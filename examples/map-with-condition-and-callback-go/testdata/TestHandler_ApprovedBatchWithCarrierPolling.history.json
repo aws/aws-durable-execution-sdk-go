@@ -1,0 +1,90 @@
+[
+  {
+    "depth": 0,
+    "index": 1,
+    "type": "CONTEXT",
+    "subType": "Map",
+    "status": "SUCCEEDED",
+    "name": "price-orders"
+  },
+  {
+    "depth": 1,
+    "index": 1,
+    "type": "CONTEXT",
+    "subType": "MapIteration",
+    "status": "SUCCEEDED",
+    "name": "price-orders[0]"
+  },
+  {
+    "depth": 2,
+    "index": 1,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED",
+    "name": "price-lookup"
+  },
+  {
+    "depth": 1,
+    "index": 2,
+    "type": "CONTEXT",
+    "subType": "MapIteration",
+    "status": "SUCCEEDED",
+    "name": "price-orders[1]"
+  },
+  {
+    "depth": 2,
+    "index": 1,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED",
+    "name": "price-lookup"
+  },
+  {
+    "depth": 2,
+    "index": 2,
+    "type": "STEP",
+    "subType": "WaitForCondition",
+    "status": "SUCCEEDED",
+    "name": "poll-carrier-status"
+  },
+  {
+    "depth": 1,
+    "index": 3,
+    "type": "CONTEXT",
+    "subType": "MapIteration",
+    "status": "SUCCEEDED",
+    "name": "price-orders[2]"
+  },
+  {
+    "depth": 2,
+    "index": 1,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED",
+    "name": "price-lookup"
+  },
+  {
+    "depth": 0,
+    "index": 2,
+    "type": "CONTEXT",
+    "subType": "WaitForCallback",
+    "status": "SUCCEEDED",
+    "name": "batch-approval"
+  },
+  {
+    "depth": 1,
+    "index": 1,
+    "type": "CALLBACK",
+    "subType": "Callback",
+    "status": "SUCCEEDED",
+    "name": "batch-approval-callback"
+  },
+  {
+    "depth": 1,
+    "index": 2,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED",
+    "name": "batch-approval-submit"
+  }
+]

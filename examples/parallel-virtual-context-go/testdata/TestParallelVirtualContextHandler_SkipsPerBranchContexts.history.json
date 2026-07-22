@@ -1,0 +1,26 @@
+[
+  {
+    "depth": 0,
+    "index": 1,
+    "type": "CONTEXT",
+    "subType": "Parallel",
+    "status": "SUCCEEDED",
+    "name": "check-warehouses"
+  },
+  {
+    "depth": 1,
+    "index": 1,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED",
+    "name": "check-inventory"
+  },
+  {
+    "depth": 1,
+    "index": 2,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED",
+    "name": "check-inventory"
+  }
+]

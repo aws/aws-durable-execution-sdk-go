@@ -1,0 +1,23 @@
+[
+  {
+    "depth": 0,
+    "index": 1,
+    "type": "CHAINED_INVOKE",
+    "status": "FAILED",
+    "name": "check-inventory-attempt-1"
+  },
+  {
+    "depth": 0,
+    "index": 2,
+    "type": "CHAINED_INVOKE",
+    "status": "FAILED",
+    "name": "check-inventory-attempt-2"
+  },
+  {
+    "depth": 0,
+    "index": 3,
+    "type": "CHAINED_INVOKE",
+    "status": "SUCCEEDED",
+    "name": "check-inventory-attempt-3"
+  }
+]

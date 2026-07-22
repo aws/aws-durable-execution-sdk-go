@@ -1,0 +1,34 @@
+[
+  {
+    "depth": 0,
+    "index": 1,
+    "type": "CONTEXT",
+    "subType": "Map",
+    "status": "SUCCEEDED",
+    "name": "price-lookup"
+  },
+  {
+    "depth": 1,
+    "index": 1,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED",
+    "name": "lookup-price"
+  },
+  {
+    "depth": 1,
+    "index": 2,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED",
+    "name": "lookup-price"
+  },
+  {
+    "depth": 1,
+    "index": 3,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED",
+    "name": "lookup-price"
+  }
+]

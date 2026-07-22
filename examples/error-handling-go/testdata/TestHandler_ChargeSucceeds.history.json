@@ -1,0 +1,10 @@
+[
+  {
+    "depth": 0,
+    "index": 1,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED",
+    "name": "charge-card"
+  }
+]

@@ -1,0 +1,90 @@
+[
+  {
+    "depth": 0,
+    "index": 1,
+    "type": "CONTEXT",
+    "subType": "Map",
+    "status": "SUCCEEDED",
+    "name": "import-records"
+  },
+  {
+    "depth": 1,
+    "index": 1,
+    "type": "CONTEXT",
+    "subType": "MapIteration",
+    "status": "SUCCEEDED",
+    "name": "import-records[0]"
+  },
+  {
+    "depth": 2,
+    "index": 1,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED",
+    "name": "import-record"
+  },
+  {
+    "depth": 1,
+    "index": 2,
+    "type": "CONTEXT",
+    "subType": "MapIteration",
+    "status": "FAILED",
+    "name": "import-records[1]"
+  },
+  {
+    "depth": 2,
+    "index": 1,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "FAILED",
+    "name": "import-record"
+  },
+  {
+    "depth": 1,
+    "index": 3,
+    "type": "CONTEXT",
+    "subType": "MapIteration",
+    "status": "SUCCEEDED",
+    "name": "import-records[2]"
+  },
+  {
+    "depth": 2,
+    "index": 1,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED",
+    "name": "import-record"
+  },
+  {
+    "depth": 1,
+    "index": 4,
+    "type": "CONTEXT",
+    "subType": "MapIteration",
+    "status": "FAILED",
+    "name": "import-records[3]"
+  },
+  {
+    "depth": 2,
+    "index": 1,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "FAILED",
+    "name": "import-record"
+  },
+  {
+    "depth": 1,
+    "index": 5,
+    "type": "CONTEXT",
+    "subType": "MapIteration",
+    "status": "SUCCEEDED",
+    "name": "import-records[4]"
+  },
+  {
+    "depth": 2,
+    "index": 1,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED",
+    "name": "import-record"
+  }
+]

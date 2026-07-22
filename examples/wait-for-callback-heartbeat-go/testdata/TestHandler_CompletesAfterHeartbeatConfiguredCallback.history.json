@@ -1,0 +1,26 @@
+[
+  {
+    "depth": 0,
+    "index": 1,
+    "type": "CONTEXT",
+    "subType": "WaitForCallback",
+    "status": "SUCCEEDED",
+    "name": "long-running-task-callback"
+  },
+  {
+    "depth": 1,
+    "index": 1,
+    "type": "CALLBACK",
+    "subType": "Callback",
+    "status": "SUCCEEDED",
+    "name": "long-running-task-callback-callback"
+  },
+  {
+    "depth": 1,
+    "index": 2,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED",
+    "name": "long-running-task-callback-submit"
+  }
+]

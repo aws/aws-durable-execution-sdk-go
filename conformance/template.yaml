@@ -1,0 +1,2833 @@
+# Go SDK conformance test harness for
+# https://github.com/aws/aws-durable-execution-conformance-tests.
+#
+# ONE shared container image (conformance/Dockerfile, built from this
+# repo's conformance/ Go module - see that module's registry.go and
+# handlers/ package doc comments for the full design) is deployed as
+# MANY Lambda functions, one per conformance requirement id. Each
+# function differs only in its CONFORMANCE_TEST_ID environment variable
+# (selecting which handlers/*.go requirement to run) and its
+# TestingMetadata.TestDescription (telling the conformance runner which
+# requirement YAML to validate that function against - see
+# aws_durable_execution_conformance_tests.validate.parse_function_descriptions,
+# which reads exactly this custom top-level key, not the CloudFormation-
+# reserved Metadata key).
+#
+# ImageUri is a template Parameter (not resolved via SAM's own
+# --resolve-image-repos convenience) so `hatch run validate --image-uri
+# ...` (this repo's own CLI, per its README) can pin every function to
+# one already-built, already-pushed image digest, matching how every
+# other multi-function image-based deployment in this repo's examples/
+# catalog is invoked from the conformance test framework's own
+# documented --image-uri flag.
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Go SDK conformance test harness (one image, many per-requirement functions).
+
+Parameters:
+  ImageUri:
+    Type: String
+    Description: >
+      Pre-built ECR image URI (repo:tag or repo@sha256:digest) for the
+      conformance/ Go module's container image. Built via `finch build`
+      (see this repo's docs/subagent-briefing.md for the established
+      Finch-based build/push workflow every other example in this repo
+      already uses) from conformance/Dockerfile.
+
+  EchoTargetImageUri:
+    Type: String
+    Default: 730758745077.dkr.ecr.us-east-1.amazonaws.com/conformance-go:echo-target-v3
+    Description: >
+      Pre-built ECR image URI (repo:tag or repo@sha256:digest) for the
+      conformance/echo-target Go module's container image - a SEPARATE,
+      durable Lambda function image from ImageUri above (see
+      echo-target/main.go's own doc for why it is now durable, not
+      plain), used as the Suite 5 (Invoke) test-requirements' real invoke
+      target. Built via `finch build` from
+      conformance/echo-target/Dockerfile - see that Dockerfile's and
+      echo-target/main.go's own doc comments for why this target is a
+      genuinely separate image/module rather than reusing the shared
+      conformance/ image every other suite's functions already use.
+
+      Defaulted (unlike ImageUri, which has no default) because the
+      upstream aws-durable-execution-conformance-tests validator's own
+      CLI (src/aws_durable_execution_conformance_tests/app.py) only knows
+      how to override ImageUri via its documented --image-uri flag - it
+      has no equivalent flag for a second, suite-specific image parameter,
+      and this template must still deploy successfully through that
+      exact, unmodified `sam deploy --parameter-overrides
+      ImageUri=...` invocation. EchoTarget itself is deployed and updated
+      independently, out-of-band, via this session's own direct `finch
+      build`/`finch push` workflow (see this session's own commit message
+      for the real, verified deployment) - this Default simply needs to
+      keep pointing at whatever echo-target image tag is currently, really
+      deployed; it is intentionally NOT re-resolved automatically on every
+      `sam deploy` the way ImageUri's caller-supplied override is.
+
+Globals:
+  Function:
+    Timeout: 60
+    MemorySize: 512
+    Architectures:
+      - arm64
+    DurableConfig:
+      ExecutionTimeout: 120
+      RetentionPeriodInDays: 1
+
+Resources:
+  # sam-conformance-execution-role is the single shared IAM execution
+  # role every conformance function uses - a plain Lambda trust policy
+  # plus AWSLambdaBasicDurableExecutionRolePolicy, matching this repo's
+  # own established shared-role pattern for its examples/ catalog (see
+  # docs/remaining-work.md's note on
+  # sam-app-SimpleStepExampleFunctionRole-syZg1x8uj2S9, the equivalent
+  # shared role for the hand-deployed examples/ functions) - declared
+  # here as a real template resource, rather than reusing that
+  # hand-created role directly, so this template is fully
+  # self-contained and reproducible via `sam deploy` alone, matching
+  # this repo's own CONTRIBUTING-equivalent principle that a conformance
+  # template must be deployable from scratch.
+  ConformanceExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicDurableExecutionRolePolicy
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  # --- Suite 1: Step (test-requirements/step/) ---
+  #
+  # Logical id naming convention for every function in this template:
+  # <SuitePascalCase><majorNumber>N<minorNumber> - e.g. Step1N1 for
+  # requirement "1-1", Map9N20 for requirement "9-20". CloudFormation
+  # logical ids must be alphanumeric only (confirmed via `sam validate
+  # --lint`: "Logical ids must be alphanumeric" - a real constraint
+  # discovered while scaffolding this template, since requirement ids
+  # themselves contain a literal hyphen, e.g. "1-1"), so this scheme
+  # substitutes a literal "N" for the hyphen rather than stripping it
+  # outright (StepN1 vs Step11 for "1-1" would collide with a
+  # hypothetical requirement "11" or "1-11" under simple concatenation;
+  # keeping the major number's own digits separate from the minor
+  # number's via a literal, unambiguous "N" separator avoids that).
+  # TestingMetadata.TestDescription (a list, even though every function
+  # in this template maps to exactly one requirement) is what actually
+  # ties a function back to its requirement id for the conformance
+  # runner - the logical id itself is never parsed by that runner, so
+  # this convention exists purely for THIS template's own readability
+  # and to guarantee logical-id uniqueness deterministically.
+  #
+  # KNOWN, VERIFIED, NON-SDK-FIXABLE BACKEND GAP affecting several
+  # requirements below (1-1, 1-2, 1-3, 1-4, 1-6, 1-8, 1-9, 1-11, 1-18,
+  # 1-20): the real Lambda Durable Functions backend's own
+  # GetDurableExecution API does not return a "Result" key AT ALL in its
+  # response for a genuinely, terminally SUCCEEDED execution - confirmed
+  # by a direct, real `aws lambda get-durable-execution` call against a
+  # live completed execution during this session, independent of both
+  # this SDK and the conformance runner's own tooling (raw response:
+  # {"DurableExecutionArn": ..., "Status": "SUCCEEDED", ...} - no
+  # "Result" field present, even though the equivalent per-STEP
+  # StepSucceededDetails.Result field on the SAME execution's
+  # GetDurableExecutionHistory response IS correctly populated). This Go
+  # SDK's own outcomeToResponse (pkg/durable/durable.go) correctly
+  # returns the handler's real result as this Lambda function's own
+  # Runtime API response payload on every success path - there is
+  # nothing wrong or missing on the write side. Every one of the 10
+  # affected requirements below has a full, exact,
+  # field-for-field-verified ExpectedExecutionHistory match (event
+  # types, SubTypes, Ids, StepSucceededDetails/StepFailedDetails
+  # payloads, RetryDetails, etc.) against a real deployed invocation;
+  # the ONLY discrepancy in each case is this single, external,
+  # verified backend characteristic on the top-level EXECUTION's own
+  # Result field, which no client-side SDK code can influence. This
+  # was already a documented finding from a prior session before this
+  # one began; this session independently re-confirmed it via a direct
+  # raw API call rather than taking it on faith. The
+  # aws-durable-execution-conformance-tests tool itself has no
+  # mechanism to mark a COVERED requirement id (one with a real,
+  # deployed, TestDescription-mapped function) as NOT_IMPLEMENTED -
+  # that status is reserved for UNCOVERED ids only (see
+  # parse_not_implemented's own caller in
+  # src/aws_durable_execution_conformance_tests/app.py: "Only uncovered
+  # ids consult not_implemented"), so these 10 requirements are left
+  # genuinely deployed and validated for real, and will correctly keep
+  # reporting FAILED on this one field until the backend itself
+  # changes - this is expected, understood, and out of this SDK's
+  # control, not an oversight.
+
+  Step1N1:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "1-1"
+    # TestingMetadata.NotImplemented (see below) is attached here, to
+    # this arbitrarily-chosen existing AWS::Serverless::Function
+    # resource, rather than either of the two forms the upstream
+    # conformance repo's own parser (parse_not_implemented in
+    # validate.py) documents as supported ("a top-level TestingMetadata
+    # block [sibling of Resources]... and/or under any function
+    # resource's TestingMetadata... both are supported"):
+    #
+    #   - The documented top-level (template-sibling-of-Resources) form
+    #     does NOT survive a real `sam deploy` against this template -
+    #     confirmed directly: CloudFormation's changeset validation
+    #     rejects an unrecognized top-level template property outright
+    #     ("Invalid template property or properties [TestingMetadata]").
+    #   - Attaching it to a PLAIN (non-transformed) resource type, e.g.
+    #     the shared ConformanceExecutionRole (AWS::IAM::Role), was tried
+    #     first and ALSO rejected by a real deploy ("Invalid template
+    #     resource property 'TestingMetadata'") - confirming raw
+    #     CloudFormation resource schemas are just as strict about
+    #     unrecognized properties as its top-level template schema is.
+    #   - Only AWS::Serverless::Function resources actually tolerate this
+    #     custom key in a real deploy (confirmed: Step1N1 through
+    #     Step1N20's own identical TestingMetadata.TestDescription usage
+    #     already deploys successfully), because SAM's own
+    #     Serverless-transform macro - which runs server-side during
+    #     changeset creation, BEFORE raw CloudFormation ever validates
+    #     resource properties - is what actually processes
+    #     AWS::Serverless::Function, and it is permissive about
+    #     unrecognized resource-level keys in a way plain CloudFormation
+    #     resource types and the top-level template schema are not.
+    #
+    # So this is the ONE of the two documented forms - a per-resource
+    # TestingMetadata block on an AWS::Serverless::Function - that this
+    # template can actually, genuinely deploy; Step1N1 is used simply
+    # because it is the first function declared in this file, not
+    # because of anything specific to requirement 1-1 itself.
+    #
+    # (This comment previously also referenced a "1-13's own
+    # NotImplemented reason, below" - RESOLVED, see Step1N13's own
+    # comment further down in this file for the fix; 1-13 is no longer a
+    # NotImplemented entry.)
+    TestingMetadata:
+      TestDescription:
+        - "1-1"
+  # NOTE (deliberately NOT a NotImplemented id, unlike 8-12 above - and
+  # since FIXED, see the "RESOLVED" marker at the end of this block): a
+  # real, verified, architectural mismatch was found this session
+  # between this Go SDK's Map/Parallel completion-policy contract and
+  # what roughly half of the Parallel suite's own requirements (8-6, 8-7,
+  # 8-8, 8-9, 8-10, 8-13, 8-16, 8-17, 8-18, 8-20, 8-22 - every requirement
+  # configuring a CompletionConfig at all) expect, discovered via real
+  # deployed invocations and confirmed by directly reading batch.go's
+  # batchCompletion/finishBatch. It is recorded here as a plain comment,
+  # NOT as a TestingMetadata.NotImplemented entry, because every one of
+  # those ids is COVERED (each has its own real, deployed Parallel8N*
+  # function below) - the validator's own logic (confirmed both by
+  # reading validate.py earlier this session and by a real "'8-8' is
+  # declared NotImplemented but is covered by an example in the
+  # template; the declaration may be stale" warning this exact entry
+  # produced when first added as a formal id, before this correction)
+  # only consults NotImplemented declarations for UNCOVERED ids -
+  # attaching one to a covered id is flagged by the tool itself as
+  # exactly the kind of stale/incorrect declaration this whole
+  # initiative has deliberately avoided in every earlier suite. These
+  # requirements are simply left as real, genuinely observed FAILED
+  # results (matching this block's own established "not left uncovered"
+  # precedent for every other honestly-unresolved gap), not hidden
+  # behind a declaration the tool would reject as inapplicable anyway.
+  #
+  # Every affected requirement's own ExpectedExecutionHistory checkpoints
+  # the PARENT Map/Parallel CONTEXT operation's own terminal event as
+  # ContextSucceeded, even when the batch's overall completion policy was
+  # NOT met (e.g. 8-6's fail-fast scenario, 8-7's "rethrow" scenario,
+  # 8-17's min-successful-never-reached scenario) - i.e. every reference
+  # SDK models "did this batch meet its configured policy" as a property
+  # OF the returned BatchResult value (a completionReason/status field
+  # the CALLER then inspects, and may choose to rethrow), entirely
+  # SEPARATE from whether the CONTEXT operation's own checkpoint
+  # succeeded or failed. This Go SDK's actual, pre-existing (predating
+  # this session - see docs/remaining-work.md §4 task 10's
+  # error-hierarchy work) behavior, in finishBatch, is different:
+  # batchCompletion.overallSucceeded's true/false result directly drives
+  # whether finishBatch checkpoints the outer CONTEXT operation
+  # ContextSucceeded or ContextFailed, and Parallel/Map themselves return
+  # a Go error (*BatchFailedError) instead of a BatchResult whenever
+  # overallSucceeded is false - there is no "returns a BatchResult you
+  # can inspect/rethrow" case at all once a batch's policy is unmet. Real
+  # deployed evidence: 8-6's output/8-6.json shows the parent Parallel
+  # context checkpoint as ContextFailed (SubType Parallel, EventId 7),
+  # not the YAML's own expected ContextSucceeded; 8-9's output/8-9.json
+  # (a "tolerance not exceeded" scenario, where this Go SDK's
+  # overallSucceeded IS true) correctly shows ContextSucceeded,
+  # confirming the mismatch is specifically about the policy-not-met
+  # case, not a blanket problem with every CompletionConfig scenario.
+  #
+  # SEPARATELY, but discovered investigating the SAME suite: this SDK's
+  # CompletionConfig.MinSuccessful is not actually an early-exit gate at
+  # all. Reading batchCompletion.thresholdExceeded directly (the ONLY
+  # function runBatch's scheduling loop consults before starting each
+  # new item/branch) shows it examines ONLY ToleratedFailureCount/
+  # ToleratedFailurePercentage, never MinSuccessful - MinSuccessful is
+  # consulted exclusively inside overallSucceeded, called once AFTER
+  # every branch has already run to completion. Confirmed via a real
+  # deployment of requirement 8-8 (four branches, sequential via
+  # max-concurrency=1, MinSuccessful=2, expecting only 2 of 4 branches to
+  # ever start): output/8-8.json shows all FOUR branches' own
+  # ContextStarted/ContextSucceeded events present, not two - branches 2
+  # and 3 run today, contradicting this requirement's own "totalCount: 2"
+  # / "stops early" expectation.
+  #
+  # Both findings are real, verified, and NOT safely fixable within this
+  # stage's own scope: the first is a foundational change to Map/
+  # Parallel's own success/failure contract (return a BatchResult
+  # unconditionally, moving the succeed-or-fail-the-execution decision to
+  # the CALLER) that would break the already-existing, already-tested
+  # contract every current caller (including examples/completion-config-go's
+  # own handler.go, and this SDK's own batch_test.go coverage) correctly
+  # depends on today - changing it is a large, cross-cutting redesign
+  # affecting Map equally (batch.go is explicitly shared, per this task's
+  # own briefing), not a small, isolated Parallel-only fix, and doing it
+  # without full room to re-verify every Map caller/test (Map itself is
+  # Stage 8, not yet implemented at the time of this session) is out of
+  # this stage's safe scope. The second (MinSuccessful early-exit) is a
+  # smaller, more isolated potential fix, but still touches runBatch's
+  # shared scheduling loop (used identically by Map), and the precise
+  # real-backend semantics for how MinSuccessful should interact with an
+  # in-flight failure tally mid-batch are not confirmable from any source
+  # available this session. Both are recorded here rather than attempted,
+  # per this task's own explicit instruction to document a genuinely new
+  # class of gap rather than force a large, cross-cutting fix outside a
+  # single suite's own scope.
+  #
+  # Every affected Parallel8N* function (8-6 through 8-22) is still
+  # declared, deployed, and validated for real (matching this block's own
+  # established "not left uncovered" precedent) - see this session's own
+  # commit message for the exact, real, observed pass/fail outcome
+  # against each.
+  #
+  # CONFIRMED TO RECUR IN THE MAP SUITE (Stage 8, same session as this
+  # block's own Parallel findings above - batch.go's batchCompletion/
+  # finishBatch/runBatch are unconditionally shared between Map and
+  # Parallel, so both root causes above apply identically to Map's own
+  # analogous requirements): the completion-policy-contract mismatch
+  # recurs for 9-5 (fail-fast, tolerated-failure-count=0 - real deployed
+  # output/9-5.json shows the parent Map context checkpointed
+  # ContextFailed rather than this requirement's own expected
+  # ContextSucceeded, exactly matching 8-6's own confirmed shape one
+  # level up), 9-6 (throw-if-error propagating an item failure to the
+  # execution - this one's own ExpectedResult.ExecutionStatus is FAILED,
+  # so it is unaffected by the mismatch the same way 8-7 is unaffected:
+  # Map's real *BatchFailedError return IS the desired "propagate
+  # uncaught" behavior here), 9-9 (tolerated-failure-count exceeded) and
+  # 9-10 (tolerated-failure-percentage exceeded), both handled with the
+  # same catch-*BatchFailedError-and-project workaround as 8-10/8-13.
+  # The separate MinSuccessful-is-not-an-early-exit-gate finding also
+  # recurs identically for 9-7 (min-successful=2 over four items,
+  # expecting early completion after item 1 without starting items 2/3):
+  # real deployed output/9-7.json shows all FOUR items' own
+  # ContextStarted/ContextSucceeded events present, not two, exactly
+  # mirroring 8-8's own confirmed output/8-8.json shape - Map's
+  # thresholdExceeded (batch.go, shared verbatim with Parallel) examines
+  # only ToleratedFailureCount/ToleratedFailurePercentage before starting
+  # each new item, never MinSuccessful, so every item still runs
+  # regardless. Every affected Map9N* function (9-5 through 9-10, plus
+  # 9-18's own within-tolerance scenario, which is UNAFFECTED by this
+  # gap - see map_9_18.go's own doc) is still declared, deployed, and
+  # validated for real - see this session's own commit message for the
+  # exact, real, observed pass/fail outcome against each.
+  #
+  # ***** RESOLVED (later session) *****: BOTH findings recorded in this
+  # entire NOTE block above are now FIXED at the SDK level - see
+  # operations.BatchResult's own top-level doc (pkg/durable/operations/
+  # batch.go) for the full completion-policy-contract fix (Map/Parallel
+  # now ALWAYS return a valid BatchResult with a nil error once their
+  # items/branches finish, and the outer CONTEXT/MAP or CONTEXT/PARALLEL
+  # operation is ALWAYS checkpointed ContextSucceeded, matching every
+  # affected requirement's own YAML exactly) and batchCompletion.
+  # thresholdExceeded's own doc (same file) for the MinSuccessful-early-
+  # exit fix. Real conformance re-run confirms all 12 originally-affected
+  # requirements (Parallel 8-6/7/8/10/13/17/18, Map 9-5/6/7/9/10) now
+  # genuinely PASS, with zero regressions anywhere else in either suite
+  # (Parallel 21/22 passed - only 8-12 not-implemented, unchanged; Map
+  # 16/20 passed - only 9-12/13/19/20 not-implemented, unchanged) or the
+  # full 148-requirement suite (124 passed, up from 112, exactly the +12
+  # expected). All 12 affected conformance handlers (parallel_8_6.go
+  # through map_9_10.go) were rewritten to call BatchResult's own real
+  # Status()/CompletionReason/SucceededCount()/FailureCount()/
+  # TotalCount()/ThrowIfError() methods directly, removing the hand-
+  # rolled *BatchFailedError-catching workarounds this NOTE block's own
+  # history above describes in detail. This historical record is
+  # retained above (not deleted) to document the investigation that led
+  # to the fix, per this template's own established convention.
+  #
+  # ---------------------------------------------------------------------
+  # CORRECTION (later session, prompted directly by a user's explicit,
+  # correct skepticism: "I don't believe it - all other SDKs like Java,
+  # Python and TypeScript work perfectly... find out what we missed"):
+  # the top-level GetDurableExecution.Result-field "backend gap" and the
+  # ExecutionFailedDetails.Error.Payload-empty "backend gap" documented
+  # at length elsewhere in this template (originally attached to formal
+  # NotImplemented ids "3-11"/"4-3"/"5-1" - now REMOVED/corrected, see
+  # below) were BOTH ENTIRELY THIS SDK'S OWN BUGS, not backend
+  # limitations, the whole time. Direct comparison against the JS
+  # reference SDK's own real, tested source
+  # (with-durable-execution.ts/core.ts, confirmed via that repo's own
+  # passing with-durable-execution.test.ts assertions) revealed this Go
+  # SDK's types.DurableExecutionOutput was sending the WRONG WIRE KEYS on
+  # every single invocation's Runtime API response the whole time:
+  # "ResultPayload" instead of the real, correct "Result" on success, and
+  # two flat top-level "ErrorMessage"/"ErrorType" fields instead of a
+  # single nested "Error" object on failure - both silently discarded by
+  # the real backend (no error, just never populated), which is EXACTLY
+  # why every prior suite's own top-level Result/Error.Payload assertion
+  # failed identically and consistently, suite after suite, and why this
+  # was originally (wrongly) concluded to be a backend limitation rather
+  # than two simple, mechanical wire-shape bugs. Both fixed in
+  # pkg/durable/types/wire.go (DurableExecutionOutput's own json tags)
+  # and pkg/durable/durable.go (outcomeToResponse, plus a NEW
+  # innermostErrorMessage helper - see that function's own doc for two
+  # further, real, immediately-self-caught wrong approaches before
+  # landing on the correct one: this repo's OWN example handlers
+  # legitimately wrap an operation error with their own additional
+  # fmt.Errorf context, which must never be stripped, distinct from
+  # operations.OperationError's own internal Go-debugging decoration,
+  # which must be).
+  #
+  # Real-world impact, confirmed via a full 148-requirement re-run
+  # (region us-east-1) against the corrected image: PASSED count rose
+  # from 37 to 110 out of 148 - the large majority of this entire
+  # initiative's own previously-"explained" FAILED results were this
+  # SDK's own two wire-shape bugs, not anything backend-side.
+  #
+  # What is now REMOVED entirely: the "4-3" NotImplemented entry (the
+  # Error.Payload-empty finding) - re-confirmed via the same full re-run
+  # that EVERY one of its seven originally-affected ids (4-3, 4-4, 4-6,
+  # 4-7, 4-8, 4-10, 4-11) now genuinely PASSES (or, for 4-6 specifically,
+  # correctly surfaces the EXACT literal external-system error message
+  # via the new innermostErrorMessage fix) - this gap is fully closed,
+  # not merely reduced.
+  #
+  # What MOVED from a formal NotImplemented id to a plain comment here
+  # (both ids are, and always were, COVERED - a formal NotImplemented
+  # declaration for a covered id is flagged by the tool itself as stale,
+  # confirmed by a real, direct validator warning this exact correction
+  # was made in response to):
+  #
+  #   - "3-11" (Child context large payload / ReplayChildren mode): FIXED
+  #     in a later session (real, additive implementation of the
+  #     ReplayChildren protocol in operations.RunInChildContext -
+  #     invoke.go's own doc has the full technical writeup). Confirmed
+  #     via a real re-run against a real deployment: 3-11 now genuinely
+  #     PASSES. The original finding (preserved for history at the
+  #     commit that first documented it) was correct at the time: no
+  #     ReplayChildren protocol existed anywhere in
+  #     pkg/durable/operations, and RunInChildContext's real behavior for
+  #     an oversized result was an unconditional client-side
+  #     *ResultTooLargeError. This entry is retained here (rather than
+  #     deleted outright) only as a historical note that this WAS a real,
+  #     confirmed, and since-CLOSED gap - it is no longer an open finding.
+  #
+  #   - "5-1" (Invoke's ChainedInvokeStartedDetails.DurableExecutionArn):
+  #     **RESOLVED in a LATER session** - see the "FINAL RESOLUTION"
+  #     note immediately below this entry. The finding described in this
+  #     paragraph (retained for history) was that this field genuinely
+  #     failed after the wire-shape fix, for a seemingly separate, real
+  #     reason: the official API reference's own documented Pattern
+  #     regex for this field structurally requires the invoked TARGET to
+  #     itself be a durable execution, and conformance/echo-target was,
+  #     AT THE TIME, deliberately a plain, non-durable target. That
+  #     technical mechanism was correct - but the CONCLUSION drawn from
+  #     it (that this was an unfixable architectural limitation of this
+  #     SDK) was wrong, because nothing about operations.Invoke itself
+  #     requires a plain target; only this ONE conformance target's own,
+  #     avoidable design choice did.
+  #
+  #     FINAL RESOLUTION (later session, prompted by explicit user
+  #     skepticism: "all other SDKs are working fine, so try to find the
+  #     issue" - repeating the same discipline that already twice turned
+  #     an apparent "confirmed limitation" into a real, fixable bug):
+  #     settled via a genuine, live experiment rather than re-reading the
+  #     same API doc again - a temporary, throwaway durable Lambda
+  #     function was deployed, invoked via operations.Invoke from a real
+  #     conformance function, and its own ChainedInvokeStartedDetails.
+  #     DurableExecutionArn came back fully, correctly populated,
+  #     definitively proving the field's earlier absence was caused
+  #     SOLELY by echo-target's own plainness. FIX: echo-target
+  #     (conformance/echo-target/main.go) was converted to a genuine
+  #     durable function (wrapped in durable.WithDurableExecution, a
+  #     single Step echoing its input) - EchoTarget/EchoTargetTenant
+  #     (template.yaml) both gained a DurableConfig property and
+  #     EchoTargetExecutionRole gained AWSLambdaBasicDurableExecutionRolePolicy.
+  #     No operations.Invoke code changed - this was purely a
+  #     conformance-harness deployment choice, never an SDK gap. Real
+  #     re-validation confirmed all 16 Invoke5N* requirements (5-1
+  #     through 5-16) now genuinely pass. This entry (and its own
+  #     original, superseded conclusion) is retained here, not deleted,
+  #     as the historical record of the investigation - matching this
+  #     template's own established convention for prior corrections
+  #     (see "3-11"'s and the completion-policy-contract entries above).
+  #
+  # Two NEW, genuinely distinct, smaller findings surfaced ONLY once the
+  # wire-shape fix let Result/Error.Payload actually populate for the
+  # first time (previously invisible, since the top-level field never
+  # appeared at all regardless of what was inside it) - NOT added as
+  # NotImplemented entries (both are real, small, plausibly-fixable SDK
+  # behavior questions, not confirmed-permanent gaps, and both remain
+  # honestly FAILED rather than hidden behind any declaration):
+  #
+  #   - Custom per-step/per-child serdes (1-6, 3-14): CONFIRMED, definitively,
+  #     to be a CONFORMANCE-SUITE REQUIREMENT BUG, not an SDK gap - not left
+  #     as an open question. A custom Serdes transforms the WIRE bytes on
+  #     Serialize, but Step/RunInChildContext both correctly return the raw,
+  #     untransformed in-memory fn() result to the caller on a fresh
+  #     (non-replay) execution, so the handler's own return value (not the
+  #     serdes-transformed wire bytes) is what reaches the top-level Result.
+  #     Verified directly against the JS reference SDK's own ACTUAL SOURCE
+  #     (run-in-child-context-handler.ts: computes serializedResult via
+  #     safeSerialize purely for the CHECKPOINT's own Payload, then falls
+  #     through to `return result` - the raw, untransformed value - on the
+  #     very next lines) AND its own test suite (run-in-child-context-
+  #     handler.test.ts's "should use custom serdes for serialization and
+  #     deserialization" test explicitly asserts `expect(result).toEqual
+  #     (testResult)` - the ORIGINAL, untransformed object, not a
+  #     re-serialized/uppercased string). 1-6/3-14's own ExpectedResult.
+  #     Result assumes a round-trip that NEITHER this Go SDK NOR the JS
+  #     reference SDK actually performs - these two requirements' own
+  #     expectations do not match any confirmed reference SDK behavior.
+  #     Recommended next step: report this to the conformance suite's own
+  #     maintainers rather than changing this SDK to match an
+  #     unconfirmed-by-any-reference-SDK expectation.
+  #
+  #   - 4-9 (createCallback + 5s wait + await callback, callback resolves
+  #     via a 1s-delayed external action): the single earlier failure
+  #     (event-ID/Name swap between the Callback and Wait operations) is
+  #     CONFIRMED to be transient test-timing noise, not a real bug - 8
+  #     consecutive re-runs (3 as part of a full-suite run, 5 more in
+  #     isolation) all passed cleanly. Root cause of the original failure
+  #     is a genuinely tight race BUILT INTO the requirement's own timing
+  #     design, not this SDK: the external callback (Delay: 1s) must
+  #     complete, get processed by the real backend, and checkpoint back
+  #     strictly before the 5-second Wait's own timer expires - a
+  #     representative passing run's own real timestamps show only ~1.65
+  #     seconds of margin between CallbackSucceeded and WaitSucceeded out
+  #     of that 5-second window (output/4-9.json: 16:00:01.384 vs.
+  #     16:00:03.034). Any transient AWS-side scheduling delay (cold
+  #     start, throttling, network latency on the validator's own
+  #     SendDurableExecutionCallbackSuccess call) could plausibly tighten
+  #     or invert that margin. Not something this SDK's own code can
+  #     control or fix - this is the requirement's own test-timing
+  #     fragility, not a client-side correctness issue.
+  # ---------------------------------------------------------------------
+
+  Step1N2:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "1-2"
+    TestingMetadata:
+      TestDescription:
+        - "1-2"
+
+  Step1N3:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "1-3"
+    TestingMetadata:
+      TestDescription:
+        - "1-3"
+
+  Step1N4:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "1-4"
+    TestingMetadata:
+      TestDescription:
+        - "1-4"
+
+  Step1N5:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "1-5"
+    TestingMetadata:
+      TestDescription:
+        - "1-5"
+
+  Step1N6:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "1-6"
+    TestingMetadata:
+      TestDescription:
+        - "1-6"
+
+  Step1N7:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "1-7"
+    TestingMetadata:
+      TestDescription:
+        - "1-7"
+
+  Step1N8:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "1-8"
+    TestingMetadata:
+      TestDescription:
+        - "1-8"
+
+  Step1N9:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "1-9"
+    TestingMetadata:
+      TestDescription:
+        - "1-9"
+
+  Step1N10:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "1-10"
+    TestingMetadata:
+      TestDescription:
+        - "1-10"
+
+  Step1N11:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "1-11"
+    TestingMetadata:
+      TestDescription:
+        - "1-11"
+
+  Step1N12:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "1-12"
+    TestingMetadata:
+      TestDescription:
+        - "1-12"
+
+  # Step1N13 ("Default retry strategy") - FIXED, now a real, deployed
+  # function. Previously undeclared here (this comment used to explain
+  # why: this Go SDK's zero-option operations.Step default was
+  # utils.Presets.NoRetry(), not the cross-SDK 6-attempt/5s-initial/
+  # 60s-max/2x-backoff/FULL-jitter default this requirement's own YAML
+  # documents). That conclusion was re-examined per explicit user request
+  # and found to be a real, fixable divergence from the JS reference
+  # SDK's own actual runtime fallback (retryPresets.default, confirmed
+  # by reading step-handler.ts/retry-presets.ts directly) - not a
+  # deliberate design choice, and not a genuine SDK feature gap. Fixed
+  # in pkg/durable/operations/step.go (new zero-option fallback:
+  # utils.Presets.Default(), added to pkg/durable/utils/retry.go
+  # specifically to match retryPresets.default's exact values) - see
+  # both files' own doc comments for the complete fix, and
+  # handlers/step_1_13.go for this requirement's own real handler.
+  Step1N13:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "1-13"
+    TestingMetadata:
+      TestDescription:
+        - "1-13"
+
+  Step1N14:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "1-14"
+    TestingMetadata:
+      TestDescription:
+        - "1-14"
+
+  Step1N15:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "1-15"
+    TestingMetadata:
+      TestDescription:
+        - "1-15"
+
+  Step1N16:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "1-16"
+    TestingMetadata:
+      TestDescription:
+        - "1-16"
+
+  Step1N17:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "1-17"
+    TestingMetadata:
+      TestDescription:
+        - "1-17"
+
+  Step1N18:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "1-18"
+    TestingMetadata:
+      TestDescription:
+        - "1-18"
+
+  Step1N19:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "1-19"
+    TestingMetadata:
+      TestDescription:
+        - "1-19"
+
+  Step1N20:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "1-20"
+    TestingMetadata:
+      TestDescription:
+        - "1-20"
+
+  # --- Suite 2: Wait (test-requirements/wait/) ---
+  #
+  # Same logical id convention as Suite 1 above: Wait2N<minor>. Wait's
+  # own terminal checkpoint (WaitSucceeded) is entirely backend-driven -
+  # operations.Wait (wait.go) only ever sends a WAIT/START checkpoint
+  # itself - so every one of these functions is a thin
+  # durable.WithDurableExecution wrapper around one or more
+  # operations.Wait calls; see each handlers/wait_2_*.go file's own doc
+  # comment for its specific requirement.
+
+  Wait2N1:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "2-1"
+    TestingMetadata:
+      TestDescription:
+        - "2-1"
+
+  Wait2N2:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "2-2"
+    TestingMetadata:
+      TestDescription:
+        - "2-2"
+
+  Wait2N3:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "2-3"
+    TestingMetadata:
+      TestDescription:
+        - "2-3"
+
+  Wait2N4:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "2-4"
+    TestingMetadata:
+      TestDescription:
+        - "2-4"
+
+  Wait2N5:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "2-5"
+    TestingMetadata:
+      TestDescription:
+        - "2-5"
+
+  # --- Suite 3: Child (test-requirements/child/) ---
+  #
+  # Same logical id convention: Child3N<minor>. Every function here
+  # wraps one or more operations.RunInChildContext calls, typically with
+  # nested operations.Step/operations.Wait calls inside - see each
+  # handlers/child_3_*.go file's own doc comment for its specific
+  # requirement's exact scenario.
+  #
+  # Child3N11 ("Child context large payload / ReplayChildren mode") is a
+  # SECOND, DISTINCT NotImplemented gap from the existing Result-field
+  # one already documented on Step1N1's TestingMetadata below - see that
+  # block's own new "3-11" entry for the full, evidence-based reasoning
+  # (grepped pkg/durable/operations for ReplayChildren: zero matches
+  # outside the wire-type definitions themselves). The function is still
+  # declared and deployed here (not left uncovered) so the real,
+  # observed failure mode is empirically demonstrated, not merely
+  # asserted.
+
+  Child3N1:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "3-1"
+    TestingMetadata:
+      TestDescription:
+        - "3-1"
+
+  Child3N2:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "3-2"
+    TestingMetadata:
+      TestDescription:
+        - "3-2"
+
+  Child3N3:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "3-3"
+    TestingMetadata:
+      TestDescription:
+        - "3-3"
+
+  Child3N4:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "3-4"
+    TestingMetadata:
+      TestDescription:
+        - "3-4"
+
+  Child3N5:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "3-5"
+    TestingMetadata:
+      TestDescription:
+        - "3-5"
+
+  Child3N6:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "3-6"
+    TestingMetadata:
+      TestDescription:
+        - "3-6"
+
+  Child3N7:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "3-7"
+    TestingMetadata:
+      TestDescription:
+        - "3-7"
+
+  Child3N8:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "3-8"
+    TestingMetadata:
+      TestDescription:
+        - "3-8"
+
+  Child3N9:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "3-9"
+    TestingMetadata:
+      TestDescription:
+        - "3-9"
+
+  Child3N10:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "3-10"
+    TestingMetadata:
+      TestDescription:
+        - "3-10"
+
+  Child3N11:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "3-11"
+    TestingMetadata:
+      TestDescription:
+        - "3-11"
+
+  Child3N12:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "3-12"
+    TestingMetadata:
+      TestDescription:
+        - "3-12"
+
+  Child3N13:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "3-13"
+    TestingMetadata:
+      TestDescription:
+        - "3-13"
+
+  Child3N14:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "3-14"
+    TestingMetadata:
+      TestDescription:
+        - "3-14"
+
+  Child3N15:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "3-15"
+    TestingMetadata:
+      TestDescription:
+        - "3-15"
+
+  Child3N16:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "3-16"
+    TestingMetadata:
+      TestDescription:
+        - "3-16"
+
+  Child3N17:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "3-17"
+    TestingMetadata:
+      TestDescription:
+        - "3-17"
+
+  Child3N18:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "3-18"
+    TestingMetadata:
+      TestDescription:
+        - "3-18"
+
+  # --- Suite 4: Callback (test-requirements/callback/) ---
+  #
+  # Same logical id convention: Callback4N<minor>. Every function here
+  # wraps one or more operations.CreateCallback + operations.AwaitCallback
+  # calls (see operations/callback.go), several interleaved with
+  # operations.Step/operations.Wait exactly as each handlers/callback_4_*.
+  # go file's own doc comment describes.
+  #
+  # This suite is the first to exercise a REAL, backend-driven CALLBACK
+  # timeout/heartbeat-timeout, and a REAL external-system-reported
+  # callback failure - both required two genuine, root-cause SDK fixes
+  # in pkg/durable/operations/callback.go this session (not merely new
+  # handler code):
+  #
+  #   1. CreateCallback never set CallbackOptions (TimeoutSeconds/
+  #      HeartbeatTimeoutSeconds) on its CALLBACK/CALLBACK START
+  #      checkpoint - confirmed by grepping the entire operations
+  #      package for "CallbackOptions" before this fix: zero matches
+  #      outside wire.go (the struct's own definition) and awssdk/
+  #      client.go (its marshaling, already covered by an existing
+  #      client_test.go case) - the option simply didn't exist on
+  #      CreateCallback's own CallbackOption[T] surface at all. Added
+  #      WithCallbackTimeout/WithCallbackHeartbeatTimeout (new exported
+  #      options, used by callback_4_3/4_4/4_5/4_8/4_11/4_14.go).
+  #   2. A checkpointed CALLBACK operation with a terminal
+  #      OperationStatusTimedOut status (the backend's own outcome for a
+  #      real timeout - types.OperationStatusTimedOut already existed on
+  #      the wire enum, confirmed used elsewhere for CHAINED_INVOKE) fell
+  #      through EVERY status switch in callback.go (CreateCallback's own
+  #      replay branch, and awaitCallback) straight to the
+  #      SUCCESS/deserialize path, since both switches only ever checked
+  #      for OperationStatusFailed explicitly. This silently produced a
+  #      confusing generic "succeeded but no result recorded" SerdesError
+  #      instead of the correct *CallbackFailedError - and separately,
+  #      CallbackFailedError.Timeout was hard-coded false in every
+  #      construction site (its own doc literally said "Always false
+  #      currently... reserved for when heartbeat-timeout enforcement
+  #      lands"). Fixed by routing OperationStatusTimedOut through the
+  #      same callbackError(...) path as OperationStatusFailed in both
+  #      switches, and having callbackError itself set Timeout :=
+  #      (op.Status == types.OperationStatusTimedOut) rather than a
+  #      constant.
+  #
+  # See pkg/durable/operations/callback.go's own updated doc comments on
+  # WithCallbackTimeout/WithCallbackHeartbeatTimeout/callbackError for
+  # the full detail, and this session's commit message for how each was
+  # verified (go test ./pkg/... -race, plus this suite's own real
+  # conformance run below).
+
+  Callback4N1:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "4-1"
+    TestingMetadata:
+      TestDescription:
+        - "4-1"
+
+  Callback4N2:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "4-2"
+    TestingMetadata:
+      TestDescription:
+        - "4-2"
+
+  Callback4N3:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "4-3"
+    TestingMetadata:
+      TestDescription:
+        - "4-3"
+
+  Callback4N4:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "4-4"
+    TestingMetadata:
+      TestDescription:
+        - "4-4"
+
+  Callback4N5:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "4-5"
+    TestingMetadata:
+      TestDescription:
+        - "4-5"
+
+  Callback4N6:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "4-6"
+    TestingMetadata:
+      TestDescription:
+        - "4-6"
+
+  Callback4N7:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "4-7"
+    TestingMetadata:
+      TestDescription:
+        - "4-7"
+
+  Callback4N8:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "4-8"
+    TestingMetadata:
+      TestDescription:
+        - "4-8"
+
+  Callback4N9:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "4-9"
+    TestingMetadata:
+      TestDescription:
+        - "4-9"
+
+  Callback4N10:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "4-10"
+    TestingMetadata:
+      TestDescription:
+        - "4-10"
+
+  Callback4N11:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "4-11"
+    TestingMetadata:
+      TestDescription:
+        - "4-11"
+
+  Callback4N12:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "4-12"
+    TestingMetadata:
+      TestDescription:
+        - "4-12"
+
+  Callback4N13:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "4-13"
+    TestingMetadata:
+      TestDescription:
+        - "4-13"
+
+  Callback4N14:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "4-14"
+    TestingMetadata:
+      TestDescription:
+        - "4-14"
+
+  Callback4N15:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "4-15"
+    TestingMetadata:
+      TestDescription:
+        - "4-15"
+
+  Callback4N16:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "4-16"
+    TestingMetadata:
+      TestDescription:
+        - "4-16"
+
+  Callback4N17:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "4-17"
+    TestingMetadata:
+      TestDescription:
+        - "4-17"
+
+  Callback4N18:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "4-18"
+    TestingMetadata:
+      TestDescription:
+        - "4-18"
+
+  Callback4N19:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "4-19"
+    TestingMetadata:
+      TestDescription:
+        - "4-19"
+
+  # --- Suite 5: Invoke (test-requirements/invoke/) ---
+  #
+  # Same logical id convention as every suite above: Invoke5N<minor>.
+  # This is the FIRST suite that needs a real, separate, plain
+  # (non-durable) TARGET Lambda function for operations.Invoke to call -
+  # every other suite's operations are entirely self-contained within the
+  # one conformance function under test. See conformance/echo-target/
+  # main.go's own doc comment for the target's full design (one smart
+  # echo target, not several single-purpose ones - branches on an
+  # optional reserved __echoTargetControl.fail field in its own input to
+  # cover the two requirements, 5-5 and 5-6, that need a genuine target
+  # failure rather than a plain echo).
+  #
+  # EchoTargetImageUri is a SEPARATE template Parameter (not reusing
+  # ImageUri) because this target is built from an entirely different
+  # Dockerfile/Go module (conformance/echo-target/, its own go.mod - see
+  # that module's own files) than every Invoke5N* function's shared
+  # conformance/ image, exactly mirroring how ImageUri itself is already
+  # a template Parameter rather than resolved via SAM's own
+  # --resolve-image-repos (see this template's own top-level doc comment)
+  # for the identical `hatch run validate --image-uri ...`-driven
+  # workflow reason.
+  #
+  # EchoTarget is a genuine, durable AWS::Lambda::Function (see
+  # echo-target/main.go's own doc for why: this field's own
+  # ChainedInvokeStartedDetails.DurableExecutionArn requirement in 15 of
+  # this suite's 16 requirements is only satisfiable when the INVOKED
+  # TARGET is itself durable - confirmed via a real, deployed experiment,
+  # not assumed). Kept as a plain AWS::Lambda::Function resource (not
+  # AWS::Serverless::Function) since it has no TestingMetadata/
+  # conformance-suite registration of its own - only DurableConfig is
+  # added explicitly here (Globals: Function: DurableConfig, above, only
+  # applies to AWS::Serverless::Function resources, not plain
+  # AWS::Lambda::Function ones like this).
+  #
+  # The conformance test runner itself never invokes EchoTarget directly
+  # (it has no TestingMetadata.TestDescription and is not one of the ids
+  # the conformance suite validates against) - only this template's own
+  # Invoke5N* functions call it, via operations.Invoke, at runtime.
+  #
+  # No resource-based (Lambda function) policy is attached to EchoTarget
+  # granting any specific caller lambda:InvokeFunction - confirmed
+  # unnecessary by a real, successful end-to-end deployment and
+  # operations.Invoke call during this session (see this session's own
+  # commit message/report for the exact verification): a same-account
+  # Invoke call only needs the CALLER's own IDENTITY policy (i.e.
+  # ConformanceExecutionRole, which every Invoke5N* function already
+  # shares and reuses - see EchoTargetInvokePolicy below) to allow
+  # lambda:InvokeFunction on the target's ARN; Lambda's own resource-based
+  # policy is only required for a CROSS-account or service-principal
+  # caller, neither of which applies here.
+  EchoTarget:
+    Type: AWS::Lambda::Function
+    Properties:
+      PackageType: Image
+      Code:
+        ImageUri: !Ref EchoTargetImageUri
+      Role: !GetAtt EchoTargetExecutionRole.Arn
+      Timeout: 30
+      MemorySize: 256
+      Architectures:
+        - arm64
+      DurableConfig:
+        ExecutionTimeout: 30
+        RetentionPeriodInDays: 1
+
+  # EchoTargetVersion publishes an immutable, QUALIFIED version of
+  # EchoTarget - required because a durable function cannot be invoked
+  # via an unqualified ARN/$LATEST (confirmed via a real, deployed
+  # InvalidParameterValueException: "You cannot invoke a durable function
+  # using an unqualified ARN" - the exact same constraint this repo's own
+  # examples already work around by publishing a version manually after
+  # each deploy, e.g. large-payload-go-example/completion-config-go-example -
+  # see docs/remaining-work.md's own redeployment writeups). Description
+  # is set to EchoTargetImageUri's OWN current value specifically so this
+  # resource's logical id can stay fixed across deploys while still
+  # forcing a fresh version publish whenever the image changes:
+  # AWS::Lambda::Version's own Description property requires Replacement
+  # on update (per its own CloudFormation Template Reference), so tying
+  # it directly to the parameter that actually changes when the target's
+  # code changes makes CloudFormation replace this resource (publish a
+  # new version) exactly when needed, with no manual
+  # `aws lambda publish-version` step required the way the examples above
+  # still need. (CodeSha256 was tried first and rejected by `sam validate
+  # --lint`: GetAtt does not expose that attribute on
+  # AWS::Lambda::Function - only Arn/SnapStartResponse do.)
+  EchoTargetVersion:
+    Type: AWS::Lambda::Version
+    Properties:
+      FunctionName: !Ref EchoTarget
+      Description: !Sub 'image: ${EchoTargetImageUri}'
+
+  # EchoTargetVersion is never invoked directly - handlers use
+  # !Ref EchoTargetVersion, whose Ref return value is the qualified
+  # version ARN.
+
+  # EchoTargetTenant is a SECOND, tenant-isolation-enabled deployment of
+  # the SAME echo-target image, used ONLY by requirement 5-8 ("Invoke
+  # with tenantId"). This is a separate function, not a property added to
+  # EchoTarget itself, for two real, confirmed reasons this session
+  # discovered the hard way (both via real, deployed, then-reverted
+  # attempts - not guessed):
+  #
+  #   1. TenancyConfig.TenantIsolationMode can ONLY be set at function
+  #      CREATION time (AWS Lambda's own documentation, docs.aws.amazon.
+  #      com/lambda/latest/dg/tenant-isolation-configure.html: "You
+  #      cannot enable tenant isolation on existing functions") - so it
+  #      cannot be conditionally toggled on a single shared EchoTarget
+  #      resource depending on which Invoke5N* function happens to be
+  #      calling it.
+  #   2. More importantly, tenant isolation is NOT merely additive/
+  #      optional once enabled on a function - confirmed by a real,
+  #      deployed regression this session hit directly: after adding
+  #      TenancyConfig to EchoTarget itself (rather than a separate
+  #      function), EVERY OTHER Invoke5N* requirement that does NOT pass
+  #      a TenantId (5-1 through 5-7, 5-9 through 5-16) started failing
+  #      with a real, observed ChainedInvokeFailed error: "The invoked
+  #      function is enabled with tenancy configuration. Add a valid
+  #      tenant ID in your request and try again." (InvalidParameterValue
+  #      Exception) - i.e. enabling tenant isolation makes a TenantId
+  #      REQUIRED on every single invocation of that function, not just
+  #      permitted. A single shared target genuinely cannot serve both
+  #      "tenant ID required" (5-8) and "tenant ID must be absent" (every
+  #      other requirement) simultaneously - hence this second, dedicated
+  #      function, deployed from the exact same echo-target image (same
+  #      EchoTargetImageUri parameter, same durable design - see that
+  #      module's own main.go doc comment) with ONLY the TenancyConfig
+  #      property differing. 5-8's own ExpectedExecutionHistory does not
+  #      assert ChainedInvokeStartedDetails.DurableExecutionArn (unlike
+  #      every other Invoke5N* requirement), so this target's own
+  #      durability is not independently exercised by 5-8 itself - it is
+  #      durable purely because it is built from the identical image as
+  #      EchoTarget, not because 5-8 itself requires it.
+  EchoTargetTenant:
+    Type: AWS::Lambda::Function
+    Properties:
+      PackageType: Image
+      Code:
+        ImageUri: !Ref EchoTargetImageUri
+      Role: !GetAtt EchoTargetExecutionRole.Arn
+      Timeout: 30
+      MemorySize: 256
+      Architectures:
+        - arm64
+      DurableConfig:
+        ExecutionTimeout: 30
+        RetentionPeriodInDays: 1
+      TenancyConfig:
+        TenantIsolationMode: PER_TENANT
+
+  # EchoTargetTenantVersion mirrors EchoTargetVersion above for the
+  # SAME reason - EchoTargetTenant is also durable, so it also needs a
+  # qualified ARN to be invocable at all.
+  EchoTargetTenantVersion:
+    Type: AWS::Lambda::Version
+    Properties:
+      FunctionName: !Ref EchoTargetTenant
+      Description: !Sub 'image: ${EchoTargetImageUri}'
+
+  # EchoTargetExecutionRole is EchoTarget's OWN minimal execution role -
+  # deliberately NOT ConformanceExecutionRole (which grants
+  # AWSLambdaBasicDurableExecutionRolePolicy, meaningless for a plain,
+  # non-durable function like this one) - just the plain
+  # AWSLambdaBasicExecutionRole every ordinary Lambda function needs for
+  # its own CloudWatch Logs access. Also includes
+  # AWSLambdaBasicDurableExecutionRolePolicy (added when this target
+  # became durable - see main.go's own doc for why - mirroring
+  # ConformanceExecutionRole's own identical pair of managed policies
+  # above): a durable function's own runtime needs this to make its OWN
+  # checkpoint API calls back to the Lambda service, independent of
+  # anything its CALLER's role (ConformanceExecutionRole) grants for
+  # invoking IT.
+  EchoTargetExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicDurableExecutionRolePolicy
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  # EchoTargetInvokePolicy grants ConformanceExecutionRole (shared by
+  # every Invoke5N* function below, exactly like every other suite's
+  # functions already share it) permission to actually call EchoTarget -
+  # the CALLER-side identity policy a same-account operations.Invoke call
+  # genuinely needs (see EchoTarget's own doc comment above for why no
+  # resource-based policy on EchoTarget itself is required instead).
+  # Grants on BOTH the base function ARN and a wildcard version/alias
+  # suffix (EchoTarget.Arn is the UNQUALIFIED ARN; the actual invoke
+  # target used by every Invoke5N* handler is EchoTargetVersion's own
+  # qualified ARN - see that resource's own doc for why a durable target
+  # needs one - lambda:InvokeFunction's own resource pattern matching
+  # requires the wildcard suffix to cover both an unqualified Resource
+  # entry and any :N-qualified one).
+  EchoTargetInvokePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: ConformanceEchoTargetInvokePolicy
+      Roles:
+        - !Ref ConformanceExecutionRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: lambda:InvokeFunction
+            Resource:
+              - !GetAtt EchoTarget.Arn
+              - !Sub '${EchoTarget.Arn}:*'
+              - !GetAtt EchoTargetTenant.Arn
+              - !Sub '${EchoTargetTenant.Arn}:*'
+
+  Invoke5N1:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "5-1"
+          CONFORMANCE_ECHO_TARGET_ARN: !Ref EchoTargetVersion
+    TestingMetadata:
+      TestDescription:
+        - "5-1"
+
+  Invoke5N2:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "5-2"
+          CONFORMANCE_ECHO_TARGET_ARN: !Ref EchoTargetVersion
+    TestingMetadata:
+      TestDescription:
+        - "5-2"
+
+  Invoke5N3:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "5-3"
+          CONFORMANCE_ECHO_TARGET_ARN: !Ref EchoTargetVersion
+    TestingMetadata:
+      TestDescription:
+        - "5-3"
+
+  Invoke5N4:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "5-4"
+          CONFORMANCE_ECHO_TARGET_ARN: !Ref EchoTargetVersion
+    TestingMetadata:
+      TestDescription:
+        - "5-4"
+
+  Invoke5N5:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "5-5"
+          CONFORMANCE_ECHO_TARGET_ARN: !Ref EchoTargetVersion
+    TestingMetadata:
+      TestDescription:
+        - "5-5"
+
+  Invoke5N6:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "5-6"
+          CONFORMANCE_ECHO_TARGET_ARN: !Ref EchoTargetVersion
+    TestingMetadata:
+      TestDescription:
+        - "5-6"
+
+  Invoke5N7:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "5-7"
+          CONFORMANCE_ECHO_TARGET_ARN: !Ref EchoTargetVersion
+    TestingMetadata:
+      TestDescription:
+        - "5-7"
+
+  Invoke5N8:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "5-8"
+          # Invoke5N8 (only) targets EchoTargetTenant, not EchoTarget -
+          # see EchoTargetTenant's own doc comment above for why
+          # requirement 5-8 ("Invoke with tenantId") needs a SEPARATE,
+          # tenant-isolation-enabled target function rather than the
+          # plain EchoTarget every other Invoke5N* function uses.
+          CONFORMANCE_ECHO_TARGET_ARN: !Ref EchoTargetTenantVersion
+    TestingMetadata:
+      TestDescription:
+        - "5-8"
+
+  Invoke5N9:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "5-9"
+          CONFORMANCE_ECHO_TARGET_ARN: !Ref EchoTargetVersion
+    TestingMetadata:
+      TestDescription:
+        - "5-9"
+
+  Invoke5N10:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "5-10"
+          CONFORMANCE_ECHO_TARGET_ARN: !Ref EchoTargetVersion
+    TestingMetadata:
+      TestDescription:
+        - "5-10"
+
+  Invoke5N11:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "5-11"
+          CONFORMANCE_ECHO_TARGET_ARN: !Ref EchoTargetVersion
+    TestingMetadata:
+      TestDescription:
+        - "5-11"
+
+  Invoke5N12:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "5-12"
+          CONFORMANCE_ECHO_TARGET_ARN: !Ref EchoTargetVersion
+    TestingMetadata:
+      TestDescription:
+        - "5-12"
+
+  Invoke5N13:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "5-13"
+          CONFORMANCE_ECHO_TARGET_ARN: !Ref EchoTargetVersion
+    TestingMetadata:
+      TestDescription:
+        - "5-13"
+
+  Invoke5N14:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "5-14"
+          CONFORMANCE_ECHO_TARGET_ARN: !Ref EchoTargetVersion
+    TestingMetadata:
+      TestDescription:
+        - "5-14"
+
+  Invoke5N15:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "5-15"
+          CONFORMANCE_ECHO_TARGET_ARN: !Ref EchoTargetVersion
+    TestingMetadata:
+      TestDescription:
+        - "5-15"
+
+  Invoke5N16:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "5-16"
+          CONFORMANCE_ECHO_TARGET_ARN: !Ref EchoTargetVersion
+    TestingMetadata:
+      TestDescription:
+        - "5-16"
+
+  WaitForCondition6N1:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "6-1"
+    TestingMetadata:
+      TestDescription:
+        - "6-1"
+
+  WaitForCondition6N2:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "6-2"
+    TestingMetadata:
+      TestDescription:
+        - "6-2"
+
+  WaitForCondition6N3:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "6-3"
+    TestingMetadata:
+      TestDescription:
+        - "6-3"
+
+  WaitForCondition6N4:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "6-4"
+    TestingMetadata:
+      TestDescription:
+        - "6-4"
+
+  WaitForCondition6N5:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "6-5"
+    TestingMetadata:
+      TestDescription:
+        - "6-5"
+
+  WaitForCondition6N6:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "6-6"
+    TestingMetadata:
+      TestDescription:
+        - "6-6"
+
+  WaitForCondition6N7:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "6-7"
+    TestingMetadata:
+      TestDescription:
+        - "6-7"
+
+  WaitForCondition6N8:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "6-8"
+    TestingMetadata:
+      TestDescription:
+        - "6-8"
+
+  WaitForCondition6N9:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "6-9"
+    TestingMetadata:
+      TestDescription:
+        - "6-9"
+
+  WaitForCondition6N10:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "6-10"
+    TestingMetadata:
+      TestDescription:
+        - "6-10"
+
+  WaitForCondition6N11:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "6-11"
+    TestingMetadata:
+      TestDescription:
+        - "6-11"
+
+  WaitForCondition6N12:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "6-12"
+    TestingMetadata:
+      TestDescription:
+        - "6-12"
+
+  WaitForCondition6N13:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "6-13"
+    TestingMetadata:
+      TestDescription:
+        - "6-13"
+
+  WaitForCallback7N1:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "7-1"
+    TestingMetadata:
+      TestDescription:
+        - "7-1"
+
+  WaitForCallback7N2:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "7-2"
+    TestingMetadata:
+      TestDescription:
+        - "7-2"
+
+  WaitForCallback7N3:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "7-3"
+    TestingMetadata:
+      TestDescription:
+        - "7-3"
+
+  WaitForCallback7N4:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "7-4"
+    TestingMetadata:
+      TestDescription:
+        - "7-4"
+
+  WaitForCallback7N5:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "7-5"
+    TestingMetadata:
+      TestDescription:
+        - "7-5"
+
+  WaitForCallback7N6:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "7-6"
+    TestingMetadata:
+      TestDescription:
+        - "7-6"
+
+  WaitForCallback7N7:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "7-7"
+    TestingMetadata:
+      TestDescription:
+        - "7-7"
+
+  WaitForCallback7N8:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "7-8"
+    TestingMetadata:
+      TestDescription:
+        - "7-8"
+
+  WaitForCallback7N9:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "7-9"
+    TestingMetadata:
+      TestDescription:
+        - "7-9"
+
+  WaitForCallback7N10:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "7-10"
+    TestingMetadata:
+      TestDescription:
+        - "7-10"
+
+  WaitForCallback7N11:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "7-11"
+    TestingMetadata:
+      TestDescription:
+        - "7-11"
+
+  WaitForCallback7N12:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "7-12"
+    TestingMetadata:
+      TestDescription:
+        - "7-12"
+
+  WaitForCallback7N13:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "7-13"
+    TestingMetadata:
+      TestDescription:
+        - "7-13"
+
+  WaitForCallback7N14:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "7-14"
+    TestingMetadata:
+      TestDescription:
+        - "7-14"
+
+  WaitForCallback7N15:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "7-15"
+    TestingMetadata:
+      TestDescription:
+        - "7-15"
+
+
+  Parallel8N1:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "8-1"
+    TestingMetadata:
+      TestDescription:
+        - "8-1"
+
+  Parallel8N2:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "8-2"
+    TestingMetadata:
+      TestDescription:
+        - "8-2"
+
+  Parallel8N3:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "8-3"
+    TestingMetadata:
+      TestDescription:
+        - "8-3"
+
+  Parallel8N4:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "8-4"
+    TestingMetadata:
+      TestDescription:
+        - "8-4"
+
+  Parallel8N5:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "8-5"
+    TestingMetadata:
+      TestDescription:
+        - "8-5"
+
+  Parallel8N6:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "8-6"
+    TestingMetadata:
+      TestDescription:
+        - "8-6"
+
+  Parallel8N7:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "8-7"
+    TestingMetadata:
+      TestDescription:
+        - "8-7"
+
+  Parallel8N8:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "8-8"
+    TestingMetadata:
+      TestDescription:
+        - "8-8"
+
+  Parallel8N9:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "8-9"
+    TestingMetadata:
+      TestDescription:
+        - "8-9"
+
+  Parallel8N10:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "8-10"
+    TestingMetadata:
+      TestDescription:
+        - "8-10"
+
+  Parallel8N11:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "8-11"
+    TestingMetadata:
+      TestDescription:
+        - "8-11"
+
+  # Parallel8N12 ("Parallel with FLAT nesting") - FIXED, now a real,
+  # deployed function. Previously undeclared here (this comment used to
+  # explain why: this Go SDK's operations.Parallel had no "nesting mode"
+  # concept at all). That conclusion was re-examined per explicit user
+  # request and found to be a real, buildable feature gap, not a
+  # permanent limitation - the JS reference SDK has a genuine, public,
+  # documented NestingType enum (packages/aws-durable-execution-sdk-js/
+  # src/types/batch.ts) plumbed into a confirmed virtualContext
+  # mechanism (run-in-child-context-handler.ts). Implemented as
+  # operations.NestingMode/WithParallelNesting[TOut](operations.
+  # NestingModeFlat) (pkg/durable/operations/batch.go), built on a new
+  # dcontext.Context.NewVirtualChildWithName primitive (pkg/durable/
+  # context/dcontext.go) - see handlers/parallel_8_12.go for this
+  # requirement's own real handler and the full fix writeup.
+  Parallel8N12:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "8-12"
+    TestingMetadata:
+      TestDescription:
+        - "8-12"
+
+  Parallel8N13:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "8-13"
+    TestingMetadata:
+      TestDescription:
+        - "8-13"
+
+  Parallel8N14:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "8-14"
+    TestingMetadata:
+      TestDescription:
+        - "8-14"
+
+  Parallel8N15:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "8-15"
+    TestingMetadata:
+      TestDescription:
+        - "8-15"
+
+  Parallel8N16:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "8-16"
+    TestingMetadata:
+      TestDescription:
+        - "8-16"
+
+  Parallel8N17:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "8-17"
+    TestingMetadata:
+      TestDescription:
+        - "8-17"
+
+  Parallel8N18:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "8-18"
+    TestingMetadata:
+      TestDescription:
+        - "8-18"
+
+  Parallel8N19:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "8-19"
+    TestingMetadata:
+      TestDescription:
+        - "8-19"
+
+  Parallel8N20:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "8-20"
+    TestingMetadata:
+      TestDescription:
+        - "8-20"
+
+  Parallel8N21:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "8-21"
+    TestingMetadata:
+      TestDescription:
+        - "8-21"
+
+  Parallel8N22:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "8-22"
+    TestingMetadata:
+      TestDescription:
+        - "8-22"
+
+  Map9N1:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "9-1"
+    TestingMetadata:
+      TestDescription:
+        - "9-1"
+
+  Map9N2:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "9-2"
+    TestingMetadata:
+      TestDescription:
+        - "9-2"
+
+  Map9N3:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "9-3"
+    TestingMetadata:
+      TestDescription:
+        - "9-3"
+
+  Map9N4:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "9-4"
+    TestingMetadata:
+      TestDescription:
+        - "9-4"
+
+  Map9N5:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "9-5"
+    TestingMetadata:
+      TestDescription:
+        - "9-5"
+
+  Map9N6:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "9-6"
+    TestingMetadata:
+      TestDescription:
+        - "9-6"
+
+  Map9N7:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "9-7"
+    TestingMetadata:
+      TestDescription:
+        - "9-7"
+
+  Map9N8:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "9-8"
+    TestingMetadata:
+      TestDescription:
+        - "9-8"
+
+  Map9N9:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "9-9"
+    TestingMetadata:
+      TestDescription:
+        - "9-9"
+
+  Map9N10:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "9-10"
+    TestingMetadata:
+      TestDescription:
+        - "9-10"
+
+  Map9N11:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "9-11"
+    TestingMetadata:
+      TestDescription:
+        - "9-11"
+
+  # Map9N12 ("Map with FLAT nesting") - FIXED, now a real, deployed
+  # function. Previously undeclared here (this comment used to explain
+  # why: this Go SDK's operations.Map had no "nesting mode" concept at
+  # all). Same fix and root-cause history as Parallel8N12 one level up
+  # (see that resource's own comment, and handlers/parallel_8_12.go's
+  # doc, for the full writeup) - operations.WithMapNesting[TIn,
+  # TOut](operations.NestingModeFlat) is Map's own equivalent option,
+  # built on the SAME shared runBatchItem/NewVirtualChildWithName
+  # mechanism, since Map and Parallel already share that single
+  # implementation for their per-item/per-branch lifecycle. See
+  # handlers/map_9_12.go for this requirement's own real handler.
+  Map9N12:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "9-12"
+    TestingMetadata:
+      TestDescription:
+        - "9-12"
+
+  # Map9N13 ("Map with a custom item namer") - FIXED, now a real,
+  # deployed function. Previously undeclared here (this comment used to
+  # explain why: this Go SDK's operations.Map had no item-namer concept
+  # at all). That conclusion was re-examined per explicit user request
+  # and found to be a real, buildable feature gap, not a permanent
+  # limitation - the JS reference SDK has a genuine, public, distinct
+  # MapConfig.itemNamer field (types/batch.ts), wired directly into each
+  # iteration's own checkpoint Name (map-handler.ts). Implemented as
+  # operations.WithMapItemNamer[TIn, TOut](func(item TIn, index int)
+  # string) (pkg/durable/operations/batch.go) - see handlers/map_9_13.go
+  # for this requirement's own real handler and the full fix writeup.
+  Map9N13:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "9-13"
+    TestingMetadata:
+      TestDescription:
+        - "9-13"
+
+  Map9N14:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "9-14"
+    TestingMetadata:
+      TestDescription:
+        - "9-14"
+
+  Map9N15:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "9-15"
+    TestingMetadata:
+      TestDescription:
+        - "9-15"
+
+  Map9N16:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "9-16"
+    TestingMetadata:
+      TestDescription:
+        - "9-16"
+
+  Map9N17:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "9-17"
+    TestingMetadata:
+      TestDescription:
+        - "9-17"
+
+  Map9N18:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "9-18"
+    TestingMetadata:
+      TestDescription:
+        - "9-18"
+
+  # Map9N19 ("Map with an operation-level (whole-result) serdes -
+  # serialize on a fresh operation") - FIXED, now a real, deployed
+  # function. Previously undeclared here (this comment used to explain
+  # why: this Go SDK's WithMapSerdes was exclusively a per-item
+  # serializer, and finishBatch's own outer BatchResult checkpoint
+  # deliberately always used plain encoding/json regardless of any
+  # serdes configured). That conclusion was re-examined per explicit
+  # user request and found to be a real, buildable feature gap, not a
+  # permanent limitation - the JS reference SDK has a genuine, public,
+  # DISTINCT MapConfig.serdes field (types/batch.ts: "for parent
+  # context", separate from itemSerdes's own "for each item"), and its
+  # own mechanism (map-handler.ts forwards config.serdes straight into
+  # runInChildContext's OWN options.serdes) confirms this is the exact
+  # same generic per-context serdes hook RunInChildContext/
+  # WithChildSerdes already implements one level down in this very Go
+  # SDK, not a Map/Parallel-specific mechanism at all. Implemented as
+  # operations.WithMapResultSerdes[TIn, TOut](types.Serdes)
+  # (pkg/durable/operations/batch.go), which finishBatch/
+  # deserializeBatchResult now dispatch to (by concrete type) instead of
+  # the old, unconditional batchResultWire[TOut]/MarshalJSON path - see
+  # handlers/map_9_19.go for this requirement's own real handler and the
+  # full fix writeup.
+  Map9N19:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "9-19"
+    TestingMetadata:
+      TestDescription:
+        - "9-19"
+
+  # Map9N20 ("Map with an operation-level serdes - deserialize on
+  # replay") - FIXED, now a real, deployed function. Same fix and
+  # root-cause history as Map9N19 directly above (see that resource's
+  # own comment, and handlers/map_9_19.go's doc, for the full writeup) -
+  # this is the deserialize-on-replay sibling of the exact same gap:
+  # deserializeBatchResult now dispatches to the caller's own
+  # WithMapResultSerdes's Deserialize (by concrete type) instead of
+  # unconditionally unmarshalling []itemResultWire[TOut] via plain
+  # encoding/json. See handlers/map_9_20.go for this requirement's own
+  # real handler (a durable Wait after the map forces the real backend
+  # to replay past the already-SUCCEEDED Map context on a later
+  # invocation, proving Deserialize genuinely runs).
+  Map9N20:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt ConformanceExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "9-20"
+    TestingMetadata:
+      TestDescription:
+        - "9-20"
+

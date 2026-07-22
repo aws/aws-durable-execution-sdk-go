@@ -1,0 +1,26 @@
+[
+  {
+    "depth": 0,
+    "index": 1,
+    "type": "CONTEXT",
+    "subType": "RunInChildContext",
+    "status": "FAILED",
+    "name": "payment"
+  },
+  {
+    "depth": 1,
+    "index": 1,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED",
+    "name": "validate-amount"
+  },
+  {
+    "depth": 1,
+    "index": 2,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "FAILED",
+    "name": "charge-card"
+  }
+]

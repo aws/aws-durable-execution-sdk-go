@@ -1,0 +1,34 @@
+[
+  {
+    "depth": 0,
+    "index": 1,
+    "type": "CONTEXT",
+    "subType": "RunInChildContext",
+    "status": "SUCCEEDED",
+    "name": "payment"
+  },
+  {
+    "depth": 1,
+    "index": 1,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED",
+    "name": "validate-amount"
+  },
+  {
+    "depth": 1,
+    "index": 2,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED",
+    "name": "charge-card"
+  },
+  {
+    "depth": 0,
+    "index": 2,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED",
+    "name": "create-shipping-label"
+  }
+]

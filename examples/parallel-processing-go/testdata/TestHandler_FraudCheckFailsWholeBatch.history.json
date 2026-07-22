@@ -1,0 +1,74 @@
+[
+  {
+    "depth": 0,
+    "index": 1,
+    "type": "CONTEXT",
+    "subType": "Parallel",
+    "status": "SUCCEEDED",
+    "name": "order-checks"
+  },
+  {
+    "depth": 1,
+    "index": 1,
+    "type": "CONTEXT",
+    "subType": "ParallelBranch",
+    "status": "FAILED",
+    "name": "order-checks[0]"
+  },
+  {
+    "depth": 2,
+    "index": 1,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "FAILED",
+    "name": "fraud-check"
+  },
+  {
+    "depth": 1,
+    "index": 2,
+    "type": "CONTEXT",
+    "subType": "ParallelBranch",
+    "status": "SUCCEEDED",
+    "name": "order-checks[1]"
+  },
+  {
+    "depth": 2,
+    "index": 1,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED",
+    "name": "inventory-check"
+  },
+  {
+    "depth": 1,
+    "index": 3,
+    "type": "CONTEXT",
+    "subType": "ParallelBranch",
+    "status": "SUCCEEDED",
+    "name": "order-checks[2]"
+  },
+  {
+    "depth": 2,
+    "index": 1,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED",
+    "name": "address-validation"
+  },
+  {
+    "depth": 1,
+    "index": 4,
+    "type": "CONTEXT",
+    "subType": "ParallelBranch",
+    "status": "SUCCEEDED",
+    "name": "order-checks[3]"
+  },
+  {
+    "depth": 2,
+    "index": 1,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED",
+    "name": "payment-authorization"
+  }
+]

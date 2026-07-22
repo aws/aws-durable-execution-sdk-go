@@ -1,0 +1,98 @@
+[
+  {
+    "depth": 0,
+    "index": 1,
+    "type": "CONTEXT",
+    "subType": "Map",
+    "status": "SUCCEEDED",
+    "name": "price-orders"
+  },
+  {
+    "depth": 1,
+    "index": 1,
+    "type": "CONTEXT",
+    "subType": "MapIteration",
+    "status": "SUCCEEDED",
+    "name": "price-orders[0]"
+  },
+  {
+    "depth": 2,
+    "index": 1,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED",
+    "name": "price-lookup"
+  },
+  {
+    "depth": 1,
+    "index": 2,
+    "type": "CONTEXT",
+    "subType": "MapIteration",
+    "status": "SUCCEEDED",
+    "name": "price-orders[1]"
+  },
+  {
+    "depth": 2,
+    "index": 1,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED",
+    "name": "price-lookup"
+  },
+  {
+    "depth": 1,
+    "index": 3,
+    "type": "CONTEXT",
+    "subType": "MapIteration",
+    "status": "SUCCEEDED",
+    "name": "price-orders[2]"
+  },
+  {
+    "depth": 2,
+    "index": 1,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED",
+    "name": "price-lookup"
+  },
+  {
+    "depth": 0,
+    "index": 2,
+    "type": "CONTEXT",
+    "subType": "Parallel",
+    "status": "SUCCEEDED",
+    "name": "pre-checkout-verifications"
+  },
+  {
+    "depth": 1,
+    "index": 1,
+    "type": "CONTEXT",
+    "subType": "ParallelBranch",
+    "status": "SUCCEEDED",
+    "name": "pre-checkout-verifications[0]"
+  },
+  {
+    "depth": 2,
+    "index": 1,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED",
+    "name": "fraud-check"
+  },
+  {
+    "depth": 1,
+    "index": 2,
+    "type": "CONTEXT",
+    "subType": "ParallelBranch",
+    "status": "SUCCEEDED",
+    "name": "pre-checkout-verifications[1]"
+  },
+  {
+    "depth": 2,
+    "index": 1,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED",
+    "name": "inventory-check"
+  }
+]

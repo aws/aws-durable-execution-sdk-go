@@ -1,0 +1,120 @@
+name: Build
+
+# Mirrors the other three reference SDKs' "Build" workflow (task 22 in
+# docs/remaining-work.md, §10): build/vet/format/test on every push and
+# pull request targeting the golang branch, across the root module AND
+# every example module (each example is an independent Go module with
+# its own go.mod/go.sum - see the loop in the "Build and test examples"
+# step below, mirroring the exact verification loop this repo's
+# docs/subagent-briefing.md prescribes for every session).
+on:
+  push:
+    branches: [golang]
+  pull_request:
+    branches: [golang]
+
+# Least-privilege default: this workflow only reads the repo and writes
+# nothing (no releases, no PR comments, no packages) - it does not need
+# any elevated permissions.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build, vet, format, test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # Keep in sync with this repo's go.mod `go` directive (root
+          # module and every example module all currently pin `go 1.24`).
+          go-version: "1.24"
+          # actions/setup-go's built-in module/build cache, keyed off the
+          # committed go.sum files - safe and standard; unrelated to the
+          # GOPROXY concern documented below.
+          cache: true
+
+      # IMPORTANT - GOPROXY/GOSUMDB, read before "fixing" this workflow:
+      #
+      # This repo's own docs/subagent-briefing.md tells contributors to
+      # prefix Go commands with `GOPROXY=direct GOSUMDB=off`. That is a
+      # workaround for the SANDBOXED DEVELOPMENT ENVIRONMENT this SDK was
+      # built in, where the real Go module proxy (proxy.golang.org) is
+      # network-blocked, but direct git/HTTPS fetches of module source
+      # (bypassing the proxy) still work. It is NOT a statement that this
+      # project requires GOPROXY=direct to build, and it must not be
+      # copy-pasted into CI:
+      #
+      #   - GitHub-hosted runners have normal, unrestricted outbound
+      #     internet access and can reach proxy.golang.org fine. There is
+      #     no reason to bypass the module proxy here, and doing so would
+      #     make every CI run slower (module-proxy caching is faster than
+      #     fetching raw source from GitHub) and would silently mask a
+      #     real proxy.golang.org outage as a false "build passes"
+      #     signal, since GOPROXY=direct takes a completely different
+      #     code path than what a normal `go build` on a contributor's
+      #     own machine (or a real release build) would use.
+      #   - GOSUMDB=off disables checksum-database verification of
+      #     fetched modules against sum.golang.org. That's a meaningful
+      #     supply-chain safety check this workflow should keep enabled -
+      #     it was only ever turned off locally because the sandboxed dev
+      #     environment couldn't reach sum.golang.org either, not because
+      #     the check itself is undesirable.
+      #
+      # So: no GOPROXY/GOSUMDB overrides below. Go's normal defaults
+      # (GOPROXY=https://proxy.golang.org,direct, GOSUMDB=sum.golang.org)
+      # apply, exactly as they would for any other Go project's CI.
+      #
+      # Honesty note (see docs/remaining-work.md task 22's writeup for the
+      # full context): the sandboxed environment used to author this
+      # workflow could not itself reach proxy.golang.org, so the fetch
+      # path this job actually relies on (a real GOPROXY=proxy.golang.org
+      # module download on a GitHub-hosted runner) could not be
+      # end-to-end verified from that sandbox. The build/vet/fmt/test
+      # commands themselves WERE verified in that sandbox, with
+      # GOPROXY=direct GOSUMDB=off substituted back in locally only for
+      # that verification - never in this file.
+
+      - name: go build (root module)
+        run: go build ./...
+
+      - name: go vet (root module)
+        run: go vet ./...
+
+      - name: gofmt check (root module)
+        # gofmt -l lists files that are not correctly formatted; a
+        # non-empty listing must fail the build. `test -z` on the
+        # command's output achieves exactly that without a separate
+        # shell script.
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "The following files are not gofmt-formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go test -race (root module)
+        run: go test ./... -race
+
+      - name: Build and test example modules
+        # Each example under examples/ is an independent Go module (its
+        # own go.mod/go.sum, `replace`-directive-pinned to this repo's
+        # root module - see any examples/*/go.mod) rather than part of
+        # the root module's own build list, so it must be built/tested
+        # from within its own directory. Mirrors the exact loop
+        # docs/subagent-briefing.md step 7 prescribes for verifying every
+        # example after a change to a shared package - reused here
+        # verbatim (minus the GOPROXY=direct/GOSUMDB=off prefix, per the
+        # note above) so CI enforces the same bar every session's own
+        # manual verification already had to clear.
+        run: |
+          set -e
+          for d in examples/simple-step-go examples/run-in-child-context-go examples/wait-for-callback-go examples/wait-for-condition-go examples/chained-invoke-go examples/map-parallel-go; do
+            echo "=== $d ==="
+            (cd "$d" && go build ./... && go test ./... -race)
+          done

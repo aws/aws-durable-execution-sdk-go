@@ -1,0 +1,9 @@
+[
+  {
+    "depth": 0,
+    "index": 1,
+    "type": "CHAINED_INVOKE",
+    "status": "SUCCEEDED",
+    "name": "check-inventory-attempt-1"
+  }
+]

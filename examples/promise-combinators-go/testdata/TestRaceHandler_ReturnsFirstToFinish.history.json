@@ -1,0 +1,26 @@
+[
+  {
+    "depth": 0,
+    "index": 1,
+    "type": "CONTEXT",
+    "subType": "Parallel",
+    "status": "SUCCEEDED",
+    "name": "race-vendor-quote"
+  },
+  {
+    "depth": 1,
+    "index": 1,
+    "type": "CONTEXT",
+    "subType": "ParallelBranch",
+    "status": "SUCCEEDED",
+    "name": "race-vendor-quote[0]"
+  },
+  {
+    "depth": 2,
+    "index": 1,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED",
+    "name": "quote-acme"
+  }
+]

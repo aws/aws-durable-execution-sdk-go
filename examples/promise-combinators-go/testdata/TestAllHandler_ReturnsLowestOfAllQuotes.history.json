@@ -1,0 +1,58 @@
+[
+  {
+    "depth": 0,
+    "index": 1,
+    "type": "CONTEXT",
+    "subType": "Parallel",
+    "status": "SUCCEEDED",
+    "name": "all-vendor-quotes"
+  },
+  {
+    "depth": 1,
+    "index": 1,
+    "type": "CONTEXT",
+    "subType": "ParallelBranch",
+    "status": "SUCCEEDED",
+    "name": "all-vendor-quotes[0]"
+  },
+  {
+    "depth": 2,
+    "index": 1,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED",
+    "name": "quote-acme"
+  },
+  {
+    "depth": 1,
+    "index": 2,
+    "type": "CONTEXT",
+    "subType": "ParallelBranch",
+    "status": "SUCCEEDED",
+    "name": "all-vendor-quotes[1]"
+  },
+  {
+    "depth": 2,
+    "index": 1,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED",
+    "name": "quote-globex"
+  },
+  {
+    "depth": 1,
+    "index": 3,
+    "type": "CONTEXT",
+    "subType": "ParallelBranch",
+    "status": "SUCCEEDED",
+    "name": "all-vendor-quotes[2]"
+  },
+  {
+    "depth": 2,
+    "index": 1,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED",
+    "name": "quote-initech"
+  }
+]

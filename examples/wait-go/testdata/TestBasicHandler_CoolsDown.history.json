@@ -1,0 +1,10 @@
+[
+  {
+    "depth": 0,
+    "index": 1,
+    "type": "WAIT",
+    "subType": "Wait",
+    "status": "SUCCEEDED",
+    "name": "cool-down"
+  }
+]

@@ -1,0 +1,71 @@
+name: CodeQL
+
+# Static analysis for Go, mirroring the other three reference SDKs'
+# CodeQL workflow (task 22 in docs/remaining-work.md, §10). Follows
+# GitHub's own current documented advanced-setup pattern for CodeQL
+# (github/codeql-action/{init,analyze}@v4, confirmed via
+# docs.github.com/en/code-security/code-scanning/creating-an-advanced-setup-for-code-scanning
+# and docs.github.com/en/code-security/reference/code-scanning/workflow-configuration-options
+# at the time this workflow was written) rather than an older/deprecated
+# codeql-action@v1/v2 syntax.
+on:
+  push:
+    branches: [golang]
+  pull_request:
+    branches: [golang]
+  schedule:
+    # Weekly scheduled scan, matching the default CodeQL advanced-setup
+    # template's own convention of not relying solely on push/PR events
+    # to catch newly-published CodeQL query/vulnerability updates against
+    # unchanged code.
+    - cron: "20 14 * * 1"
+
+permissions:
+  # Required by github/codeql-action/analyze to upload SARIF results to
+  # the repository's code scanning alerts.
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    name: Analyze (Go)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # Keep in sync with build.yml / this repo's go.mod `go`
+          # directive.
+          go-version: "1.24"
+          cache: true
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: go
+          # build-mode: autobuild is CodeQL's default for Go and works
+          # for a standard `go build ./...`-shaped module layout like
+          # this repo's; if a future change makes autobuild fail, prefer
+          # switching to build-mode: manual with explicit build steps
+          # over silently dropping this workflow.
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:go"
+
+# Honesty note (see docs/remaining-work.md task 22's writeup): this
+# workflow's YAML was validated for syntactic correctness, and its
+# actions/versions/inputs were cross-checked against GitHub's current
+# published documentation, but - like build.yml - it has NOT been run on
+# a real GitHub Actions runner from within the sandboxed environment this
+# was authored in (no outbound access to api.github.com/GitHub Actions
+# infrastructure). Whether CodeQL's Go autobuild step succeeds against
+# this specific repo layout (root module + six independent example
+# modules) is therefore not end-to-end confirmed.

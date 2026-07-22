@@ -1,0 +1,26 @@
+[
+  {
+    "depth": 0,
+    "index": 1,
+    "type": "CALLBACK",
+    "subType": "Callback",
+    "status": "SUCCEEDED",
+    "name": "carrier-pickup"
+  },
+  {
+    "depth": 0,
+    "index": 2,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED",
+    "name": "register-with-carrier"
+  },
+  {
+    "depth": 0,
+    "index": 3,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED",
+    "name": "check-inventory"
+  }
+]

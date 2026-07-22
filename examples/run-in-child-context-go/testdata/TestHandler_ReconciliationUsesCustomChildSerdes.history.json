@@ -1,0 +1,18 @@
+[
+  {
+    "depth": 0,
+    "index": 1,
+    "type": "CONTEXT",
+    "subType": "RunInChildContext",
+    "status": "SUCCEEDED",
+    "name": "reconciliation"
+  },
+  {
+    "depth": 1,
+    "index": 1,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED",
+    "name": "compute-reconciled-total"
+  }
+]

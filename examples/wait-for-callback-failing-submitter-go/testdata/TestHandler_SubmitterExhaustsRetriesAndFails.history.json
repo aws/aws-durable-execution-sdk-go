@@ -1,0 +1,26 @@
+[
+  {
+    "depth": 0,
+    "index": 1,
+    "type": "CONTEXT",
+    "subType": "WaitForCallback",
+    "status": "FAILED",
+    "name": "failing-submitter-callback"
+  },
+  {
+    "depth": 1,
+    "index": 1,
+    "type": "CALLBACK",
+    "subType": "Callback",
+    "status": "STARTED",
+    "name": "failing-submitter-callback-callback"
+  },
+  {
+    "depth": 1,
+    "index": 2,
+    "type": "STEP",
+    "subType": "Step",
+    "status": "FAILED",
+    "name": "failing-submitter-callback-submit"
+  }
+]
