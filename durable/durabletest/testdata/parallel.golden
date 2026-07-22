@@ -1,0 +1,30 @@
+[
+  {
+    "type": "CONTEXT",
+    "subType": "Parallel",
+    "name": "parallel-work",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "ParallelBranch",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "step-a",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "ParallelBranch",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "step-b",
+    "status": "SUCCEEDED"
+  }
+]

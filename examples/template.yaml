@@ -1,0 +1,2201 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: AWS Lambda Durable Execution SDK for Go - Examples
+
+Parameters:
+  FunctionNamePrefix:
+    Type: String
+    Default: ''
+    Description: Optional prefix for Lambda function names
+
+Globals:
+  Function:
+    Runtime: provided.al2023
+    Timeout: 60
+    MemorySize: 128
+    Architectures:
+      - x86_64
+
+Resources:
+  DurableFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DurableExecutionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:CheckpointDurableExecution
+                  - lambda:GetDurableExecutionState
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - lambda:SendDurableExecutionCallbackSuccess
+                  - lambda:SendDurableExecutionCallbackFailure
+                  - lambda:SendDurableExecutionCallbackHeartbeat
+                Resource: '*'
+
+  # --- Existing examples ---
+
+  OrderFulfillmentFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-order-fulfillment
+      CodeUri: .aws-sam/build-artifacts/order-fulfillment/
+      Handler: bootstrap
+      Description: Order fulfillment workflow demonstrating Step, Wait, Parallel, and child context
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
+  # --- Slice 1: Step & Retry examples ---
+
+  SimpleStepFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-simple-step
+      CodeUri: .aws-sam/build-artifacts/simple-step/
+      Handler: bootstrap
+      Description: Basic step checkpoint
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  NamedStepFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-named-step
+      CodeUri: .aws-sam/build-artifacts/named-step/
+      Handler: bootstrap
+      Description: Step with custom name for observability
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  StepWithRetryFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-step-with-retry
+      CodeUri: .aws-sam/build-artifacts/step-with-retry/
+      Handler: bootstrap
+      Description: Step with custom retry strategy and at-most-once semantics
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  StepsWithRetryFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-steps-with-retry
+      CodeUri: .aws-sam/build-artifacts/steps-with-retry/
+      Handler: bootstrap
+      Description: Multiple steps in a polling loop with retry on each
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
+  AttemptFallbackFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-attempt-fallback
+      CodeUri: .aws-sam/build-artifacts/attempt-fallback/
+      Handler: bootstrap
+      Description: Retry-based supplier fallback chain
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  InterruptedNoRetryFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-interrupted-no-retry
+      CodeUri: .aws-sam/build-artifacts/interrupted-no-retry/
+      Handler: bootstrap
+      Timeout: 5
+      Description: Step interruption with at-most-once semantics and no retry
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  StepErrorDeterminismFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-step-error-determinism
+      CodeUri: .aws-sam/build-artifacts/step-error-determinism/
+      Handler: bootstrap
+      Description: Verifies error properties are deterministic across replay
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  RetryExhaustionFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-retry-exhaustion
+      CodeUri: .aws-sam/build-artifacts/retry-exhaustion/
+      Handler: bootstrap
+      Description: Step that fails all retries demonstrating exhaustion
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  RetryInvokeFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-retry-invoke
+      CodeUri: .aws-sam/build-artifacts/retry-invoke/
+      Handler: bootstrap
+      Description: Retry loop around durable Invoke
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  RetryInvokeTargetFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-retry-invoke-target
+      CodeUri: .aws-sam/build-artifacts/retry-invoke-target/
+      Handler: bootstrap
+      Description: Target function for retry-invoke that fails until attempt threshold
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  RetryCallbackFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-retry-callback
+      CodeUri: .aws-sam/build-artifacts/retry-callback/
+      Handler: bootstrap
+      Description: Retry loop around WaitForCallback
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  # --- Slice 2: Wait & WaitForCondition examples ---
+
+  WaitBasicFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-wait-basic
+      CodeUri: .aws-sam/build-artifacts/wait-basic/
+      Handler: bootstrap
+      Description: Basic wait suspending execution for a fixed duration
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  WaitNamedFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-wait-named
+      CodeUri: .aws-sam/build-artifacts/wait-named/
+      Handler: bootstrap
+      Description: Wait with custom name for observability
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  WaitConfigurableFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-wait-configurable
+      CodeUri: .aws-sam/build-artifacts/wait-configurable/
+      Handler: bootstrap
+      Description: Wait with configurable duration from event payload
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  WaitUnawaitedFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-wait-unawaited
+      CodeUri: .aws-sam/build-artifacts/wait-unawaited/
+      Handler: bootstrap
+      Description: Scheduled wait without blocking on the result
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  WaitForConditionFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-wait-for-condition
+      CodeUri: .aws-sam/build-artifacts/wait-for-condition/
+      Handler: bootstrap
+      Description: Polling loop with checkpointed state between attempts
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  MultipleWaitsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-multiple-waits
+      CodeUri: .aws-sam/build-artifacts/multiple-waits/
+      Handler: bootstrap
+      Description: Sequential wait operations creating multiple suspension cycles
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  # --- Slice 3: Invoke & Child Context examples ---
+
+  InvokeSimpleFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-invoke-simple
+      CodeUri: .aws-sam/build-artifacts/invoke-simple/
+      Handler: bootstrap
+      Description: Simple durable invoke of another function
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  InvokeSimpleTargetFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-invoke-simple-target
+      CodeUri: .aws-sam/build-artifacts/invoke-simple-target/
+      Handler: bootstrap
+      Description: Target function for invoke-simple and chained-invoke
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  InvokeTenantIdFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-invoke-tenant-id
+      CodeUri: .aws-sam/build-artifacts/invoke-tenant-id/
+      Handler: bootstrap
+      Description: Durable invoke with tenant ID isolation
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  InvokeTenantTargetFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-invoke-tenant-target
+      CodeUri: .aws-sam/build-artifacts/invoke-tenant-target/
+      Handler: bootstrap
+      Description: Target function for tenant-isolated invocations
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  ChainedInvokeFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-chained-invoke
+      CodeUri: .aws-sam/build-artifacts/chained-invoke/
+      Handler: bootstrap
+      Description: Sequential chain of durable invocations
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
+  ChildContextBasicFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-child-context-basic
+      CodeUri: .aws-sam/build-artifacts/child-context-basic/
+      Handler: bootstrap
+      Description: Basic child context grouping operations
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  ChildContextVirtualFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-child-context-virtual
+      CodeUri: .aws-sam/build-artifacts/child-context-virtual/
+      Handler: bootstrap
+      Description: Concurrent child context via durable.Go
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  ChildContextSerdesFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-child-context-serdes
+      CodeUri: .aws-sam/build-artifacts/child-context-serdes/
+      Handler: bootstrap
+      Description: Child context with custom serializer
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  ChildContextLargeDataFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-child-context-large-data
+      CodeUri: .aws-sam/build-artifacts/child-context-large-data/
+      Handler: bootstrap
+      Timeout: 120
+      MemorySize: 512
+      Description: Child context with payload exceeding 256KB checkpoint limit
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
+  ChildContextErrorPropagationFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-child-context-error-propagation
+      CodeUri: .aws-sam/build-artifacts/child-context-error-propagation/
+      Handler: bootstrap
+      Description: Error propagation through nested child contexts
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  ChildContextFailingStepFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-child-context-failing-step
+      CodeUri: .aws-sam/build-artifacts/child-context-failing-step/
+      Handler: bootstrap
+      Description: Child context with failing step followed by successful wait
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  ChildContextCheckpointSizeLimitFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-child-context-checkpoint-size-limit
+      CodeUri: .aws-sam/build-artifacts/child-context-checkpoint-size-limit/
+      Handler: bootstrap
+      Timeout: 120
+      MemorySize: 512
+      Description: Child context straddling the 256KB checkpoint size boundary
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
+  ChildOpsPreservationFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-child-ops-preservation
+      CodeUri: .aws-sam/build-artifacts/child-ops-preservation/
+      Handler: bootstrap
+      Description: Child operations survive suspend/resume cycle
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  ChildOpsInvalidDepthFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-child-ops-invalid-depth
+      CodeUri: .aws-sam/build-artifacts/child-ops-invalid-depth/
+      Handler: bootstrap
+      Description: Unhandled child error fails the execution
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  # --- Slice 4: Callback examples (batch 1) ---
+
+  CallbackSenderFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-callback-sender
+      CodeUri: .aws-sam/build-artifacts/callback-sender/
+      Handler: bootstrap
+      Description: Companion Lambda that completes callbacks externally
+      Role: !GetAtt DurableFunctionRole.Arn
+
+  WaitCallbackBasicFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-wait-callback-basic
+      CodeUri: .aws-sam/build-artifacts/wait-callback-basic/
+      Handler: bootstrap
+      Description: Basic WaitForCallback with self-completing submitter
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  WaitCallbackTimeoutFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-wait-callback-timeout
+      CodeUri: .aws-sam/build-artifacts/wait-callback-timeout/
+      Handler: bootstrap
+      Description: WaitForCallback that times out
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  WaitCallbackQuickCompletionFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-wait-callback-quick-completion
+      CodeUri: .aws-sam/build-artifacts/wait-callback-quick-completion/
+      Handler: bootstrap
+      Description: WaitForCallback with immediate completion
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  WaitCallbackAnonymousFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-wait-callback-anonymous
+      CodeUri: .aws-sam/build-artifacts/wait-callback-anonymous/
+      Handler: bootstrap
+      Description: WaitForCallback with anonymous submitter
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  WaitCallbackSubmitterFailureFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-wait-callback-submitter-failure
+      CodeUri: .aws-sam/build-artifacts/wait-callback-submitter-failure/
+      Handler: bootstrap
+      Description: WaitForCallback with failing submitter
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  WaitCallbackFailuresFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-wait-callback-failures
+      CodeUri: .aws-sam/build-artifacts/wait-callback-failures/
+      Handler: bootstrap
+      Description: WaitForCallback with external failure response
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  WaitCallbackSubmitterRetryFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-wait-callback-submitter-retry
+      CodeUri: .aws-sam/build-artifacts/wait-callback-submitter-retry/
+      Handler: bootstrap
+      Description: WaitForCallback with submitter retry strategy
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  CreateCallbackSimpleFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-create-callback-simple
+      CodeUri: .aws-sam/build-artifacts/create-callback-simple/
+      Handler: bootstrap
+      Description: Basic CreateCallback with external completion
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  CreateCallbackTimeoutFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-create-callback-timeout
+      CodeUri: .aws-sam/build-artifacts/create-callback-timeout/
+      Handler: bootstrap
+      Description: CreateCallback that times out
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  CreateCallbackFailuresFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-create-callback-failures
+      CodeUri: .aws-sam/build-artifacts/create-callback-failures/
+      Handler: bootstrap
+      Description: CreateCallback with external failure
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  CreateCallbackConcurrentFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-create-callback-concurrent
+      CodeUri: .aws-sam/build-artifacts/create-callback-concurrent/
+      Handler: bootstrap
+      Description: Multiple concurrent CreateCallback operations
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  # --- Slice 4: Callback examples (batch 2) ---
+
+  WaitCallbackNestedFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-wait-callback-nested
+      CodeUri: .aws-sam/build-artifacts/wait-callback-nested/
+      Handler: bootstrap
+      Description: Nested WaitForCallback across child contexts
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  WaitCallbackSerdesFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-wait-callback-serdes
+      CodeUri: .aws-sam/build-artifacts/wait-callback-serdes/
+      Handler: bootstrap
+      Description: WaitForCallback with custom serialization
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  WaitCallbackMixedOpsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-wait-callback-mixed-ops
+      CodeUri: .aws-sam/build-artifacts/wait-callback-mixed-ops/
+      Handler: bootstrap
+      Description: WaitForCallback mixed with steps and waits
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  WaitCallbackMultipleInvocationsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-wait-callback-multiple-invocations
+      CodeUri: .aws-sam/build-artifacts/wait-callback-multiple-invocations/
+      Handler: bootstrap
+      Description: Multiple WaitForCallback ops across invocations
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  WaitCallbackChildContextFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-wait-callback-child-context
+      CodeUri: .aws-sam/build-artifacts/wait-callback-child-context/
+      Handler: bootstrap
+      Description: WaitForCallback within child contexts
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  WaitCallbackHeartbeatFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-wait-callback-heartbeat
+      CodeUri: .aws-sam/build-artifacts/wait-callback-heartbeat/
+      Handler: bootstrap
+      Description: WaitForCallback with heartbeat sends
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  WaitCallbackErrorInstanceFailureFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-wait-callback-error-instance-failure
+      CodeUri: .aws-sam/build-artifacts/wait-callback-error-instance-failure/
+      Handler: bootstrap
+      Description: Verify CallbackError instanceof after replay
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  WaitCallbackErrorInstanceSubmitterFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-wait-callback-error-instance-submitter
+      CodeUri: .aws-sam/build-artifacts/wait-callback-error-instance-submitter/
+      Handler: bootstrap
+      Description: Verify submitter error instanceof after replay
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  WaitCallbackErrorInstanceTimeoutFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-wait-callback-error-instance-timeout
+      CodeUri: .aws-sam/build-artifacts/wait-callback-error-instance-timeout/
+      Handler: bootstrap
+      Description: Verify CallbackTimeoutError instanceof after replay
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  CreateCallbackHeartbeatFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-create-callback-heartbeat
+      CodeUri: .aws-sam/build-artifacts/create-callback-heartbeat/
+      Handler: bootstrap
+      Description: CreateCallback with heartbeat timeout
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  CreateCallbackSerdesFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-create-callback-serdes
+      CodeUri: .aws-sam/build-artifacts/create-callback-serdes/
+      Handler: bootstrap
+      Description: CreateCallback with custom serialization
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  CreateCallbackMixedOpsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-create-callback-mixed-ops
+      CodeUri: .aws-sam/build-artifacts/create-callback-mixed-ops/
+      Handler: bootstrap
+      Description: CreateCallback mixed with steps and waits
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  CreateCallbackErrorInstanceFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-create-callback-error-instance
+      CodeUri: .aws-sam/build-artifacts/create-callback-error-instance/
+      Handler: bootstrap
+      Description: Verify callback error instances for timeout and failure
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  # --- Slice 5: Map & Parallel examples ---
+
+  MapBasicFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-map-basic
+      CodeUri: .aws-sam/build-artifacts/map-basic/
+      Handler: bootstrap
+      Description: Basic map operation with bounded concurrency
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  MapEmptyFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-map-empty
+      CodeUri: .aws-sam/build-artifacts/map-empty/
+      Handler: bootstrap
+      Description: Map with empty input slice
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  MapLargeScaleFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-map-large-scale
+      CodeUri: .aws-sam/build-artifacts/map-large-scale/
+      Handler: bootstrap
+      Description: Map with 50 items and 100KB payloads
+      Role: !GetAtt DurableFunctionRole.Arn
+      MemorySize: 512
+      Timeout: 300
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 600
+
+  MapErrorPreservationFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-map-error-preservation
+      CodeUri: .aws-sam/build-artifacts/map-error-preservation/
+      Handler: bootstrap
+      Description: Map demonstrating error type preservation through BatchResult
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  MapMinSuccessfulFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-map-min-successful
+      CodeUri: .aws-sam/build-artifacts/map-min-successful/
+      Handler: bootstrap
+      Description: Map with MinSuccessful early completion
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  MapToleratedFailureCountFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-map-tolerated-failure-count
+      CodeUri: .aws-sam/build-artifacts/map-tolerated-failure-count/
+      Handler: bootstrap
+      Description: Map with ToleratedFailureCount allowing bounded failures
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  MapFailureThresholdFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-map-failure-threshold
+      CodeUri: .aws-sam/build-artifacts/map-failure-threshold/
+      Handler: bootstrap
+      Description: Map where failures exceed tolerance causing early failure
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  MapCompletionConfigIssueFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-map-completion-config-issue
+      CodeUri: .aws-sam/build-artifacts/map-completion-config-issue/
+      Handler: bootstrap
+      Description: Map with combined MinSuccessful and ToleratedFailurePercentage
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  ParallelBasicFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-parallel-basic
+      CodeUri: .aws-sam/build-artifacts/parallel-basic/
+      Handler: bootstrap
+      Description: Basic parallel operation with bounded concurrency
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  ParallelEmptyFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-parallel-empty
+      CodeUri: .aws-sam/build-artifacts/parallel-empty/
+      Handler: bootstrap
+      Description: Parallel with zero branches
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  ParallelInvokeFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-parallel-invoke
+      CodeUri: .aws-sam/build-artifacts/parallel-invoke/
+      Handler: bootstrap
+      Description: Parallel branches invoking child functions
+      Role: !GetAtt DurableFunctionRole.Arn
+      Environment:
+        Variables:
+          FUNCTION_NAME_PREFIX: !Ref FunctionNamePrefix
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  ParallelWaitFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-parallel-wait
+      CodeUri: .aws-sam/build-artifacts/parallel-wait/
+      Handler: bootstrap
+      Description: Parallel branches with concurrent waits
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  ParallelErrorPreservationFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-parallel-error-preservation
+      CodeUri: .aws-sam/build-artifacts/parallel-error-preservation/
+      Handler: bootstrap
+      Description: Parallel demonstrating error type preservation
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  ParallelMinSuccessfulFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-parallel-min-successful
+      CodeUri: .aws-sam/build-artifacts/parallel-min-successful/
+      Handler: bootstrap
+      Description: Parallel with MinSuccessful early completion
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  ParallelToleratedFailureFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-parallel-tolerated-failure
+      CodeUri: .aws-sam/build-artifacts/parallel-tolerated-failure/
+      Handler: bootstrap
+      Description: Parallel with ToleratedFailureCount allowing bounded failures
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  # --- Slice 6: Future Combinators & Concurrency examples ---
+
+  FutureAllFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-future-all
+      CodeUri: .aws-sam/build-artifacts/future-all/
+      Handler: bootstrap
+      Description: All combinator - wait for all futures to succeed
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  FutureAllSettledFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-future-all-settled
+      CodeUri: .aws-sam/build-artifacts/future-all-settled/
+      Handler: bootstrap
+      Description: AllSettled combinator - wait for all futures regardless of outcome
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  FutureAllWaitFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-future-all-wait
+      CodeUri: .aws-sam/build-artifacts/future-all-wait/
+      Handler: bootstrap
+      Description: All combinator with WaitAsync futures
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  FutureAnyFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-future-any
+      CodeUri: .aws-sam/build-artifacts/future-any/
+      Handler: bootstrap
+      Description: Any combinator - first success or aggregate CombinatorError
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  FutureRaceFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-future-race
+      CodeUri: .aws-sam/build-artifacts/future-race/
+      Handler: bootstrap
+      Description: Race combinator - first settled wins
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  FutureRaceWaitFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-future-race-wait
+      CodeUri: .aws-sam/build-artifacts/future-race-wait/
+      Handler: bootstrap
+      Description: Race combinator with WaitAsync futures - shortest wins
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  FutureCombinatorsMixedFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-future-combinators-mixed
+      CodeUri: .aws-sam/build-artifacts/future-combinators-mixed/
+      Handler: bootstrap
+      Description: All four combinators in a single workflow
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  FutureReplayFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-future-replay
+      CodeUri: .aws-sam/build-artifacts/future-replay/
+      Handler: bootstrap
+      Description: Futures replay gracefully after AllSettled absorbs failure
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  FutureUnhandledErrorFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-future-unhandled-error
+      CodeUri: .aws-sam/build-artifacts/future-unhandled-error/
+      Handler: bootstrap
+      Description: Failed futures in combinators do not cause unhandled errors on replay
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  ConcurrentWaitFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-concurrent-wait
+      CodeUri: .aws-sam/build-artifacts/concurrent-wait/
+      Handler: bootstrap
+      Description: Multiple WaitAsync futures joined with All
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  ConcurrentOperationsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-concurrent-operations
+      CodeUri: .aws-sam/build-artifacts/concurrent-operations/
+      Handler: bootstrap
+      Description: Concurrent child contexts via Go joined with All
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  ConcurrentCallbackSubmitterFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-concurrent-callback-submitter
+      CodeUri: .aws-sam/build-artifacts/concurrent-callback-submitter/
+      Handler: bootstrap
+      Description: WaitForCallback inside concurrent Go child contexts
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  ConcurrentCallbackWaitFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-concurrent-callback-wait
+      CodeUri: .aws-sam/build-artifacts/concurrent-callback-wait/
+      Handler: bootstrap
+      Description: All combining WaitAsync and WaitForCallback futures
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  # --- Slice 7: Cross-cutting & Observability examples ---
+
+  LoggerAfterWaitFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-logger-after-wait
+      CodeUri: .aws-sam/build-artifacts/logger-after-wait/
+      Handler: bootstrap
+      Description: Replay-aware logging across a wait suspend/resume boundary
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  LoggerAfterCallbackFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-logger-after-callback
+      CodeUri: .aws-sam/build-artifacts/logger-after-callback/
+      Handler: bootstrap
+      Description: Replay-aware logging across a callback suspend/resume boundary
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  LoggerLogLevelsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-logger-log-levels
+      CodeUri: .aws-sam/build-artifacts/logger-log-levels/
+      Handler: bootstrap
+      Description: All log levels (Debug, Info, Warn, Error) with replay suppression
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  SerdeBasicFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-serde-basic
+      CodeUri: .aws-sam/build-artifacts/serde-basic/
+      Handler: bootstrap
+      Description: Per-operation custom serdes using WithStepSerdes
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  SerdeCustomConfigFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-serde-custom-config
+      CodeUri: .aws-sam/build-artifacts/serde-custom-config/
+      Handler: bootstrap
+      Description: Handler-level serdes using WithSerdes (Go equiv of configureSerdes)
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  ContextValidationChildFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-context-validation-child
+      CodeUri: .aws-sam/build-artifacts/context-validation-child/
+      Handler: bootstrap
+      Description: Error from using parent context inside durable.Go (FAILED expected)
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  ContextValidationStepFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-context-validation-step
+      CodeUri: .aws-sam/build-artifacts/context-validation-step/
+      Handler: bootstrap
+      Description: Error from using parent context inside step within child (FAILED expected)
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  ContextValidationWaitConditionFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-context-validation-wait-condition
+      CodeUri: .aws-sam/build-artifacts/context-validation-wait-condition/
+      Handler: bootstrap
+      Description: Error from using parent context inside WaitForCondition check (FAILED expected)
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  ForceCheckpointCallbackFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-force-checkpoint-callback
+      CodeUri: .aws-sam/build-artifacts/force-checkpoint-callback/
+      Handler: bootstrap
+      Description: Force checkpoint with parallel long step and sequential callbacks
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
+  ForceCheckpointInvokeFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-force-checkpoint-invoke
+      CodeUri: .aws-sam/build-artifacts/force-checkpoint-invoke/
+      Handler: bootstrap
+      Description: Force checkpoint with parallel long step and sequential invokes
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
+  ForceCheckpointWaitFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-force-checkpoint-wait
+      CodeUri: .aws-sam/build-artifacts/force-checkpoint-wait/
+      Handler: bootstrap
+      Description: Force checkpoint with parallel long step and sequential waits
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
+  ForceCheckpointStepRetryFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-force-checkpoint-step-retry
+      CodeUri: .aws-sam/build-artifacts/force-checkpoint-step-retry/
+      Handler: bootstrap
+      Description: Force checkpoint with parallel long step and retry progress
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
+  ErrorDeterminismFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-error-determinism
+      CodeUri: .aws-sam/build-artifacts/error-determinism/
+      Handler: bootstrap
+      Description: Deterministic error handling across replay boundaries
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  HandlerErrorFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-handler-error
+      CodeUri: .aws-sam/build-artifacts/handler-error/
+      Handler: bootstrap
+      Description: Handler-level error captured as structured FAILED result
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  # --- Slice 8: Showcase & Edge Cases ---
+
+  HelloWorldFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-hello-world
+      CodeUri: .aws-sam/build-artifacts/hello-world/
+      Handler: bootstrap
+      Description: Simplest durable function with no operations
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  SimpleExecutionFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-simple-execution
+      CodeUri: .aws-sam/build-artifacts/simple-execution/
+      Handler: bootstrap
+      Description: Handler execution without durable operations
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  NonDurableFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-non-durable
+      CodeUri: .aws-sam/build-artifacts/non-durable/
+      Handler: bootstrap
+      Description: Plain Lambda function without durable execution SDK
+      Role: !GetAtt DurableFunctionRole.Arn
+
+  NoReplayExecutionFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-no-replay-execution
+      CodeUri: .aws-sam/build-artifacts/no-replay-execution/
+      Handler: bootstrap
+      Description: Sequential steps completing on first invocation without replay
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  LargePayloadFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-large-payload
+      CodeUri: .aws-sam/build-artifacts/large-payload/
+      Handler: bootstrap
+      Description: Large payload handling via ReplayChildren offload path
+      Role: !GetAtt DurableFunctionRole.Arn
+      MemorySize: 512
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  UndefinedResultsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-undefined-results
+      CodeUri: .aws-sam/build-artifacts/undefined-results/
+      Handler: bootstrap
+      Description: Operations returning nil values replay correctly
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  ComprehensiveOperationsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-comprehensive-operations
+      CodeUri: .aws-sam/build-artifacts/comprehensive-operations/
+      Handler: bootstrap
+      Description: All major operations (Step, Wait, Map, Parallel) in one handler
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+Outputs:
+  OrderFulfillmentFunction:
+    Description: Order Fulfillment Example Function ARN
+    Value: !GetAtt OrderFulfillmentFunction.Arn
+  OrderFulfillmentFunctionName:
+    Description: Order Fulfillment Example Function Name
+    Value: !Ref OrderFulfillmentFunction
+  SimpleStepFunction:
+    Description: Simple Step Function ARN
+    Value: !GetAtt SimpleStepFunction.Arn
+  NamedStepFunction:
+    Description: Named Step Function ARN
+    Value: !GetAtt NamedStepFunction.Arn
+  StepWithRetryFunction:
+    Description: Step With Retry Function ARN
+    Value: !GetAtt StepWithRetryFunction.Arn
+  StepsWithRetryFunction:
+    Description: Steps With Retry Function ARN
+    Value: !GetAtt StepsWithRetryFunction.Arn
+  AttemptFallbackFunction:
+    Description: Attempt Fallback Function ARN
+    Value: !GetAtt AttemptFallbackFunction.Arn
+  InterruptedNoRetryFunction:
+    Description: Interrupted No Retry Function ARN
+    Value: !GetAtt InterruptedNoRetryFunction.Arn
+  StepErrorDeterminismFunction:
+    Description: Step Error Determinism Function ARN
+    Value: !GetAtt StepErrorDeterminismFunction.Arn
+  RetryExhaustionFunction:
+    Description: Retry Exhaustion Function ARN
+    Value: !GetAtt RetryExhaustionFunction.Arn
+  RetryInvokeFunction:
+    Description: Retry Invoke Function ARN
+    Value: !GetAtt RetryInvokeFunction.Arn
+  RetryInvokeTargetFunction:
+    Description: Retry Invoke Target Function ARN
+    Value: !GetAtt RetryInvokeTargetFunction.Arn
+  RetryCallbackFunction:
+    Description: Retry Callback Function ARN
+    Value: !GetAtt RetryCallbackFunction.Arn
+  WaitBasicFunction:
+    Description: Wait Basic Function ARN
+    Value: !GetAtt WaitBasicFunction.Arn
+  WaitNamedFunction:
+    Description: Wait Named Function ARN
+    Value: !GetAtt WaitNamedFunction.Arn
+  WaitConfigurableFunction:
+    Description: Wait Configurable Function ARN
+    Value: !GetAtt WaitConfigurableFunction.Arn
+  WaitUnawaitedFunction:
+    Description: Wait Unawaited Function ARN
+    Value: !GetAtt WaitUnawaitedFunction.Arn
+  WaitForConditionFunction:
+    Description: Wait For Condition Function ARN
+    Value: !GetAtt WaitForConditionFunction.Arn
+  MultipleWaitsFunction:
+    Description: Multiple Waits Function ARN
+    Value: !GetAtt MultipleWaitsFunction.Arn
+  InvokeSimpleFunction:
+    Description: Invoke Simple Function ARN
+    Value: !GetAtt InvokeSimpleFunction.Arn
+  InvokeSimpleTargetFunction:
+    Description: Invoke Simple Target Function ARN
+    Value: !GetAtt InvokeSimpleTargetFunction.Arn
+  InvokeTenantIdFunction:
+    Description: Invoke Tenant Id Function ARN
+    Value: !GetAtt InvokeTenantIdFunction.Arn
+  InvokeTenantTargetFunction:
+    Description: Invoke Tenant Target Function ARN
+    Value: !GetAtt InvokeTenantTargetFunction.Arn
+  ChainedInvokeFunction:
+    Description: Chained Invoke Function ARN
+    Value: !GetAtt ChainedInvokeFunction.Arn
+  ChildContextBasicFunction:
+    Description: Child Context Basic Function ARN
+    Value: !GetAtt ChildContextBasicFunction.Arn
+  ChildContextVirtualFunction:
+    Description: Child Context Virtual Function ARN
+    Value: !GetAtt ChildContextVirtualFunction.Arn
+  ChildContextSerdesFunction:
+    Description: Child Context Serdes Function ARN
+    Value: !GetAtt ChildContextSerdesFunction.Arn
+  ChildContextLargeDataFunction:
+    Description: Child Context Large Data Function ARN
+    Value: !GetAtt ChildContextLargeDataFunction.Arn
+  ChildContextErrorPropagationFunction:
+    Description: Child Context Error Propagation Function ARN
+    Value: !GetAtt ChildContextErrorPropagationFunction.Arn
+  ChildContextFailingStepFunction:
+    Description: Child Context Failing Step Function ARN
+    Value: !GetAtt ChildContextFailingStepFunction.Arn
+  ChildContextCheckpointSizeLimitFunction:
+    Description: Child Context Checkpoint Size Limit Function ARN
+    Value: !GetAtt ChildContextCheckpointSizeLimitFunction.Arn
+  ChildOpsPreservationFunction:
+    Description: Child Ops Preservation Function ARN
+    Value: !GetAtt ChildOpsPreservationFunction.Arn
+  ChildOpsInvalidDepthFunction:
+    Description: Child Ops Invalid Depth Function ARN
+    Value: !GetAtt ChildOpsInvalidDepthFunction.Arn
+  CallbackSenderFunction:
+    Description: Callback Sender Function ARN
+    Value: !GetAtt CallbackSenderFunction.Arn
+  WaitCallbackBasicFunction:
+    Description: Wait Callback Basic Function ARN
+    Value: !GetAtt WaitCallbackBasicFunction.Arn
+  WaitCallbackTimeoutFunction:
+    Description: Wait Callback Timeout Function ARN
+    Value: !GetAtt WaitCallbackTimeoutFunction.Arn
+  WaitCallbackQuickCompletionFunction:
+    Description: Wait Callback Quick Completion Function ARN
+    Value: !GetAtt WaitCallbackQuickCompletionFunction.Arn
+  WaitCallbackAnonymousFunction:
+    Description: Wait Callback Anonymous Function ARN
+    Value: !GetAtt WaitCallbackAnonymousFunction.Arn
+  WaitCallbackSubmitterFailureFunction:
+    Description: Wait Callback Submitter Failure Function ARN
+    Value: !GetAtt WaitCallbackSubmitterFailureFunction.Arn
+  WaitCallbackFailuresFunction:
+    Description: Wait Callback Failures Function ARN
+    Value: !GetAtt WaitCallbackFailuresFunction.Arn
+  WaitCallbackSubmitterRetryFunction:
+    Description: Wait Callback Submitter Retry Function ARN
+    Value: !GetAtt WaitCallbackSubmitterRetryFunction.Arn
+  CreateCallbackSimpleFunction:
+    Description: Create Callback Simple Function ARN
+    Value: !GetAtt CreateCallbackSimpleFunction.Arn
+  CreateCallbackTimeoutFunction:
+    Description: Create Callback Timeout Function ARN
+    Value: !GetAtt CreateCallbackTimeoutFunction.Arn
+  CreateCallbackFailuresFunction:
+    Description: Create Callback Failures Function ARN
+    Value: !GetAtt CreateCallbackFailuresFunction.Arn
+  CreateCallbackConcurrentFunction:
+    Description: Create Callback Concurrent Function ARN
+    Value: !GetAtt CreateCallbackConcurrentFunction.Arn
+  WaitCallbackNestedFunction:
+    Description: Wait Callback Nested Function ARN
+    Value: !GetAtt WaitCallbackNestedFunction.Arn
+  WaitCallbackSerdesFunction:
+    Description: Wait Callback Serdes Function ARN
+    Value: !GetAtt WaitCallbackSerdesFunction.Arn
+  WaitCallbackMixedOpsFunction:
+    Description: Wait Callback Mixed Ops Function ARN
+    Value: !GetAtt WaitCallbackMixedOpsFunction.Arn
+  WaitCallbackMultipleInvocationsFunction:
+    Description: Wait Callback Multiple Invocations Function ARN
+    Value: !GetAtt WaitCallbackMultipleInvocationsFunction.Arn
+  WaitCallbackChildContextFunction:
+    Description: Wait Callback Child Context Function ARN
+    Value: !GetAtt WaitCallbackChildContextFunction.Arn
+  WaitCallbackHeartbeatFunction:
+    Description: Wait Callback Heartbeat Function ARN
+    Value: !GetAtt WaitCallbackHeartbeatFunction.Arn
+  WaitCallbackErrorInstanceFailureFunction:
+    Description: Wait Callback Error Instance Failure Function ARN
+    Value: !GetAtt WaitCallbackErrorInstanceFailureFunction.Arn
+  WaitCallbackErrorInstanceSubmitterFunction:
+    Description: Wait Callback Error Instance Submitter Function ARN
+    Value: !GetAtt WaitCallbackErrorInstanceSubmitterFunction.Arn
+  WaitCallbackErrorInstanceTimeoutFunction:
+    Description: Wait Callback Error Instance Timeout Function ARN
+    Value: !GetAtt WaitCallbackErrorInstanceTimeoutFunction.Arn
+  CreateCallbackHeartbeatFunction:
+    Description: Create Callback Heartbeat Function ARN
+    Value: !GetAtt CreateCallbackHeartbeatFunction.Arn
+  CreateCallbackSerdesFunction:
+    Description: Create Callback Serdes Function ARN
+    Value: !GetAtt CreateCallbackSerdesFunction.Arn
+  CreateCallbackMixedOpsFunction:
+    Description: Create Callback Mixed Ops Function ARN
+    Value: !GetAtt CreateCallbackMixedOpsFunction.Arn
+  CreateCallbackErrorInstanceFunction:
+    Description: Create Callback Error Instance Function ARN
+    Value: !GetAtt CreateCallbackErrorInstanceFunction.Arn
+  MapBasicFunction:
+    Description: Map Basic Function ARN
+    Value: !GetAtt MapBasicFunction.Arn
+  MapEmptyFunction:
+    Description: Map Empty Function ARN
+    Value: !GetAtt MapEmptyFunction.Arn
+  MapLargeScaleFunction:
+    Description: Map Large Scale Function ARN
+    Value: !GetAtt MapLargeScaleFunction.Arn
+  MapErrorPreservationFunction:
+    Description: Map Error Preservation Function ARN
+    Value: !GetAtt MapErrorPreservationFunction.Arn
+  MapMinSuccessfulFunction:
+    Description: Map Min Successful Function ARN
+    Value: !GetAtt MapMinSuccessfulFunction.Arn
+  MapToleratedFailureCountFunction:
+    Description: Map Tolerated Failure Count Function ARN
+    Value: !GetAtt MapToleratedFailureCountFunction.Arn
+  MapFailureThresholdFunction:
+    Description: Map Failure Threshold Function ARN
+    Value: !GetAtt MapFailureThresholdFunction.Arn
+  MapCompletionConfigIssueFunction:
+    Description: Map Completion Config Issue Function ARN
+    Value: !GetAtt MapCompletionConfigIssueFunction.Arn
+  ParallelBasicFunction:
+    Description: Parallel Basic Function ARN
+    Value: !GetAtt ParallelBasicFunction.Arn
+  ParallelEmptyFunction:
+    Description: Parallel Empty Function ARN
+    Value: !GetAtt ParallelEmptyFunction.Arn
+  ParallelInvokeFunction:
+    Description: Parallel Invoke Function ARN
+    Value: !GetAtt ParallelInvokeFunction.Arn
+  ParallelWaitFunction:
+    Description: Parallel Wait Function ARN
+    Value: !GetAtt ParallelWaitFunction.Arn
+  ParallelErrorPreservationFunction:
+    Description: Parallel Error Preservation Function ARN
+    Value: !GetAtt ParallelErrorPreservationFunction.Arn
+  ParallelMinSuccessfulFunction:
+    Description: Parallel Min Successful Function ARN
+    Value: !GetAtt ParallelMinSuccessfulFunction.Arn
+  ParallelToleratedFailureFunction:
+    Description: Parallel Tolerated Failure Function ARN
+    Value: !GetAtt ParallelToleratedFailureFunction.Arn
+  FutureAllFunction:
+    Description: Future All Function ARN
+    Value: !GetAtt FutureAllFunction.Arn
+  FutureAllSettledFunction:
+    Description: Future All Settled Function ARN
+    Value: !GetAtt FutureAllSettledFunction.Arn
+  FutureAllWaitFunction:
+    Description: Future All Wait Function ARN
+    Value: !GetAtt FutureAllWaitFunction.Arn
+  FutureAnyFunction:
+    Description: Future Any Function ARN
+    Value: !GetAtt FutureAnyFunction.Arn
+  FutureRaceFunction:
+    Description: Future Race Function ARN
+    Value: !GetAtt FutureRaceFunction.Arn
+  FutureRaceWaitFunction:
+    Description: Future Race Wait Function ARN
+    Value: !GetAtt FutureRaceWaitFunction.Arn
+  FutureCombinatorsMixedFunction:
+    Description: Future Combinators Mixed Function ARN
+    Value: !GetAtt FutureCombinatorsMixedFunction.Arn
+  FutureReplayFunction:
+    Description: Future Replay Function ARN
+    Value: !GetAtt FutureReplayFunction.Arn
+  FutureUnhandledErrorFunction:
+    Description: Future Unhandled Error Function ARN
+    Value: !GetAtt FutureUnhandledErrorFunction.Arn
+  ConcurrentWaitFunction:
+    Description: Concurrent Wait Function ARN
+    Value: !GetAtt ConcurrentWaitFunction.Arn
+  ConcurrentOperationsFunction:
+    Description: Concurrent Operations Function ARN
+    Value: !GetAtt ConcurrentOperationsFunction.Arn
+  ConcurrentCallbackSubmitterFunction:
+    Description: Concurrent Callback Submitter Function ARN
+    Value: !GetAtt ConcurrentCallbackSubmitterFunction.Arn
+  ConcurrentCallbackWaitFunction:
+    Description: Concurrent Callback Wait Function ARN
+    Value: !GetAtt ConcurrentCallbackWaitFunction.Arn
+  LoggerAfterWaitFunction:
+    Description: Logger After Wait Function ARN
+    Value: !GetAtt LoggerAfterWaitFunction.Arn
+  LoggerAfterCallbackFunction:
+    Description: Logger After Callback Function ARN
+    Value: !GetAtt LoggerAfterCallbackFunction.Arn
+  LoggerLogLevelsFunction:
+    Description: Logger Log Levels Function ARN
+    Value: !GetAtt LoggerLogLevelsFunction.Arn
+  SerdeBasicFunction:
+    Description: Serde Basic Function ARN
+    Value: !GetAtt SerdeBasicFunction.Arn
+  SerdeCustomConfigFunction:
+    Description: Serde Custom Config Function ARN
+    Value: !GetAtt SerdeCustomConfigFunction.Arn
+  ContextValidationChildFunction:
+    Description: Context Validation Child Function ARN
+    Value: !GetAtt ContextValidationChildFunction.Arn
+  ContextValidationStepFunction:
+    Description: Context Validation Step Function ARN
+    Value: !GetAtt ContextValidationStepFunction.Arn
+  ContextValidationWaitConditionFunction:
+    Description: Context Validation Wait Condition Function ARN
+    Value: !GetAtt ContextValidationWaitConditionFunction.Arn
+  ForceCheckpointCallbackFunction:
+    Description: Force Checkpoint Callback Function ARN
+    Value: !GetAtt ForceCheckpointCallbackFunction.Arn
+  ForceCheckpointInvokeFunction:
+    Description: Force Checkpoint Invoke Function ARN
+    Value: !GetAtt ForceCheckpointInvokeFunction.Arn
+  ForceCheckpointWaitFunction:
+    Description: Force Checkpoint Wait Function ARN
+    Value: !GetAtt ForceCheckpointWaitFunction.Arn
+  ForceCheckpointStepRetryFunction:
+    Description: Force Checkpoint Step Retry Function ARN
+    Value: !GetAtt ForceCheckpointStepRetryFunction.Arn
+  ErrorDeterminismFunction:
+    Description: Error Determinism Function ARN
+    Value: !GetAtt ErrorDeterminismFunction.Arn
+  HandlerErrorFunction:
+    Description: Handler Error Function ARN
+    Value: !GetAtt HandlerErrorFunction.Arn
+  HelloWorldFunction:
+    Description: Hello World Function ARN
+    Value: !GetAtt HelloWorldFunction.Arn
+  SimpleExecutionFunction:
+    Description: Simple Execution Function ARN
+    Value: !GetAtt SimpleExecutionFunction.Arn
+  NonDurableFunction:
+    Description: Non Durable Function ARN
+    Value: !GetAtt NonDurableFunction.Arn
+  NoReplayExecutionFunction:
+    Description: No Replay Execution Function ARN
+    Value: !GetAtt NoReplayExecutionFunction.Arn
+  LargePayloadFunction:
+    Description: Large Payload Function ARN
+    Value: !GetAtt LargePayloadFunction.Arn
+  UndefinedResultsFunction:
+    Description: Undefined Results Function ARN
+    Value: !GetAtt UndefinedResultsFunction.Arn
+  ComprehensiveOperationsFunction:
+    Description: Comprehensive Operations Function ARN
+    Value: !GetAtt ComprehensiveOperationsFunction.Arn

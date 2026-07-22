@@ -1,0 +1,20 @@
+version: "2"
+
+linters:
+  enable:
+    - revive
+  settings:
+    errcheck:
+      check-type-assertions: true
+    revive:
+      rules:
+        # Parameter names in exported signatures are API documentation
+        # (rendered in godoc) and must not be renamed to _ in stubs or
+        # interface-shaped implementations.
+        - name: unused-parameter
+          disabled: true
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

@@ -1,0 +1,8 @@
+[
+  {
+    "type": "CHAINED_INVOKE",
+    "subType": "ChainedInvoke",
+    "name": "call-service",
+    "status": "SUCCEEDED"
+  }
+]

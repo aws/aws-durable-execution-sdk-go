@@ -1,0 +1,8 @@
+{
+  "orderId": "ORD-12345",
+  "customerId": "CUST-001",
+  "items": [
+    { "sku": "WIDGET-A", "quantity": 2, "price": 29.99 },
+    { "sku": "GADGET-B", "quantity": 1, "price": 49.99 }
+  ]
+}

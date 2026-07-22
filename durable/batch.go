@@ -1,0 +1,1382 @@
+package durable
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"sync"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
+)
+
+// Wire subtypes for batch operations.
+const (
+	operationSubTypeMap            = "Map"
+	operationSubTypeMapIteration   = "MapIteration"
+	operationSubTypeParallel       = "Parallel"
+	operationSubTypeParallelBranch = "ParallelBranch"
+)
+
+// Map processes items concurrently, applying fn to each in its own child
+// context, and returns the collected results. Concurrency and completion
+// behavior are configured with [BatchOption] values.
+//
+// Each item runs in a MapIteration child context. Items are identified by
+// their zero-based index; use [WithItemNamer] for custom naming.
+// MaxConcurrency bounds in-flight items; completion config may stop
+// scheduling early.
+func Map[I, O any](ctx Context, name string, items []I, fn func(ctx Context, item I, index int) (O, error), opts ...BatchOption) (BatchResult[O], error) {
+	ec, ok := ctx.(*execContext)
+	if !ok {
+		return BatchResult[O]{}, fmt.Errorf("durable: Map %q: Context was not created by the SDK", name)
+	}
+
+	options := resolveBatchOptions(ec, opts)
+
+	if options.maxConcurrency == 0 {
+		return BatchResult[O]{}, fmt.Errorf("durable: Map %q: max concurrency must be positive or unset (negative for unlimited)", name)
+	}
+
+	id, err := ec.claimOperation()
+	if err != nil {
+		return BatchResult[O]{}, err
+	}
+
+	// Check if the batch is already checkpointed as a terminal operation.
+	op := ec.state.get(id)
+	if err := validateReplayConsistency(op, string(types.OperationTypeContext), operationSubTypeMap, name); err != nil {
+		return BatchResult[O]{}, err
+	}
+	if op != nil && op.status.terminal() {
+		result, err := replayTerminalBatch[I, O](ec, op, id, name, items, fn, options, operationSubTypeMap, operationSubTypeMapIteration)
+		if err != nil {
+			return BatchResult[O]{}, err
+		}
+		// Advance the parent counter past the iteration IDs that were
+		// consumed from it during the original execution. Sequential
+		// (concurrency=1) only claims started items; concurrent claims
+		// all items upfront.
+		concurrency := options.maxConcurrency
+		if concurrency < 0 {
+			concurrency = len(items)
+		}
+		if concurrency == 1 {
+			ec.ids.advance(len(result.Items))
+		} else {
+			ec.ids.advance(len(items))
+		}
+		return result, nil
+	}
+
+	// Checkpoint the parent Map context START.
+	if op == nil {
+		update := batchParentUpdate(ec, id, name, operationSubTypeMap, types.OperationActionStart)
+		if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+			return BatchResult[O]{}, err
+		}
+	}
+
+	totalItems := len(items)
+	if totalItems == 0 {
+		// Empty collection: checkpoint success immediately.
+		result := BatchResult[O]{
+			Items:  nil,
+			Reason: CompletionAllCompleted,
+		}
+		return checkpointBatchSuccess(ec, id, name, operationSubTypeMap, result, options)
+	}
+
+	// Execute items with bounded concurrency and completion checking.
+	return executeBatchItems[I, O](ec, id, name, totalItems, options, operationSubTypeMap, operationSubTypeMapIteration, func(childCtx Context, index int) (O, error) {
+		return fn(childCtx, items[index], index)
+	})
+}
+
+// Parallel executes branches concurrently, each in its own child context,
+// and returns the collected results. All branches must produce the same
+// type; for heterogeneous fan-out, use [Go] with futures of different
+// types.
+//
+// Each branch runs in a ParallelBranch child context. Branches are
+// identified by their zero-based index; use [Branch.Name] for display
+// names. MaxConcurrency bounds in-flight branches; completion config may
+// stop scheduling early.
+func Parallel[O any](ctx Context, name string, branches []Branch[O], opts ...BatchOption) (BatchResult[O], error) {
+	ec, ok := ctx.(*execContext)
+	if !ok {
+		return BatchResult[O]{}, fmt.Errorf("durable: Parallel %q: Context was not created by the SDK", name)
+	}
+
+	options := resolveBatchOptions(ec, opts)
+
+	if options.maxConcurrency == 0 {
+		return BatchResult[O]{}, fmt.Errorf("durable: Parallel %q: max concurrency must be positive or unset (negative for unlimited)", name)
+	}
+
+	id, err := ec.claimOperation()
+	if err != nil {
+		return BatchResult[O]{}, err
+	}
+
+	// Check if the batch is already checkpointed as a terminal operation.
+	op := ec.state.get(id)
+	if err := validateReplayConsistency(op, string(types.OperationTypeContext), operationSubTypeParallel, name); err != nil {
+		return BatchResult[O]{}, err
+	}
+	if op != nil && op.status.terminal() {
+		result, err := replayTerminalBatch[struct{}, O](ec, op, id, name, nil, nil, options, operationSubTypeParallel, operationSubTypeParallelBranch)
+		if err != nil {
+			return BatchResult[O]{}, err
+		}
+		// Advance the parent counter past the branch IDs that were
+		// consumed from it during the original execution.
+		concurrency := options.maxConcurrency
+		if concurrency < 0 {
+			concurrency = len(branches)
+		}
+		if concurrency == 1 {
+			ec.ids.advance(len(result.Items))
+		} else {
+			ec.ids.advance(len(branches))
+		}
+		return result, nil
+	}
+
+	// Checkpoint the parent Parallel context START.
+	if op == nil {
+		update := batchParentUpdate(ec, id, name, operationSubTypeParallel, types.OperationActionStart)
+		if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+			return BatchResult[O]{}, err
+		}
+	}
+
+	totalItems := len(branches)
+	if totalItems == 0 {
+		result := BatchResult[O]{
+			Items:  nil,
+			Reason: CompletionAllCompleted,
+		}
+		return checkpointBatchSuccess(ec, id, name, operationSubTypeParallel, result, options)
+	}
+
+	return executeBatchItems[struct{}, O](ec, id, name, totalItems, options, operationSubTypeParallel, operationSubTypeParallelBranch, func(childCtx Context, index int) (O, error) {
+		return branches[index].Func(childCtx)
+	})
+}
+
+// Branch is one branch of a [Parallel] operation.
+type Branch[O any] struct {
+	// Name identifies the branch. It may be empty.
+	Name string
+
+	// Func is the branch body.
+	Func func(Context) (O, error)
+}
+
+// BatchItemStatus is the terminal status of one item or branch in a batch
+// operation.
+type BatchItemStatus int
+
+// Batch item statuses.
+const (
+	// BatchItemSucceeded indicates the item completed and produced a
+	// result.
+	BatchItemSucceeded BatchItemStatus = iota + 1
+
+	// BatchItemFailed indicates the item failed.
+	BatchItemFailed
+
+	// BatchItemNotStarted indicates the batch completed early before the
+	// item started.
+	BatchItemNotStarted
+)
+
+// BatchItem is the outcome of one item or branch in a batch operation.
+type BatchItem[O any] struct {
+	// Index is the zero-based position of this item in the original input
+	// slice.
+	Index int
+
+	// Name identifies the item or branch.
+	Name string
+
+	// Status is the item's terminal status.
+	Status BatchItemStatus
+
+	// Result is the item's result. It is the zero value unless Status is
+	// [BatchItemSucceeded].
+	Result O
+
+	// Err is the item's error. It is nil unless Status is
+	// [BatchItemFailed].
+	Err error
+}
+
+// BatchResult is the collected outcome of a [Map] or [Parallel] operation.
+type BatchResult[O any] struct {
+	// Items holds the per-item outcomes in input order. Only items that
+	// were started are included; items that never started due to early
+	// completion are omitted.
+	Items []BatchItem[O]
+
+	// Reason records why the batch completed.
+	Reason CompletionReason
+}
+
+// Results returns the successful results in input order. Failed or
+// not-started items are omitted.
+func (r BatchResult[O]) Results() []O {
+	var out []O
+	for i := range r.Items {
+		if r.Items[i].Status == BatchItemSucceeded {
+			out = append(out, r.Items[i].Result)
+		}
+	}
+	if out == nil {
+		out = []O{}
+	}
+	return out
+}
+
+// Succeeded returns the items that succeeded, in input order.
+func (r BatchResult[O]) Succeeded() []BatchItem[O] {
+	var out []BatchItem[O]
+	for i := range r.Items {
+		if r.Items[i].Status == BatchItemSucceeded {
+			out = append(out, r.Items[i])
+		}
+	}
+	return out
+}
+
+// Failed returns the items that failed, in input order.
+func (r BatchResult[O]) Failed() []BatchItem[O] {
+	var out []BatchItem[O]
+	for i := range r.Items {
+		if r.Items[i].Status == BatchItemFailed {
+			out = append(out, r.Items[i])
+		}
+	}
+	return out
+}
+
+// Errors returns the errors from failed items, in input order.
+func (r BatchResult[O]) Errors() []error {
+	var out []error
+	for i := range r.Items {
+		if r.Items[i].Status == BatchItemFailed && r.Items[i].Err != nil {
+			out = append(out, r.Items[i].Err)
+		}
+	}
+	return out
+}
+
+// HasFailure reports whether any item failed.
+func (r BatchResult[O]) HasFailure() bool {
+	for i := range r.Items {
+		if r.Items[i].Status == BatchItemFailed {
+			return true
+		}
+	}
+	return false
+}
+
+// ThrowIfError returns the first item failure as an error if any item
+// failed, allowing the caller to propagate it and fail the execution.
+func (r BatchResult[O]) ThrowIfError() error {
+	for i := range r.Items {
+		if r.Items[i].Status == BatchItemFailed {
+			return r.Items[i].Err
+		}
+	}
+	return nil
+}
+
+// SuccessCount returns the number of items that succeeded.
+func (r BatchResult[O]) SuccessCount() int {
+	n := 0
+	for i := range r.Items {
+		if r.Items[i].Status == BatchItemSucceeded {
+			n++
+		}
+	}
+	return n
+}
+
+// FailureCount returns the number of items that failed.
+func (r BatchResult[O]) FailureCount() int {
+	n := 0
+	for i := range r.Items {
+		if r.Items[i].Status == BatchItemFailed {
+			n++
+		}
+	}
+	return n
+}
+
+// TotalCount returns the total number of items that were started (excludes
+// never-started items from early completion).
+func (r BatchResult[O]) TotalCount() int {
+	return len(r.Items)
+}
+
+// Status returns "SUCCEEDED" if no item failed, "FAILED" otherwise.
+func (r BatchResult[O]) Status() string {
+	if r.HasFailure() {
+		return "FAILED"
+	}
+	return "SUCCEEDED"
+}
+
+// CompletionReason records why a batch operation completed.
+type CompletionReason int
+
+// Batch completion reasons.
+const (
+	// CompletionAllCompleted indicates every item ran to completion.
+	CompletionAllCompleted CompletionReason = iota + 1
+
+	// CompletionMinSuccessfulReached indicates the batch completed early
+	// because the MinSuccessful threshold was met.
+	CompletionMinSuccessfulReached
+
+	// CompletionFailureToleranceExceeded indicates the batch failed early
+	// because more items failed than the tolerance allows.
+	CompletionFailureToleranceExceeded
+)
+
+// String returns the wire representation of the completion reason.
+func (r CompletionReason) String() string {
+	switch r {
+	case CompletionAllCompleted:
+		return "ALL_COMPLETED"
+	case CompletionMinSuccessfulReached:
+		return "MIN_SUCCESSFUL_REACHED"
+	case CompletionFailureToleranceExceeded:
+		return "FAILURE_TOLERANCE_EXCEEDED"
+	default:
+		return "UNKNOWN"
+	}
+}
+
+// NestingMode controls whether batch items run in real or virtual child
+// contexts.
+type NestingMode int
+
+// Nesting modes.
+const (
+	// NestingNormal (default) runs each item in its own child context,
+	// producing per-item ContextStarted/ContextSucceeded events.
+	NestingNormal NestingMode = iota
+
+	// NestingFlat runs each item in a virtual context: operations inside
+	// the item are checkpointed directly under the parent batch context,
+	// with no per-item context events.
+	NestingFlat
+)
+
+// BatchOption configures a [Map] or [Parallel] operation.
+type BatchOption interface {
+	applyBatch(*batchOptions)
+}
+
+// WithMaxConcurrency bounds how many items or branches run at once.
+// A value of zero is invalid and causes Map/Parallel to return an error.
+// Negative means unbounded.
+func WithMaxConcurrency(n int) BatchOption {
+	return batchOptionFunc(func(o *batchOptions) { o.maxConcurrency = n })
+}
+
+// WithCompletion sets the batch's early-completion policy.
+func WithCompletion(c CompletionConfig) BatchOption {
+	return batchOptionFunc(func(o *batchOptions) { o.completion = c })
+}
+
+// WithItemNamer sets display names for a [Map] operation's items. namer is
+// called with each item's index; callers derive names from their own items
+// slice:
+//
+//	durable.Map(ctx, "process", orders, processOrder,
+//	    durable.WithItemNamer(func(i int) string { return orders[i].ID }))
+//
+// namer must be a deterministic function of the index.
+func WithItemNamer(namer func(index int) string) BatchOption {
+	return batchOptionFunc(func(o *batchOptions) { o.itemNamer = namer })
+}
+
+// WithBatchSerdes overrides the serializer for each item's result within
+// the batch (the per-item serdes).
+func WithBatchSerdes(s Serdes) BatchOption {
+	return batchOptionFunc(func(o *batchOptions) { o.itemSerdes = s })
+}
+
+// WithBatchResultSerdes overrides the serializer for the entire batch
+// result when checkpointing the parent context's terminal event. This is
+// the operation-level serdes: it serializes and deserializes the whole
+// [BatchResult] rather than individual items.
+func WithBatchResultSerdes(s Serdes) BatchOption {
+	return batchOptionFunc(func(o *batchOptions) { o.resultSerdes = s })
+}
+
+// WithNesting sets the nesting mode for the batch. [NestingFlat] causes
+// items to run in virtual contexts without per-item context events.
+func WithNesting(m NestingMode) BatchOption {
+	return batchOptionFunc(func(o *batchOptions) { o.nesting = m })
+}
+
+// CompletionConfig is a batch early-completion policy. Zero values leave
+// the corresponding threshold unset. Thresholds may be combined — when
+// multiple are set, the first threshold to fire wins. This matches the JS
+// SDK semantics; the Java SDK disallows combining MinSuccessful with failure
+// tolerances at the API level.
+type CompletionConfig struct {
+	// MinSuccessful completes the batch early once this many items
+	// succeed.
+	MinSuccessful int
+
+	// ToleratedFailureCount fails the batch once more than this many
+	// items fail. A zero value means fail on the first failure.
+	ToleratedFailureCount int
+
+	// ToleratedFailurePercentage fails the batch once the failure
+	// percentage strictly exceeds this threshold.
+	ToleratedFailurePercentage int
+
+	// toleratedFailureCountSet distinguishes an explicit 0 from an unset
+	// value. Without this, we cannot differentiate "fail-fast" (0) from
+	// "unset" (no failure tolerance at all).
+	toleratedFailureCountSet bool
+}
+
+// WithToleratedFailureCount returns a CompletionConfig with the tolerated
+// failure count set explicitly. This distinguishes an intentional 0 (fail-
+// fast) from an unset value.
+func WithToleratedFailureCount(n int) CompletionConfig {
+	return CompletionConfig{
+		ToleratedFailureCount:    n,
+		toleratedFailureCountSet: true,
+	}
+}
+
+type batchOptions struct {
+	maxConcurrency int
+	completion     CompletionConfig
+	itemNamer      func(index int) string
+	itemSerdes     Serdes
+	resultSerdes   Serdes
+	nesting        NestingMode
+}
+
+type batchOptionFunc func(*batchOptions)
+
+func (f batchOptionFunc) applyBatch(o *batchOptions) { f(o) }
+
+func resolveBatchOptions(ec *execContext, opts []BatchOption) batchOptions {
+	o := batchOptions{
+		maxConcurrency: -1, // unlimited by default
+		itemSerdes:     ec.serdes,
+	}
+	for _, opt := range opts {
+		opt.applyBatch(&o)
+	}
+	return o
+}
+
+// executeBatchItems runs the core batch loop: schedule items up to max
+// concurrency, collect results, check completion conditions.
+//
+// The runItem function receives the child context and the item index and
+// must return the item result or error.
+func executeBatchItems[I, O any](
+	ec *execContext,
+	parentID, parentName string,
+	totalItems int,
+	options batchOptions,
+	parentSubType, childSubType string,
+	runItem func(childCtx Context, index int) (O, error),
+) (BatchResult[O], error) {
+	// Items collects results in input order. We allocate for all items
+	// but only fill the ones that actually start.
+	results := make([]BatchItem[O], 0, totalItems)
+
+	var (
+		successCount int
+		failureCount int
+		reason       = CompletionAllCompleted
+		reasonLocked bool // set at the moment the completion decision is made
+	)
+
+	// Sequential execution path (max-concurrency = 1 or all items sequential).
+	// Also used when max-concurrency >= totalItems (effectively unlimited).
+	concurrency := options.maxConcurrency
+	if concurrency < 0 {
+		concurrency = totalItems
+	}
+
+	if concurrency == 1 {
+		// Sequential path: simpler, no goroutines needed.
+
+		// For FLAT nesting, create a shared context whose prefix is the
+		// parent batch ID. All iterations share this context so their
+		// operations are minted sequentially under the parent (no per-
+		// iteration context events).
+		var flatCtx *execContext
+		if options.nesting == NestingFlat {
+			flatMode := childReplayMode(ec, parentID, ec.state.get(parentID))
+			flatCtx = ec.child(parentID, ec.owner, flatMode)
+		}
+
+		for i := 0; i < totalItems; i++ {
+			// Check if we should stop scheduling.
+			if reasonLocked {
+				break
+			}
+
+			itemName := itemNameForIndex(options, i)
+			var result BatchItem[O]
+			var err error
+			if options.nesting == NestingFlat {
+				result, err = runFlatBatchItemShared[O](flatCtx, parentID, i, itemName, options, runItem)
+			} else {
+				result, err = runNestedBatchItem[O](ec, parentID, parentName, itemName, i, options, childSubType, runItem)
+			}
+			if err != nil {
+				// Suspension propagates.
+				if errors.Is(err, errSuspendExecution) {
+					return BatchResult[O]{}, err
+				}
+				return BatchResult[O]{}, err
+			}
+
+			results = append(results, result)
+			switch result.Status {
+			case BatchItemSucceeded:
+				successCount++
+			case BatchItemFailed:
+				failureCount++
+			}
+
+			// Check completion conditions AFTER recording the result.
+			if shouldStopMin(options.completion, successCount) {
+				reason = CompletionMinSuccessfulReached
+				reasonLocked = true
+			} else if shouldStopFailure(options.completion, failureCount, totalItems) {
+				reason = CompletionFailureToleranceExceeded
+				reasonLocked = true
+			}
+		}
+	} else {
+		// Concurrent path: claim all child IDs synchronously on the
+		// owning goroutine (deterministic ordering), then dispatch work
+		// to bounded goroutines. Each goroutine captures its own child
+		// context ownership.
+		type itemResult struct {
+			index int
+			item  BatchItem[O]
+			err   error
+		}
+
+		// Pre-claim child IDs and check terminal states synchronously.
+		type preClaimedItem struct {
+			index    int
+			name     string
+			childID  string
+			op       *operation
+			terminal bool
+		}
+
+		preClaimed := make([]preClaimedItem, 0, totalItems)
+		for i := 0; i < totalItems; i++ {
+			itemName := itemNameForIndex(options, i)
+
+			if options.nesting == NestingFlat {
+				// FLAT mode: claim the virtual child ID.
+				childID, claimErr := ec.claimOperation()
+				if claimErr != nil {
+					return BatchResult[O]{}, claimErr
+				}
+				op := ec.state.get(childID)
+				preClaimed = append(preClaimed, preClaimedItem{
+					index: i, name: itemName, childID: childID, op: op,
+					terminal: op != nil && op.status.terminal(),
+				})
+			} else {
+				// NORMAL mode: claim the child context ID.
+				childID, claimErr := ec.claimOperation()
+				if claimErr != nil {
+					return BatchResult[O]{}, claimErr
+				}
+				op := ec.state.get(childID)
+				isTerminal := op != nil && op.status.terminal()
+				// Checkpoint START if needed (synchronously, before dispatching).
+				if !isTerminal && op == nil {
+					update := batchChildUpdate(ec, childID, itemName, childSubType, parentID, types.OperationActionStart)
+					if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+						return BatchResult[O]{}, err
+					}
+				}
+				preClaimed = append(preClaimed, preClaimedItem{
+					index: i, name: itemName, childID: childID, op: op,
+					terminal: isTerminal,
+				})
+			}
+		}
+
+		resultCh := make(chan itemResult, totalItems)
+		sem := make(chan struct{}, concurrency)
+
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+		stopped := false
+
+		for _, pc := range preClaimed {
+			mu.Lock()
+			if stopped {
+				mu.Unlock()
+				break
+			}
+			mu.Unlock()
+
+			localPC := pc
+
+			// Acquire the semaphore slot.
+			sem <- struct{}{}
+
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer func() { <-sem }()
+
+				var result BatchItem[O]
+				var runErr error
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							runErr = fmt.Errorf("durable: batch item %d panicked: %v", localPC.index, r)
+						}
+					}()
+					result, runErr = runPreClaimedBatchItem[O](ec, parentID, localPC.childID, localPC.name, localPC.index, localPC.op, localPC.terminal, options, childSubType, runItem)
+				}()
+
+				if runErr != nil {
+					resultCh <- itemResult{index: localPC.index, err: runErr}
+					return
+				}
+				resultCh <- itemResult{index: localPC.index, item: result}
+
+				// Check completion after this result.
+				mu.Lock()
+				defer mu.Unlock()
+				switch result.Status {
+				case BatchItemSucceeded:
+					successCount++
+				case BatchItemFailed:
+					failureCount++
+				}
+				if !reasonLocked {
+					if shouldStopMin(options.completion, successCount) {
+						reason = CompletionMinSuccessfulReached
+						reasonLocked = true
+						stopped = true
+					} else if shouldStopFailure(options.completion, failureCount, totalItems) {
+						reason = CompletionFailureToleranceExceeded
+						reasonLocked = true
+						stopped = true
+					}
+				}
+			}()
+		}
+
+		wg.Wait()
+		close(resultCh)
+
+		// Collect results indexed by position.
+		indexed := make(map[int]BatchItem[O])
+		for res := range resultCh {
+			if res.err != nil {
+				if errors.Is(res.err, errSuspendExecution) {
+					return BatchResult[O]{}, res.err
+				}
+				return BatchResult[O]{}, res.err
+			}
+			indexed[res.index] = res.item
+		}
+
+		// Assemble in input order.
+		for i := 0; i < totalItems; i++ {
+			if item, ok := indexed[i]; ok {
+				results = append(results, item)
+			}
+		}
+	}
+
+	batchResult := BatchResult[O]{
+		Items:  results,
+		Reason: reason,
+	}
+
+	return checkpointBatchSuccess(ec, parentID, parentName, parentSubType, batchResult, options)
+}
+
+// runPreClaimedBatchItem runs a batch item whose operation ID was already
+// claimed on the owning goroutine. Used by the concurrent path.
+func runPreClaimedBatchItem[O any](
+	ec *execContext,
+	parentID, childID, itemName string,
+	index int,
+	op *operation,
+	terminal bool,
+	options batchOptions,
+	childSubType string,
+	runItem func(childCtx Context, index int) (O, error),
+) (BatchItem[O], error) {
+	if options.nesting == NestingFlat {
+		// FLAT mode: run in a virtual child context.
+		mode := childReplayMode(ec, childID, op)
+		virtualChild := ec.child(childID, currentGoroutineOwner(), mode)
+		result, fnErr := runItem(virtualChild, index)
+		if fnErr != nil {
+			if errors.Is(fnErr, errSuspendExecution) {
+				return BatchItem[O]{}, fnErr
+			}
+			return BatchItem[O]{
+				Index:  index,
+				Name:   itemName,
+				Status: BatchItemFailed,
+				Err:    fnErr,
+			}, nil
+		}
+		serialized, serErr := options.itemSerdes.Marshal(result)
+		if serErr != nil {
+			return BatchItem[O]{}, fmt.Errorf("durable: batch item %d: serialize result: %w", index, serErr)
+		}
+		var out O
+		if err := options.itemSerdes.Unmarshal(serialized, &out); err != nil {
+			return BatchItem[O]{}, fmt.Errorf("durable: batch item %d: deserialize result: %w", index, err)
+		}
+		return BatchItem[O]{
+			Index:  index,
+			Name:   itemName,
+			Status: BatchItemSucceeded,
+			Result: out,
+		}, nil
+	}
+
+	// NORMAL mode: child context with full checkpointing.
+	if terminal {
+		return replayTerminalChildItem[O](ec, op, childID, itemName, index, options, childSubType, runItem)
+	}
+
+	// The child context runs on this goroutine; capture ownership here.
+	mode := childReplayMode(ec, childID, op)
+	child := ec.child(childID, currentGoroutineOwner(), mode)
+
+	result, fnErr := runItem(child, index)
+	if fnErr != nil {
+		if errors.Is(fnErr, errSuspendExecution) {
+			return BatchItem[O]{}, fnErr
+		}
+		update := batchChildUpdate(ec, childID, itemName, childSubType, parentID, types.OperationActionFail)
+		update.Error = errorObject(fnErr)
+		if cerr := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); cerr != nil {
+			return BatchItem[O]{}, cerr
+		}
+		return BatchItem[O]{
+			Index:  index,
+			Name:   itemName,
+			Status: BatchItemFailed,
+			Err:    &ChildContextError{Name: itemName, Err: fnErr},
+		}, nil
+	}
+
+	serialized, serErr := options.itemSerdes.Marshal(result)
+	if serErr != nil {
+		return BatchItem[O]{}, fmt.Errorf("durable: batch item %d: serialize result: %w", index, serErr)
+	}
+	update := batchChildUpdate(ec, childID, itemName, childSubType, parentID, types.OperationActionSucceed)
+	if len(serialized) > checkpointSizeLimitBytes {
+		update.ContextOptions = &types.ContextOptions{ReplayChildren: aws.Bool(true)}
+	} else {
+		update.Payload = aws.String(string(serialized))
+	}
+	if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+		return BatchItem[O]{}, err
+	}
+	var out O
+	if err := options.itemSerdes.Unmarshal(serialized, &out); err != nil {
+		return BatchItem[O]{}, fmt.Errorf("durable: batch item %d: deserialize result: %w", index, err)
+	}
+	return BatchItem[O]{
+		Index:  index,
+		Name:   itemName,
+		Status: BatchItemSucceeded,
+		Result: out,
+	}, nil
+}
+
+// runFlatBatchItem runs an item in FLAT nesting mode: no child context,
+// operations are checkpointed under the parent's ID space using a virtual
+// child (no ContextStarted/Succeeded events).
+func runFlatBatchItem[O any](
+	ec *execContext,
+	parentID string,
+	index int,
+	itemName string,
+	options batchOptions,
+	runItem func(childCtx Context, index int) (O, error),
+) (BatchItem[O], error) {
+	// In FLAT mode, the item's operations are minted under the parent
+	// context's ID space. We create a virtual child that shares the
+	// parent's opIDs prefix but does NOT checkpoint its own context events.
+	// The ID for the virtual child is just the next parent-level op ID.
+	childID, err := ec.claimOperation()
+	if err != nil {
+		return BatchItem[O]{}, err
+	}
+
+	// Check for replay: if this virtual child's first op is checkpointed,
+	// it's in replay mode.
+	mode := childReplayMode(ec, childID, ec.state.get(childID))
+	virtualChild := ec.child(childID, ec.owner, mode)
+
+	result, fnErr := runItem(virtualChild, index)
+	if fnErr != nil {
+		if errors.Is(fnErr, errSuspendExecution) {
+			return BatchItem[O]{}, fnErr
+		}
+		return BatchItem[O]{
+			Index:  index,
+			Name:   itemName,
+			Status: BatchItemFailed,
+			Err:    fnErr,
+		}, nil
+	}
+
+	// Round-trip through serdes.
+	serialized, serErr := options.itemSerdes.Marshal(result)
+	if serErr != nil {
+		return BatchItem[O]{}, fmt.Errorf("durable: batch item %d: serialize result: %w", index, serErr)
+	}
+	var out O
+	if err := options.itemSerdes.Unmarshal(serialized, &out); err != nil {
+		return BatchItem[O]{}, fmt.Errorf("durable: batch item %d: deserialize result: %w", index, err)
+	}
+
+	return BatchItem[O]{
+		Index:  index,
+		Name:   itemName,
+		Status: BatchItemSucceeded,
+		Result: out,
+	}, nil
+}
+
+// runFlatBatchItemShared runs an item in FLAT nesting mode using a shared
+// context whose prefix is the parent batch's entity ID. Operations inside
+// the item are minted sequentially under the parent, with no per-iteration
+// context events. The shared context's counter advances across iterations.
+func runFlatBatchItemShared[O any](
+	flatCtx *execContext,
+	parentID string,
+	index int,
+	itemName string,
+	options batchOptions,
+	runItem func(childCtx Context, index int) (O, error),
+) (BatchItem[O], error) {
+	result, fnErr := runItem(flatCtx, index)
+	if fnErr != nil {
+		if errors.Is(fnErr, errSuspendExecution) {
+			return BatchItem[O]{}, fnErr
+		}
+		return BatchItem[O]{
+			Index:  index,
+			Name:   itemName,
+			Status: BatchItemFailed,
+			Err:    fnErr,
+		}, nil
+	}
+
+	// Round-trip through serdes.
+	serialized, serErr := options.itemSerdes.Marshal(result)
+	if serErr != nil {
+		return BatchItem[O]{}, fmt.Errorf("durable: batch item %d: serialize result: %w", index, serErr)
+	}
+	var out O
+	if err := options.itemSerdes.Unmarshal(serialized, &out); err != nil {
+		return BatchItem[O]{}, fmt.Errorf("durable: batch item %d: deserialize result: %w", index, err)
+	}
+
+	return BatchItem[O]{
+		Index:  index,
+		Name:   itemName,
+		Status: BatchItemSucceeded,
+		Result: out,
+	}, nil
+}
+
+// runNestedBatchItem runs an item in NORMAL nesting mode: full child context
+// with ContextStarted/ContextSucceeded or ContextFailed events.
+func runNestedBatchItem[O any](
+	ec *execContext,
+	parentID, parentName, itemName string,
+	index int,
+	options batchOptions,
+	childSubType string,
+	runItem func(childCtx Context, index int) (O, error),
+) (item BatchItem[O], retErr error) {
+	// Claim the child's operation ID from the parent.
+	childID, err := ec.claimOperation()
+	if err != nil {
+		return BatchItem[O]{}, err
+	}
+
+	op := ec.state.get(childID)
+	if op != nil && op.status.terminal() {
+		return replayTerminalChildItem[O](ec, op, childID, itemName, index, options, childSubType, runItem)
+	}
+
+	// Checkpoint child context START.
+	if op == nil {
+		update := batchChildUpdate(ec, childID, itemName, childSubType, parentID, types.OperationActionStart)
+		if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+			return BatchItem[O]{}, err
+		}
+	}
+
+	mode := childReplayMode(ec, childID, op)
+	child := ec.child(childID, ec.owner, mode)
+
+	// Recover panics in the item function so they become failures, not
+	// process crashes.
+	var result O
+	var fnErr error
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fnErr = fmt.Errorf("durable: batch item %d panicked: %v", index, r)
+			}
+		}()
+		result, fnErr = runItem(child, index)
+	}()
+
+	if fnErr != nil {
+		if errors.Is(fnErr, errSuspendExecution) {
+			return BatchItem[O]{}, fnErr
+		}
+		// Checkpoint the failure.
+		update := batchChildUpdate(ec, childID, itemName, childSubType, parentID, types.OperationActionFail)
+		update.Error = errorObject(fnErr)
+		if cerr := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); cerr != nil {
+			return BatchItem[O]{}, cerr
+		}
+		return BatchItem[O]{
+			Index:  index,
+			Name:   itemName,
+			Status: BatchItemFailed,
+			Err:    &ChildContextError{Name: itemName, Err: fnErr},
+		}, nil
+	}
+
+	// Serialize and checkpoint the child success.
+	serialized, serErr := options.itemSerdes.Marshal(result)
+	if serErr != nil {
+		return BatchItem[O]{}, fmt.Errorf("durable: batch item %d: serialize result: %w", index, serErr)
+	}
+
+	update := batchChildUpdate(ec, childID, itemName, childSubType, parentID, types.OperationActionSucceed)
+	if len(serialized) > checkpointSizeLimitBytes {
+		update.ContextOptions = &types.ContextOptions{ReplayChildren: aws.Bool(true)}
+	} else {
+		update.Payload = aws.String(string(serialized))
+	}
+	if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+		return BatchItem[O]{}, err
+	}
+
+	// Round-trip through serdes for live == replay consistency.
+	var out O
+	if err := options.itemSerdes.Unmarshal(serialized, &out); err != nil {
+		return BatchItem[O]{}, fmt.Errorf("durable: batch item %d: deserialize result: %w", index, err)
+	}
+
+	return BatchItem[O]{
+		Index:  index,
+		Name:   itemName,
+		Status: BatchItemSucceeded,
+		Result: out,
+	}, nil
+}
+
+// replayTerminalChildItem resolves a child item that already has a terminal
+// status in the checkpoint log.
+func replayTerminalChildItem[O any](
+	ec *execContext,
+	op *operation,
+	childID, itemName string,
+	index int,
+	options batchOptions,
+	childSubType string,
+	runItem func(childCtx Context, index int) (O, error),
+) (BatchItem[O], error) {
+	switch op.status {
+	case statusSucceeded:
+		if op.childCtx == nil {
+			return BatchItem[O]{}, fmt.Errorf("durable: batch item %d: checkpointed SUCCEEDED with no context details", index)
+		}
+		if op.childCtx.replayChildren {
+			mode := modeReplaySucceededContext
+			child := ec.child(childID, ec.owner, mode)
+			result, err := runItem(child, index)
+			if err != nil {
+				return BatchItem[O]{}, err
+			}
+			return BatchItem[O]{
+				Index:  index,
+				Name:   itemName,
+				Status: BatchItemSucceeded,
+				Result: result,
+			}, nil
+		}
+		var out O
+		if err := options.itemSerdes.Unmarshal([]byte(op.childCtx.result), &out); err != nil {
+			return BatchItem[O]{}, fmt.Errorf("durable: batch item %d: deserialize result: %w", index, err)
+		}
+		return BatchItem[O]{
+			Index:  index,
+			Name:   itemName,
+			Status: BatchItemSucceeded,
+			Result: out,
+		}, nil
+
+	case statusFailed:
+		cause := &replayedError{errType: "Error", message: "item failed"}
+		if op.childCtx != nil {
+			cause = &replayedError{errType: op.childCtx.errType, message: op.childCtx.errMessage}
+		}
+		return BatchItem[O]{
+			Index:  index,
+			Name:   itemName,
+			Status: BatchItemFailed,
+			Err:    &ChildContextError{Name: itemName, Err: cause},
+		}, nil
+
+	default:
+		return BatchItem[O]{}, fmt.Errorf("durable: batch item %d: unexpected terminal status %s", index, op.status)
+	}
+}
+
+// replayTerminalBatch handles a batch whose parent context is already
+// terminal in the checkpoint log.
+func replayTerminalBatch[I, O any](
+	ec *execContext,
+	op *operation,
+	id, name string,
+	items []I,
+	fn func(Context, I, int) (O, error),
+	options batchOptions,
+	parentSubType, childSubType string,
+) (BatchResult[O], error) {
+	switch op.status {
+	case statusSucceeded:
+		if op.childCtx == nil {
+			return BatchResult[O]{}, fmt.Errorf("durable: batch %q: checkpointed SUCCEEDED with no context details", name)
+		}
+		// If an operation-level serdes is configured, use it to
+		// deserialize the whole batch result.
+		if options.resultSerdes != nil {
+			var result BatchResult[O]
+			if err := options.resultSerdes.Unmarshal([]byte(op.childCtx.result), &result); err != nil {
+				return BatchResult[O]{}, fmt.Errorf("durable: batch %q: deserialize batch result: %w", name, err)
+			}
+			return result, nil
+		}
+		// ReplayChildren mode: re-execute the batch to reconstruct.
+		if op.childCtx.replayChildren {
+			mode := modeReplaySucceededContext
+			child := ec.child(id, ec.owner, mode)
+			// Re-execute: the child context replays all children.
+			// We need to re-run the batch loop in the child context.
+			return replayBatchChildren[I, O](child, id, name, items, fn, options, parentSubType, childSubType)
+		}
+		// Normal replay: deserialize the stored aggregate result.
+		// The parent checkpoint stores a JSON-serialized batch summary
+		// using the batchCheckpointPayload envelope (lowercase "results"
+		// and "reason" JSON keys).
+		var payload batchCheckpointPayload
+		if err := json.Unmarshal([]byte(op.childCtx.result), &payload); err != nil {
+			// Fall back to re-executing children if the stored
+			// payload is not the batch summary (could be legacy).
+			mode := modeReplaySucceededContext
+			child := ec.child(id, ec.owner, mode)
+			return replayBatchChildren[I, O](child, id, name, items, fn, options, parentSubType, childSubType)
+		}
+		return toBatchResult[O](payload, options.itemSerdes)
+
+	case statusFailed:
+		cause := &replayedError{errType: "Error", message: "batch failed"}
+		if op.childCtx != nil {
+			cause = &replayedError{errType: op.childCtx.errType, message: op.childCtx.errMessage}
+		}
+		return BatchResult[O]{}, &ChildContextError{Name: name, Err: cause}
+
+	default:
+		return BatchResult[O]{}, fmt.Errorf("durable: batch %q: unexpected terminal status %s", name, op.status)
+	}
+}
+
+// replayBatchChildren re-executes batch children to reconstruct the batch
+// result from child replay.
+func replayBatchChildren[I, O any](
+	ec *execContext,
+	parentID, parentName string,
+	items []I,
+	fn func(Context, I, int) (O, error),
+	options batchOptions,
+	parentSubType, childSubType string,
+) (BatchResult[O], error) {
+	// Determine total items based on whether we have items (Map) or not (Parallel).
+	totalItems := len(items)
+	if totalItems == 0 {
+		return BatchResult[O]{Items: nil, Reason: CompletionAllCompleted}, nil
+	}
+
+	results := make([]BatchItem[O], 0, totalItems)
+	var successCount, failureCount int
+	reason := CompletionAllCompleted
+
+	for i := 0; i < totalItems; i++ {
+		itemName := itemNameForIndex(options, i)
+		var result BatchItem[O]
+		var err error
+
+		if options.nesting == NestingFlat {
+			result, err = runFlatBatchItem[O](ec, parentID, i, itemName, options, func(ctx Context, idx int) (O, error) {
+				if fn != nil && items != nil {
+					return fn(ctx, items[idx], idx)
+				}
+				var zero O
+				return zero, fmt.Errorf("durable: cannot replay parallel branches without branch functions")
+			})
+		} else {
+			result, err = runNestedBatchItem[O](ec, parentID, parentName, itemName, i, options, childSubType, func(ctx Context, idx int) (O, error) {
+				if fn != nil && items != nil {
+					return fn(ctx, items[idx], idx)
+				}
+				var zero O
+				return zero, fmt.Errorf("durable: cannot replay parallel branches without branch functions")
+			})
+		}
+
+		if err != nil {
+			return BatchResult[O]{}, err
+		}
+
+		results = append(results, result)
+		switch result.Status {
+		case BatchItemSucceeded:
+			successCount++
+		case BatchItemFailed:
+			failureCount++
+		}
+
+		if shouldStopMin(options.completion, successCount) {
+			reason = CompletionMinSuccessfulReached
+			break
+		}
+		if shouldStopFailure(options.completion, failureCount, totalItems) {
+			reason = CompletionFailureToleranceExceeded
+			break
+		}
+	}
+
+	return BatchResult[O]{Items: results, Reason: reason}, nil
+}
+
+// checkpointBatchSuccess checkpoints the parent batch context as SUCCEEDED
+// and returns the final BatchResult.
+func checkpointBatchSuccess[O any](
+	ec *execContext,
+	id, name, subType string,
+	result BatchResult[O],
+	options batchOptions,
+) (BatchResult[O], error) {
+	// Serialize the result. If an operation-level serdes is provided,
+	// use it; otherwise serialize a default JSON summary.
+	var serialized []byte
+	var serErr error
+
+	if options.resultSerdes != nil {
+		serialized, serErr = options.resultSerdes.Marshal(result)
+	} else {
+		payload, payloadErr := fromBatchResult(result, options.itemSerdes)
+		if payloadErr != nil {
+			return BatchResult[O]{}, payloadErr
+		}
+		serialized, serErr = json.Marshal(payload)
+	}
+	if serErr != nil {
+		return BatchResult[O]{}, fmt.Errorf("durable: batch %q: serialize result: %w", name, serErr)
+	}
+
+	update := batchParentUpdate(ec, id, name, subType, types.OperationActionSucceed)
+	if len(serialized) > checkpointSizeLimitBytes {
+		update.ContextOptions = &types.ContextOptions{ReplayChildren: aws.Bool(true)}
+	} else {
+		update.Payload = aws.String(string(serialized))
+	}
+	if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+		return BatchResult[O]{}, err
+	}
+
+	return result, nil
+}
+
+// batchCheckpointPayload is the JSON structure stored as the parent batch
+// context's checkpoint payload. It uses checkpoint-safe item representations
+// that avoid interface fields (error) which cannot round-trip through JSON.
+type batchCheckpointPayload struct {
+	Results []batchCheckpointItem `json:"results"`
+	Reason  CompletionReason      `json:"reason"`
+}
+
+// batchCheckpointItem is the per-item representation in the checkpoint
+// payload. Unlike [BatchItem], it replaces the error interface with
+// serializable error type/message strings.
+type batchCheckpointItem struct {
+	Index      int             `json:"index"`
+	Name       string          `json:"name,omitempty"`
+	Status     BatchItemStatus `json:"status"`
+	Result     string          `json:"result,omitempty"`
+	ErrType    string          `json:"errType,omitempty"`
+	ErrMessage string          `json:"errMessage,omitempty"`
+}
+
+// toBatchResult converts a deserialized checkpoint payload back into a
+// typed [BatchResult] using the provided item serdes for result values.
+func toBatchResult[O any](payload batchCheckpointPayload, itemSerdes Serdes) (BatchResult[O], error) {
+	items := make([]BatchItem[O], len(payload.Results))
+	for i, cp := range payload.Results {
+		items[i] = BatchItem[O]{
+			Index:  cp.Index,
+			Name:   cp.Name,
+			Status: cp.Status,
+		}
+		switch cp.Status {
+		case BatchItemSucceeded:
+			var out O
+			if cp.Result != "" {
+				if err := itemSerdes.Unmarshal([]byte(cp.Result), &out); err != nil {
+					return BatchResult[O]{}, fmt.Errorf("durable: batch item %d: deserialize checkpointed result: %w", i, err)
+				}
+			}
+			items[i].Result = out
+		case BatchItemFailed:
+			items[i].Err = &ChildContextError{
+				Name: cp.Name,
+				Err:  &replayedError{errType: cp.ErrType, message: cp.ErrMessage},
+			}
+		}
+	}
+	return BatchResult[O]{Items: items, Reason: payload.Reason}, nil
+}
+
+// fromBatchResult converts a live [BatchResult] into the checkpoint payload
+// format for serialization. Item results are pre-serialized through the
+// provided item serdes.
+func fromBatchResult[O any](result BatchResult[O], itemSerdes Serdes) (batchCheckpointPayload, error) {
+	cpItems := make([]batchCheckpointItem, len(result.Items))
+	for i, item := range result.Items {
+		cpItems[i] = batchCheckpointItem{
+			Index:  item.Index,
+			Name:   item.Name,
+			Status: item.Status,
+		}
+		switch item.Status {
+		case BatchItemSucceeded:
+			raw, err := itemSerdes.Marshal(item.Result)
+			if err != nil {
+				return batchCheckpointPayload{}, fmt.Errorf("durable: batch item %d: serialize result for checkpoint: %w", i, err)
+			}
+			cpItems[i].Result = string(raw)
+		case BatchItemFailed:
+			if item.Err != nil {
+				cpItems[i].ErrType = errorTypeName(item.Err)
+				cpItems[i].ErrMessage = item.Err.Error()
+				// Extract inner error details for child context errors.
+				var childErr *ChildContextError
+				if errors.As(item.Err, &childErr) && childErr.Err != nil {
+					cpItems[i].ErrType = errorTypeName(childErr.Err)
+					cpItems[i].ErrMessage = childErr.Err.Error()
+				}
+			}
+		}
+	}
+	return batchCheckpointPayload{Results: cpItems, Reason: result.Reason}, nil
+}
+
+// batchParentUpdate builds an operation update for the parent batch context.
+func batchParentUpdate(ec *execContext, id, name, subType string, action types.OperationAction) types.OperationUpdate {
+	update := types.OperationUpdate{
+		Id:      aws.String(hashID(id)),
+		Type:    types.OperationTypeContext,
+		SubType: aws.String(subType),
+		Action:  action,
+	}
+	if name != "" {
+		update.Name = aws.String(name)
+	}
+	if parent := ec.ids.prefix; parent != "" {
+		update.ParentId = aws.String(hashID(parent))
+	}
+	return update
+}
+
+// batchChildUpdate builds an operation update for a batch child (iteration
+// or branch).
+func batchChildUpdate(ec *execContext, childID, childName, childSubType, parentID string, action types.OperationAction) types.OperationUpdate {
+	update := types.OperationUpdate{
+		Id:       aws.String(hashID(childID)),
+		Type:     types.OperationTypeContext,
+		SubType:  aws.String(childSubType),
+		Action:   action,
+		ParentId: aws.String(hashID(parentID)),
+	}
+	if childName != "" {
+		update.Name = aws.String(childName)
+	}
+	return update
+}
+
+// itemNameForIndex returns the name for a batch item at the given index.
+func itemNameForIndex(options batchOptions, index int) string {
+	if options.itemNamer != nil {
+		return options.itemNamer(index)
+	}
+	return ""
+}
+
+// shouldStopMin checks if the min-successful threshold has been met.
+func shouldStopMin(cfg CompletionConfig, successCount int) bool {
+	if cfg.MinSuccessful <= 0 {
+		return false
+	}
+	return successCount >= cfg.MinSuccessful
+}
+
+// shouldStopFailure checks if the failure tolerance has been exceeded.
+func shouldStopFailure(cfg CompletionConfig, failureCount, totalItems int) bool {
+	// Check count-based tolerance.
+	if cfg.toleratedFailureCountSet {
+		if failureCount > cfg.ToleratedFailureCount {
+			return true
+		}
+	}
+	// Check percentage-based tolerance.
+	if cfg.ToleratedFailurePercentage > 0 && totalItems > 0 {
+		pct := (failureCount * 100) / totalItems
+		if pct > cfg.ToleratedFailurePercentage {
+			return true
+		}
+	}
+	return false
+}

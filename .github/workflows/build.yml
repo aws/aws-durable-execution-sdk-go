@@ -1,0 +1,83 @@
+name: Build
+
+on:
+  push:
+    branches: [main, mainline]
+  pull_request:
+    branches: [main, mainline]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Check formatting
+        run: |
+          if [ -n "$(gofmt -l .)" ]; then
+            echo "The following files are not properly formatted:"
+            gofmt -l .
+            exit 1
+          fi
+
+      - name: Install golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          args: --timeout=5m
+
+      - name: Test
+        run: go test -race ./...
+
+  compliance:
+    name: Build Compliance Module
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build compliance module
+        working-directory: compliance
+        run: go build ./...
+
+      - name: Vet compliance module
+        working-directory: compliance
+        run: go vet ./...
+
+  examples:
+    name: Build Examples Module
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build examples module
+        working-directory: examples
+        run: go build ./...
+
+      - name: Vet examples module
+        working-directory: examples
+        run: go vet ./...

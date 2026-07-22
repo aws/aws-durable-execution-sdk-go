@@ -1,0 +1,419 @@
+package durable
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
+
+	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/aws/aws-lambda-go/lambdacontext"
+	"github.com/aws/aws-sdk-go-v2/config"
+	lambdaservice "github.com/aws/aws-sdk-go-v2/service/lambda"
+)
+
+// Handler is a durable function handler. It receives the deserialized
+// invocation event and a [Context] in place of the standard Lambda context.
+type Handler[I, O any] func(ctx Context, event I) (O, error)
+
+// Start registers handler as the Lambda function handler and begins
+// processing invocations. It is the durable analogue of lambda.Start and
+// does not return.
+func Start[I, O any](handler Handler[I, O], opts ...HandlerOption) {
+	lambda.Start(Wrap(handler, opts...))
+}
+
+// Wrap adapts handler into a lambda.Handler for callers that compose their
+// own Lambda entry point. Most programs should use [Start].
+func Wrap[I, O any](handler Handler[I, O], opts ...HandlerOption) lambda.Handler {
+	if handler == nil {
+		panic("durable: handler must not be nil")
+	}
+	options := handlerOptions{}
+	for _, o := range opts {
+		o.applyHandler(&options)
+	}
+	if err := validateHandlerOptions(&options); err != nil {
+		panic(err.Error())
+	}
+	return &durableHandler[I, O]{handler: handler, options: options}
+}
+
+// HandlerOption configures the durable execution handler at construction
+// time.
+type HandlerOption interface {
+	applyHandler(*handlerOptions)
+}
+
+// WithLogger sets the logger used for SDK and context logging. The default
+// logger emits structured JSON enriched with execution metadata.
+func WithLogger(l Logger) HandlerOption {
+	return handlerOptionFunc(func(o *handlerOptions) { o.logger = l })
+}
+
+// WithSerdes sets the default serializer for operation results. It applies
+// to steps, child contexts, invokes, and condition state. Per-operation
+// serdes options take precedence. The default is encoding/json.
+func WithSerdes(s Serdes) HandlerOption {
+	return handlerOptionFunc(func(o *handlerOptions) { o.serdes = s })
+}
+
+// WithCallbackDeserializer sets the default deserializer for callback
+// payloads submitted by external systems. This is used when deserializing
+// the result of a SUCCEEDED callback during replay. Per-operation
+// [WithCallbackSerdes] takes precedence. Without it, callbacks use the
+// handler-level serdes (default: encoding/json).
+func WithCallbackDeserializer(d Deserializer) HandlerOption {
+	return handlerOptionFunc(func(o *handlerOptions) { o.callbackDeserializer = d })
+}
+
+type handlerOptions struct {
+	logger               Logger
+	serdes               Serdes
+	callbackDeserializer Deserializer
+
+	// client overrides the lazily-built Lambda client. Set via
+	// [WithExecutionClient].
+	client ExecutionClient
+
+	// plugins holds registered instrumentation plugins. Set via
+	// [WithPlugins].
+	plugins []Plugin
+}
+
+// WithExecutionClient sets the execution client for the durable handler.
+// The default client is a [github.com/aws/aws-sdk-go-v2/service/lambda.Client]
+// built lazily from the default AWS config.
+//
+// Use this option to inject a custom [ExecutionClient] implementation, such
+// as the in-memory client provided by the [durabletest] package for local
+// testing.
+func WithExecutionClient(client ExecutionClient) HandlerOption {
+	return handlerOptionFunc(func(o *handlerOptions) { o.client = client })
+}
+
+// withLambdaAPI injects a Lambda client double. Test-only; retained for
+// backward compatibility with existing tests that use this name.
+func withLambdaAPI(client ExecutionClient) HandlerOption {
+	return WithExecutionClient(client)
+}
+
+type handlerOptionFunc func(*handlerOptions)
+
+func (f handlerOptionFunc) applyHandler(o *handlerOptions) { f(o) }
+
+// durableHandler is the lambda.Handler that drives one durable invocation:
+// parse the durable payload, reconstruct execution state, run the user
+// handler under replay, and translate the outcome (result, failure, or
+// suspension) into the invocation response.
+type durableHandler[I, O any] struct {
+	handler Handler[I, O]
+	options handlerOptions
+
+	clientMu sync.Mutex
+	client   ExecutionClient
+}
+
+var _ lambda.Handler = (*durableHandler[any, any])(nil)
+
+// errSuspendExecution signals that the current invocation must end with a
+// PENDING response because execution is blocked on pending operations
+// (waits, callbacks, in-flight invokes). It is internal control flow that
+// user code never observes. Operations return it directly; wrapping is
+// safe because the translation uses errors.Is, but adds no value.
+var errSuspendExecution = errors.New("durable: execution suspended")
+
+// Invoke implements lambda.Handler: parse the durable payload, reconstruct
+// execution state, run the user handler on its own goroutine under replay,
+// and translate the outcome into the invocation response.
+func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]byte, error) {
+	var in invocationInput
+	if err := json.Unmarshal(payload, &in); err != nil {
+		return nil, fmt.Errorf("durable: parse invocation input: %w", err)
+	}
+	if in.DurableExecutionArn == "" || in.CheckpointToken == "" {
+		return nil, errors.New("durable: invocation input missing DurableExecutionArn or CheckpointToken; is the function configured with DurableConfig?")
+	}
+
+	client, err := h.lambdaClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	cp := newCheckpointer(client, in.DurableExecutionArn, in.CheckpointToken)
+
+	state, err := assembleState(ctx, cp, &in.InitialExecutionState)
+	if err != nil {
+		return nil, err
+	}
+
+	var event I
+	if raw, ok := in.InitialExecutionState.customerInput(); ok {
+		if err := json.Unmarshal([]byte(raw), &event); err != nil {
+			return nil, fmt.Errorf("durable: deserialize customer input: %w", err)
+		}
+	}
+
+	lambdaCtx, _ := lambdacontext.FromContext(ctx)
+	logger := h.options.logger
+	if logger == nil {
+		logger = newDefaultLogger(in.DurableExecutionArn)
+	} else {
+		// Wrap user-provided loggers with replay suppression so they
+		// don't emit during replay. The default logger already has this
+		// built in; user loggers need the wrapper to implement
+		// replayToggler.
+		logger = &replayAwareLogger{inner: logger, replaying: &atomic.Bool{}}
+	}
+
+	// Plugin dispatcher: nil when no plugins are registered (zero overhead).
+	pd := newPluginDispatcher(h.options.plugins)
+
+	isFirstInvocation := len(state.operations) <= 1
+	invInfo := InvocationHookInfo{
+		ExecutionArn:      in.DurableExecutionArn,
+		IsFirstInvocation: isFirstInvocation,
+	}
+
+	// OnOperationChange: fire for operations that changed externally.
+	if pd != nil && len(in.UpdatedOperationIds) > 0 {
+		var updated []OperationHookInfo
+		for _, uid := range in.UpdatedOperationIds {
+			op := state.get(uid)
+			if op == nil {
+				continue
+			}
+			updated = append(updated, OperationHookInfo{
+				ExecutionArn: in.DurableExecutionArn,
+				ID:           uid,
+				Name:         op.name,
+				Type:         op.opType,
+				SubType:      op.subType,
+				Status:       toPluginOperationStatus(op.status),
+				IsReplay:     true,
+			})
+		}
+		if len(updated) > 0 {
+			changeInfo := OperationChangeHookInfo{
+				ExecutionArn:      in.DurableExecutionArn,
+				UpdatedOperations: updated,
+			}
+			dispatchNotification(pd, func(p *Plugin) {
+				if p.OnOperationChange != nil {
+					p.OnOperationChange(changeInfo)
+				}
+			})
+		}
+	}
+
+	// OnInvocationStart
+	dispatchNotification(pd, func(p *Plugin) {
+		if p.OnInvocationStart != nil {
+			p.OnInvocationStart(invInfo)
+		}
+	})
+
+	// The user handler runs on its own goroutine, which owns the root
+	// context: durable operations are claimed there in program order.
+	// Suspension is signaled out-of-band: once an operation fires the
+	// suspend signal, the invocation ends with PENDING regardless of how
+	// the user goroutine later unwinds, so user code cannot convert a
+	// suspended execution into a completed one by intercepting the
+	// suspension error. The channel is buffered so the abandoned
+	// goroutine's final send never blocks.
+	type outcome struct {
+		result O
+		err    error
+	}
+	ec := newExecContext(ctx, in.DurableExecutionArn, lambdaCtx, logger, state)
+	ec.checkpointer = cp
+	cp.state = state
+	if h.options.serdes != nil {
+		ec.serdes = h.options.serdes
+	}
+	if h.options.callbackDeserializer != nil {
+		ec.callbackDeserializer = h.options.callbackDeserializer
+	}
+	ec.pluginDispatcher = pd
+	outcomeCh := make(chan outcome, 1)
+
+	// WrapInvocation: compose around the handler execution.
+	runHandler := func() (any, error) {
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					outcomeCh <- outcome{err: fmt.Errorf("durable: handler panicked: %v", r)}
+				}
+			}()
+			// The root context is owned by this goroutine, not the one
+			// that constructed it.
+			ec.owner = currentGoroutineOwner()
+			result, err := h.handler(ec, event)
+			outcomeCh <- outcome{result: result, err: err}
+		}()
+
+		select {
+		case out := <-outcomeCh:
+			if ec.suspend.fired() {
+				return nil, errSuspendExecution
+			}
+			if out.err != nil {
+				return nil, out.err
+			}
+			return out.result, nil
+		case <-ec.suspend.done():
+			return nil, errSuspendExecution
+		}
+	}
+
+	wrapResult, wrapErr := wrapChain(pd,
+		func(p *Plugin) func(func() (any, error)) (any, error) {
+			if p.WrapInvocation == nil {
+				return nil
+			}
+			return func(fn func() (any, error)) (any, error) {
+				return p.WrapInvocation(invInfo, fn)
+			}
+		},
+		runHandler,
+	)
+
+	// Translate the wrapped outcome to the wire response.
+	var resp []byte
+	var respErr error
+	switch {
+	case errors.Is(wrapErr, errSuspendExecution) || ec.suspend.fired():
+		// OnInvocationEnd with PENDING.
+		dispatchNotification(pd, func(p *Plugin) {
+			if p.OnInvocationEnd != nil {
+				p.OnInvocationEnd(InvocationEndHookInfo{
+					ExecutionArn: in.DurableExecutionArn,
+					Status:       PluginInvocationPending,
+				})
+			}
+		})
+		resp, respErr = respond(invocationResponse{Status: invocationPending})
+	case wrapErr != nil:
+		dispatchNotification(pd, func(p *Plugin) {
+			if p.OnInvocationEnd != nil {
+				p.OnInvocationEnd(InvocationEndHookInfo{
+					ExecutionArn: in.DurableExecutionArn,
+					Status:       PluginInvocationFailed,
+				})
+			}
+		})
+		resp, respErr = respond(invocationResponse{
+			Status: invocationFailed,
+			Error:  errorObjectFromError(wrapErr),
+		})
+	default:
+		dispatchNotification(pd, func(p *Plugin) {
+			if p.OnInvocationEnd != nil {
+				p.OnInvocationEnd(InvocationEndHookInfo{
+					ExecutionArn: in.DurableExecutionArn,
+					Status:       PluginInvocationSucceeded,
+				})
+			}
+		})
+		// Serialize the result.
+		serialized, serr := json.Marshal(wrapResult)
+		if serr != nil {
+			return nil, fmt.Errorf("durable: serialize handler result: %w", serr)
+		}
+		s := string(serialized)
+		resp, respErr = respond(invocationResponse{Status: invocationSucceeded, Result: &s})
+	}
+	return resp, respErr
+}
+
+// lambdaClient returns the injected client or lazily builds the default
+// one. The client is memoized only on success, so a transient config
+// failure on one invocation is retried on the next instead of bricking the
+// warm environment.
+func (h *durableHandler[I, O]) lambdaClient(ctx context.Context) (ExecutionClient, error) {
+	h.clientMu.Lock()
+	defer h.clientMu.Unlock()
+	if h.client != nil {
+		return h.client, nil
+	}
+	if h.options.client != nil {
+		h.client = h.options.client
+		return h.client, nil
+	}
+	cfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("durable: load AWS config: %w", err)
+	}
+	h.client = lambdaservice.NewFromConfig(cfg)
+	return h.client, nil
+}
+
+// assembleState combines the operation page embedded in the invocation
+// payload with any remaining pages fetched from the backend.
+func assembleState(ctx context.Context, cp *checkpointer, initial *initialExecutionState) (*executionState, error) {
+	ops := initial.toOperations()
+	if initial.NextMarker != "" {
+		rest, err := cp.loadStateFrom(ctx, initial.NextMarker)
+		if err != nil {
+			return nil, err
+		}
+		ops = append(ops, rest...)
+	}
+	return newExecutionState(ops), nil
+}
+
+// errorObjectFromError builds the wire error object for a FAILED response.
+func errorObjectFromError(err error) *wireError {
+	we := &wireError{ErrorType: "Error", ErrorMessage: err.Error()}
+	var stepErr *StepError
+	var invokeErr *InvokeError
+	var callbackErr *CallbackError
+	var childErr *ChildContextError
+	var condErr *WaitForConditionError
+	var combErr *CombinatorError
+	switch {
+	case errors.As(err, &stepErr):
+		we.ErrorType = "StepError"
+	case errors.As(err, &invokeErr):
+		we.ErrorType = "InvokeError"
+	case errors.As(err, &callbackErr):
+		we.ErrorType = "CallbackError"
+		// Use the inner error's message for the wire. For replayed errors
+		// (from the checkpoint), extract just the message portion
+		// (without the ErrorType prefix) so it matches the original
+		// external system's ErrorMessage on the wire.
+		if callbackErr.Err != nil {
+			var re *replayedError
+			if errors.As(callbackErr.Err, &re) {
+				we.ErrorMessage = re.message
+			} else {
+				we.ErrorMessage = callbackErr.Err.Error()
+			}
+		}
+	case errors.As(err, &childErr):
+		we.ErrorType = "ChildContextError"
+		if childErr.Err != nil {
+			var re *replayedError
+			if errors.As(childErr.Err, &re) {
+				we.ErrorMessage = re.message
+			} else {
+				we.ErrorMessage = childErr.Err.Error()
+			}
+		}
+	case errors.As(err, &condErr):
+		we.ErrorType = "WaitForConditionError"
+	case errors.As(err, &combErr):
+		we.ErrorType = "PromiseCombinatorError"
+	}
+	return we
+}
+
+// respond serializes an invocation response.
+func respond(r invocationResponse) ([]byte, error) {
+	b, err := json.Marshal(r)
+	if err != nil {
+		return nil, fmt.Errorf("durable: marshal invocation response: %w", err)
+	}
+	return b, nil
+}
