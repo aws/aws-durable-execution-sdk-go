@@ -97,26 +97,187 @@ The `durable` package provides the following operations:
 | `Any` | Return the first future to succeed. Errors if all fail. |
 | `Race` | Return the result of the first future to settle. |
 
-## Local Testing
+## A complete example
 
-The `durable/durabletest` package provides an in-memory test runner that executes durable handlers without network access or AWS credentials.
+The handler below is one order-processing workflow that uses every operation
+above. Helper functions such as `reserveInventory` stand in for application
+code. To compile it yourself, define the event types (`OrderEvent`,
+`LineItem`, `OrderResult`) and the application helpers it calls. The handler
+is compile-verified against the SDK, and the test in the next section runs it
+end to end.
 
 ```go
-runner := durabletest.NewLocalRunner(handler)
-result := runner.RunUntilComplete(t, input)
+func handler(ctx durable.Context, event OrderEvent) (OrderResult, error) {
+	// Step: run a function once, checkpoint the result, skip it on replay.
+	orderID, err := durable.Step(ctx, "validate-order", func(sc durable.StepContext) (string, error) {
+		if len(event.Items) == 0 {
+			return "", fmt.Errorf("order %s has no items", event.OrderID)
+		}
+		return event.OrderID, nil
+	})
+	if err != nil {
+		return OrderResult{}, err
+	}
 
-val, err := durabletest.ResultAs[MyOutput](result)
+	// Parallel: run named branches concurrently.
+	checks, err := durable.Parallel(ctx, "pre-flight", []durable.Branch[string]{
+		{Name: "payment", Func: func(c durable.Context) (string, error) {
+			return authorizePayment(orderID)
+		}},
+		{Name: "fraud", Func: func(c durable.Context) (string, error) {
+			return screenForFraud(orderID)
+		}},
+	})
+	if err != nil {
+		return OrderResult{}, err
+	}
+	if err := checks.ThrowIfError(); err != nil {
+		return OrderResult{}, err
+	}
+
+	// Map: fan a function out over the line items with bounded concurrency.
+	reservations, err := durable.Map(ctx, "reserve-items", event.Items,
+		func(c durable.Context, item LineItem, index int) (string, error) {
+			return reserveInventory(item.SKU, item.Quantity)
+		},
+		durable.WithMaxConcurrency(3))
+	if err != nil {
+		return OrderResult{}, err
+	}
+	if err := reservations.ThrowIfError(); err != nil {
+		return OrderResult{}, err
+	}
+
+	// RunInChildContext: group the fulfillment phase in its own context.
+	tracking, err := durable.RunInChildContext(ctx, "fulfillment", func(c durable.Context) (string, error) {
+		// Invoke: call another durable function and wait for its result.
+		label, err := durable.Invoke[string](c, "print-label", "shipping-labels-function", orderID)
+		if err != nil {
+			return "", err
+		}
+
+		// WaitForCallback: hand a callback ID to an external system and
+		// suspend until that system resolves it through the callback API.
+		return durable.WaitForCallback[string](c, "warehouse-pick",
+			func(sc durable.StepContext, callbackID string) error {
+				return notifyWarehouse(callbackID, label)
+			})
+	})
+	if err != nil {
+		return OrderResult{}, err
+	}
+
+	// durable.Go: replay-safe concurrent subflows returning futures.
+	email := durable.Go(ctx, "email", func(c durable.Context) (string, error) {
+		return sendEmail(orderID)
+	})
+	sms := durable.Go(ctx, "sms", func(c durable.Context) (string, error) {
+		return sendSMS(orderID)
+	})
+
+	// All: join the futures. AllSettled, Any, and Race take the same shape.
+	if _, err := durable.All(ctx, "notify", []*durable.Future[string]{email, sms}); err != nil {
+		return OrderResult{}, err
+	}
+
+	// WaitForCondition: poll a check function until the condition is met.
+	status, err := durable.WaitForCondition(ctx, "await-delivery",
+		func(sc durable.StepContext, state string) (string, error) {
+			return carrierStatus(tracking)
+		},
+		durable.ConditionConfig[string]{
+			InitialState: "IN_TRANSIT",
+			WaitStrategy: func(state string, attempt int) durable.WaitDecision {
+				if state == "DELIVERED" {
+					return durable.WaitDecision{Continue: false}
+				}
+				return durable.WaitDecision{Continue: true, Delay: 15 * time.Minute}
+			},
+		})
+	if err != nil {
+		return OrderResult{}, err
+	}
+
+	// Wait: suspend for a duration without holding compute.
+	if err := durable.Wait(ctx, "settlement-delay", 24*time.Hour); err != nil {
+		return OrderResult{}, err
+	}
+
+	// Step: capture the payment after the settlement delay.
+	if _, err := durable.Step(ctx, "capture-payment", func(sc durable.StepContext) (string, error) {
+		return capturePayment(orderID)
+	}); err != nil {
+		return OrderResult{}, err
+	}
+
+	return OrderResult{OrderID: orderID, Status: status}, nil
+}
+
+func main() {
+	durable.Start(handler)
+}
 ```
 
-Key testing utilities:
+`Step`, `Wait`, `Invoke`, and `RunInChildContext` also have Async variants
+(`StepAsync`, `WaitAsync`, `InvokeAsync`, `RunInChildContextAsync`) that
+return a `*Future` immediately, the same pattern `durable.Go` shows above.
 
-- `NewLocalRunner` - Create a local runner from a durable handler function.
-- `RunUntilComplete` - Loop invocations with automatic time advancement until terminal.
-- `AdvanceTime` - Advance pending wait and step-retry timers.
-- `SendCallbackSuccess` - Resolve a pending callback with a success payload.
-- `SendCallbackFailure` - Resolve a pending callback with an error.
-- `SendCallbackHeartbeat` - Extend a pending callback timeout.
-- `ResultAs` - Deserialize the execution result into a typed value.
+## Testing
+
+The `durable/durabletest` package provides an in-memory test runner that
+executes durable handlers without network access or AWS credentials. The test
+below runs the complete example above end to end. `RunUntilComplete` invokes
+the handler repeatedly, advancing waits and retries automatically, and returns
+when the execution finishes or blocks on external action. The test resolves
+the chained invoke and the warehouse callback the way the real backend would.
+
+```go
+func TestOrderWorkflow(t *testing.T) {
+	runner := durabletest.NewLocalRunner(handler)
+
+	event := OrderEvent{
+		OrderID: "order-42",
+		Items:   []LineItem{{SKU: "widget", Quantity: 2}},
+	}
+
+	// Run until the workflow suspends on the chained invoke.
+	result := runner.RunUntilComplete(t, event)
+
+	// Resolve the invoked shipping-labels function.
+	if err := runner.CompleteChainedInvoke("print-label", "label-7"); err != nil {
+		t.Fatal(err)
+	}
+	result = runner.RunUntilComplete(t, event)
+
+	// Resolve the warehouse callback the workflow is now blocked on.
+	cb := runner.OpenCallbacks()[0]
+	if err := runner.SendCallbackSuccess(cb.CallbackID, "picked"); err != nil {
+		t.Fatal(err)
+	}
+	result = runner.RunUntilComplete(t, event)
+
+	if result.Status != durabletest.Succeeded {
+		t.Fatalf("status = %s, want SUCCEEDED", result.Status)
+	}
+	out, err := durabletest.ResultAs[OrderResult](result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Status != "DELIVERED" {
+		t.Fatalf("order status = %s, want DELIVERED", out.Status)
+	}
+}
+```
+
+Run it with the standard toolchain:
+
+```console
+go test ./...
+```
+
+Other runner utilities: `AdvanceTime` advances pending wait and step-retry
+timers, `SendCallbackFailure` resolves a callback with an error, and
+`SendCallbackHeartbeat` extends a callback timeout.
 
 For testing against a deployed function, use `NewCloudRunner`:
 
