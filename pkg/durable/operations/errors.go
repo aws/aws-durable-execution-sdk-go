@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/types"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 // errSuspended is returned up the call stack (never to the top-level

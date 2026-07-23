@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/types"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 // DefaultLogger is a minimal types.Logger backed by the standard library

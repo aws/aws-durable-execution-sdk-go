@@ -5,7 +5,7 @@ import (
 	"math"
 	"math/rand"
 
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/types"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 // JitterStrategy controls how randomness is applied to computed retry

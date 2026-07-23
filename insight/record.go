@@ -4,7 +4,7 @@
 // package.
 //
 // Workflow Insight is a consumer of the SDK's own EXPERIMENTAL
-// instrumentation-plugin system (github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/plugin,
+// instrumentation-plugin system (github.com/aws/aws-durable-execution-sdk-go/pkg/durable/plugin,
 // see that package's own doc) rather than a core SDK feature - it is
 // intentionally published as its OWN Go module (insight/go.mod, sibling
 // to the repo's root module, exactly matching this repo's own existing

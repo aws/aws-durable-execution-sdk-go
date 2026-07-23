@@ -1,7 +1,7 @@
-# Subagent briefing: aws-durable-execution-sdk-csharp, golang branch
+# Subagent briefing: aws-durable-execution-sdk-go, golang branch
 
 You are implementing ONE task in a Go SDK for AWS Lambda Durable Execution Functions.
-Repo: /tmp/aws-durable-execution-sdk-csharp, branch `golang`.
+Repo: /tmp/aws-durable-execution-sdk-go, branch `golang`.
 
 ## Mandatory workflow for every task
 1. Read `docs/remaining-work.md` in full first for context on what's already done and the project's conventions.

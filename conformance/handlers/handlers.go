@@ -23,9 +23,9 @@ package handlers
 import (
 	"context"
 
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/checkpoint"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/types"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/checkpoint"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 // Handler is the uniform, type-erased shape every requirement's

@@ -47,10 +47,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/checkpoint"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/operations"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/types"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/checkpoint"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/operations"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 // callbackPayload415 is the wire shape of the external system's raw JSON

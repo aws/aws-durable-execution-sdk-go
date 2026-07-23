@@ -56,10 +56,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/checkpoint"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/operations"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/types"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/checkpoint"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/operations"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 // opLevelSerdes is 9-19/9-20's own shared custom, non-identity,

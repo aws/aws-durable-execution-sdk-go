@@ -790,7 +790,7 @@ finch build --platform linux/arm64 -t conformance-go:echo-target-vN -f conforman
 # run the full 148-requirement suite (or --suite <name> for just one)
 cd /tmp/aws-durable-execution-conformance-tests
 hatch run validate \
-  --template /path/to/aws-durable-execution-sdk-csharp/conformance/template.yaml \
+  --template /path/to/aws-durable-execution-sdk-go/conformance/template.yaml \
   --language go --region us-east-1 \
   --image-uri <account>.dkr.ecr.us-east-1.amazonaws.com/conformance-go:vN \
   --report console

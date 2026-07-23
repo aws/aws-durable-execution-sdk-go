@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/types"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 // fakeClient is a minimal in-memory checkpoint.Client test double for

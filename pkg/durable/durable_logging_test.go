@@ -6,10 +6,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/operations"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/types"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/utils"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/operations"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/types"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/utils"
 )
 
 // errTransientFailure is a shared sentinel used by this file's retry tests

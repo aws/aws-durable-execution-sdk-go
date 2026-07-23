@@ -5,7 +5,7 @@ package utils
 import (
 	"encoding/json"
 
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/types"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 // JSONSerdes is the SDK's default Serdes implementation, serializing

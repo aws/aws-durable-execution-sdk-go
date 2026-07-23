@@ -21,8 +21,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/types"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 // recordingLogger is a types.Logger test double recording every call made

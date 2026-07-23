@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/types"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 // TestCreateRetryStrategy_RejectsInvalidConfig verifies the

@@ -69,8 +69,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	lambdatypes "github.com/aws/aws-sdk-go-v2/service/lambda/types"
 
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/checkpoint"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/types"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/checkpoint"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 // RawExternalExecutionAPI is the subset of the AWS SDK for Go v2's

@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/operations"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/types"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/operations"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 // InventorySnapshotEvent is this example's input shape.

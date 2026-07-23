@@ -40,8 +40,8 @@ import (
 	"sort"
 	"testing"
 
-	dcontext "github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/context"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/types"
+	dcontext "github.com/aws/aws-durable-execution-sdk-go/pkg/durable/context"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 // EventSignature is the deterministic, comparable subset of a single

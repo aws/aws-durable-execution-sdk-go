@@ -16,8 +16,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/execmgr"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/types"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/execmgr"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 // Client is the interface to the Lambda Durable Functions backend's

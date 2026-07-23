@@ -6,9 +6,9 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/plugin"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/types"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/plugin"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 func TestSampledIn_RateOne_AlwaysTrue(t *testing.T) {
