@@ -21,8 +21,8 @@ import (
 	"testing"
 	"time"
 
-	dtesting "github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/testing"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/types"
+	dtesting "github.com/aws/aws-durable-execution-sdk-go/pkg/durable/testing"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 const waitForCallbackSerdesGoExampleFunctionARN = "arn:aws:lambda:us-east-1:730758745077:function:wait-for-callback-serdes-go-example:1"

@@ -3,8 +3,8 @@ package durable
 import (
 	"time"
 
-	dcontext "github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/context"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/types"
+	dcontext "github.com/aws/aws-durable-execution-sdk-go/pkg/durable/context"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 // CurrentTime returns a replay-safe "current time" for dc, backed by the

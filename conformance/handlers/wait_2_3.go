@@ -33,10 +33,10 @@
 package handlers
 
 import (
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/checkpoint"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/operations"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/types"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/checkpoint"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/operations"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 // wait2_3Result mirrors the YAML's ExpectedResult.Result shape

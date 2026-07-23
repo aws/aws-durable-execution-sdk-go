@@ -11,7 +11,7 @@ visibility into your durable workflows without building custom
 instrumentation.
 
 This is its own, separate Go module (`insight/go.mod`), not part of the
-core `github.com/aws/aws-durable-execution-sdk-csharp` module — see
+core `github.com/aws/aws-durable-execution-sdk-go` module — see
 [Why a separate module](#why-a-separate-module) below.
 
 > **EXPERIMENTAL.** This package, and the core SDK's own
@@ -100,12 +100,12 @@ import (
 	"context"
 	"log"
 
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/awssdk"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/operations"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/plugin"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/types"
-	"github.com/aws/aws-durable-execution-sdk-csharp/insight"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/awssdk"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/operations"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/plugin"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/types"
+	"github.com/aws/aws-durable-execution-sdk-go/insight"
 )
 
 func handler(event map[string]any, dc types.DurableContext) (map[string]any, error) {

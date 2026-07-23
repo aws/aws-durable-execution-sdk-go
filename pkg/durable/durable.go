@@ -9,11 +9,11 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/checkpoint"
-	dcontext "github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/context"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/execmgr"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/plugin"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/types"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/checkpoint"
+	dcontext "github.com/aws/aws-durable-execution-sdk-go/pkg/durable/context"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/execmgr"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/plugin"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 // CheckpointStrategy controls how operation updates are batched into

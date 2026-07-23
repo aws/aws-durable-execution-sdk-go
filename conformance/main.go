@@ -29,8 +29,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/awssdk"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/types"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/awssdk"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 func main() {

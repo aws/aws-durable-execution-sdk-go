@@ -43,9 +43,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/operations"
-	dtesting "github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/testing"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/types"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/operations"
+	dtesting "github.com/aws/aws-durable-execution-sdk-go/pkg/durable/testing"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 // stepThenWaitDeploymentVersion selects which of the two handler bodies

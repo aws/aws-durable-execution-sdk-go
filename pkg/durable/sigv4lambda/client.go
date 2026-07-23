@@ -48,7 +48,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/types"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 // Client calls the Lambda API's durable-execution checkpoint operations

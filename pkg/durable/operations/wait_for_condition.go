@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 
-	dcontext "github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/context"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/plugin"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/types"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/utils"
+	dcontext "github.com/aws/aws-durable-execution-sdk-go/pkg/durable/context"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/plugin"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/types"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/utils"
 )
 
 // ConditionOption configures a WaitForCondition invocation.

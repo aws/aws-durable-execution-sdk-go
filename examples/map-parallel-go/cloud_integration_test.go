@@ -33,8 +33,8 @@ import (
 	"testing"
 	"time"
 
-	dtesting "github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/testing"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/types"
+	dtesting "github.com/aws/aws-durable-execution-sdk-go/pkg/durable/testing"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 // mapParallelGoExampleFunctionARN is the REAL, already-deployed,

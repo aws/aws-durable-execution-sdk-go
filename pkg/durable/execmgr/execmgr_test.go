@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/types"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 // TestWaitForOperation_SuspendsWhenNoOtherActiveGoroutine verifies the

@@ -10,8 +10,8 @@ import (
 
 	smithy "github.com/aws/smithy-go"
 
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/execmgr"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/types"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/execmgr"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 // scriptedClient is a test double for Client that returns a scripted

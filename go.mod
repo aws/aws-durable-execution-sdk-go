@@ -1,4 +1,4 @@
-module github.com/aws/aws-durable-execution-sdk-csharp
+module github.com/aws/aws-durable-execution-sdk-go
 
 go 1.24
 

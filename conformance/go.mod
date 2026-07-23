@@ -1,9 +1,9 @@
-module github.com/aws/aws-durable-execution-sdk-csharp/conformance
+module github.com/aws/aws-durable-execution-sdk-go/conformance
 
 go 1.24
 
 require (
-	github.com/aws/aws-durable-execution-sdk-csharp v0.0.0
+	github.com/aws/aws-durable-execution-sdk-go v0.0.0
 	github.com/aws/aws-sdk-go-v2/service/lambda v1.99.0
 )
 
@@ -25,4 +25,4 @@ require (
 	github.com/aws/smithy-go v1.27.3 // indirect
 )
 
-replace github.com/aws/aws-durable-execution-sdk-csharp => ..
+replace github.com/aws/aws-durable-execution-sdk-go => ..

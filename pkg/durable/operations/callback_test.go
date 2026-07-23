@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/types"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/utils"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/types"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/utils"
 )
 
 // TestCallbackError_TimeoutFlag verifies the real bug this session fixed:

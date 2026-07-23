@@ -1,7 +1,7 @@
 # AWS Durable Execution SDK for Go
 
-[![Build](https://github.com/aws/aws-durable-execution-sdk-csharp/actions/workflows/build.yml/badge.svg)](https://github.com/aws/aws-durable-execution-sdk-csharp/actions/workflows/build.yml)
-[![Go Reference](https://pkg.go.dev/badge/github.com/aws/aws-durable-execution-sdk-csharp.svg)](https://pkg.go.dev/github.com/aws/aws-durable-execution-sdk-csharp)
+[![Build](https://github.com/aws/aws-durable-execution-sdk-go/actions/workflows/build.yml/badge.svg)](https://github.com/aws/aws-durable-execution-sdk-go/actions/workflows/build.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/aws/aws-durable-execution-sdk-go.svg)](https://pkg.go.dev/github.com/aws/aws-durable-execution-sdk-go)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Go](https://img.shields.io/badge/go-%3E%3D1.24-brightgreen)](https://go.dev/)
 
@@ -30,7 +30,7 @@ Build **resilient, long-running AWS Lambda functions** in Go with automatic stat
 ### Installation
 
 ```bash
-go get github.com/aws/aws-durable-execution-sdk-csharp
+go get github.com/aws/aws-durable-execution-sdk-go
 ```
 
 ### Your First Durable Function
@@ -39,10 +39,10 @@ go get github.com/aws/aws-durable-execution-sdk-csharp
 package main
 
 import (
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/awssdk"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/operations"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/types"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/awssdk"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/operations"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 type OrderEvent struct {

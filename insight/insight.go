@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/plugin"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/plugin"
 )
 
 // EmitMode controls when Workflow Insight sends a record to its

@@ -17,7 +17,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/types"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 // fakeAsyncLambdaInvoker implements both LambdaInvoker (unused by these

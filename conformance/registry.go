@@ -13,7 +13,7 @@ import (
 	// a self-registering plugin-style package where main never calls
 	// anything in handlers by name beyond reading the resulting
 	// Registry map.
-	"github.com/aws/aws-durable-execution-sdk-csharp/conformance/handlers"
+	"github.com/aws/aws-durable-execution-sdk-go/conformance/handlers"
 )
 
 // requirementHandlerFactories is just handlers.Registry under this

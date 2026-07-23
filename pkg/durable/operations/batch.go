@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"sync"
 
-	dcontext "github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/context"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/plugin"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/types"
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/utils"
+	dcontext "github.com/aws/aws-durable-execution-sdk-go/pkg/durable/context"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/plugin"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/types"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/utils"
 )
 
 // ItemResult is the outcome of a single Map iteration or Parallel branch.

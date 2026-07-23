@@ -34,7 +34,7 @@ import (
 	"fmt"
 	"os/exec"
 
-	"github.com/aws/aws-durable-execution-sdk-csharp/pkg/durable/types"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/types"
 )
 
 // Client shells out to the AWS CLI for each checkpoint call.
