@@ -12,7 +12,9 @@ func handler(ctx durable.Context, _ any) ([]string, error) {
 			return durable.Step(childCtx, "", func(_ durable.StepContext) (string, error) { return "fb", nil })
 		}},
 	}, durable.WithMaxConcurrency(1), durable.WithNesting(durable.NestingFlat))
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	return result.Results(), nil
 }
 

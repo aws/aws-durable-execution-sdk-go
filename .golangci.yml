@@ -13,6 +13,15 @@ linters:
         # interface-shaped implementations.
         - name: unused-parameter
           disabled: true
+  exclusions:
+    rules:
+      # Conformance handler error strings mirror the other language SDKs'
+      # handlers and may be asserted verbatim by the conformance suite;
+      # their capitalization must not be "fixed".
+      - path: compliance/
+        linters:
+          - staticcheck
+        text: "ST1005"
 
 formatters:
   enable:

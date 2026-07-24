@@ -20,7 +20,7 @@ type Result struct {
 func handler(ctx durable.Context, _ any) (Result, error) {
 	// Scenario 1: All with a failing future — catch the error.
 	f1 := durable.StepAsync(ctx, "fail-1", func(_ durable.StepContext) (string, error) {
-		return "", errors.New("This step failed")
+		return "", errors.New("this step failed")
 	}, durable.WithRetry(durable.NoRetry()))
 
 	_, err := durable.All(ctx, "all-1", []*durable.Future[string]{f1})
@@ -33,10 +33,10 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 
 	// Scenario 2: Multiple combinators, immediate usage.
 	f2 := durable.StepAsync(ctx, "fail-2", func(_ durable.StepContext) (string, error) {
-		return "", errors.New("Step 1 failed")
+		return "", errors.New("step 1 failed")
 	}, durable.WithRetry(durable.NoRetry()))
 	f3 := durable.StepAsync(ctx, "fail-3", func(_ durable.StepContext) (string, error) {
-		return "", errors.New("Step 2 failed")
+		return "", errors.New("step 2 failed")
 	}, durable.WithRetry(durable.NoRetry()))
 
 	_, _ = durable.All(ctx, "all-2", []*durable.Future[string]{f2})
@@ -44,10 +44,10 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 
 	// Scenario 3: Combinator after wait (replay path).
 	f4 := durable.StepAsync(ctx, "fail-4", func(_ durable.StepContext) (string, error) {
-		return "", errors.New("Step 3 failed")
+		return "", errors.New("step 3 failed")
 	}, durable.WithRetry(durable.NoRetry()))
 	f5 := durable.StepAsync(ctx, "fail-5", func(_ durable.StepContext) (string, error) {
-		return "", errors.New("Step 4 failed")
+		return "", errors.New("step 4 failed")
 	}, durable.WithRetry(durable.NoRetry()))
 
 	_, _ = durable.All(ctx, "all-3", []*durable.Future[string]{f4})
@@ -58,10 +58,10 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 
 	// Scenario 4: Combinator after extended wait (deep replay).
 	f6 := durable.StepAsync(ctx, "fail-6", func(_ durable.StepContext) (string, error) {
-		return "", errors.New("Step 5 failed")
+		return "", errors.New("step 5 failed")
 	}, durable.WithRetry(durable.NoRetry()))
 	f7 := durable.StepAsync(ctx, "fail-7", func(_ durable.StepContext) (string, error) {
-		return "", errors.New("Step 6 failed")
+		return "", errors.New("step 6 failed")
 	}, durable.WithRetry(durable.NoRetry()))
 
 	_ = durable.Wait(ctx, "wait-before-final", 1*time.Second)

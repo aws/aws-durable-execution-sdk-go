@@ -14,11 +14,15 @@ func handler(ctx durable.Context, _ any) ([][]string, error) {
 					return durable.Step(innerCtx, "", func(_ durable.StepContext) (string, error) { return "i2", nil })
 				}},
 			}, durable.WithMaxConcurrency(1))
-			if err != nil { return nil, err }
+			if err != nil {
+				return nil, err
+			}
 			return inner.Results(), nil
 		}},
 	}, durable.WithMaxConcurrency(1))
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	return result.Results(), nil
 }
 

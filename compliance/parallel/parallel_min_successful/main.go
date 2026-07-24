@@ -10,11 +10,13 @@ func handler(ctx durable.Context, _ any) (map[string]any, error) {
 		{Func: func(_ durable.Context) (string, error) { return "c", nil }},
 		{Func: func(_ durable.Context) (string, error) { return "d", nil }},
 	}, durable.WithMaxConcurrency(1), durable.WithCompletion(durable.CompletionConfig{MinSuccessful: 2}))
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	return map[string]any{
 		"completionReason": result.Reason.String(),
-		"successCount": result.SuccessCount(),
-		"totalCount": result.TotalCount(),
+		"successCount":     result.SuccessCount(),
+		"totalCount":       result.TotalCount(),
 	}, nil
 }
 

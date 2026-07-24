@@ -34,7 +34,10 @@ func (opSerdes) Unmarshal(_ durable.SerdesContext, data []byte, v any) error {
 			Result: val,
 		}
 	}
-	ptr := v.(*durable.BatchResult[string])
+	ptr, ok := v.(*durable.BatchResult[string])
+	if !ok {
+		return fmt.Errorf("opSerdes: unexpected type %T, want *durable.BatchResult[string]", v)
+	}
 	*ptr = durable.BatchResult[string]{Items: items, Reason: durable.CompletionAllCompleted}
 	return nil
 }

@@ -12,10 +12,10 @@ import (
 
 // Result collects outcomes from each combinator stage.
 type Result struct {
-	AllResults     []string `json:"allResults"`
-	RaceResult     string   `json:"raceResult"`
-	SettledCount   int      `json:"settledCount"`
-	AnyResult      string   `json:"anyResult"`
+	AllResults   []string `json:"allResults"`
+	RaceResult   string   `json:"raceResult"`
+	SettledCount int      `json:"settledCount"`
+	AnyResult    string   `json:"anyResult"`
 }
 
 func handler(ctx durable.Context, _ any) (Result, error) {
@@ -51,7 +51,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 		return "Success!", nil
 	})
 	s2 := durable.StepAsync(ctx, "settled-fail", func(_ durable.StepContext) (string, error) {
-		return "", errors.New("This step failed")
+		return "", errors.New("this step failed")
 	}, durable.WithRetry(durable.NoRetry()))
 	settled, err := durable.AllSettled(ctx, "settled-steps", []*durable.Future[string]{s1, s2})
 	if err != nil {
@@ -60,10 +60,10 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 
 	// Stage 4: Any — first success wins despite some failures.
 	y1 := durable.StepAsync(ctx, "any-fail-1", func(_ durable.StepContext) (string, error) {
-		return "", errors.New("First failure")
+		return "", errors.New("first failure")
 	}, durable.WithRetry(durable.NoRetry()))
 	y2 := durable.StepAsync(ctx, "any-fail-2", func(_ durable.StepContext) (string, error) {
-		return "", errors.New("Second failure")
+		return "", errors.New("second failure")
 	}, durable.WithRetry(durable.NoRetry()))
 	y3 := durable.StepAsync(ctx, "any-ok", func(_ durable.StepContext) (string, error) {
 		return "First success!", nil

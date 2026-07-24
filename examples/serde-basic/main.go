@@ -72,11 +72,7 @@ func handler(ctx durable.Context, ev event) (output, error) {
 
 	// Step 1: create user with custom serdes.
 	user, err := durable.Step(ctx, "create-user", func(_ durable.StepContext) (User, error) {
-		return User{
-			FirstName: ev.FirstName,
-			LastName:  ev.LastName,
-			Email:     ev.Email,
-		}, nil
+		return User(ev), nil
 	}, durable.WithStepSerdes(userSerdes))
 	if err != nil {
 		return output{}, err
