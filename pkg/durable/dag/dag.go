@@ -285,30 +285,3 @@ func (d *Context) register(name string, deps []AnyHandle, kind resultKind, opts 
 	d.tasks = append(d.tasks, def)
 	return def, cfg
 }
-
-// Dag declares and runs a directed acyclic graph of tasks. The register
-// callback builds the graph by calling the free registration functions
-// (Step, Invoke, ...). Dag returns (*DagResult, error):
-//
-//   - err != nil: a registration/validation/config failure (nothing was
-//     scheduled), e.g. *DagValidationError, a cycle error, or a config
-//     error.
-//   - err == nil: the DAG drained (or early-completed). Individual task
-//     failures are reported inside the result via res.Err().
-//
-// NOTE (stub): this is the Task 5 surface stub. Scheduling/wiring is
-// completed in Task 9.
-//
-// Experimental: This API is experimental and may be changed or removed in
-// future releases.
-func Dag(dc DurableContext, name string, register func(d *Context), opts ...Option) (*DagResult, error) {
-	d := newContext("")
-	if register != nil {
-		register(d)
-	}
-	if err := validate(d, buildConfig(opts)); err != nil {
-		return nil, err
-	}
-	// Task 9 replaces this stub with real scheduling.
-	return newDagResult(nil, AllCompleted), nil
-}

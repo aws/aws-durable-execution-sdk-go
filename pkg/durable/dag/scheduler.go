@@ -40,7 +40,16 @@ type scheduler struct {
 	state    map[string]*TaskExecution // terminal (or STARTED) states by name
 	inFlight map[string]struct{}
 
-	completing bool
+	// parentParked mirrors the base batch scheduler's parentDeregistered:
+	// true while the main loop goroutine has deregistered itself and is
+	// waiting, so a finishing task can hand a registration back to it and
+	// avoid the active-count spuriously hitting zero. Guarded by mu.
+	parentParked bool
+	// suspending is set once any task returns the suspend sentinel: the
+	// whole invocation is going to suspend, so no new tasks start.
+	suspending bool
+
+	completing     bool
 	completeReason CompletionReason
 	completeSet    bool
 }
@@ -71,8 +80,8 @@ func newScheduler(tasks []*taskDef, maxConc int, completion *DagCompletionConfig
 // (in which case the caller must propagate the suspend signal, and the
 // returned executions/reason are not authoritative).
 func (s *scheduler) run(ctx context.Context) ([]TaskExecution, CompletionReason, bool) {
-	done := make(chan taskDone)
-	suspended := false
+	// Buffered so task goroutines never block delivering completions.
+	done := make(chan taskDone, len(s.tasks)+1)
 
 	for {
 		// 1. Resolve skips synchronously and start ready tasks (bounded).
@@ -82,38 +91,56 @@ func (s *scheduler) run(ctx context.Context) ([]TaskExecution, CompletionReason,
 		nInFlight := len(s.inFlight)
 		allSettled := len(s.state) == len(s.tasks)
 		completing := s.completing
+		suspending := s.suspending
 		s.mu.Unlock()
 
+		if suspending && nInFlight == 0 {
+			return nil, "", true
+		}
 		if (completing || allSettled) && nInFlight == 0 {
 			break
 		}
 		if nInFlight == 0 && !progressed {
-			// No in-flight work and nothing new could start: graph is
-			// drained (remaining tasks, if any, are unreachable/skipped
-			// already recorded). Done.
+			// Drained: nothing in-flight and nothing new could start.
 			break
 		}
 
-		// 2. Wait for a completion or a suspension.
+		// 2a. Pre-drain any already-delivered completions WITHOUT parking,
+		// so we never park (deregister) while a completion is pending -
+		// which would let the active count spuriously reach zero.
+		select {
+		case d := <-done:
+			s.handleDone(d)
+			continue
+		default:
+		}
+
+		// 2b. Park (deregister) and wait for a completion or a suspension.
+		s.mu.Lock()
+		s.parentParked = true
+		s.mu.Unlock()
+		if s.hooks.deregister != nil {
+			s.hooks.deregister()
+		}
+
 		var suspCh <-chan struct{}
 		if s.hooks.suspendedCh != nil {
 			suspCh = s.hooks.suspendedCh()
 		}
 		select {
 		case d := <-done:
+			// The finishing task performed the register hand-off on our
+			// behalf (see the task goroutine below), so we are registered
+			// again without an explicit Register call here.
 			s.handleDone(d)
 		case <-suspCh:
-			// Whole invocation suspended; stop scheduling. In-flight
-			// goroutines are abandoned exactly as the base batch
-			// scheduler abandons its branches.
-			suspended = true
+			// Whole invocation suspended; in-flight goroutines are
+			// abandoned exactly as the base batch scheduler abandons its
+			// branches.
 			return nil, "", true
 		}
 	}
 
-	if suspended {
-		return nil, "", true
-	}
 	return s.finalize()
 }
 
@@ -124,7 +151,7 @@ func (s *scheduler) startReady(ctx context.Context, done chan taskDone) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.completing {
+	if s.completing || s.suspending {
 		return false
 	}
 	progressed := false
@@ -172,10 +199,33 @@ func (s *scheduler) startReady(ctx context.Context, done chan taskDone) bool {
 		go func(def *taskDef, dp Deps) {
 			result, err := s.hooks.runTask(def, dp)
 			susp := err != nil && s.hooks.isSuspend != nil && s.hooks.isSuspend(err)
-			if !susp && s.hooks.deregister != nil {
+
+			if susp {
+				// The operation already deregistered itself before
+				// blocking (base SDK contract), so this goroutine must
+				// NOT deregister again and must NOT hand off. The whole
+				// invocation will suspend via the Suspended channel.
+				done <- taskDone{name: def.name, susp: true}
+				return
+			}
+
+			// Normal completion: perform the register hand-off if the
+			// parent is currently parked, so the active count never
+			// spuriously reaches zero while a completion is pending
+			// (mirrors the base batch scheduler's branchFinished).
+			s.mu.Lock()
+			handoff := s.parentParked
+			if handoff {
+				s.parentParked = false
+			}
+			s.mu.Unlock()
+			if handoff && s.hooks.register != nil {
+				s.hooks.register()
+			}
+			if s.hooks.deregister != nil {
 				s.hooks.deregister()
 			}
-			done <- taskDone{name: def.name, result: result, err: err, susp: susp}
+			done <- taskDone{name: def.name, result: result, err: err}
 		}(t, deps)
 	}
 	return progressed
@@ -188,7 +238,9 @@ func (s *scheduler) handleDone(d taskDone) {
 
 	delete(s.inFlight, d.name)
 	if d.susp {
-		// Task suspended; leave it unsettled so replay re-runs it.
+		// Task suspended; leave it unsettled so replay re-runs it, and
+		// stop scheduling new tasks - the whole invocation is suspending.
+		s.suspending = true
 		return
 	}
 	if _, alreadySTARTED := s.state[d.name]; alreadySTARTED {
