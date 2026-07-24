@@ -28,11 +28,11 @@
 //	        func(deps dag.Deps, s dag.StepContext) (Out, error) { ... })
 //	})
 //	if err != nil { return err }              // registration/validation error
-//	if err := res.Err(); err != nil { return err } // >=1 task FAILED
+//	if err := res.ThrowIfError(); err != nil { return err } // >=1 task FAILED
 //
-// The builder methods DependsOn and WithTrigger are methods on
+// The builder methods After and WithTrigger are methods on
 // TaskHandle[T] (they introduce no new type parameter) and chain:
-// h.DependsOn(x).WithTrigger(dag.AllDone).
+// h.After(x).WithTrigger(dag.AllDone).
 //
 // # Explicit type-argument divergence
 //

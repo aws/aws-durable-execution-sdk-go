@@ -32,17 +32,17 @@ const (
 	// in future releases.
 	AllDone TriggerRule = "ALL_DONE"
 
-	// OneSuccess runs the task if at least one upstream succeeded.
+	// AnySuccess runs the task if at least one upstream succeeded.
 	//
 	// Experimental: This API is experimental and may be changed or removed
 	// in future releases.
-	OneSuccess TriggerRule = "ONE_SUCCESS"
+	AnySuccess TriggerRule = "ANY_SUCCESS"
 
-	// OneFailed runs the task if at least one upstream failed.
+	// AnyFailed runs the task if at least one upstream failed.
 	//
 	// Experimental: This API is experimental and may be changed or removed
 	// in future releases.
-	OneFailed TriggerRule = "ONE_FAILED"
+	AnyFailed TriggerRule = "ANY_FAILED"
 
 	// NoneFailed runs the task if no upstream failed (successes and skips
 	// are allowed). With no upstreams it is satisfied.
@@ -55,7 +55,7 @@ const (
 // knownTriggerRules is the set of valid rules, used by validation.
 var knownTriggerRules = map[TriggerRule]struct{}{
 	AllSuccess: {}, AllFailed: {}, AllDone: {},
-	OneSuccess: {}, OneFailed: {}, NoneFailed: {},
+	AnySuccess: {}, AnyFailed: {}, NoneFailed: {},
 }
 
 // allAre reports whether every status equals want.
@@ -90,8 +90,8 @@ var triggerRuleEvaluators = map[TriggerRule]func([]TaskStatus) bool{
 	AllSuccess: func(s []TaskStatus) bool { return allAre(s, StatusSucceeded) },
 	AllFailed:  func(s []TaskStatus) bool { return len(s) > 0 && allAre(s, StatusFailed) },
 	AllDone:    func(s []TaskStatus) bool { return true },
-	OneSuccess: func(s []TaskStatus) bool { return anyIs(s, StatusSucceeded) },
-	OneFailed:  func(s []TaskStatus) bool { return anyIs(s, StatusFailed) },
+	AnySuccess: func(s []TaskStatus) bool { return anyIs(s, StatusSucceeded) },
+	AnyFailed:  func(s []TaskStatus) bool { return anyIs(s, StatusFailed) },
 	NoneFailed: func(s []TaskStatus) bool { return noneIs(s, StatusFailed) },
 }
 

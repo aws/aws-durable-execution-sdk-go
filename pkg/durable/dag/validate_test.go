@@ -20,7 +20,7 @@ func buildGraph(t *testing.T, edges map[string][]string, order []string) *Contex
 	for _, name := range order {
 		for _, dep := range edges[name] {
 			if h, ok := handles[dep]; ok {
-				handles[name].DependsOn(h)
+				handles[name].After(h)
 			} else {
 				// foreign/missing dep: attach by mutating def directly.
 				d.byName[name].orderDeps = append(d.byName[name].orderDeps, dep)

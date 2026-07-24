@@ -124,7 +124,7 @@ func TestScheduler_TriggerAllFailedRunsCompensation(t *testing.T) {
 	d := newContext("")
 	charge := Step(d, "charge", nil, func(_ Deps, _ StepContext) (int, error) { return 0, nil })
 	Step(d, "refund", nil, func(_ Deps, _ StepContext) (int, error) { return 0, nil }).
-		DependsOn(charge).WithTrigger(AllFailed)
+		After(charge).WithTrigger(AllFailed)
 	ran := map[string]bool{}
 	var mu sync.Mutex
 	execs, _ := runSched(d, 0, nil, func(def *taskDef, _ Deps) (any, error) {
@@ -502,7 +502,7 @@ func runSchedTimeout(t *testing.T, sc *scheduler, d time.Duration) ([]TaskExecut
 // TestScheduler_SkipFreesEarlierDependent is the regression guard for the
 // park BLOCKER (loop-2): a synchronous skip resolved in one startReady pass
 // can free a dependent that appears EARLIER in registration order (legal via
-// a DependsOn ordering edge) and so is not re-scanned that pass. With zero
+// a After ordering edge) and so is not re-scanned that pass. With zero
 // tasks in-flight the parent must NOT park (no worker exists to wake it):
 // the pure-logic path would deadlock and the real-runtime path would
 // spuriously suspend. All prior skip/cascade tests register dependents AFTER
@@ -514,7 +514,7 @@ func TestScheduler_SkipFreesEarlierDependent(t *testing.T) {
 	d := newContext("")
 	y := Step(d, "y", nil, func(_ Deps, _ StepContext) (int, error) { return 0, nil })
 	x := Step(d, "x", nil, func(_ Deps, _ StepContext) (int, error) { return 0, nil }, WithRunIf(func(Deps) bool { return false }))
-	y.DependsOn(x)
+	y.After(x)
 
 	sc := newScheduler(d.tasks, 0, nil, schedHooks{
 		runTask:   func(def *taskDef, _ Deps) (any, error) { return 0, nil },
@@ -539,7 +539,7 @@ func TestScheduler_SkipFreesEarlierDependent(t *testing.T) {
 	y2 := Step(d2, "y", nil, func(_ Deps, _ StepContext) (int, error) { return 0, nil })
 	x1 := Step(d2, "x1", nil, func(_ Deps, _ StepContext) (int, error) { return 0, nil }, WithRunIf(func(Deps) bool { return false }))
 	x2 := Step(d2, "x2", nil, func(_ Deps, _ StepContext) (int, error) { return 0, nil }, WithRunIf(func(Deps) bool { return false }))
-	y2.DependsOn(x1, x2)
+	y2.After(x1, x2)
 
 	sc2 := newScheduler(d2.tasks, 0, nil, schedHooks{
 		runTask:   func(def *taskDef, _ Deps) (any, error) { return 0, nil },
@@ -562,7 +562,7 @@ func TestScheduler_SkipFreesEarlierDependent(t *testing.T) {
 	d3 := newContext("")
 	y3 := Step(d3, "y", nil, func(_ Deps, _ StepContext) (int, error) { return 0, nil })
 	x3 := Step(d3, "x", nil, func(_ Deps, _ StepContext) (int, error) { return 0, nil }, WithRunIf(func(Deps) bool { return false }))
-	y3.DependsOn(x3)
+	y3.After(x3)
 	em := newRaceExecMgr()
 	em.Register() // parent goroutine enters run() registered
 	sc3 := newScheduler(d3.tasks, 0, nil, schedHooks{

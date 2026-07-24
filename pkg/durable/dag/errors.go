@@ -96,10 +96,24 @@ func (e *DagInvalidTriggerRuleError) Error() string {
 	return fmt.Sprintf("invalid trigger rule %q", string(e.Rule))
 }
 
-// DagExecutionError is returned by DagResult.Err() when at least one task
-// failed (or a custom predicate completed the DAG with a failure outcome).
-// It wraps the first failed task's cause, so errors.Is/errors.As traverse
-// into the underlying error.
+// DagInapplicableOptionError reports a functional Option applied to a task
+// registration whose target operation does not honor it. Because all options
+// share one functional Option type, a misapplied option (e.g. WithTimeout on
+// a Step, or the DAG-level WithMaxConcurrency on a task) would otherwise
+// compile and be silently dropped; registration surfaces it here instead.
+//
+// Experimental: This API is experimental and may be changed or removed in
+// future releases.
+type DagInapplicableOptionError struct{ Task, Option, Op string }
+
+func (e *DagInapplicableOptionError) Error() string {
+	return fmt.Sprintf("task %q (%s): option %s does not apply to this operation", e.Task, e.Op, e.Option)
+}
+
+// DagExecutionError is returned by DagResult.ThrowIfError() when at least
+// one task failed (or a custom predicate completed the DAG with a failure
+// outcome). It wraps the first failed task's cause, so errors.Is/errors.As
+// traverse into the underlying error.
 //
 // Experimental: This API is experimental and may be changed or removed in
 // future releases.

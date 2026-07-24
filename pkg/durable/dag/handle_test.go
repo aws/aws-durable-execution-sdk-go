@@ -7,16 +7,16 @@ import (
 	dcontext "github.com/aws/aws-durable-execution-sdk-go/pkg/durable/context"
 )
 
-func TestHandle_DependsOnAndWithTriggerMutateDef(t *testing.T) {
+func TestHandle_AfterAndWithTriggerMutateDef(t *testing.T) {
 	d := newContext("")
 	a := Step(d, "a", nil, func(_ Deps, _ StepContext) (int, error) { return 0, nil })
 	b := Step(d, "b", nil, func(_ Deps, _ StepContext) (int, error) { return 0, nil })
 	h := Step(d, "c", nil, func(_ Deps, _ StepContext) (int, error) { return 0, nil })
-	h.DependsOn(a, b).WithTrigger(AllDone)
+	h.After(a, b).WithTrigger(AllDone)
 
 	def := d.byName["c"]
 	if len(def.orderDeps) != 2 || def.orderDeps[0] != "a" || def.orderDeps[1] != "b" {
-		t.Fatalf("DependsOn did not mutate orderDeps: %v", def.orderDeps)
+		t.Fatalf("After did not mutate orderDeps: %v", def.orderDeps)
 	}
 	if !def.hasTrigger || def.trigger != AllDone {
 		t.Fatalf("WithTrigger did not mutate trigger: %v", def.trigger)
@@ -71,14 +71,14 @@ func TestTrigger_TruthTable(t *testing.T) {
 		// AllDone (always true)
 		{AllDone, nil, true},
 		{AllDone, []TaskStatus{S, F, K}, true},
-		// OneSuccess
-		{OneSuccess, nil, false},
-		{OneSuccess, []TaskStatus{F, S}, true},
-		{OneSuccess, []TaskStatus{F, K}, false},
-		// OneFailed
-		{OneFailed, nil, false},
-		{OneFailed, []TaskStatus{S, F}, true},
-		{OneFailed, []TaskStatus{S, K}, false},
+		// AnySuccess
+		{AnySuccess, nil, false},
+		{AnySuccess, []TaskStatus{F, S}, true},
+		{AnySuccess, []TaskStatus{F, K}, false},
+		// AnyFailed
+		{AnyFailed, nil, false},
+		{AnyFailed, []TaskStatus{S, F}, true},
+		{AnyFailed, []TaskStatus{S, K}, false},
 		// NoneFailed (empty => true; skips allowed)
 		{NoneFailed, nil, true},
 		{NoneFailed, []TaskStatus{S, K}, true},

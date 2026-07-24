@@ -57,7 +57,7 @@ func TestDag_LargePayloadReplay(t *testing.T) {
 		if err != nil {
 			return out{}, err
 		}
-		if e := res.Err(); e != nil {
+		if e := res.ThrowIfError(); e != nil {
 			return out{}, e
 		}
 		total := 0
@@ -68,7 +68,7 @@ func TestDag_LargePayloadReplay(t *testing.T) {
 			}
 			total += len(v)
 		}
-		return out{TotalLen: total, Success: res.SuccessCount(), Reason: res.CompletionReason()}, nil
+		return out{TotalLen: total, Success: res.SucceededCount(), Reason: string(res.CompletionReason())}, nil
 	}
 
 	runner := dtesting.New(handler, nil) // SkipTime defaults on
@@ -92,7 +92,7 @@ func TestDag_LargePayloadReplay(t *testing.T) {
 	if want := bigTaskCount + 2; o.Success != want { // seed + big tasks + pause wait
 		t.Fatalf("success count=%d want %d", o.Success, want)
 	}
-	if o.Reason != dag.AllCompleted {
+	if o.Reason != string(dag.AllCompleted) {
 		t.Fatalf("reason=%q want AllCompleted", o.Reason)
 	}
 	// Each big-task body ran exactly once despite the suspend/resume replay.
@@ -157,11 +157,11 @@ func TestDag_OrderIndependenceReplay(t *testing.T) {
 			if derr != nil {
 				return out{}, derr
 			}
-			if e := res.Err(); e != nil {
+			if e := res.ThrowIfError(); e != nil {
 				return out{}, e
 			}
 			merge, _ := dag.ResultByName[int](res, "merge")
-			return out{Merged: merge, Success: res.SuccessCount(), Failure: res.FailureCount(), Reason: res.CompletionReason()}, nil
+			return out{Merged: merge, Success: res.SucceededCount(), Failure: res.FailureCount(), Reason: string(res.CompletionReason())}, nil
 		}
 
 		runner := dtesting.New(handler, nil)
@@ -190,7 +190,7 @@ func TestDag_OrderIndependenceReplay(t *testing.T) {
 		t.Fatalf("order-dependent result: aFirst=%+v bFirst=%+v", aThenB, bThenA)
 	}
 	// a=11, b=12 => merge=23; 4 successes, no failures.
-	if aThenB.Merged != 23 || aThenB.Success != 4 || aThenB.Failure != 0 || aThenB.Reason != dag.AllCompleted {
+	if aThenB.Merged != 23 || aThenB.Success != 4 || aThenB.Failure != 0 || aThenB.Reason != string(dag.AllCompleted) {
 		t.Fatalf("unexpected diamond result: %+v", aThenB)
 	}
 }

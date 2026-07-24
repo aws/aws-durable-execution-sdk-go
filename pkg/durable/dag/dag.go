@@ -118,8 +118,12 @@ type config struct {
 	retry         RetryStrategy
 	serdes        Serdes
 	timeout       *Duration
-	initialState  any
 	conditionPred any // func(S) bool, erased
+
+	// task-level, batch-only (Map/Parallel inner fan-out). Kept distinct
+	// from the DAG-level maxConcurrency below so the two concurrency
+	// meanings can never be confused (see WithBatchMaxConcurrency).
+	batchMaxConcurrency *int
 
 	// dag-level
 	maxConcurrency *int
@@ -127,6 +131,63 @@ type config struct {
 	defaultRetry   RetryStrategy
 	completion     *DagCompletionConfig
 	summaryGen     func(*DagResult) string
+
+	// applied records, in application order, which Option builders set this
+	// config, so registration can reject options that do not apply to the
+	// target operation (see validateTaskOptions).
+	applied []optionID
+}
+
+// optionID identifies a functional Option builder so a task registration can
+// validate that only options applicable to its operation were supplied.
+type optionID int
+
+const (
+	optTrigger optionID = iota
+	optRunIf
+	optRetry
+	optSerdes
+	optTimeout
+	optCondition
+	optBatchMaxConcurrency
+	optMaxConcurrency
+	optDefaultTrigger
+	optDefaultRetry
+	optCompletion
+	optSummaryGen
+)
+
+// optionName returns the customer-facing builder name for an option, for
+// error messages.
+func optionName(id optionID) string {
+	switch id {
+	case optTrigger:
+		return "WithTriggerRule"
+	case optRunIf:
+		return "WithRunIf"
+	case optRetry:
+		return "WithRetry"
+	case optSerdes:
+		return "WithSerdes"
+	case optTimeout:
+		return "WithTimeout"
+	case optCondition:
+		return "WithCondition"
+	case optBatchMaxConcurrency:
+		return "WithBatchMaxConcurrency"
+	case optMaxConcurrency:
+		return "WithMaxConcurrency"
+	case optDefaultTrigger:
+		return "WithDefaultTriggerRule"
+	case optDefaultRetry:
+		return "WithDefaultRetry"
+	case optCompletion:
+		return "WithCompletion"
+	case optSummaryGen:
+		return "WithSummaryGenerator"
+	default:
+		return "unknown"
+	}
 }
 
 // Option configures a task or a DAG (functional options).
@@ -140,7 +201,7 @@ type Option func(*config)
 // Experimental: This API is experimental and may be changed or removed in
 // future releases.
 func WithTriggerRule(r TriggerRule) Option {
-	return func(c *config) { c.trigger = r; c.hasTrigger = true }
+	return func(c *config) { c.trigger = r; c.hasTrigger = true; c.applied = append(c.applied, optTrigger) }
 }
 
 // WithRunIf sets a task's conditional-execution predicate. If it returns
@@ -150,7 +211,7 @@ func WithTriggerRule(r TriggerRule) Option {
 // Experimental: This API is experimental and may be changed or removed in
 // future releases.
 func WithRunIf(pred func(deps Deps) bool) Option {
-	return func(c *config) { c.runIf = pred }
+	return func(c *config) { c.runIf = pred; c.applied = append(c.applied, optRunIf) }
 }
 
 // WithRetry sets a task's retry strategy (applied to kinds that support one:
@@ -158,45 +219,59 @@ func WithRunIf(pred func(deps Deps) bool) Option {
 //
 // Experimental: This API is experimental and may be changed or removed in
 // future releases.
-func WithRetry(s RetryStrategy) Option { return func(c *config) { c.retry = s } }
+func WithRetry(s RetryStrategy) Option {
+	return func(c *config) { c.retry = s; c.applied = append(c.applied, optRetry) }
+}
 
 // WithSerdes sets a task's custom result serializer.
 //
 // Experimental: This API is experimental and may be changed or removed in
 // future releases.
-func WithSerdes(s Serdes) Option { return func(c *config) { c.serdes = s } }
+func WithSerdes(s Serdes) Option {
+	return func(c *config) { c.serdes = s; c.applied = append(c.applied, optSerdes) }
+}
 
 // WithTimeout sets a callback/condition task's timeout.
 //
 // Experimental: This API is experimental and may be changed or removed in
 // future releases.
-func WithTimeout(d Duration) Option { return func(c *config) { c.timeout = &d } }
-
-// WithInitialState sets a WaitForCondition task's initial state. It is a
-// generic free function (returning an Option) because Go methods cannot be
-// generic; the value is stored type-erased and recovered by the
-// WaitForCondition registration function.
-//
-// Experimental: This API is experimental and may be changed or removed in
-// future releases.
-func WithInitialState[S any](s S) Option {
-	return func(c *config) { c.initialState = s }
+func WithTimeout(d Duration) Option {
+	return func(c *config) { c.timeout = &d; c.applied = append(c.applied, optTimeout) }
 }
 
-// WithCondition sets a WaitForCondition task's completion predicate.
+// WithCondition sets a WaitForCondition task's completion predicate. It is
+// REQUIRED for a WaitForCondition task; omitting it is a registration error
+// (otherwise the poll would complete after a single iteration).
 //
 // Experimental: This API is experimental and may be changed or removed in
 // future releases.
 func WithCondition[S any](pred func(S) bool) Option {
-	return func(c *config) { c.conditionPred = pred }
+	return func(c *config) { c.conditionPred = pred; c.applied = append(c.applied, optCondition) }
 }
 
-// WithMaxConcurrency bounds how many top-level DAG tasks run concurrently.
-// A value <= 0 is a configuration error surfaced by Dag(...).
+// WithMaxConcurrency bounds how many top-level DAG tasks run concurrently
+// (the DAG fan-out limit). It is a DAG-level option: pass it to Dag(...),
+// not to a task registration. A value <= 0 is a configuration error
+// surfaced by Dag(...). To bound the inner fan-out of a Map/Parallel task,
+// use WithBatchMaxConcurrency instead.
 //
 // Experimental: This API is experimental and may be changed or removed in
 // future releases.
-func WithMaxConcurrency(n int) Option { return func(c *config) { c.maxConcurrency = &n } }
+func WithMaxConcurrency(n int) Option {
+	return func(c *config) { c.maxConcurrency = &n; c.applied = append(c.applied, optMaxConcurrency) }
+}
+
+// WithBatchMaxConcurrency bounds the inner fan-out of a Map or Parallel
+// task (how many items/branches run concurrently within that one task). It
+// is a task-level option accepted only by Map and Parallel; it is distinct
+// from the DAG-level WithMaxConcurrency so the two concurrency meanings are
+// never conflated.
+//
+// Experimental: This API is experimental and may be changed or removed in
+// future releases.
+func WithBatchMaxConcurrency(n int) Option {
+	return func(c *config) { c.batchMaxConcurrency = &n; c.applied = append(c.applied, optBatchMaxConcurrency) }
+}
 
 // WithDefaultTriggerRule sets the default trigger rule for tasks that do not
 // set their own.
@@ -204,7 +279,7 @@ func WithMaxConcurrency(n int) Option { return func(c *config) { c.maxConcurrenc
 // Experimental: This API is experimental and may be changed or removed in
 // future releases.
 func WithDefaultTriggerRule(r TriggerRule) Option {
-	return func(c *config) { c.defaultTrigger = r }
+	return func(c *config) { c.defaultTrigger = r; c.applied = append(c.applied, optDefaultTrigger) }
 }
 
 // WithDefaultRetry sets the default retry strategy for tasks that do not set
@@ -212,7 +287,9 @@ func WithDefaultTriggerRule(r TriggerRule) Option {
 //
 // Experimental: This API is experimental and may be changed or removed in
 // future releases.
-func WithDefaultRetry(s RetryStrategy) Option { return func(c *config) { c.defaultRetry = s } }
+func WithDefaultRetry(s RetryStrategy) Option {
+	return func(c *config) { c.defaultRetry = s; c.applied = append(c.applied, optDefaultRetry) }
+}
 
 // WithCompletion sets the DAG's completion configuration (threshold or
 // custom predicate; mutually exclusive).
@@ -220,7 +297,7 @@ func WithDefaultRetry(s RetryStrategy) Option { return func(c *config) { c.defau
 // Experimental: This API is experimental and may be changed or removed in
 // future releases.
 func WithCompletion(cc DagCompletionConfig) Option {
-	return func(c *config) { c.completion = &cc }
+	return func(c *config) { c.completion = &cc; c.applied = append(c.applied, optCompletion) }
 }
 
 // WithSummaryGenerator sets an observability-only summary generator whose
@@ -229,7 +306,7 @@ func WithCompletion(cc DagCompletionConfig) Option {
 // Experimental: This API is experimental and may be changed or removed in
 // future releases.
 func WithSummaryGenerator(f func(*DagResult) string) Option {
-	return func(c *config) { c.summaryGen = f }
+	return func(c *config) { c.summaryGen = f; c.applied = append(c.applied, optSummaryGen) }
 }
 
 func buildConfig(opts []Option) config {
@@ -266,10 +343,95 @@ func newContext(prefix string) *Context {
 	return &Context{byName: map[string]*taskDef{}, prefix: prefix}
 }
 
+// opKind identifies the concrete DAG operation a task registers, so
+// registration can validate that only options applicable to that operation
+// were supplied (see validateTaskOptions).
+type opKind int
+
+const (
+	opStep opKind = iota
+	opInvoke
+	opCallback
+	opWait
+	opCondition
+	opChild
+	opMap
+	opParallel
+	opSubDag
+)
+
+func (k opKind) String() string {
+	switch k {
+	case opStep:
+		return "Step"
+	case opInvoke:
+		return "Invoke"
+	case opCallback:
+		return "Callback"
+	case opWait:
+		return "Wait"
+	case opCondition:
+		return "WaitForCondition"
+	case opChild:
+		return "Child"
+	case opMap:
+		return "Map"
+	case opParallel:
+		return "Parallel"
+	case opSubDag:
+		return "SubDag"
+	default:
+		return "unknown"
+	}
+}
+
+// optionApplicable reports whether a given option applies to a given
+// operation. Trigger/RunIf are common to every task; the rest are per-op.
+// DAG-level options (maxConcurrency/default*/completion/summaryGen) apply to
+// no task operation. SubDag intentionally accepts every option: the spec
+// forwards its opts slice to both the task level and the nested DAG level,
+// so validating it would break that documented dual-level behavior.
+func optionApplicable(op opKind, id optionID) bool {
+	if op == opSubDag {
+		return true
+	}
+	switch id {
+	case optTrigger, optRunIf:
+		return true // common to all task operations
+	case optRetry:
+		return op == opStep || op == opCallback || op == opCondition
+	case optSerdes:
+		return op == opStep || op == opInvoke || op == opCallback || op == opCondition || op == opChild
+	case optTimeout:
+		return op == opCallback || op == opCondition
+	case optCondition:
+		return op == opCondition
+	case optBatchMaxConcurrency:
+		return op == opMap || op == opParallel
+	default:
+		// DAG-level options: not applicable to any task operation.
+		return false
+	}
+}
+
+// validateTaskOptions appends a DagInapplicableOptionError for each supplied
+// option that does not apply to the target operation.
+func (d *Context) validateTaskOptions(name string, op opKind, applied []optionID) {
+	for _, id := range applied {
+		if !optionApplicable(op, id) {
+			d.regErrs = append(d.regErrs, &DagInapplicableOptionError{
+				Task: name, Option: optionName(id), Op: op.String(),
+			})
+		}
+	}
+}
+
 // register creates and records a task definition, applying task-level
-// options and detecting duplicate names.
-func (d *Context) register(name string, deps []AnyHandle, kind resultKind, opts []Option) (*taskDef, config) {
+// options and detecting duplicate names. op identifies the concrete
+// operation so misapplied options are rejected at registration.
+func (d *Context) register(name string, deps []AnyHandle, kind resultKind, op opKind, opts []Option) (*taskDef, config) {
 	cfg := buildConfig(opts)
+	d.validateTaskOptions(name, op, cfg.applied)
 	// Apply the DAG-level default retry when the task set none of its own.
 	if cfg.retry == nil {
 		cfg.retry = d.defaultRetry

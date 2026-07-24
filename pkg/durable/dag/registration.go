@@ -1,11 +1,15 @@
 package dag
 
-import "github.com/aws/aws-durable-execution-sdk-go/pkg/durable/operations"
+import (
+	"fmt"
+
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/operations"
+)
 
 // This file holds the free-function task-registration API. Registration
 // functions are free (not methods) because Go methods cannot declare type
 // parameters, and each mints a new result type T. The builder methods
-// DependsOn/WithTrigger live on TaskHandle[T] (handle.go) since they do not
+// After/WithTrigger live on TaskHandle[T] (handle.go) since they do not
 // introduce a new type parameter.
 
 // Step registers a step task. Result type T is inferred from fn.
@@ -13,7 +17,7 @@ import "github.com/aws/aws-durable-execution-sdk-go/pkg/durable/operations"
 // Experimental: This API is experimental and may be changed or removed in
 // future releases.
 func Step[T any](d *Context, name string, deps []AnyHandle, fn StepFunc[T], opts ...Option) TaskHandle[T] {
-	def, cfg := d.register(name, deps, kindPlain, opts)
+	def, cfg := d.register(name, deps, kindPlain, opStep, opts)
 	def.run = func(taskCtx DurableContext, dp Deps) (any, error) {
 		var sopts []operations.StepOption[T]
 		if cfg.retry != nil {
@@ -37,7 +41,7 @@ func Step[T any](d *Context, name string, deps []AnyHandle, fn StepFunc[T], opts
 // Experimental: This API is experimental and may be changed or removed in
 // future releases.
 func Invoke[In, Out any](d *Context, name string, functionARN string, deps []AnyHandle, payload PayloadFunc[In], opts ...Option) TaskHandle[Out] {
-	def, cfg := d.register(name, deps, kindPlain, opts)
+	def, cfg := d.register(name, deps, kindPlain, opInvoke, opts)
 	def.run = func(taskCtx DurableContext, dp Deps) (any, error) {
 		in, err := payload(dp)
 		if err != nil {
@@ -60,7 +64,7 @@ func Invoke[In, Out any](d *Context, name string, functionARN string, deps []Any
 // Experimental: This API is experimental and may be changed or removed in
 // future releases.
 func Callback[T any](d *Context, name string, deps []AnyHandle, submit SubmitterFunc, opts ...Option) TaskHandle[T] {
-	def, cfg := d.register(name, deps, kindPlain, opts)
+	def, cfg := d.register(name, deps, kindPlain, opCallback, opts)
 	def.run = func(taskCtx DurableContext, dp Deps) (any, error) {
 		var copts []operations.WaitForCallbackOption[T]
 		if cfg.timeout != nil {
@@ -84,7 +88,7 @@ func Callback[T any](d *Context, name string, deps []AnyHandle, submit Submitter
 // Experimental: This API is experimental and may be changed or removed in
 // future releases.
 func Wait(d *Context, name string, deps []AnyHandle, duration Duration, opts ...Option) TaskHandle[Void] {
-	def, _ := d.register(name, deps, kindPlain, opts)
+	def, _ := d.register(name, deps, kindPlain, opWait, opts)
 	def.run = func(taskCtx DurableContext, dp Deps) (any, error) {
 		if err := operations.Wait(taskCtx, name, duration); err != nil {
 			return Void{}, err
@@ -95,20 +99,21 @@ func Wait(d *Context, name string, deps []AnyHandle, duration Duration, opts ...
 }
 
 // WaitForCondition registers a polling task. Result type S is inferred from
-// the check func and WithInitialState[S]. Supply WithInitialState and
-// WithCondition via opts.
+// the positional initial state and the check func. The completion predicate
+// is supplied via WithCondition and is REQUIRED: omitting it is a
+// registration error (matching the base operation's compile-time
+// requirement, which the option form otherwise loses).
 //
 // Experimental: This API is experimental and may be changed or removed in
 // future releases.
-func WaitForCondition[S any](d *Context, name string, deps []AnyHandle, check CheckFunc[S], opts ...Option) TaskHandle[S] {
-	def, cfg := d.register(name, deps, kindPlain, opts)
+func WaitForCondition[S any](d *Context, name string, deps []AnyHandle, initial S, check CheckFunc[S], opts ...Option) TaskHandle[S] {
+	def, cfg := d.register(name, deps, kindPlain, opCondition, opts)
+	if cfg.conditionPred == nil {
+		d.regErrs = append(d.regErrs, &DagInvalidConfigError{
+			Reason: fmt.Sprintf("WaitForCondition task %q: WithCondition is required", name),
+		})
+	}
 	def.run = func(taskCtx DurableContext, dp Deps) (any, error) {
-		var initial S
-		if cfg.initialState != nil {
-			if v, ok := cfg.initialState.(S); ok {
-				initial = v
-			}
-		}
 		var pred func(S) bool
 		if cfg.conditionPred != nil {
 			if p, ok := cfg.conditionPred.(func(S) bool); ok {
@@ -127,7 +132,7 @@ func WaitForCondition[S any](d *Context, name string, deps []AnyHandle, check Ch
 			if err != nil {
 				return operations.ConditionResult[S]{}, err
 			}
-			done := pred == nil || pred(next)
+			done := pred != nil && pred(next)
 			return operations.ConditionResult[S]{State: next, ConditionMet: done}, nil
 		}, initial, wopts...)
 	}
@@ -140,7 +145,7 @@ func WaitForCondition[S any](d *Context, name string, deps []AnyHandle, check Ch
 // Experimental: This API is experimental and may be changed or removed in
 // future releases.
 func Child[T any](d *Context, name string, deps []AnyHandle, fn ChildFunc[T], opts ...Option) TaskHandle[T] {
-	def, cfg := d.register(name, deps, kindPlain, opts)
+	def, cfg := d.register(name, deps, kindPlain, opChild, opts)
 	def.run = func(taskCtx DurableContext, dp Deps) (any, error) {
 		var copts []operations.ChildOption[T]
 		if cfg.serdes != nil {
@@ -159,12 +164,12 @@ func Child[T any](d *Context, name string, deps []AnyHandle, fn ChildFunc[T], op
 // Experimental: This API is experimental and may be changed or removed in
 // future releases.
 func Map[In, Out any](d *Context, name string, deps []AnyHandle, items ItemsFunc[In], mapFn MapFunc[In, Out], opts ...Option) TaskHandle[BatchResult[Out]] {
-	def, cfg := d.register(name, deps, kindBatch, opts)
+	def, cfg := d.register(name, deps, kindBatch, opMap, opts)
 	def.run = func(taskCtx DurableContext, dp Deps) (any, error) {
 		in := items(dp)
 		var mopts []operations.MapOption[In, Out]
-		if cfg.maxConcurrency != nil {
-			mopts = append(mopts, operations.WithMapMaxConcurrency[In, Out](*cfg.maxConcurrency))
+		if cfg.batchMaxConcurrency != nil {
+			mopts = append(mopts, operations.WithMapMaxConcurrency[In, Out](*cfg.batchMaxConcurrency))
 		}
 		return operations.Map(taskCtx, name, in, func(cc DurableContext, item In, index int) (Out, error) {
 			return mapFn(cc, item, index)
@@ -179,15 +184,15 @@ func Map[In, Out any](d *Context, name string, deps []AnyHandle, items ItemsFunc
 // Experimental: This API is experimental and may be changed or removed in
 // future releases.
 func Parallel[Out any](d *Context, name string, deps []AnyHandle, branches []Branch[Out], opts ...Option) TaskHandle[BatchResult[Out]] {
-	def, cfg := d.register(name, deps, kindBatch, opts)
+	def, cfg := d.register(name, deps, kindBatch, opParallel, opts)
 	def.run = func(taskCtx DurableContext, dp Deps) (any, error) {
 		fns := make([]func(child DurableContext) (Out, error), len(branches))
 		for i, b := range branches {
 			fns[i] = b.Func
 		}
 		var popts []operations.ParallelOption[Out]
-		if cfg.maxConcurrency != nil {
-			popts = append(popts, operations.WithParallelMaxConcurrency[Out](*cfg.maxConcurrency))
+		if cfg.batchMaxConcurrency != nil {
+			popts = append(popts, operations.WithParallelMaxConcurrency[Out](*cfg.batchMaxConcurrency))
 		}
 		return operations.Parallel(taskCtx, name, fns, popts...)
 	}
@@ -208,7 +213,7 @@ func Parallel[Out any](d *Context, name string, deps []AnyHandle, branches []Bra
 // Experimental: This API is experimental and may be changed or removed in
 // future releases.
 func SubDag(d *Context, name string, deps []AnyHandle, register func(sub *Context), opts ...Option) TaskHandle[*DagResult] {
-	def, _ := d.register(name, deps, kindDag, opts)
+	def, _ := d.register(name, deps, kindDag, opSubDag, opts)
 	def.run = func(taskCtx DurableContext, dp Deps) (any, error) {
 		return Dag(taskCtx, name, register, opts...)
 	}

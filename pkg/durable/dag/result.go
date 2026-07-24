@@ -230,11 +230,13 @@ func (r *DagResult) Results() map[string]TaskExecution {
 	return out
 }
 
-// SuccessCount returns the number of succeeded tasks.
+// SucceededCount returns the number of succeeded tasks. Named to match the
+// base BatchResult.SucceededCount() so customers see one spelling across a
+// DAG result and a nested Map/Parallel BatchResult at the same call site.
 //
 // Experimental: This API is experimental and may be changed or removed in
 // future releases.
-func (r *DagResult) SuccessCount() int { return len(r.filter(StatusSucceeded)) }
+func (r *DagResult) SucceededCount() int { return len(r.filter(StatusSucceeded)) }
 
 // FailureCount returns the number of failed tasks.
 //
@@ -262,13 +264,15 @@ func (r *DagResult) TotalCount() int { return r.total }
 // future releases.
 func (r *DagResult) CompletionReason() CompletionReason { return r.reason }
 
-// Err returns a *DagExecutionError when at least one task failed or the DAG
-// was custom-completed with a failure outcome; otherwise nil. This is the
-// idiomatic-Go analog of the JS throwIfError().
+// ThrowIfError returns a *DagExecutionError when at least one task failed or
+// the DAG was custom-completed with a failure outcome; otherwise nil. Named
+// to match the base BatchResult.ThrowIfError() so customers see one spelling
+// across a DAG result and a nested Map/Parallel BatchResult at the same call
+// site.
 //
 // Experimental: This API is experimental and may be changed or removed in
 // future releases.
-func (r *DagResult) Err() error {
+func (r *DagResult) ThrowIfError() error {
 	if r.FailureCount() == 0 && r.reason != CustomCompletionFailed {
 		return nil
 	}

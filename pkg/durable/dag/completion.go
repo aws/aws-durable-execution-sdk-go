@@ -113,14 +113,15 @@ func (c *DagCompletionConfig) isThreshold() bool {
 	return c != nil && (c.MinSuccessful != nil || c.ToleratedFailureCount != nil || c.ToleratedFailurePercentage != nil)
 }
 
-// CompletionReason is the reason a DAG stopped scheduling. It shares the
-// underlying string type with the core batch completion reasons; the DAG
-// adds one member (CompletedWithFailures) beyond the core set, preserving
-// the dag -> core (never core -> dag) dependency direction.
+// CompletionReason is the reason a DAG stopped scheduling. It is a defined
+// string type (matching the TriggerRule/TaskStatus/SkipReason pattern) whose
+// values share the underlying wire vocabulary of the core batch completion
+// reasons; the DAG adds one member (CompletedWithFailures) beyond the core
+// set, preserving the dag -> core (never core -> dag) dependency direction.
 //
 // Experimental: This API is experimental and may be changed or removed in
 // future releases.
-type CompletionReason = string
+type CompletionReason string
 
 // Completion reasons. The three threshold reasons and the two custom
 // reasons are re-exported from the core operations package (single source

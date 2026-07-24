@@ -105,8 +105,8 @@ func record(scenario string, tasks map[string]any, reason any, c, sc map[string]
 // type); names is the registered task-name list for structural checks.
 func liveRecord(scenario string, res *dag.DagResult, tasks map[string]any, names ...string) map[string]any {
 	return record(
-		scenario, tasks, res.CompletionReason(),
-		counts(res.SuccessCount(), res.FailureCount(), res.SkippedCount(), res.TotalCount()),
+		scenario, tasks, string(res.CompletionReason()),
+		counts(res.SucceededCount(), res.FailureCount(), res.SkippedCount(), res.TotalCount()),
 		structChecks(true, names...), nil,
 	)
 }
@@ -185,13 +185,13 @@ func compensationGraph(scenario string, chargeFails bool) func(_ struct{}, dc ty
 			})
 			dag.Step(d, "fulfill", nil, func(_ dag.Deps, _ dag.StepContext) (string, error) {
 				return "fulfilled", nil
-			}).DependsOn(charge) // default ALL_SUCCESS
+			}).After(charge) // default ALL_SUCCESS
 			dag.Step(d, "refund", nil, func(_ dag.Deps, _ dag.StepContext) (string, error) {
 				return "refunded", nil
-			}).DependsOn(charge).WithTrigger(dag.AllFailed)
+			}).After(charge).WithTrigger(dag.AllFailed)
 			dag.Step(d, "audit", nil, func(_ dag.Deps, _ dag.StepContext) (string, error) {
 				return "audited", nil
-			}).DependsOn(charge).WithTrigger(dag.AllDone)
+			}).After(charge).WithTrigger(dag.AllDone)
 		})
 		if err != nil {
 			return nil, err
@@ -276,8 +276,8 @@ func hDAG5(_ struct{}, dc types.DurableContext) (map[string]any, error) {
 		{"r_all_success", dag.AllSuccess},
 		{"r_all_failed", dag.AllFailed},
 		{"r_all_done", dag.AllDone},
-		{"r_one_success", dag.OneSuccess},
-		{"r_one_failed", dag.OneFailed},
+		{"r_one_success", dag.AnySuccess},
+		{"r_one_failed", dag.AnyFailed},
 		{"r_none_failed", dag.NoneFailed},
 	}
 	res, err := dag.Dag(dc, "matrix_empty", func(d *dag.Context) {
@@ -312,14 +312,14 @@ func hDAG6(_ struct{}, dc types.DurableContext) (map[string]any, error) {
 			{"c_all_success", dag.AllSuccess},
 			{"c_all_failed", dag.AllFailed},
 			{"c_all_done", dag.AllDone},
-			{"c_one_success", dag.OneSuccess},
-			{"c_one_failed", dag.OneFailed},
+			{"c_one_success", dag.AnySuccess},
+			{"c_one_failed", dag.AnyFailed},
 			{"c_none_failed", dag.NoneFailed},
 		}
 		for _, c := range consumers {
 			dag.Step(d, c.name, nil, func(_ dag.Deps, _ dag.StepContext) (string, error) {
 				return "c", nil
-			}).DependsOn(upOK, upFail).WithTrigger(c.rule)
+			}).After(upOK, upFail).WithTrigger(c.rule)
 		}
 	})
 	if err != nil {
@@ -342,14 +342,14 @@ func hDAG7(_ struct{}, dc types.DurableContext) (map[string]any, error) {
 			{"k_all_success", dag.AllSuccess},
 			{"k_all_failed", dag.AllFailed},
 			{"k_all_done", dag.AllDone},
-			{"k_one_success", dag.OneSuccess},
-			{"k_one_failed", dag.OneFailed},
+			{"k_one_success", dag.AnySuccess},
+			{"k_one_failed", dag.AnyFailed},
 			{"k_none_failed", dag.NoneFailed},
 		}
 		for _, c := range consumers {
 			dag.Step(d, c.name, nil, func(_ dag.Deps, _ dag.StepContext) (string, error) {
 				return "k", nil
-			}).DependsOn(u1, u2).WithTrigger(c.rule)
+			}).After(u1, u2).WithTrigger(c.rule)
 		}
 	})
 	if err != nil {
@@ -378,7 +378,7 @@ func hDAG8(_ struct{}, dc types.DurableContext) (map[string]any, error) {
 		})
 		dag.Step(d, "sink", nil, func(_ dag.Deps, _ dag.StepContext) (string, error) {
 			return "sink", nil
-		}).DependsOn(gate).WithTrigger(dag.AllDone)
+		}).After(gate).WithTrigger(dag.AllDone)
 	})
 	if err != nil {
 		return nil, err
@@ -427,7 +427,7 @@ func hDAG9(_ struct{}, dc types.DurableContext) (map[string]any, error) {
 	innerRes, _ := dag.ResultByName[*dag.DagResult](res, "inner")
 	innerNorm := map[string]any{
 		"completion_reason": innerRes.CompletionReason(),
-		"counts":            counts(innerRes.SuccessCount(), innerRes.FailureCount(), innerRes.SkippedCount(), innerRes.TotalCount()),
+		"counts":            counts(innerRes.SucceededCount(), innerRes.FailureCount(), innerRes.SkippedCount(), innerRes.TotalCount()),
 	}
 	tasks := map[string]any{
 		"a":       tSucc(a),
@@ -451,8 +451,8 @@ func hDAG11(_ struct{}, dc types.DurableContext) (map[string]any, error) {
 	_, err := dag.Dag(dc, "cycle", func(d *dag.Context) {
 		p := dag.Step(d, "p", nil, func(_ dag.Deps, _ dag.StepContext) (int, error) { return 0, nil })
 		q := dag.Step(d, "q", nil, func(_ dag.Deps, _ dag.StepContext) (int, error) { return 0, nil })
-		p.DependsOn(q)
-		q.DependsOn(p)
+		p.After(q)
+		q.After(p)
 	})
 	if err == nil {
 		return nil, errors.New("DAG-11: expected validation error, got nil")
@@ -546,7 +546,7 @@ func hDAG17(_ struct{}, dc types.DurableContext) (map[string]any, error) {
 				return 0, errors.New("boom")
 			})
 			if prev != nil {
-				h.DependsOn(prev).WithTrigger(dag.AllDone)
+				h.After(prev).WithTrigger(dag.AllDone)
 			}
 			prev = h
 		}
@@ -580,7 +580,7 @@ func hDAG18(_ struct{}, dc types.DurableContext) (map[string]any, error) {
 				return verdict{Verdict: v}, nil
 			})
 			if prev != nil {
-				h.DependsOn(prev)
+				h.After(prev)
 			}
 			prev = h
 		}

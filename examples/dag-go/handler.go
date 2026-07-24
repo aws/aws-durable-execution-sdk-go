@@ -63,16 +63,16 @@ func Handler(event Event, dc types.DurableContext) (Result, error) {
 		}) // default ALL_SUCCESS
 		dag.Step(d, "refund", nil, func(_ dag.Deps, _ dag.StepContext) (string, error) {
 			return "refunded", nil
-		}).DependsOn(charge).WithTrigger(dag.AllFailed)
+		}).After(charge).WithTrigger(dag.AllFailed)
 		dag.Step(d, "notify", nil, func(_ dag.Deps, _ dag.StepContext) (string, error) {
 			return "notified", nil
-		}).DependsOn(charge).WithTrigger(dag.AllDone)
+		}).After(charge).WithTrigger(dag.AllDone)
 	})
 	if err != nil {
 		return Result{}, err
 	}
 
-	out := Result{Reason: res.CompletionReason()}
+	out := Result{Reason: string(res.CompletionReason())}
 	out.Merged, _ = dag.ResultByName[int](res, "merge")
 	if st, ok := res.Status("charge"); ok {
 		out.ChargeStatus = string(st)

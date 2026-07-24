@@ -31,8 +31,8 @@ type dagRuntime interface {
 //     *DagInvalidConfigError. On suspension it returns the base SDK's
 //     suspend sentinel (operations.ErrSuspended) so the invocation pauses.
 //   - err == nil: the DAG drained (or early-completed). Individual task
-//     failures are reported INSIDE the result via res.Err(), mirroring the
-//     JS reject-vs-resolve split.
+//     failures are reported INSIDE the result via res.ThrowIfError(),
+//     mirroring the JS reject-vs-resolve split.
 //
 // Each task runs under a deterministic, name-derived child context
 // ({dagScope}-DAG_NODE_T_{taskName}, hashed) so task operation IDs are

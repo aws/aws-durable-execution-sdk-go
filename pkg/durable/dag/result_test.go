@@ -19,8 +19,8 @@ func TestDagResult_Getters(t *testing.T) {
 		{Name: "c", Status: StatusSkipped, SkipReason: SkipTriggerRule, kind: kindPlain},
 	}, CompletedWithFailures)
 
-	if r.SuccessCount() != 1 || r.FailureCount() != 1 || r.SkippedCount() != 1 || r.TotalCount() != 3 {
-		t.Fatalf("counts wrong: s=%d f=%d k=%d t=%d", r.SuccessCount(), r.FailureCount(), r.SkippedCount(), r.TotalCount())
+	if r.SucceededCount() != 1 || r.FailureCount() != 1 || r.SkippedCount() != 1 || r.TotalCount() != 3 {
+		t.Fatalf("counts wrong: s=%d f=%d k=%d t=%d", r.SucceededCount(), r.FailureCount(), r.SkippedCount(), r.TotalCount())
 	}
 	if st, ok := r.Status("a"); !ok || st != StatusSucceeded {
 		t.Fatalf("status a: %v %v", st, ok)
@@ -50,24 +50,24 @@ func TestDagResult_ResultTyped(t *testing.T) {
 func TestDagResult_Err(t *testing.T) {
 	// No failures -> nil.
 	ok := newDagResult([]TaskExecution{mkExec("a", StatusSucceeded, 1, nil)}, AllCompleted)
-	if ok.Err() != nil {
-		t.Fatalf("expected nil Err, got %v", ok.Err())
+	if ok.ThrowIfError() != nil {
+		t.Fatalf("expected nil ThrowIfError, got %v", ok.ThrowIfError())
 	}
 	// Failure -> *DagExecutionError wrapping cause.
 	cause := errors.New("root cause")
 	bad := newDagResult([]TaskExecution{mkExec("x", StatusFailed, nil, cause)}, CompletedWithFailures)
-	err := bad.Err()
+	err := bad.ThrowIfError()
 	var de *DagExecutionError
 	if !errors.As(err, &de) || de.FirstFailed != "x" {
 		t.Fatalf("expected DagExecutionError for x, got %v", err)
 	}
 	if !errors.Is(err, cause) {
-		t.Fatalf("Err should unwrap to cause")
+		t.Fatalf("ThrowIfError should unwrap to cause")
 	}
 	// Custom completion failed -> Err non-nil even with no FAILED tasks.
 	cust := newDagResult([]TaskExecution{mkExec("a", StatusSucceeded, 1, nil)}, CustomCompletionFailed)
-	if cust.Err() == nil {
-		t.Fatal("custom-completion-failed should surface Err")
+	if cust.ThrowIfError() == nil {
+		t.Fatal("custom-completion-failed should surface ThrowIfError")
 	}
 }
 
@@ -99,8 +99,8 @@ func TestDagResult_JSONRoundTrip_WithErrorAndLazyTyping(t *testing.T) {
 	if st, _ := back.Status("b"); st != StatusFailed {
 		t.Fatalf("b status: %v", st)
 	}
-	if back.Err() == nil {
-		t.Fatal("restored result should surface Err for failed task")
+	if back.ThrowIfError() == nil {
+		t.Fatal("restored result should surface ThrowIfError for failed task")
 	}
 	// Skip reason preserved.
 	if len(back.Skipped()) != 1 || back.Skipped()[0].SkipReason != SkipRunIf {

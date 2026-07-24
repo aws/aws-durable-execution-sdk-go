@@ -14,7 +14,7 @@ type AnyHandle interface {
 
 // TaskHandle is a typed reference to a registered task producing a value of
 // type T. Registration free functions (Step, Invoke, ...) mint a handle;
-// the builder methods DependsOn and WithTrigger mutate the underlying task
+// the builder methods After and WithTrigger mutate the underlying task
 // definition and return the handle for chaining. The type parameter T is
 // carried as a phantom so that Get[T]/Result[T] can return the task's value
 // with its concrete type.
@@ -32,13 +32,13 @@ func (h TaskHandle[T]) taskName() string   { return h.name }
 func (h TaskHandle[T]) taskID() string     { return h.id }
 func (h TaskHandle[T]) kindOf() resultKind { return h.kind }
 
-// DependsOn adds ordering-only dependency edges to this task (the upstream
+// After adds ordering-only dependency edges to this task (the upstream
 // results are not injected into Deps, unlike the deps passed at
 // registration). Returns the handle for chaining.
 //
 // Experimental: This API is experimental and may be changed or removed in
 // future releases.
-func (h TaskHandle[T]) DependsOn(deps ...AnyHandle) TaskHandle[T] {
+func (h TaskHandle[T]) After(deps ...AnyHandle) TaskHandle[T] {
 	if h.def != nil {
 		for _, d := range deps {
 			h.def.orderDeps = append(h.def.orderDeps, d.taskName())
@@ -66,7 +66,7 @@ type taskDef struct {
 	id         string
 	kind       resultKind
 	inlineDeps []string // results injected into Deps (from the deps arg)
-	orderDeps  []string // ordering-only edges (from DependsOn)
+	orderDeps  []string // ordering-only edges (from After)
 	trigger    TriggerRule
 	hasTrigger bool
 	runIf      func(Deps) bool

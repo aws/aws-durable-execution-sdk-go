@@ -141,7 +141,7 @@ func (s *scheduler) run(ctx context.Context) ([]TaskExecution, CompletionReason,
 			// Reaching here implies progressed==true (the !progressed drain
 			// above already returned). A synchronous skip resolved THIS pass
 			// can free a dependent that appears EARLIER than its dependency
-			// in registration order (legal via DependsOn ordering edges) and
+			// in registration order (legal via After ordering edges) and
 			// so was skipped over by startReady's single forward pass. There
 			// is nothing in-flight to ever wake a parked parent, so parking
 			// here would deadlock the pure-logic path and spuriously suspend

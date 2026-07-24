@@ -28,5 +28,5 @@ skipped) and the compensation path (charge fails → refund runs, reason
   be generic.
 - `dag.Invoke` and `dag.Callback` **require explicit type arguments** (their
   result type appears only in the return).
-- Task failures are reported inside the result (`res.Err()`), while
+- Task failures are reported inside the result (`res.ThrowIfError()`), while
   registration/validation errors are the `error` return of `dag.Dag(...)`.

@@ -48,11 +48,11 @@ func TestDag_DiamondSucceeds(t *testing.T) {
 		if err != nil {
 			return dagOut{}, err
 		}
-		if e := res.Err(); e != nil {
+		if e := res.ThrowIfError(); e != nil {
 			return dagOut{}, e
 		}
 		merge, _ := dag.ResultByName[int](res, "merge")
-		return dagOut{Merged: merge, Success: res.SuccessCount(), Failure: res.FailureCount(), Skipped: res.SkippedCount(), Reason: res.CompletionReason()}, nil
+		return dagOut{Merged: merge, Success: res.SucceededCount(), Failure: res.FailureCount(), Skipped: res.SkippedCount(), Reason: string(res.CompletionReason())}, nil
 	}
 
 	runner := dtesting.New(handler, nil)
@@ -72,7 +72,7 @@ func TestDag_DiamondSucceeds(t *testing.T) {
 	if out.Merged != 23 {
 		t.Fatalf("merge=%d want 23", out.Merged)
 	}
-	if out.Success != 4 || out.Failure != 0 || out.Reason != dag.AllCompleted {
+	if out.Success != 4 || out.Failure != 0 || out.Reason != string(dag.AllCompleted) {
 		t.Fatalf("unexpected aggregate: %+v", out)
 	}
 }
@@ -98,7 +98,7 @@ func TestDag_TaskFailureReportedInResult(t *testing.T) {
 		if err != nil {
 			return out{}, err // registration/validation error path (not expected)
 		}
-		return out{DagErr: res.Err() != nil, Failures: res.FailureCount(), Skips: res.SkippedCount(), Reason: res.CompletionReason()}, nil
+		return out{DagErr: res.ThrowIfError() != nil, Failures: res.FailureCount(), Skips: res.SkippedCount(), Reason: string(res.CompletionReason())}, nil
 	}
 	runner := dtesting.New(handler, nil)
 	result, err := runner.Run(struct{}{})
@@ -113,7 +113,7 @@ func TestDag_TaskFailureReportedInResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetResult: %v", err)
 	}
-	if !o.DagErr || o.Failures != 1 || o.Skips != 1 || o.Reason != dag.CompletedWithFailures {
+	if !o.DagErr || o.Failures != 1 || o.Skips != 1 || o.Reason != string(dag.CompletedWithFailures) {
 		t.Fatalf("unexpected: %+v", o)
 	}
 }
@@ -138,10 +138,10 @@ func TestDag_WaitSuspendResume(t *testing.T) {
 		if err != nil {
 			return "", err
 		}
-		if e := res.Err(); e != nil {
+		if e := res.ThrowIfError(); e != nil {
 			return "", e
 		}
-		return res.CompletionReason(), nil
+		return string(res.CompletionReason()), nil
 	}
 	runner := dtesting.New(handler, nil) // SkipTime defaults on
 	result, err := runner.Run(struct{}{})
@@ -190,7 +190,7 @@ func TestDag_CustomCompletion(t *testing.T) {
 		if err != nil {
 			return "", err
 		}
-		return res.CompletionReason(), nil
+		return string(res.CompletionReason()), nil
 	}
 
 	runner := dtesting.New(handler, nil)
@@ -206,7 +206,7 @@ func TestDag_CustomCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetResult: %v", err)
 	}
-	if reason != dag.CustomCompletionFailed {
+	if reason != string(dag.CustomCompletionFailed) {
 		t.Fatalf("reason=%q want CUSTOM_COMPLETION_FAILED", reason)
 	}
 }
@@ -238,10 +238,10 @@ func TestDag_DefaultRetryApplied(t *testing.T) {
 		if err != nil {
 			return "", err
 		}
-		if e := res.Err(); e != nil {
+		if e := res.ThrowIfError(); e != nil {
 			return "", e
 		}
-		return res.CompletionReason(), nil
+		return string(res.CompletionReason()), nil
 	}
 	runner := dtesting.New(handler, nil)
 	result, err := runner.Run(struct{}{})
