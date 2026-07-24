@@ -1,0 +1,44 @@
+[
+  {
+    "type": "CONTEXT",
+    "subType": "Dag",
+    "name": "compensation",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "DagTask",
+    "name": "charge",
+    "status": "FAILED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "charge",
+    "status": "FAILED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "DagTask",
+    "name": "refund",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "refund",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "DagTask",
+    "name": "audit",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "audit",
+    "status": "SUCCEEDED"
+  }
+]

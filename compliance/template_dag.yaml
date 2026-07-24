@@ -1,0 +1,104 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Durable Execution Conformance Test Examples - Go (DAG)
+Globals:
+  Function:
+    Runtime: provided.al2023
+    Timeout: 300
+    MemorySize: 128
+
+Resources:
+  DurableFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+      - PolicyName: DurableExecutionPolicy
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - lambda:CheckpointDurableExecution
+            - lambda:GetDurableExecutionState
+            Resource: '*'
+
+  DagDiamond:
+    Type: AWS::Serverless::Function
+    TestingMetadata:
+      TestDescription: ["dag-diamond"]
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/dag_diamond/
+      Handler: bootstrap
+      Description: DAG diamond fan-out/fan-in with typed dependency injection
+      Role:
+        Fn::GetAtt:
+        - DurableFunctionRole
+        - Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
+  DagCompensation:
+    Type: AWS::Serverless::Function
+    TestingMetadata:
+      TestDescription: ["dag-compensation"]
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/dag_compensation/
+      Handler: bootstrap
+      Description: DAG trigger-rule compensation (COMPLETED_WITH_FAILURES)
+      Role:
+        Fn::GetAtt:
+        - DurableFunctionRole
+        - Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
+  DagRunIf:
+    Type: AWS::Serverless::Function
+    TestingMetadata:
+      TestDescription: ["dag-run-if"]
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/dag_run_if/
+      Handler: bootstrap
+      Description: DAG per-task conditional execution via WithRunIf
+      Role:
+        Fn::GetAtt:
+        - DurableFunctionRole
+        - Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
+  DagWaitResume:
+    Type: AWS::Serverless::Function
+    TestingMetadata:
+      TestDescription: ["dag-wait-resume"]
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/dag_wait_resume/
+      Handler: bootstrap
+      Description: DAG in-graph Wait task suspending and resuming the invocation
+      Role:
+        Fn::GetAtt:
+        - DurableFunctionRole
+        - Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300

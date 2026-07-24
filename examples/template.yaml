@@ -1877,6 +1877,74 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 120
 
+  DagDiamondFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-dag-diamond
+      CodeUri: .aws-sam/build-artifacts/dag-diamond/
+      Handler: bootstrap
+      Description: DAG diamond fan-out/fan-in with typed dependency injection
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  DagCompensationFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-dag-compensation
+      CodeUri: .aws-sam/build-artifacts/dag-compensation/
+      Handler: bootstrap
+      Description: DAG trigger-rule compensation (COMPLETED_WITH_FAILURES)
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  DagRunIfFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-dag-run-if
+      CodeUri: .aws-sam/build-artifacts/dag-run-if/
+      Handler: bootstrap
+      Description: DAG per-task conditional execution via WithRunIf
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  DagWaitResumeFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-dag-wait-resume
+      CodeUri: .aws-sam/build-artifacts/dag-wait-resume/
+      Handler: bootstrap
+      Description: DAG in-graph Wait task suspending and resuming the invocation
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
 Outputs:
   OrderFulfillmentFunction:
     Description: Order Fulfillment Example Function ARN
@@ -2199,3 +2267,15 @@ Outputs:
   ComprehensiveOperationsFunction:
     Description: Comprehensive Operations Function ARN
     Value: !GetAtt ComprehensiveOperationsFunction.Arn
+  DagDiamondFunction:
+    Description: DAG Diamond Function ARN
+    Value: !GetAtt DagDiamondFunction.Arn
+  DagCompensationFunction:
+    Description: DAG Compensation Function ARN
+    Value: !GetAtt DagCompensationFunction.Arn
+  DagRunIfFunction:
+    Description: DAG RunIf Function ARN
+    Value: !GetAtt DagRunIfFunction.Arn
+  DagWaitResumeFunction:
+    Description: DAG Wait Resume Function ARN
+    Value: !GetAtt DagWaitResumeFunction.Arn

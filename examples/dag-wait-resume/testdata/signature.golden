@@ -1,0 +1,44 @@
+[
+  {
+    "type": "CONTEXT",
+    "subType": "Dag",
+    "name": "waitresume",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "DagTask",
+    "name": "start",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "start",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "DagTask",
+    "name": "pause",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "WAIT",
+    "subType": "Wait",
+    "name": "pause",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "DagTask",
+    "name": "finish",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "finish",
+    "status": "SUCCEEDED"
+  }
+]

@@ -125,6 +125,10 @@ EXAMPLES="
   large-payload
   undefined-results
   comprehensive-operations
+  dag-diamond
+  dag-compensation
+  dag-run-if
+  dag-wait-resume
 "
 
 for example in $EXAMPLES; do

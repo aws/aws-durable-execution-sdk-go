@@ -1,0 +1,32 @@
+[
+  {
+    "type": "CONTEXT",
+    "subType": "Dag",
+    "name": "runif",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "DagTask",
+    "name": "classify",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "classify",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "DagTask",
+    "name": "review",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "review",
+    "status": "SUCCEEDED"
+  }
+]
