@@ -27,6 +27,10 @@ const (
 )
 
 // EmitMode controls when the insight plugin emits records.
+//
+// Note: B's reference defines EmitModeOnFailure (emit only on failure).
+// This is intentionally deferred — use EmitOnComplete for terminal-only
+// emission and filter downstream if needed.
 type EmitMode string
 
 const (
@@ -75,6 +79,10 @@ type OperationRecord struct {
 	Result *ContentField `json:"result,omitempty"`
 	Error  *ErrorRecord  `json:"error,omitempty"`
 	Input  *ContentField `json:"input,omitempty"`
+
+	// Truncated indicates this operation's result was dropped due to
+	// size constraints (see Truncate).
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 // Record is the cumulative snapshot an insight plugin builds for a single
@@ -105,6 +113,13 @@ type Record struct {
 	Output *ContentField `json:"output,omitempty"`
 
 	Custom map[string]any `json:"custom,omitempty"`
+
+	// Truncation metadata: set when the record was truncated to fit an
+	// exporter's size limit (see Truncate).
+	Truncated         bool `json:"truncated,omitempty"`
+	DroppedOperations int  `json:"droppedOperations,omitempty"`
+	DroppedInput      bool `json:"droppedInput,omitempty"`
+	DroppedOutput     bool `json:"droppedOutput,omitempty"`
 }
 
 // NewRecord creates a Record with standard metadata pre-populated.

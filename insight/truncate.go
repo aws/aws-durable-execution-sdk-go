@@ -1,5 +1,88 @@
 package insight
 
+import "encoding/json"
+
+// Renderer produces the exact byte shape a Truncate call should size
+// against. Exporters with custom rendering (OperationsFormat) provide
+// their own Renderer so truncation sizes against what is actually sent.
+type Renderer func(Record) ([]byte, error)
+
+// defaultRenderer is the canonical JSON shape via json.Marshal.
+func defaultRenderer(record Record) ([]byte, error) {
+	return json.Marshal(record)
+}
+
+// Truncate returns a copy of record, best-effort truncated to fit within
+// maxBytes when rendered via render (or canonical JSON if render is nil).
+// Drop order: operation results (oldest first), whole operations (oldest
+// first), then Input, then Output. Identity/timeline fields are never
+// dropped.
+//
+// When maxBytes <= 0, returns record unchanged (truncation disabled).
+func Truncate(record Record, maxBytes int, render Renderer) Record {
+	if maxBytes <= 0 {
+		return record
+	}
+	if render == nil {
+		render = defaultRenderer
+	}
+	if fits(record, maxBytes, render) {
+		return record
+	}
+
+	// Step 1: drop each operation's Result field, oldest first.
+	for i := range record.Operations {
+		if record.Operations[i].Result == nil {
+			continue
+		}
+		record.Operations[i].Result = nil
+		record.Operations[i].Truncated = true
+		record.Truncated = true
+		if fits(record, maxBytes, render) {
+			return record
+		}
+	}
+
+	// Step 2: drop whole operations, oldest first.
+	dropped := 0
+	for len(record.Operations) > 0 && !fits(record, maxBytes, render) {
+		record.Operations = record.Operations[1:]
+		dropped++
+	}
+	if dropped > 0 {
+		record.Truncated = true
+		record.DroppedOperations = dropped
+	}
+	if fits(record, maxBytes, render) {
+		return record
+	}
+
+	// Step 3: Input, then Output, as a last resort.
+	if record.Input != nil {
+		record.Input = nil
+		record.Truncated = true
+		record.DroppedInput = true
+		if fits(record, maxBytes, render) {
+			return record
+		}
+	}
+	if record.Output != nil {
+		record.Output = nil
+		record.Truncated = true
+		record.DroppedOutput = true
+	}
+	return record
+}
+
+// fits reports whether record's rendered size is within maxBytes.
+func fits(record Record, maxBytes int, render Renderer) bool {
+	b, err := render(record)
+	if err != nil {
+		return false
+	}
+	return len(b) <= maxBytes
+}
+
 // truncateContent truncates value to maxLen, returning a ContentField
 // with Truncated=true if the value was shortened. Uses JSON-aware
 // truncation when the value appears to be JSON, otherwise truncates at
