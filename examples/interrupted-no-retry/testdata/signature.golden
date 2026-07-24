@@ -1,0 +1,8 @@
+[
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "long-running-step",
+    "status": "SUCCEEDED"
+  }
+]

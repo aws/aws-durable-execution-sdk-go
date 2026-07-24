@@ -1,0 +1,42 @@
+[
+  {
+    "type": "CONTEXT",
+    "subType": "Parallel",
+    "name": "force-cp-block",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "ParallelBranch",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "ParallelBranch",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CHAINED_INVOKE",
+    "subType": "ChainedInvoke",
+    "name": "invoke-1",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CHAINED_INVOKE",
+    "subType": "ChainedInvoke",
+    "name": "invoke-2",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CHAINED_INVOKE",
+    "subType": "ChainedInvoke",
+    "name": "invoke-3",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "long-running-step",
+    "status": "SUCCEEDED"
+  }
+]

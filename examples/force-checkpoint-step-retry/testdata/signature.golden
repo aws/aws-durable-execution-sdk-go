@@ -1,0 +1,30 @@
+[
+  {
+    "type": "CONTEXT",
+    "subType": "Parallel",
+    "name": "force-cp-block",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "ParallelBranch",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "ParallelBranch",
+    "status": "FAILED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "retrying-step",
+    "status": "FAILED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "long-running-step",
+    "status": "SUCCEEDED"
+  }
+]
