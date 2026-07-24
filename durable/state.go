@@ -3,6 +3,7 @@ package durable
 import (
 	"crypto/md5" //nolint:gosec // identifier encoding, not cryptography
 	"encoding/hex"
+	"sync"
 	"time"
 )
 
@@ -122,6 +123,12 @@ type stepDetails struct {
 // MD5 hashes of the positional operation ID; get hashes internally so
 // callers use positional IDs throughout.
 type executionState struct {
+	// mu guards operations for safe concurrent access. Operation bodies
+	// running on multiple goroutines (e.g. Map/Parallel branches or DAG
+	// tasks) read the map via get/getByWireID while the checkpointer merges
+	// backend-returned operations into it. Setup-time accesses (before any
+	// operation goroutine exists) do not require the lock.
+	mu         sync.RWMutex
 	operations map[string]*operation
 }
 
@@ -134,16 +141,29 @@ func newExecutionState(ops []*operation) *executionState {
 }
 
 // get returns the checkpointed operation for the positional ID, or nil if
-// the operation has not been checkpointed.
+// the operation has not been checkpointed. Safe for concurrent use.
 func (s *executionState) get(positionalID string) *operation {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.operations[hashID(positionalID)]
 }
 
 // getByWireID returns the checkpointed operation for an already-hashed wire
 // operation ID, or nil if unknown. Used for IDs the service supplies in wire
-// form (e.g. UpdatedOperationIds), which must not be hashed again.
+// form (e.g. UpdatedOperationIds), which must not be hashed again. Safe for
+// concurrent use.
 func (s *executionState) getByWireID(wireID string) *operation {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.operations[wireID]
+}
+
+// set records or replaces an operation. Safe for concurrent use; called by
+// the checkpointer when merging backend-returned operations.
+func (s *executionState) set(rec *operation) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.operations[rec.id] = rec
 }
 
 // hashID converts a positional operation ID to its wire form: the first 16

@@ -151,7 +151,7 @@ func (cp *checkpointer) checkpoint(ctx context.Context, updates []types.Operatio
 		if cp.state != nil && out.NewExecutionState != nil {
 			for _, apiOp := range out.NewExecutionState.Operations {
 				rec := operationFromAPI(apiOp)
-				cp.state.operations[rec.id] = rec
+				cp.state.set(rec)
 			}
 		}
 		return nil
