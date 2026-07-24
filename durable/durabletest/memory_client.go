@@ -67,7 +67,9 @@ func (m *memoryClient) CheckpointDurableExecution(_ context.Context, in *lambda.
 
 // GetDurableExecutionState returns all stored operations in a single page.
 // The local runner does not use pagination; this method exists to satisfy
-// the interface for the initial loadState pagination loop.
+// the interface for the initial loadState pagination loop. Each returned
+// operation is a deep copy, independent of the memoryClient's internal
+// state.
 func (m *memoryClient) GetDurableExecutionState(_ context.Context, _ *lambda.GetDurableExecutionStateInput, _ ...func(*lambda.Options)) (*lambda.GetDurableExecutionStateOutput, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -75,7 +77,7 @@ func (m *memoryClient) GetDurableExecutionState(_ context.Context, _ *lambda.Get
 	ops := make([]types.Operation, 0, len(m.operations))
 	for _, id := range m.opOrder {
 		if op, ok := m.operations[id]; ok {
-			ops = append(ops, *op)
+			ops = append(ops, deepCopyOperation(*op))
 		}
 	}
 	return &lambda.GetDurableExecutionStateOutput{
@@ -83,9 +85,11 @@ func (m *memoryClient) GetDurableExecutionState(_ context.Context, _ *lambda.Get
 	}, nil
 }
 
-// allOperations returns a snapshot of all stored operations in insertion
-// order, excluding the execution operation. For use in TestResult
-// construction.
+// allOperations returns a deep-copied snapshot of all stored operations in
+// insertion order, excluding the execution operation. Each returned
+// Operation is fully independent of the memoryClient's internal state,
+// preventing data races if the caller reads details while a concurrent
+// checkpoint mutates the store.
 func (m *memoryClient) allOperations() []types.Operation {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -100,7 +104,7 @@ func (m *memoryClient) allOperations() []types.Operation {
 		if op.Type == types.OperationTypeExecution {
 			continue
 		}
-		ops = append(ops, *op)
+		ops = append(ops, deepCopyOperation(*op))
 	}
 	return ops
 }
@@ -458,6 +462,113 @@ func (m *memoryClient) completeChainedInvoke(name string, result operationResult
 
 	m.operations[aws.ToString(op.Id)] = &updated
 	return nil
+}
+
+// deepCopyOperation creates a fully independent copy of a types.Operation.
+// All pointer fields and nested structs are cloned so the copy shares no
+// memory with the original.
+func deepCopyOperation(src types.Operation) types.Operation {
+	dst := types.Operation{
+		Id:       copyStringPtr(src.Id),
+		Status:   src.Status,
+		Type:     src.Type,
+		Name:     copyStringPtr(src.Name),
+		SubType:  copyStringPtr(src.SubType),
+		ParentId: copyStringPtr(src.ParentId),
+	}
+	if src.StartTimestamp != nil {
+		t := *src.StartTimestamp
+		dst.StartTimestamp = &t
+	}
+	if src.EndTimestamp != nil {
+		t := *src.EndTimestamp
+		dst.EndTimestamp = &t
+	}
+	if sd := src.StepDetails; sd != nil {
+		dst.StepDetails = &types.StepDetails{
+			Attempt: sd.Attempt,
+			Result:  copyStringPtr(sd.Result),
+		}
+		if sd.NextAttemptTimestamp != nil {
+			t := *sd.NextAttemptTimestamp
+			dst.StepDetails.NextAttemptTimestamp = &t
+		}
+		if sd.Error != nil {
+			dst.StepDetails.Error = copyErrorObject(sd.Error)
+		}
+	}
+	if cd := src.CallbackDetails; cd != nil {
+		dst.CallbackDetails = &types.CallbackDetails{
+			CallbackId: copyStringPtr(cd.CallbackId),
+			Result:     copyStringPtr(cd.Result),
+		}
+		if cd.Error != nil {
+			dst.CallbackDetails.Error = copyErrorObject(cd.Error)
+		}
+	}
+	if id := src.ChainedInvokeDetails; id != nil {
+		dst.ChainedInvokeDetails = &types.ChainedInvokeDetails{
+			Result: copyStringPtr(id.Result),
+		}
+		if id.Error != nil {
+			dst.ChainedInvokeDetails.Error = copyErrorObject(id.Error)
+		}
+	}
+	if cd := src.ContextDetails; cd != nil {
+		dst.ContextDetails = &types.ContextDetails{
+			Result:         copyStringPtr(cd.Result),
+			ReplayChildren: copyBoolPtr(cd.ReplayChildren),
+		}
+		if cd.Error != nil {
+			dst.ContextDetails.Error = copyErrorObject(cd.Error)
+		}
+	}
+	if src.WaitDetails != nil {
+		wd := &types.WaitDetails{}
+		if src.WaitDetails.ScheduledEndTimestamp != nil {
+			t := *src.WaitDetails.ScheduledEndTimestamp
+			wd.ScheduledEndTimestamp = &t
+		}
+		dst.WaitDetails = wd
+	}
+	if src.ExecutionDetails != nil {
+		dst.ExecutionDetails = &types.ExecutionDetails{
+			InputPayload: copyStringPtr(src.ExecutionDetails.InputPayload),
+		}
+	}
+	return dst
+}
+
+// copyErrorObject deep-copies an ErrorObject including its StackTrace slice.
+func copyErrorObject(src *types.ErrorObject) *types.ErrorObject {
+	dst := &types.ErrorObject{
+		ErrorData:    copyStringPtr(src.ErrorData),
+		ErrorMessage: copyStringPtr(src.ErrorMessage),
+		ErrorType:    copyStringPtr(src.ErrorType),
+	}
+	if len(src.StackTrace) > 0 {
+		dst.StackTrace = make([]string, len(src.StackTrace))
+		copy(dst.StackTrace, src.StackTrace)
+	}
+	return dst
+}
+
+// copyStringPtr returns a pointer to a copy of the string, or nil.
+func copyStringPtr(p *string) *string {
+	if p == nil {
+		return nil
+	}
+	s := *p
+	return &s
+}
+
+// copyBoolPtr returns a pointer to a copy of the bool, or nil.
+func copyBoolPtr(p *bool) *bool {
+	if p == nil {
+		return nil
+	}
+	b := *p
+	return &b
 }
 
 // findCallbackByID locates a callback operation by its callback ID.
