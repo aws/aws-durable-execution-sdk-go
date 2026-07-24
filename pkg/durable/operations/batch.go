@@ -105,6 +105,32 @@ const (
 	CompletionReasonFailureToleranceExceeded = "FAILURE_TOLERANCE_EXCEEDED"
 )
 
+// CustomCompletionSucceeded and CustomCompletionFailed are additive
+// completion-reason supersets used when a results-aware CUSTOM completion
+// predicate (as opposed to the three threshold reasons above) decides to
+// complete a batch/DAG early. They share the same underlying string type
+// as CompletionReason and do not alter the three threshold reasons; the
+// experimental DAG feature (pkg/durable/dag) is their first consumer, and
+// Map/Parallel may adopt them later. The DAG-only COMPLETED_WITH_FAILURES
+// reason is declared in the dag package, not here, preserving the
+// dag -> core (never core -> dag) dependency direction. See
+// DAG_SPEC_GO.md §2.8 and §15(3).
+const (
+	// CustomCompletionSucceeded means a custom completion predicate
+	// completed the batch/DAG with a success outcome.
+	//
+	// Experimental: This API is experimental and may be changed or removed
+	// in future releases.
+	CustomCompletionSucceeded = "CUSTOM_COMPLETION_SUCCEEDED"
+
+	// CustomCompletionFailed means a custom completion predicate completed
+	// the batch/DAG with a failure outcome.
+	//
+	// Experimental: This API is experimental and may be changed or removed
+	// in future releases.
+	CustomCompletionFailed = "CUSTOM_COMPLETION_FAILED"
+)
+
 // SucceededCount returns how many items/branches in r completed without
 // error.
 func (r BatchResult[T]) SucceededCount() int {

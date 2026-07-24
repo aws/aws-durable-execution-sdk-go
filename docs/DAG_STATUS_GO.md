@@ -5,9 +5,11 @@ Module: `github.com/aws/aws-durable-execution-sdk-go`. Base: firstcut/b layered 
 
 ## Progress log
 
-- [ ] Phase 0 Task 1 — Name-based task-ID seam (`pkg/durable/context`)
-- [ ] Phase 0 Task 2 — Custom completion predicate types (`pkg/durable/types`)
-- [ ] Phase 0 Task 3 — Completion-reason supersets (`pkg/durable/operations/batch.go`)
+- [x] Phase 0 Task 1 — Name-based task-ID seam (`pkg/durable/context`) — DONE, tested
+- [x] Phase 0 Task 2 — Custom completion predicate types (`pkg/durable/types`) — DONE, tested
+- [x] Phase 0 Task 3 — Completion-reason supersets (`pkg/durable/operations/batch.go`) — DONE, tested
+
+**PHASE 0 COMPLETE** (all 3 gating base-SDK extensions build + test green; full `go test ./pkg/...` passes).
 - [ ] Task 4 — DAG public types, enums, errors
 - [ ] Task 5 — Free-function registration + TaskHandle[T] + Deps/Get[T]
 - [ ] Task 6 — Validator
