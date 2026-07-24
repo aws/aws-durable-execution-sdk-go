@@ -150,6 +150,17 @@ func Result[T any](r *DagResult, h TaskHandle[T]) (T, error) {
 	return zero, ErrDepNotAvailable
 }
 
+// ResultByName returns the typed result of the task with the given name.
+// It is a convenience over Result[T] for call sites that hold only the name
+// (e.g. after the register callback has returned). Same error semantics as
+// Result.
+//
+// Experimental: This API is experimental and may be changed or removed in
+// future releases.
+func ResultByName[T any](r *DagResult, name string) (T, error) {
+	return Result(r, TaskHandle[T]{name: name})
+}
+
 // Status returns the status of a task by name or handle, and false if the
 // task never started (absent from results).
 //
