@@ -149,7 +149,6 @@ func TestValidate_AggregatedMultiError(t *testing.T) {
 	}
 }
 
-
 func TestValidate_UnknownDefaultTriggerRule(t *testing.T) {
 	d := newContext("")
 	Step(d, "a", nil, func(_ Deps, _ StepContext) (int, error) { return 0, nil })

@@ -112,21 +112,21 @@ type MapFunc[In, Out any] func(cctx DurableContext, item In, index int) (Out, er
 // Dag(...).
 type config struct {
 	// task-level
-	trigger      TriggerRule
-	hasTrigger   bool
-	runIf        func(Deps) bool
-	retry        RetryStrategy
-	serdes       Serdes
-	timeout      *Duration
-	initialState any
+	trigger       TriggerRule
+	hasTrigger    bool
+	runIf         func(Deps) bool
+	retry         RetryStrategy
+	serdes        Serdes
+	timeout       *Duration
+	initialState  any
 	conditionPred any // func(S) bool, erased
 
 	// dag-level
-	maxConcurrency  *int
-	defaultTrigger  TriggerRule
-	defaultRetry    RetryStrategy
-	completion      *DagCompletionConfig
-	summaryGen      func(*DagResult) string
+	maxConcurrency *int
+	defaultTrigger TriggerRule
+	defaultRetry   RetryStrategy
+	completion     *DagCompletionConfig
+	summaryGen     func(*DagResult) string
 }
 
 // Option configures a task or a DAG (functional options).
@@ -275,12 +275,12 @@ func (d *Context) register(name string, deps []AnyHandle, kind resultKind, opts 
 		cfg.retry = d.defaultRetry
 	}
 	def := &taskDef{
-		name:    name,
-		id:      name, // name-based identity; hashed IDs are derived at run time
-		kind:    kind,
-		trigger: cfg.trigger,
+		name:       name,
+		id:         name, // name-based identity; hashed IDs are derived at run time
+		kind:       kind,
+		trigger:    cfg.trigger,
 		hasTrigger: cfg.hasTrigger,
-		runIf:   cfg.runIf,
+		runIf:      cfg.runIf,
 	}
 	for _, dep := range deps {
 		def.inlineDeps = append(def.inlineDeps, dep.taskName())

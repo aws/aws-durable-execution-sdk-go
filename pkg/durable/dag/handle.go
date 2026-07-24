@@ -28,8 +28,8 @@ type TaskHandle[T any] struct {
 	def  *taskDef
 }
 
-func (h TaskHandle[T]) taskName() string  { return h.name }
-func (h TaskHandle[T]) taskID() string    { return h.id }
+func (h TaskHandle[T]) taskName() string   { return h.name }
+func (h TaskHandle[T]) taskID() string     { return h.id }
 func (h TaskHandle[T]) kindOf() resultKind { return h.kind }
 
 // DependsOn adds ordering-only dependency edges to this task (the upstream

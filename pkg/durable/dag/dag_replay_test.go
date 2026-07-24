@@ -12,11 +12,11 @@ import (
 )
 
 type dagOut struct {
-	Merged   int
-	Success  int
-	Failure  int
-	Skipped  int
-	Reason   string
+	Merged  int
+	Success int
+	Failure int
+	Skipped int
+	Reason  string
 }
 
 // TestDag_DiamondSucceeds runs a fetch -> {a,b} -> merge diamond end to end
@@ -216,7 +216,6 @@ func ruleName(i int) string {
 }
 
 var _ = durable.Handler[struct{}, string](nil)
-
 
 // TestDag_DefaultRetryApplied proves the DAG-level default retry
 // (WithDefaultRetry) is actually wired to tasks that set none of their own.

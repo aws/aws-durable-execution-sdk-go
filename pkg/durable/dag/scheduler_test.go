@@ -255,7 +255,6 @@ func TestScheduler_DepValuesFlowThroughDeps(t *testing.T) {
 	}
 }
 
-
 // TestScheduler_DefaultTriggerRuleApplied verifies that a DAG-level default
 // trigger rule (WithDefaultTriggerRule) is actually honored for tasks that
 // set none of their own — a task depending on a FAILED upstream must run
