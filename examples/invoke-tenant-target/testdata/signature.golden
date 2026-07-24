@@ -1,0 +1,8 @@
+[
+  {
+    "type": "WAIT",
+    "subType": "Wait",
+    "name": "tenant-wait",
+    "status": "SUCCEEDED"
+  }
+]

@@ -1,0 +1,14 @@
+[
+  {
+    "type": "CONTEXT",
+    "subType": "Map",
+    "name": "empty-map",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "WAIT",
+    "subType": "Wait",
+    "name": "wait",
+    "status": "SUCCEEDED"
+  }
+]

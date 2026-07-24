@@ -1,0 +1,14 @@
+[
+  {
+    "type": "WAIT",
+    "subType": "Wait",
+    "name": "pause",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "post-wait-step",
+    "status": "SUCCEEDED"
+  }
+]
