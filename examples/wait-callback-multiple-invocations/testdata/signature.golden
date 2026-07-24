@@ -1,0 +1,24 @@
+[
+  {
+    "type": "WAIT",
+    "subType": "Wait",
+    "name": "wait-invocation-1",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "WaitForCallback",
+    "name": "first-callback",
+    "status": "FAILED"
+  },
+  {
+    "type": "CALLBACK",
+    "subType": "Callback",
+    "status": "STARTED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "status": "FAILED"
+  }
+]

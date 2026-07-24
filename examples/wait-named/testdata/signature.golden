@@ -1,0 +1,8 @@
+[
+  {
+    "type": "WAIT",
+    "subType": "Wait",
+    "name": "wait-2-seconds",
+    "status": "SUCCEEDED"
+  }
+]

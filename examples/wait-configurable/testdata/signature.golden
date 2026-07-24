@@ -1,0 +1,8 @@
+[
+  {
+    "type": "WAIT",
+    "subType": "Wait",
+    "name": "configurable-wait",
+    "status": "SUCCEEDED"
+  }
+]
