@@ -1,0 +1,14 @@
+[
+  {
+    "type": "CALLBACK",
+    "subType": "Callback",
+    "name": "my-callback",
+    "status": "STARTED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "send-callback",
+    "status": "FAILED"
+  }
+]

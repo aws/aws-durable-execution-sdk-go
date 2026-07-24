@@ -1,0 +1,14 @@
+[
+  {
+    "type": "CONTEXT",
+    "subType": "RunInChildContext",
+    "name": "child-goroutine",
+    "status": "FAILED"
+  },
+  {
+    "type": "STEP",
+    "subType": "WaitForCondition",
+    "name": "check-loop",
+    "status": "FAILED"
+  }
+]

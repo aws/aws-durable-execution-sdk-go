@@ -1,0 +1,26 @@
+[
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "fetch-data",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CALLBACK",
+    "subType": "Callback",
+    "name": "process-user",
+    "status": "STARTED"
+  },
+  {
+    "type": "WAIT",
+    "subType": "Wait",
+    "name": "initial-wait",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "send-callback",
+    "status": "FAILED"
+  }
+]

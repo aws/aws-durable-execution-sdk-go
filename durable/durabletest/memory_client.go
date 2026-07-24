@@ -383,6 +383,26 @@ func (m *memoryClient) completeCallback(callbackID string, result operationResul
 	return nil
 }
 
+// timeoutCallback transitions a STARTED callback operation to TIMED_OUT,
+// simulating the backend behavior when a callback's timeout elapses.
+func (m *memoryClient) timeoutCallback(callbackID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	op := m.findCallbackByID(callbackID)
+	if op == nil {
+		return fmt.Errorf("durabletest: callback %q not found", callbackID)
+	}
+	if op.Status != types.OperationStatusStarted {
+		return fmt.Errorf("durabletest: callback %q is in %s status, expected STARTED", callbackID, op.Status)
+	}
+
+	updated := *op
+	updated.Status = types.OperationStatusTimedOut
+	m.operations[aws.ToString(op.Id)] = &updated
+	return nil
+}
+
 // heartbeatCallback validates that a callback exists and is in STARTED
 // status. No actual timeout mechanics are simulated.
 func (m *memoryClient) heartbeatCallback(callbackID string) error {

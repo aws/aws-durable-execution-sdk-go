@@ -217,6 +217,16 @@ func (r *LocalRunner[I, O]) SendCallbackHeartbeat(callbackID string) error {
 	return r.client.heartbeatCallback(callbackID)
 }
 
+// TimeoutCallback transitions a pending callback operation to TIMED_OUT,
+// simulating the backend behavior when a callback's configured timeout
+// elapses without external resolution.
+//
+// After calling TimeoutCallback, invoke [Run] or [RunUntilComplete] to
+// allow the handler to observe the timeout and continue execution.
+func (r *LocalRunner[I, O]) TimeoutCallback(callbackID string) error {
+	return r.client.timeoutCallback(callbackID)
+}
+
 // OpenCallbacks returns the callback IDs of all CALLBACK operations
 // currently in STARTED status (pending external resolution). The
 // returned IDs can be passed to [SendCallbackSuccess],

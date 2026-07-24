@@ -1,0 +1,14 @@
+[
+  {
+    "type": "CALLBACK",
+    "subType": "Callback",
+    "name": "failing-operation",
+    "status": "STARTED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "send-failure",
+    "status": "FAILED"
+  }
+]
