@@ -35,6 +35,10 @@ type scheduler struct {
 	maxConc    int
 	completion *DagCompletionConfig
 	hooks      schedHooks
+	// defaultTrigger is the DAG-level fallback trigger rule for tasks that
+	// set none of their own (WithDefaultTriggerRule). The empty value is
+	// treated as AllSuccess by evaluateTrigger.
+	defaultTrigger TriggerRule
 
 	mu       sync.Mutex
 	state    map[string]*TaskExecution // terminal (or STARTED) states by name
@@ -170,7 +174,9 @@ func (s *scheduler) startReady(ctx context.Context, done chan taskDone) bool {
 		upstream := s.upstreamStatusesLocked(t)
 		rule := t.trigger
 		if !t.hasTrigger || rule == "" {
-			rule = AllSuccess
+			// Fall back to the DAG-level default (empty => AllSuccess,
+			// handled by evaluateTrigger).
+			rule = s.defaultTrigger
 		}
 		if !evaluateTrigger(rule, upstream) {
 			s.recordSkipLocked(t, SkipTriggerRule)

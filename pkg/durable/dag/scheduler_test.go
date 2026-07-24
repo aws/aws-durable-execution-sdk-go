@@ -254,3 +254,66 @@ func TestScheduler_DepValuesFlowThroughDeps(t *testing.T) {
 		}
 	}
 }
+
+
+// TestScheduler_DefaultTriggerRuleApplied verifies that a DAG-level default
+// trigger rule (WithDefaultTriggerRule) is actually honored for tasks that
+// set none of their own — a task depending on a FAILED upstream must run
+// under a default of AllDone (rather than being skipped under the built-in
+// AllSuccess). Guards against the default being silently ignored.
+func TestScheduler_DefaultTriggerRuleApplied(t *testing.T) {
+	d := newContext("")
+	root := Step(d, "root", nil, func(_ Deps, _ StepContext) (int, error) { return 0, nil })
+	// "comp" sets no per-task trigger; it should inherit the DAG default.
+	Step(d, "comp", []AnyHandle{root}, func(_ Deps, _ StepContext) (int, error) { return 0, nil })
+
+	s := newScheduler(d.tasks, 0, nil, schedHooks{runTask: func(def *taskDef, _ Deps) (any, error) {
+		if def.name == "root" {
+			return 0, errors.New("boom")
+		}
+		return 0, nil
+	}})
+	s.defaultTrigger = AllDone
+	execs, reason, susp := s.run(context.Background())
+	if susp {
+		t.Fatal("unexpected suspend")
+	}
+	st := statusByName(execs)
+	if st["root"] != StatusFailed {
+		t.Fatalf("root should fail, got %v", st["root"])
+	}
+	if st["comp"] != StatusSucceeded {
+		t.Fatalf("comp should RUN under default AllDone (not skip), got %v", st["comp"])
+	}
+	if reason != CompletedWithFailures {
+		t.Fatalf("reason=%v want CompletedWithFailures", reason)
+	}
+
+	// Control: with the built-in default (AllSuccess, empty defaultTrigger),
+	// the same graph skips "comp".
+	d2 := newContext("")
+	root2 := Step(d2, "root", nil, func(_ Deps, _ StepContext) (int, error) { return 0, nil })
+	Step(d2, "comp", []AnyHandle{root2}, func(_ Deps, _ StepContext) (int, error) { return 0, nil })
+	execs2, _ := runSched(d2, 0, nil, func(def *taskDef, _ Deps) (any, error) {
+		if def.name == "root" {
+			return 0, errors.New("boom")
+		}
+		return 0, nil
+	})
+	if statusByName(execs2)["comp"] != StatusSkipped {
+		t.Fatalf("control: comp should skip under AllSuccess default")
+	}
+}
+
+// TestScheduler_EmptyDag verifies an empty graph drains cleanly to
+// AllCompleted with no executions.
+func TestScheduler_EmptyDag(t *testing.T) {
+	d := newContext("")
+	execs, reason := runSched(d, 0, nil, func(def *taskDef, _ Deps) (any, error) { return nil, nil })
+	if len(execs) != 0 {
+		t.Fatalf("empty dag should have 0 execs, got %d", len(execs))
+	}
+	if reason != AllCompleted {
+		t.Fatalf("empty dag reason=%v want AllCompleted", reason)
+	}
+}

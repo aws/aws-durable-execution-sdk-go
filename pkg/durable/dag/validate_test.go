@@ -148,3 +148,17 @@ func TestValidate_AggregatedMultiError(t *testing.T) {
 		t.Fatalf("expected multiple aggregated errors, got %d: %v", len(ve.Errs), ve.Errs)
 	}
 }
+
+
+func TestValidate_UnknownDefaultTriggerRule(t *testing.T) {
+	d := newContext("")
+	Step(d, "a", nil, func(_ Deps, _ StepContext) (int, error) { return 0, nil })
+	var te *DagInvalidTriggerRuleError
+	if err := validate(d, config{defaultTrigger: "NONSENSE"}); !errors.As(err, &te) {
+		t.Fatalf("expected invalid (default) trigger rule error, got %v", err)
+	}
+	// A valid default passes.
+	if err := validate(d, config{defaultTrigger: AllDone}); err != nil {
+		t.Fatalf("valid default trigger should pass, got %v", err)
+	}
+}

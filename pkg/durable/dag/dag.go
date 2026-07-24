@@ -256,6 +256,10 @@ type Context struct {
 	byName  map[string]*taskDef
 	regErrs []error
 	prefix  string // parent prefix for name-based task IDs (set at run time)
+	// defaultRetry is the DAG-level fallback retry strategy applied to
+	// retry-supporting task kinds that set none of their own
+	// (WithDefaultRetry). Set from the DAG-level config before register runs.
+	defaultRetry RetryStrategy
 }
 
 func newContext(prefix string) *Context {
@@ -266,6 +270,10 @@ func newContext(prefix string) *Context {
 // options and detecting duplicate names.
 func (d *Context) register(name string, deps []AnyHandle, kind resultKind, opts []Option) (*taskDef, config) {
 	cfg := buildConfig(opts)
+	// Apply the DAG-level default retry when the task set none of its own.
+	if cfg.retry == nil {
+		cfg.retry = d.defaultRetry
+	}
 	def := &taskDef{
 		name:    name,
 		id:      name, // name-based identity; hashed IDs are derived at run time

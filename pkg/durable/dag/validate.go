@@ -47,6 +47,13 @@ func validate(d *Context, cfg config) error {
 	// registration.
 	errs = append(errs, d.regErrs...)
 
+	// Unknown DAG-level default trigger rule (validated once, not per task).
+	if cfg.defaultTrigger != "" {
+		if _, ok := knownTriggerRules[cfg.defaultTrigger]; !ok {
+			errs = append(errs, &DagInvalidTriggerRuleError{Rule: cfg.defaultTrigger})
+		}
+	}
+
 	// Name rules.
 	for _, t := range d.tasks {
 		if err := validateName(t.name); err != nil {

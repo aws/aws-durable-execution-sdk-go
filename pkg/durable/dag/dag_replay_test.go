@@ -216,3 +216,44 @@ func ruleName(i int) string {
 }
 
 var _ = durable.Handler[struct{}, string](nil)
+
+
+// TestDag_DefaultRetryApplied proves the DAG-level default retry
+// (WithDefaultRetry) is actually wired to tasks that set none of their own.
+// A flaky step fails on its first attempt; without the default retry the
+// task FAILS and the handler errors, so a SUCCEEDED result demonstrates the
+// default recovered it.
+func TestDag_DefaultRetryApplied(t *testing.T) {
+	var attempts int32
+	handler := func(_ struct{}, dc types.DurableContext) (string, error) {
+		res, err := dag.Dag(dc, "retrying", func(d *dag.Context) {
+			dag.Step(d, "flaky", nil, func(_ dag.Deps, _ dag.StepContext) (string, error) {
+				if atomic.AddInt32(&attempts, 1) == 1 {
+					return "", errors.New("transient failure")
+				}
+				return "ok", nil
+			}) // no per-task retry; relies on the DAG default
+		}, dag.WithDefaultRetry(func(_ error, attempt int) types.RetryDecision {
+			return types.RetryDecision{ShouldRetry: attempt < 2, Delay: &types.Duration{Seconds: 0}}
+		}))
+		if err != nil {
+			return "", err
+		}
+		if e := res.Err(); e != nil {
+			return "", e
+		}
+		return res.CompletionReason(), nil
+	}
+	runner := dtesting.New(handler, nil)
+	result, err := runner.Run(struct{}{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.GetStatus() != types.ExecutionStatusSucceeded {
+		msg, _ := result.GetError()
+		t.Fatalf("expected SUCCEEDED (default retry should recover flaky step), got %s (%s)", result.GetStatus(), msg)
+	}
+	if atomic.LoadInt32(&attempts) < 2 {
+		t.Fatalf("default retry not applied: attempts=%d (want >=2)", atomic.LoadInt32(&attempts))
+	}
+}

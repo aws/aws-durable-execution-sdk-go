@@ -38,6 +38,7 @@ func Dag(dc DurableContext, name string, register func(d *Context), opts ...Opti
 	}
 
 	d := newContext(parentPrefix)
+	d.defaultRetry = cfg.defaultRetry
 	if register != nil {
 		register(d)
 	}
@@ -88,6 +89,7 @@ func Dag(dc DurableContext, name string, register func(d *Context), opts ...Opti
 	}
 
 	s := newScheduler(d.tasks, maxConc, cfg.completion, hooks)
+	s.defaultTrigger = cfg.defaultTrigger
 	execs, reason, suspended := s.run(sctx)
 	if suspended {
 		return nil, operations.ErrSuspended

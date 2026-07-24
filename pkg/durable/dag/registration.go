@@ -66,6 +66,9 @@ func Callback[T any](d *Context, name string, deps []AnyHandle, submit Submitter
 		if cfg.timeout != nil {
 			copts = append(copts, operations.WithWaitForCallbackTimeout[T](*cfg.timeout))
 		}
+		if cfg.retry != nil {
+			copts = append(copts, operations.WithWaitForCallbackSubmitterRetryStrategy[T](cfg.retry))
+		}
 		if cfg.serdes != nil {
 			copts = append(copts, operations.WithWaitForCallbackSerdes[T](cfg.serdes))
 		}
