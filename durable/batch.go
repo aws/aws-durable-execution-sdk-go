@@ -34,8 +34,16 @@ func Map[I, O any](ctx Context, name string, items []I, fn func(ctx Context, ite
 
 	options := resolveBatchOptions(ec, opts)
 
-	if options.maxConcurrency == 0 {
-		return BatchResult[O]{}, fmt.Errorf("durable: Map %q: max concurrency must be positive or unset (negative for unlimited)", name)
+	// Set the item accessor so itemNameForIndex can pass items to the namer.
+	options.itemAt = func(index int) any {
+		if index >= 0 && index < len(items) {
+			return items[index]
+		}
+		return nil
+	}
+
+	if options.maxConcurrencySet && options.maxConcurrency <= 0 {
+		return BatchResult[O]{}, fmt.Errorf("durable: Map %q: max concurrency must be positive, got %d", name, options.maxConcurrency)
 	}
 
 	id, err := ec.claimOperation()
@@ -110,8 +118,8 @@ func Parallel[O any](ctx Context, name string, branches []Branch[O], opts ...Bat
 
 	options := resolveBatchOptions(ec, opts)
 
-	if options.maxConcurrency == 0 {
-		return BatchResult[O]{}, fmt.Errorf("durable: Parallel %q: max concurrency must be positive or unset (negative for unlimited)", name)
+	if options.maxConcurrencySet && options.maxConcurrency <= 0 {
+		return BatchResult[O]{}, fmt.Errorf("durable: Parallel %q: max concurrency must be positive, got %d", name, options.maxConcurrency)
 	}
 
 	id, err := ec.claimOperation()
@@ -382,10 +390,13 @@ type BatchOption interface {
 }
 
 // WithMaxConcurrency bounds how many items or branches run at once.
-// A value of zero is invalid and causes Map/Parallel to return an error.
-// Negative means unbounded.
+// A value of zero or negative is invalid and causes Map/Parallel to return
+// an error.
 func WithMaxConcurrency(n int) BatchOption {
-	return batchOptionFunc(func(o *batchOptions) { o.maxConcurrency = n })
+	return batchOptionFunc(func(o *batchOptions) {
+		o.maxConcurrency = n
+		o.maxConcurrencySet = true
+	})
 }
 
 // WithCompletion sets the batch's early-completion policy.
@@ -394,14 +405,16 @@ func WithCompletion(c CompletionConfig) BatchOption {
 }
 
 // WithItemNamer sets display names for a [Map] operation's items. namer is
-// called with each item's index; callers derive names from their own items
-// slice:
+// called with each item's value and index; callers derive names from
+// item content:
 //
 //	durable.Map(ctx, "process", orders, processOrder,
-//	    durable.WithItemNamer(func(i int) string { return orders[i].ID }))
+//	    durable.WithItemNamer(func(item any, i int) string {
+//	        return item.(Order).ID
+//	    }))
 //
-// namer must be a deterministic function of the index.
-func WithItemNamer(namer func(index int) string) BatchOption {
+// namer must be a deterministic function of its arguments.
+func WithItemNamer(namer func(item any, index int) string) BatchOption {
 	return batchOptionFunc(func(o *batchOptions) { o.itemNamer = namer })
 }
 
@@ -460,12 +473,16 @@ func WithToleratedFailureCount(n int) CompletionConfig {
 }
 
 type batchOptions struct {
-	maxConcurrency int
-	completion     CompletionConfig
-	itemNamer      func(index int) string
-	itemSerdes     Serdes
-	resultSerdes   Serdes
-	nesting        NestingMode
+	maxConcurrency    int
+	maxConcurrencySet bool // true when user explicitly set via WithMaxConcurrency
+	completion        CompletionConfig
+	itemNamer         func(item any, index int) string
+	itemSerdes        Serdes
+	resultSerdes      Serdes
+	nesting           NestingMode
+	// itemAt retrieves the item at the given index for passing to
+	// itemNamer. Set by Map; nil for Parallel (which has no items).
+	itemAt func(index int) any
 }
 
 type batchOptionFunc func(*batchOptions)
@@ -533,7 +550,7 @@ func executeBatchItems[I, O any](
 				break
 			}
 
-			itemName := itemNameForIndex(options, i)
+			itemName := itemNameForIndex(options, itemAtIndex(options, i), i)
 			var result BatchItem[O]
 			var err error
 			if options.nesting == NestingFlat {
@@ -588,7 +605,7 @@ func executeBatchItems[I, O any](
 
 		preClaimed := make([]preClaimedItem, 0, totalItems)
 		for i := 0; i < totalItems; i++ {
-			itemName := itemNameForIndex(options, i)
+			itemName := itemNameForIndex(options, itemAtIndex(options, i), i)
 
 			if options.nesting == NestingFlat {
 				// FLAT mode: claim the virtual child ID.
@@ -747,12 +764,12 @@ func runPreClaimedBatchItem[O any](
 				Err:    fnErr,
 			}, nil
 		}
-		serialized, serErr := options.itemSerdes.Marshal(result)
+		serialized, serErr := options.itemSerdes.Marshal(ec.serdesCtx(childID), result)
 		if serErr != nil {
 			return BatchItem[O]{}, fmt.Errorf("durable: batch item %d: serialize result: %w", index, serErr)
 		}
 		var out O
-		if err := options.itemSerdes.Unmarshal(serialized, &out); err != nil {
+		if err := options.itemSerdes.Unmarshal(ec.serdesCtx(childID), serialized, &out); err != nil {
 			return BatchItem[O]{}, fmt.Errorf("durable: batch item %d: deserialize result: %w", index, err)
 		}
 		return BatchItem[O]{
@@ -790,7 +807,7 @@ func runPreClaimedBatchItem[O any](
 		}, nil
 	}
 
-	serialized, serErr := options.itemSerdes.Marshal(result)
+	serialized, serErr := options.itemSerdes.Marshal(ec.serdesCtx(childID), result)
 	if serErr != nil {
 		return BatchItem[O]{}, fmt.Errorf("durable: batch item %d: serialize result: %w", index, serErr)
 	}
@@ -804,7 +821,7 @@ func runPreClaimedBatchItem[O any](
 		return BatchItem[O]{}, err
 	}
 	var out O
-	if err := options.itemSerdes.Unmarshal(serialized, &out); err != nil {
+	if err := options.itemSerdes.Unmarshal(ec.serdesCtx(childID), serialized, &out); err != nil {
 		return BatchItem[O]{}, fmt.Errorf("durable: batch item %d: deserialize result: %w", index, err)
 	}
 	return BatchItem[O]{
@@ -854,12 +871,12 @@ func runFlatBatchItem[O any](
 	}
 
 	// Round-trip through serdes.
-	serialized, serErr := options.itemSerdes.Marshal(result)
+	serialized, serErr := options.itemSerdes.Marshal(ec.serdesCtx(childID), result)
 	if serErr != nil {
 		return BatchItem[O]{}, fmt.Errorf("durable: batch item %d: serialize result: %w", index, serErr)
 	}
 	var out O
-	if err := options.itemSerdes.Unmarshal(serialized, &out); err != nil {
+	if err := options.itemSerdes.Unmarshal(ec.serdesCtx(childID), serialized, &out); err != nil {
 		return BatchItem[O]{}, fmt.Errorf("durable: batch item %d: deserialize result: %w", index, err)
 	}
 
@@ -897,12 +914,12 @@ func runFlatBatchItemShared[O any](
 	}
 
 	// Round-trip through serdes.
-	serialized, serErr := options.itemSerdes.Marshal(result)
+	serialized, serErr := options.itemSerdes.Marshal(flatCtx.serdesCtx(parentID), result)
 	if serErr != nil {
 		return BatchItem[O]{}, fmt.Errorf("durable: batch item %d: serialize result: %w", index, serErr)
 	}
 	var out O
-	if err := options.itemSerdes.Unmarshal(serialized, &out); err != nil {
+	if err := options.itemSerdes.Unmarshal(flatCtx.serdesCtx(parentID), serialized, &out); err != nil {
 		return BatchItem[O]{}, fmt.Errorf("durable: batch item %d: deserialize result: %w", index, err)
 	}
 
@@ -978,7 +995,7 @@ func runNestedBatchItem[O any](
 	}
 
 	// Serialize and checkpoint the child success.
-	serialized, serErr := options.itemSerdes.Marshal(result)
+	serialized, serErr := options.itemSerdes.Marshal(ec.serdesCtx(childID), result)
 	if serErr != nil {
 		return BatchItem[O]{}, fmt.Errorf("durable: batch item %d: serialize result: %w", index, serErr)
 	}
@@ -995,7 +1012,7 @@ func runNestedBatchItem[O any](
 
 	// Round-trip through serdes for live == replay consistency.
 	var out O
-	if err := options.itemSerdes.Unmarshal(serialized, &out); err != nil {
+	if err := options.itemSerdes.Unmarshal(ec.serdesCtx(childID), serialized, &out); err != nil {
 		return BatchItem[O]{}, fmt.Errorf("durable: batch item %d: deserialize result: %w", index, err)
 	}
 
@@ -1038,7 +1055,7 @@ func replayTerminalChildItem[O any](
 			}, nil
 		}
 		var out O
-		if err := options.itemSerdes.Unmarshal([]byte(op.childCtx.result), &out); err != nil {
+		if err := options.itemSerdes.Unmarshal(ec.serdesCtx(childID), []byte(op.childCtx.result), &out); err != nil {
 			return BatchItem[O]{}, fmt.Errorf("durable: batch item %d: deserialize result: %w", index, err)
 		}
 		return BatchItem[O]{
@@ -1085,7 +1102,7 @@ func replayTerminalBatch[I, O any](
 		// deserialize the whole batch result.
 		if options.resultSerdes != nil {
 			var result BatchResult[O]
-			if err := options.resultSerdes.Unmarshal([]byte(op.childCtx.result), &result); err != nil {
+			if err := options.resultSerdes.Unmarshal(ec.serdesCtx(id), []byte(op.childCtx.result), &result); err != nil {
 				return BatchResult[O]{}, fmt.Errorf("durable: batch %q: deserialize batch result: %w", name, err)
 			}
 			return result, nil
@@ -1110,7 +1127,7 @@ func replayTerminalBatch[I, O any](
 			child := ec.child(id, ec.owner, mode)
 			return replayBatchChildren[I, O](child, id, name, items, fn, options, parentSubType, childSubType)
 		}
-		return toBatchResult[O](payload, options.itemSerdes)
+		return toBatchResult[O](payload, options.itemSerdes, ec.serdesCtx(id))
 
 	case statusFailed:
 		cause := &replayedError{errType: "Error", message: "batch failed"}
@@ -1145,7 +1162,7 @@ func replayBatchChildren[I, O any](
 	reason := CompletionAllCompleted
 
 	for i := 0; i < totalItems; i++ {
-		itemName := itemNameForIndex(options, i)
+		itemName := itemNameForIndex(options, itemAtIndex(options, i), i)
 		var result BatchItem[O]
 		var err error
 
@@ -1206,9 +1223,9 @@ func checkpointBatchSuccess[O any](
 	var serErr error
 
 	if options.resultSerdes != nil {
-		serialized, serErr = options.resultSerdes.Marshal(result)
+		serialized, serErr = options.resultSerdes.Marshal(ec.serdesCtx(id), result)
 	} else {
-		payload, payloadErr := fromBatchResult(result, options.itemSerdes)
+		payload, payloadErr := fromBatchResult(result, options.itemSerdes, ec.serdesCtx(id))
 		if payloadErr != nil {
 			return BatchResult[O]{}, payloadErr
 		}
@@ -1253,7 +1270,7 @@ type batchCheckpointItem struct {
 
 // toBatchResult converts a deserialized checkpoint payload back into a
 // typed [BatchResult] using the provided item serdes for result values.
-func toBatchResult[O any](payload batchCheckpointPayload, itemSerdes Serdes) (BatchResult[O], error) {
+func toBatchResult[O any](payload batchCheckpointPayload, itemSerdes Serdes, sctx SerdesContext) (BatchResult[O], error) {
 	items := make([]BatchItem[O], len(payload.Results))
 	for i, cp := range payload.Results {
 		items[i] = BatchItem[O]{
@@ -1265,7 +1282,7 @@ func toBatchResult[O any](payload batchCheckpointPayload, itemSerdes Serdes) (Ba
 		case BatchItemSucceeded:
 			var out O
 			if cp.Result != "" {
-				if err := itemSerdes.Unmarshal([]byte(cp.Result), &out); err != nil {
+				if err := itemSerdes.Unmarshal(sctx, []byte(cp.Result), &out); err != nil {
 					return BatchResult[O]{}, fmt.Errorf("durable: batch item %d: deserialize checkpointed result: %w", i, err)
 				}
 			}
@@ -1283,7 +1300,7 @@ func toBatchResult[O any](payload batchCheckpointPayload, itemSerdes Serdes) (Ba
 // fromBatchResult converts a live [BatchResult] into the checkpoint payload
 // format for serialization. Item results are pre-serialized through the
 // provided item serdes.
-func fromBatchResult[O any](result BatchResult[O], itemSerdes Serdes) (batchCheckpointPayload, error) {
+func fromBatchResult[O any](result BatchResult[O], itemSerdes Serdes, sctx SerdesContext) (batchCheckpointPayload, error) {
 	cpItems := make([]batchCheckpointItem, len(result.Items))
 	for i, item := range result.Items {
 		cpItems[i] = batchCheckpointItem{
@@ -1293,7 +1310,7 @@ func fromBatchResult[O any](result BatchResult[O], itemSerdes Serdes) (batchChec
 		}
 		switch item.Status {
 		case BatchItemSucceeded:
-			raw, err := itemSerdes.Marshal(item.Result)
+			raw, err := itemSerdes.Marshal(sctx, item.Result)
 			if err != nil {
 				return batchCheckpointPayload{}, fmt.Errorf("durable: batch item %d: serialize result for checkpoint: %w", i, err)
 			}
@@ -1348,11 +1365,21 @@ func batchChildUpdate(ec *execContext, childID, childName, childSubType, parentI
 }
 
 // itemNameForIndex returns the name for a batch item at the given index.
-func itemNameForIndex(options batchOptions, index int) string {
+// item may be nil when called from Parallel (no item value available).
+func itemNameForIndex(options batchOptions, item any, index int) string {
 	if options.itemNamer != nil {
-		return options.itemNamer(index)
+		return options.itemNamer(item, index)
 	}
 	return ""
+}
+
+// itemAtIndex retrieves the item value for the given index using the
+// options' itemAt accessor, or returns nil if no accessor is set.
+func itemAtIndex(options batchOptions, index int) any {
+	if options.itemAt != nil {
+		return options.itemAt(index)
+	}
+	return nil
 }
 
 // shouldStopMin checks if the min-successful threshold has been met.

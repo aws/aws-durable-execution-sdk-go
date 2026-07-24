@@ -660,7 +660,7 @@ func TestWaitForConditionAfterSuspension(t *testing.T) {
 // serialize and lowercases on deserialize.
 type uppercaseSerdes struct{}
 
-func (s *uppercaseSerdes) Marshal(v any) ([]byte, error) {
+func (s *uppercaseSerdes) Marshal(_ SerdesContext, v any) ([]byte, error) {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return nil, err
@@ -676,7 +676,7 @@ func (s *uppercaseSerdes) Marshal(v any) ([]byte, error) {
 	return result, nil
 }
 
-func (s *uppercaseSerdes) Unmarshal(data []byte, v any) error {
+func (s *uppercaseSerdes) Unmarshal(_ SerdesContext, data []byte, v any) error {
 	lower := make([]byte, len(data))
 	for i, c := range data {
 		if c >= 'A' && c <= 'Z' {

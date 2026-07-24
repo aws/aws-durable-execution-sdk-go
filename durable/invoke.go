@@ -125,7 +125,7 @@ func runInvoke[O, I any](ec *execContext, id, name, functionID string, input I, 
 				return zero, fmt.Errorf("durable: invoke %q: checkpointed %s operation has no invoke details", name, op.status)
 			}
 			var out O
-			if err := options.resultSerdes.Unmarshal([]byte(op.invoke.result), &out); err != nil {
+			if err := options.resultSerdes.Unmarshal(ec.serdesCtx(id), []byte(op.invoke.result), &out); err != nil {
 				return zero, fmt.Errorf("durable: invoke %q: deserialize result: %w", name, err)
 			}
 			return out, nil
@@ -140,9 +140,14 @@ func runInvoke[O, I any](ec *execContext, id, name, functionID string, input I, 
 		}
 	}
 
-	payload, err := options.payloadSerdes.Marshal(input)
+	payload, err := options.payloadSerdes.Marshal(ec.serdesCtx(id), input)
 	if err != nil {
 		return zero, fmt.Errorf("durable: invoke %q: serialize payload: %w", name, err)
+	}
+
+	// Check the serialized input size before checkpointing START.
+	if sizeErr := checkResultSize(payload, name); sizeErr != nil {
+		return zero, sizeErr
 	}
 
 	update := types.OperationUpdate{
@@ -186,13 +191,19 @@ func invokeErrorFromCheckpoint(name, functionID string, op *operation) *InvokeEr
 	// Wrap sentinel errors so callers can use errors.Is. The sentinel is
 	// added to the chain UNDER the replayedError so that both errors.Is
 	// (for the sentinel) and the checkpointed message are accessible.
+	var status OperationStatus
 	switch op.status {
 	case statusTimedOut:
 		re.sentinel = ErrInvokeTimedOut
+		status = OperationStatusTimedOut
 	case statusStopped:
 		re.sentinel = ErrExecutionStopped
+		status = OperationStatusStopped
 	case statusCancelled:
 		re.sentinel = ErrExecutionCancelled
+		status = OperationStatusCancelled
+	case statusFailed:
+		status = OperationStatusFailed
 	}
-	return &InvokeError{Name: name, FunctionID: functionID, Err: cause}
+	return &InvokeError{Name: name, FunctionID: functionID, Status: status, Err: cause}
 }

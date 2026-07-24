@@ -297,7 +297,7 @@ func TestMapItemNamer(t *testing.T) {
 	resp := invokeBatch(t, fake, batchPayload(`[1,2]`), func(ctx Context, items []int) ([]int, error) {
 		br, err := Map(ctx, "named-items", items, func(_ Context, item int, _ int) (int, error) {
 			return item * 10, nil
-		}, WithMaxConcurrency(1), WithItemNamer(func(i int) string {
+		}, WithMaxConcurrency(1), WithItemNamer(func(_ any, i int) string {
 			return fmt.Sprintf("item-%d", items[i])
 		}))
 		if err != nil {
@@ -738,7 +738,7 @@ func TestParallelNestedParallel(t *testing.T) {
 // wrapSerdes is a test custom serializer that wraps values with "wrapped:" prefix.
 type wrapSerdes struct{}
 
-func (wrapSerdes) Marshal(v any) ([]byte, error) {
+func (wrapSerdes) Marshal(_ SerdesContext, v any) ([]byte, error) {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return nil, err
@@ -751,7 +751,7 @@ func (wrapSerdes) Marshal(v any) ([]byte, error) {
 	return []byte("wrapped:" + s), nil
 }
 
-func (wrapSerdes) Unmarshal(data []byte, v any) error {
+func (wrapSerdes) Unmarshal(_ SerdesContext, data []byte, v any) error {
 	s := string(data)
 	unwrapped := strings.TrimPrefix(s, "wrapped:")
 	ptr, ok := v.(*string)
@@ -792,7 +792,7 @@ func TestMapOperationLevelSerdes(t *testing.T) {
 // opSerdes is the operation-level serdes for testing: "OPSERDE:X,Y" format.
 type opSerdes struct{}
 
-func (opSerdes) Marshal(v any) ([]byte, error) {
+func (opSerdes) Marshal(_ SerdesContext, v any) ([]byte, error) {
 	br, ok := v.(BatchResult[string])
 	if !ok {
 		return nil, fmt.Errorf("opSerdes.Marshal: unexpected type %T", v)
@@ -801,7 +801,7 @@ func (opSerdes) Marshal(v any) ([]byte, error) {
 	return []byte("OPSERDE:" + strings.Join(results, ",")), nil
 }
 
-func (opSerdes) Unmarshal(data []byte, v any) error {
+func (opSerdes) Unmarshal(_ SerdesContext, data []byte, v any) error {
 	s := string(data)
 	if !strings.HasPrefix(s, "OPSERDE:") {
 		return fmt.Errorf("opSerdes.Unmarshal: unexpected format %q", s)
@@ -944,7 +944,7 @@ func TestBatchCheckpointPayloadRoundTrip(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// fromBatchResult → marshal
-			payload, err := fromBatchResult(tt.result, serdes)
+			payload, err := fromBatchResult(tt.result, serdes, SerdesContext{})
 			if err != nil {
 				t.Fatalf("fromBatchResult: %v", err)
 			}
@@ -958,7 +958,7 @@ func TestBatchCheckpointPayloadRoundTrip(t *testing.T) {
 			if err := json.Unmarshal(raw, &decoded); err != nil {
 				t.Fatalf("unmarshal payload: %v", err)
 			}
-			got, err := toBatchResult[string](decoded, serdes)
+			got, err := toBatchResult[string](decoded, serdes, SerdesContext{})
 			if err != nil {
 				t.Fatalf("toBatchResult: %v", err)
 			}

@@ -73,7 +73,7 @@ func runWaitForCondition[S any](ec *execContext, id, name string, check func(Ste
 				return zero, fmt.Errorf("durable: WaitForCondition %q: checkpointed %s operation has no step details", name, op.status)
 			}
 			var out S
-			if err := serdes.Unmarshal([]byte(op.step.result), &out); err != nil {
+			if err := serdes.Unmarshal(ec.serdesCtx(id), []byte(op.step.result), &out); err != nil {
 				return zero, fmt.Errorf("durable: WaitForCondition %q: deserialize checkpointed result: %w", name, err)
 			}
 			return out, nil
@@ -129,7 +129,7 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 	// (resuming after a continue) or use the initial state.
 	var currentState S
 	if op != nil && op.step != nil && op.step.result != "" {
-		if err := serdes.Unmarshal([]byte(op.step.result), &currentState); err != nil {
+		if err := serdes.Unmarshal(ec.serdesCtx(id), []byte(op.step.result), &currentState); err != nil {
 			// Deserialization failure: use initial state as fallback.
 			// This matches the JS behavior where serdes failure falls
 			// back to initialState.
@@ -209,7 +209,7 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 	}
 
 	// Serialize the new state for checkpointing.
-	serialized, err := serdes.Marshal(newState)
+	serialized, err := serdes.Marshal(ec.serdesCtx(id), newState)
 	if err != nil {
 		return zero, fmt.Errorf("durable: WaitForCondition %q: serialize state: %w", name, err)
 	}
@@ -228,7 +228,7 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 	// Round-trip through serdes so the wait strategy and the returned
 	// value see the same representation that replay will produce.
 	var deserialized S
-	if err := serdes.Unmarshal(serialized, &deserialized); err != nil {
+	if err := serdes.Unmarshal(ec.serdesCtx(id), serialized, &deserialized); err != nil {
 		return zero, fmt.Errorf("durable: WaitForCondition %q: deserialize state: %w", name, err)
 	}
 

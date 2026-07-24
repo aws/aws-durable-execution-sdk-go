@@ -18,7 +18,7 @@ func TestFileSystemSerdesAlwaysMode(t *testing.T) {
 	}
 	input := Item{Name: "test", Value: 42}
 
-	data, err := s.Marshal(input)
+	data, err := s.Marshal(SerdesContext{}, input)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestFileSystemSerdesAlwaysMode(t *testing.T) {
 
 	// Unmarshal from envelope.
 	var output Item
-	if err := s.Unmarshal(data, &output); err != nil {
+	if err := s.Unmarshal(SerdesContext{}, data, &output); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
 	if output != input {
@@ -69,7 +69,7 @@ func TestFileSystemSerdesOverflowSmall(t *testing.T) {
 
 	// Small value stays inline.
 	input := "small"
-	data, err := s.Marshal(input)
+	data, err := s.Marshal(SerdesContext{}, input)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestFileSystemSerdesOverflowSmall(t *testing.T) {
 
 	// Unmarshal.
 	var output string
-	if err := s.Unmarshal(data, &output); err != nil {
+	if err := s.Unmarshal(SerdesContext{}, data, &output); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
 	if output != input {
@@ -103,7 +103,7 @@ func TestFileSystemSerdesOverflowLarge(t *testing.T) {
 
 	// Large value overflows to file.
 	input := strings.Repeat("x", 300*1024) // 300KB, exceeds 255KB threshold
-	data, err := s.Marshal(input)
+	data, err := s.Marshal(SerdesContext{}, input)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestFileSystemSerdesOverflowLarge(t *testing.T) {
 
 	// Unmarshal from file.
 	var output string
-	if err := s.Unmarshal(data, &output); err != nil {
+	if err := s.Unmarshal(SerdesContext{}, data, &output); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
 	if output != input {
@@ -133,7 +133,7 @@ func TestFileSystemSerdesNil(t *testing.T) {
 	dir := t.TempDir()
 	s := NewFileSystemSerdes(dir)
 
-	data, err := s.Marshal(nil)
+	data, err := s.Marshal(SerdesContext{}, nil)
 	if err != nil {
 		t.Fatalf("Marshal nil: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestFileSystemSerdesNil(t *testing.T) {
 	}
 
 	var output *string
-	if err := s.Unmarshal(data, &output); err != nil {
+	if err := s.Unmarshal(SerdesContext{}, data, &output); err != nil {
 		t.Fatalf("Unmarshal null: %v", err)
 	}
 	if output != nil {
@@ -166,13 +166,13 @@ func TestFileSystemSerdesRoundTrip(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := NewFileSystemSerdes(dir, FileSystemSerdesConfig{Mode: tt.mode})
-			data, err := s.Marshal(tt.input)
+			data, err := s.Marshal(SerdesContext{}, tt.input)
 			if err != nil {
 				t.Fatalf("Marshal: %v", err)
 			}
 			// Unmarshal into interface{} for comparison.
 			var output any
-			if err := s.Unmarshal(data, &output); err != nil {
+			if err := s.Unmarshal(SerdesContext{}, data, &output); err != nil {
 				t.Fatalf("Unmarshal: %v", err)
 			}
 			// Compare via JSON re-encode.
@@ -189,7 +189,7 @@ func TestFileSystemSerdesHashPathEncoding(t *testing.T) {
 	dir := t.TempDir()
 	s := NewFileSystemSerdes(dir, FileSystemSerdesConfig{})
 
-	data, err := s.Marshal("test-value")
+	data, err := s.Marshal(SerdesContext{}, "test-value")
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
@@ -218,12 +218,12 @@ func TestFileSystemSerdesEmptyPayload(t *testing.T) {
 	s := NewFileSystemSerdes(dir)
 
 	// Empty string "" is a valid JSON value.
-	data, err := s.Marshal("")
+	data, err := s.Marshal(SerdesContext{}, "")
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
 	var output string
-	if err := s.Unmarshal(data, &output); err != nil {
+	if err := s.Unmarshal(SerdesContext{}, data, &output); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
 	if output != "" {
@@ -237,7 +237,7 @@ func TestFileSystemSerdesUnmarshalEmptyEnvelope(t *testing.T) {
 	s := NewFileSystemSerdes(dir)
 
 	var output any
-	err := s.Unmarshal([]byte("null"), &output)
+	err := s.Unmarshal(SerdesContext{}, []byte("null"), &output)
 	if err != nil {
 		t.Fatalf("Unmarshal null: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestFileSystemSerdesMissingFile(t *testing.T) {
 	data, _ := json.Marshal(env)
 
 	var output any
-	err := s.Unmarshal(data, &output)
+	err := s.Unmarshal(SerdesContext{}, data, &output)
 	if err == nil {
 		t.Fatal("expected error for missing file")
 	}

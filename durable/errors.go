@@ -13,10 +13,13 @@ var (
 	_ error = (*CallbackError)(nil)
 	_ error = (*ChildContextError)(nil)
 	_ error = (*WaitForConditionError)(nil)
+	_ error = (*ConditionFailedError)(nil)
 	_ error = (*CombinatorError)(nil)
 	_ error = (*OperationError)(nil)
 	_ error = (*NonDeterministicReplayError)(nil)
 	_ error = (*ResultTooLargeError)(nil)
+	_ error = (*SerdesError)(nil)
+	_ error = (*BatchItemFailedError)(nil)
 )
 
 // Sentinel errors for matching with [errors.Is]. These indicate terminal
@@ -37,6 +40,25 @@ var ErrExecutionStopped = errors.New("durable: execution stopped")
 
 // ErrExecutionCancelled indicates that a durable execution was cancelled.
 var ErrExecutionCancelled = errors.New("durable: execution cancelled")
+
+// OperationStatus represents the terminal status of a durable operation.
+// It is used in [InvokeError] to indicate why an invoked function failed.
+type OperationStatus string
+
+// Terminal operation statuses.
+const (
+	// OperationStatusFailed indicates the operation's function returned an error.
+	OperationStatusFailed OperationStatus = "FAILED"
+
+	// OperationStatusTimedOut indicates the operation exceeded its timeout.
+	OperationStatusTimedOut OperationStatus = "TIMED_OUT"
+
+	// OperationStatusStopped indicates the execution was explicitly stopped.
+	OperationStatusStopped OperationStatus = "STOPPED"
+
+	// OperationStatusCancelled indicates the execution was cancelled.
+	OperationStatusCancelled OperationStatus = "CANCELLED"
+)
 
 // OperationError is a common base that callers can match with a single
 // [errors.As] call to determine that any durable operation produced the
@@ -129,6 +151,11 @@ type InvokeError struct {
 
 	// FunctionID is the function name or ARN that was invoked.
 	FunctionID string
+
+	// Status is the terminal operation status that caused the failure
+	// (Failed, TimedOut, Stopped, or Cancelled). It enables callers to
+	// distinguish the reason for failure without sentinel error matching.
+	Status OperationStatus
 
 	// Err is the underlying failure.
 	Err error
@@ -235,6 +262,41 @@ func (e *WaitForConditionError) As(target interface{}) bool {
 	return false
 }
 
+// ConditionFailedError indicates that a WaitForCondition operation failed
+// terminally: the check function returned an error on its final attempt,
+// or the wait strategy gave up. It is distinct from [*StepError] to allow
+// callers to match condition-specific failures without conflating them
+// with step retries.
+type ConditionFailedError struct {
+	// Name is the operation's name.
+	Name string
+
+	// CheckErr is the check function's error on the final attempt, or nil
+	// if the wait strategy gave up without a check error.
+	CheckErr error
+
+	// Attempts is the number of times the check function was called.
+	Attempts int
+}
+
+func (e *ConditionFailedError) Error() string {
+	if e.CheckErr != nil {
+		return fmt.Sprintf("durable: condition %q failed after %d attempts: %v", e.Name, e.Attempts, e.CheckErr)
+	}
+	return fmt.Sprintf("durable: condition %q failed after %d attempts", e.Name, e.Attempts)
+}
+
+func (e *ConditionFailedError) Unwrap() error { return e.CheckErr }
+
+// As supports [errors.As] matching against [*OperationError].
+func (e *ConditionFailedError) As(target interface{}) bool {
+	if t, ok := target.(**OperationError); ok {
+		*t = &OperationError{Name: e.Name, Err: e.CheckErr}
+		return true
+	}
+	return false
+}
+
 // CombinatorError indicates that a future combinator failed. For [Any],
 // this wraps all individual future errors when no future succeeded.
 type CombinatorError struct {
@@ -261,6 +323,57 @@ func (e *CombinatorError) As(target interface{}) bool {
 	}
 	return false
 }
+
+// BatchItemFailedError indicates that a single item in a [Map] or branch
+// in a [Parallel] operation failed. It wraps the child error with the
+// item's zero-based index so callers inspecting batch failures can identify
+// which item failed without parsing error messages.
+type BatchItemFailedError struct {
+	// Name is the item or branch name.
+	Name string
+
+	// Index is the zero-based position of the failed item in the input slice.
+	Index int
+
+	// Err is the underlying child error.
+	Err error
+}
+
+func (e *BatchItemFailedError) Error() string {
+	return fmt.Sprintf("durable: batch item %d (%q) failed: %v", e.Index, e.Name, e.Err)
+}
+
+func (e *BatchItemFailedError) Unwrap() error { return e.Err }
+
+// As supports [errors.As] matching against [*OperationError].
+func (e *BatchItemFailedError) As(target interface{}) bool {
+	if t, ok := target.(**OperationError); ok {
+		*t = &OperationError{Name: e.Name, Err: e.Err}
+		return true
+	}
+	return false
+}
+
+// SerdesError indicates that a serialization or deserialization operation
+// failed. It wraps the underlying serdes failure with context about which
+// operation and direction (marshal/unmarshal) triggered it.
+type SerdesError struct {
+	// Operation is the name of the durable operation whose serdes failed.
+	Operation string
+
+	// Direction is "marshal" or "unmarshal", indicating whether
+	// serialization or deserialization failed.
+	Direction string
+
+	// Err is the underlying serdes failure.
+	Err error
+}
+
+func (e *SerdesError) Error() string {
+	return fmt.Sprintf("durable: serdes %s failed for operation %q: %v", e.Direction, e.Operation, e.Err)
+}
+
+func (e *SerdesError) Unwrap() error { return e.Err }
 
 // NonDeterministicReplayError indicates that a checkpointed operation's
 // type does not match what the current code expects at the same position.

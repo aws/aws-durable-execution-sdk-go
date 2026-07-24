@@ -70,7 +70,7 @@ func CreateCallback[O any](ctx Context, name string, opts ...CallbackOption) (*C
 		serdes := callbackDeserializerForOptions(ec, options)
 		switch op.status {
 		case statusSucceeded:
-			cb := resolveCallbackSuccess[O](op, id, name, serdes)
+			cb := resolveCallbackSuccess[O](op, id, name, serdes, ec.serdesCtx(id))
 			return cb, nil
 
 		case statusFailed:
@@ -163,7 +163,7 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 				return zero, fmt.Errorf("durable: WaitForCallback %q: checkpointed SUCCEEDED has no context details", name)
 			}
 			var out O
-			if err := ec.serdes.Unmarshal([]byte(op.childCtx.result), &out); err != nil {
+			if err := ec.serdes.Unmarshal(ec.serdesCtx(id), []byte(op.childCtx.result), &out); err != nil {
 				return zero, fmt.Errorf("durable: WaitForCallback %q: deserialize result: %w", name, err)
 			}
 			return out, nil
@@ -205,7 +205,7 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 	}
 
 	// Checkpoint ContextSucceeded.
-	serialized, serr := ec.serdes.Marshal(result)
+	serialized, serr := ec.serdes.Marshal(ec.serdesCtx(id), result)
 	if serr != nil {
 		return zero, fmt.Errorf("durable: WaitForCallback %q: serialize result: %w", name, serr)
 	}
@@ -217,7 +217,7 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 
 	// Round-trip for consistency (first-run == replay).
 	var out O
-	if err := ec.serdes.Unmarshal(serialized, &out); err != nil {
+	if err := ec.serdes.Unmarshal(ec.serdesCtx(id), serialized, &out); err != nil {
 		return zero, fmt.Errorf("durable: WaitForCallback %q: deserialize result: %w", name, err)
 	}
 	return out, nil
@@ -278,7 +278,7 @@ func wfcbFailedError(op *operation, name string) error {
 
 // resolveCallbackSuccess creates a pre-settled callback for a SUCCEEDED
 // checkpointed status.
-func resolveCallbackSuccess[O any](op *operation, id, name string, serdes Serdes) *Callback[O] {
+func resolveCallbackSuccess[O any](op *operation, id, name string, serdes Serdes, sctx SerdesContext) *Callback[O] {
 	if op.callback == nil {
 		fut := newFailedFuture[O](fmt.Errorf("durable: callback %q: SUCCEEDED but no callback details", name))
 		return &Callback[O]{id: "", future: fut}
@@ -290,7 +290,7 @@ func resolveCallbackSuccess[O any](op *operation, id, name string, serdes Serdes
 		return &Callback[O]{id: op.callback.callbackID, future: newSettledFuture(zero, nil)}
 	}
 	var out O
-	if err := serdes.Unmarshal([]byte(op.callback.result), &out); err != nil {
+	if err := serdes.Unmarshal(sctx, []byte(op.callback.result), &out); err != nil {
 		fut := newFailedFuture[O](fmt.Errorf("durable: callback %q: deserialize result: %w", name, err))
 		return &Callback[O]{id: op.callback.callbackID, future: fut}
 	}
@@ -439,10 +439,10 @@ type deserializerSerdes struct {
 	d Deserializer
 }
 
-func (s deserializerSerdes) Marshal(v any) ([]byte, error) {
-	return jsonSerdes{}.Marshal(v)
+func (s deserializerSerdes) Marshal(ctx SerdesContext, v any) ([]byte, error) {
+	return jsonSerdes{}.Marshal(ctx, v)
 }
 
-func (s deserializerSerdes) Unmarshal(data []byte, v any) error {
+func (s deserializerSerdes) Unmarshal(_ SerdesContext, data []byte, v any) error {
 	return s.d.Unmarshal(data, v)
 }

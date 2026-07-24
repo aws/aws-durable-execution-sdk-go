@@ -91,6 +91,15 @@ func newExecContext(ctx context.Context, executionArn string, lambdaCtx *lambdac
 
 func (c *execContext) ExecutionArn() string { return c.executionArn }
 
+// serdesCtx builds a [SerdesContext] for the given operation ID, using the
+// execution's ARN as the durable execution identifier.
+func (c *execContext) serdesCtx(operationID string) SerdesContext {
+	return SerdesContext{
+		OperationID:         operationID,
+		DurableExecutionArn: c.executionArn,
+	}
+}
+
 func (c *execContext) LambdaContext() *lambdacontext.LambdaContext { return c.lambdaCtx }
 
 func (c *execContext) Logger() Logger { return c.logger }

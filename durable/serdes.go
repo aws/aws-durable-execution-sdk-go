@@ -7,10 +7,10 @@ type jsonSerdes struct{}
 
 var _ Serdes = jsonSerdes{}
 
-func (jsonSerdes) Marshal(v any) ([]byte, error) {
+func (jsonSerdes) Marshal(_ SerdesContext, v any) ([]byte, error) {
 	return json.Marshal(v)
 }
 
-func (jsonSerdes) Unmarshal(data []byte, v any) error {
+func (jsonSerdes) Unmarshal(_ SerdesContext, data []byte, v any) error {
 	return json.Unmarshal(data, v)
 }

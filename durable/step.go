@@ -170,7 +170,7 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 				}
 			})
 			var out O
-			if err := options.serdes.Unmarshal([]byte(op.step.result), &out); err != nil {
+			if err := options.serdes.Unmarshal(ec.serdesCtx(id), []byte(op.step.result), &out); err != nil {
 				return zero, fmt.Errorf("durable: step %q: deserialize checkpointed result: %w", name, err)
 			}
 			dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
@@ -374,7 +374,7 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 			}
 		},
 		func() (any, error) {
-			r, e := runStepFunc(ec, fn)
+			r, e := runStepFunc(ec, fn, attempt)
 			return r, e
 		},
 	)
@@ -399,7 +399,7 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 		return settleStepFailure[O](ec, id, name, options, stepErr, attempt)
 	}
 
-	serialized, err := options.serdes.Marshal(result)
+	serialized, err := options.serdes.Marshal(ec.serdesCtx(id), result)
 	if err != nil {
 		dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
 			if p.OnOperationAttemptEnd != nil {
@@ -435,7 +435,7 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 	// the checkpointed payload, so first execution and replay observe an
 	// identical result.
 	var out O
-	if err := options.serdes.Unmarshal(serialized, &out); err != nil {
+	if err := options.serdes.Unmarshal(ec.serdesCtx(id), serialized, &out); err != nil {
 		return zero, fmt.Errorf("durable: step %q: deserialize result: %w", name, err)
 	}
 	return out, nil
@@ -474,13 +474,13 @@ func settleStepFailure[O any](ec *execContext, id, name string, options stepOpti
 
 // runStepFunc executes the step body with panic recovery: a panicking step
 // is a failed attempt, subject to the retry strategy like any other error.
-func runStepFunc[O any](ec *execContext, fn func(StepContext) (O, error)) (result O, err error) {
+func runStepFunc[O any](ec *execContext, fn func(StepContext) (O, error), attempt int) (result O, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("durable: step panicked: %v", r)
 		}
 	}()
-	return fn(&stepContext{Context: ec.Context, logger: ec.logger})
+	return fn(&stepContext{Context: ec.Context, logger: ec.logger, attempt: attempt})
 }
 
 // stepUpdate assembles the shared fields of a step operation update. IDs
@@ -504,12 +504,16 @@ func stepUpdate(ec *execContext, id, name string, action types.OperationAction) 
 // stepContext is the concrete [StepContext] passed to step bodies.
 type stepContext struct {
 	context.Context
-	logger Logger
+	logger  Logger
+	attempt int
 }
 
 var _ StepContext = (*stepContext)(nil)
 
 func (c *stepContext) Logger() Logger { return c.logger }
+
+// Attempt returns the zero-indexed attempt number for this step execution.
+func (c *stepContext) Attempt() int { return c.attempt }
 
 // errorObject converts a Go error into the wire error shape recorded with
 // FAIL and RETRY updates.
