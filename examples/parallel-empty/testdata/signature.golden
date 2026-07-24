@@ -1,0 +1,14 @@
+[
+  {
+    "type": "CONTEXT",
+    "subType": "Parallel",
+    "name": "empty-parallel",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "WAIT",
+    "subType": "Wait",
+    "name": "wait",
+    "status": "SUCCEEDED"
+  }
+]

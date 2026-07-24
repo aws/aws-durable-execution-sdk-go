@@ -1,0 +1,14 @@
+[
+  {
+    "type": "WAIT",
+    "subType": "Wait",
+    "name": "wait-1",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "WAIT",
+    "subType": "Wait",
+    "name": "wait-2",
+    "status": "SUCCEEDED"
+  }
+]
