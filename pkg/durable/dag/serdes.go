@@ -72,7 +72,11 @@ type serializedTaskExecution struct {
 type serializedDagResult struct {
 	Tasks            []serializedTaskExecution `json:"tasks"`
 	CompletionReason CompletionReason          `json:"completionReason"`
-	Summary          string                    `json:"summary,omitempty"`
+	// Total is the registered-task count (spec §2.8). Persisted separately
+	// from len(Tasks) because never-started tasks are absent from Tasks
+	// under early completion but still count toward Total.
+	Total   int    `json:"total,omitempty"`
+	Summary string `json:"summary,omitempty"`
 }
 
 func serializeTaskExecution(te TaskExecution) (serializedTaskExecution, error) {
@@ -124,7 +128,7 @@ func serializeTaskExecution(te TaskExecution) (serializedTaskExecution, error) {
 // NOT wired to the aggregate-checkpoint/large-payload offload yet, hence
 // unexported until it is).
 func serializeDagResult(r *DagResult) ([]byte, error) {
-	sr := serializedDagResult{CompletionReason: r.reason, Summary: r.summary}
+	sr := serializedDagResult{CompletionReason: r.reason, Total: r.total, Summary: r.summary}
 	for _, te := range r.tasks {
 		ste, err := serializeTaskExecution(te)
 		if err != nil {
@@ -174,5 +178,11 @@ func restoreDagResult(data []byte) (*DagResult, error) {
 		}
 		execs = append(execs, te)
 	}
-	return newDagResult(execs, sr.CompletionReason), nil
+	res := newDagResult(execs, sr.CompletionReason)
+	// Restore the registered-task total (spec §2.8). Legacy records without
+	// a "total" field decode as 0; fall back to len(execs) for them.
+	if sr.Total > 0 {
+		res.total = sr.Total
+	}
+	return res, nil
 }

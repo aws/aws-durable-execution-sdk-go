@@ -110,6 +110,10 @@ func Dag(dc DurableContext, name string, register func(d *Context), opts ...Opti
 	}
 
 	res := newDagResult(execs, reason)
+	// Spec §2.8: total = number of REGISTERED tasks, not the settled count.
+	// Under early completion never-started tasks are absent from execs but
+	// still count toward total.
+	res.total = len(d.tasks)
 	if cfg.summaryGen != nil {
 		res.summary = cfg.summaryGen(res)
 	}

@@ -824,23 +824,24 @@ func expectedRecords() map[string]map[string]any {
 		"DAG-14": record("DAG-14", map[string]any{}, nil, counts(0, 0, 0, 0), none, "DagInvalidTaskNameError"),
 		"DAG-15": record("DAG-15", map[string]any{}, nil, counts(0, 0, 0, 0), none, "DagInvalidDependencyError"),
 
-		// DIVERGENCE (DAG-16): catalog total=5 (registered); Go
-		// DagResult.TotalCount()=3 (settled/recorded only — absent s4/s5 are
-		// not recorded). Emitting Go's actual output surfaces the difference.
+		// DAG-16: minSuccessful early-completion. total=5 (registered);
+		// s4/s5 never started so are absent from tasks (§9.6) but still
+		// count toward total (§2.8).
 		"DAG-16": record("DAG-16", map[string]any{
 			"s1": tSucc(1), "s2": tSucc(2), "s3": tSucc(3),
-		}, "MIN_SUCCESSFUL_REACHED", counts(3, 0, 0, 3), all("s1", "s2", "s3", "s4", "s5"), nil),
+		}, "MIN_SUCCESSFUL_REACHED", counts(3, 0, 0, 5), all("s1", "s2", "s3", "s4", "s5"), nil),
 
-		// DIVERGENCE (DAG-17): catalog total=4; Go TotalCount()=2 (settled).
+		// DAG-17: toleratedFailureCount exceeded. total=4 (registered).
 		"DAG-17": record("DAG-17", map[string]any{
 			"t1": tFail(), "t2": tFail(),
-		}, "FAILURE_TOLERANCE_EXCEEDED", counts(0, 2, 0, 2), all("t1", "t2", "t3", "t4"), nil),
+		}, "FAILURE_TOLERANCE_EXCEEDED", counts(0, 2, 0, 4), all("t1", "t2", "t3", "t4"), nil),
 
-		// DIVERGENCE (DAG-18): catalog total=3; Go TotalCount()=2 (settled).
+		// DAG-18: custom result-based completion [TS + Go]. total=3
+		// (registered); both custom-completion SDKs now agree.
 		"DAG-18": record("DAG-18", map[string]any{
 			"r1": tSucc(map[string]any{"verdict": "ACCEPT"}),
 			"r2": tSucc(map[string]any{"verdict": "REJECT"}),
-		}, "CUSTOM_COMPLETION_FAILED", counts(2, 0, 0, 2), all("r1", "r2", "r3"), nil),
+		}, "CUSTOM_COMPLETION_FAILED", counts(2, 0, 0, 3), all("r1", "r2", "r3"), nil),
 
 		"DAG-19": record("DAG-19", map[string]any{
 			"root": tSucc(100), "b": tSucc(101), "c": tSucc(102), "merge": tSucc(203),

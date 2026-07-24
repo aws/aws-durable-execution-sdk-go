@@ -105,14 +105,21 @@ type TaskExecution struct {
 // Experimental: This API is experimental and may be changed or removed in
 // future releases.
 type DagResult struct {
-	tasks   []TaskExecution
-	byName  map[string]*TaskExecution
-	reason  CompletionReason
+	tasks  []TaskExecution
+	byName map[string]*TaskExecution
+	reason CompletionReason
+	// total is the number of REGISTERED tasks in the DAG (spec §2.8):
+	// fixed, independent of early completion or never-started tasks. It is
+	// deliberately decoupled from len(tasks): under early completion,
+	// never-started tasks are absent from tasks (§9.6) but still count
+	// toward total. Defaults to len(execs); the scheduler/replay paths
+	// override it with the registered count.
+	total   int
 	summary string // observability-only; never read on replay
 }
 
 func newDagResult(execs []TaskExecution, reason CompletionReason) *DagResult {
-	r := &DagResult{tasks: execs, reason: reason, byName: make(map[string]*TaskExecution, len(execs))}
+	r := &DagResult{tasks: execs, reason: reason, total: len(execs), byName: make(map[string]*TaskExecution, len(execs))}
 	for i := range r.tasks {
 		r.byName[r.tasks[i].Name] = &r.tasks[i]
 	}
@@ -241,11 +248,13 @@ func (r *DagResult) FailureCount() int { return len(r.filter(StatusFailed)) }
 // future releases.
 func (r *DagResult) SkippedCount() int { return len(r.filter(StatusSkipped)) }
 
-// TotalCount returns the number of recorded task executions.
+// TotalCount returns the number of REGISTERED tasks in the DAG (spec §2.8).
+// This is fixed and independent of early completion: never-started tasks are
+// absent from the per-task executions (§9.6) but still counted here.
 //
 // Experimental: This API is experimental and may be changed or removed in
 // future releases.
-func (r *DagResult) TotalCount() int { return len(r.tasks) }
+func (r *DagResult) TotalCount() int { return r.total }
 
 // CompletionReason returns why the DAG stopped scheduling.
 //
