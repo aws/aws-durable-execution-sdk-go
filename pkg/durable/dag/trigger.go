@@ -1,15 +1,3 @@
-// Package dag implements an EXPERIMENTAL directed-acyclic-graph (DAG)
-// orchestration layer on top of the durable-execution SDK's core
-// operations. It lets a handler declare a graph of named tasks with
-// dependencies, trigger rules, conditional execution, and custom
-// completion, then runs them with bounded concurrency while preserving the
-// SDK's replay/checkpoint guarantees.
-//
-// See docs/DAG_SPEC_GO.md for the full design. Every exported symbol in
-// this package is EXPERIMENTAL.
-//
-// Experimental: This API is experimental and may be changed or removed in
-// future releases.
 package dag
 
 // TriggerRule determines whether a task runs based on the terminal
