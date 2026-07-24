@@ -4,7 +4,7 @@ Description: Durable Execution Conformance Test Examples - Go (Child Context)
 Globals:
   Function:
     Runtime: provided.al2023
-    Timeout: 60
+    Timeout: 300
     MemorySize: 128
 
 Resources:
