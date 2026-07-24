@@ -30,11 +30,11 @@ type receivedData struct {
 // a Unix epoch second.
 type callbackSerdes struct{}
 
-func (callbackSerdes) Marshal(v any) ([]byte, error) {
+func (callbackSerdes) Marshal(_ durable.SerdesContext, v any) ([]byte, error) {
 	return json.Marshal(v)
 }
 
-func (callbackSerdes) Unmarshal(data []byte, v any) error {
+func (callbackSerdes) Unmarshal(_ durable.SerdesContext, data []byte, v any) error {
 	// The callback result payload is a JSON object string.
 	var raw callbackPayload
 	if err := json.Unmarshal(data, &raw); err != nil {

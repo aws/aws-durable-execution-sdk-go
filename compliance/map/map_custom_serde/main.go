@@ -11,12 +11,12 @@ import (
 // wrapSerdes wraps on serialize, unwraps on deserialize (real, non-identity).
 type wrapSerdes struct{}
 
-func (wrapSerdes) Marshal(v any) ([]byte, error) {
+func (wrapSerdes) Marshal(_ durable.SerdesContext, v any) ([]byte, error) {
 	s := v.(string)
 	return []byte("wrapped:" + s), nil
 }
 
-func (wrapSerdes) Unmarshal(data []byte, v any) error {
+func (wrapSerdes) Unmarshal(_ durable.SerdesContext, data []byte, v any) error {
 	s := string(data)
 	unwrapped := strings.TrimPrefix(s, "wrapped:")
 	ptr := v.(*string)

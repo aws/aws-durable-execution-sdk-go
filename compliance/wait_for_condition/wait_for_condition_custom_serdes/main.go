@@ -14,7 +14,7 @@ import (
 // deserialize, exercising the custom serdes round-trip.
 type prefixSerdes struct{}
 
-func (s *prefixSerdes) Marshal(v any) ([]byte, error) {
+func (s *prefixSerdes) Marshal(_ durable.SerdesContext, v any) ([]byte, error) {
 	str, ok := v.(string)
 	if !ok {
 		return json.Marshal(v)
@@ -22,7 +22,7 @@ func (s *prefixSerdes) Marshal(v any) ([]byte, error) {
 	return json.Marshal("ENC:" + str)
 }
 
-func (s *prefixSerdes) Unmarshal(data []byte, v any) error {
+func (s *prefixSerdes) Unmarshal(_ durable.SerdesContext, data []byte, v any) error {
 	var raw string
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return json.Unmarshal(data, v)

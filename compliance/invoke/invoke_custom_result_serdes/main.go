@@ -16,11 +16,11 @@ import (
 // serialization is standard JSON.
 type uppercaseResultSerdes struct{}
 
-func (uppercaseResultSerdes) Marshal(v any) ([]byte, error) {
+func (uppercaseResultSerdes) Marshal(_ durable.SerdesContext, v any) ([]byte, error) {
 	return json.Marshal(v)
 }
 
-func (uppercaseResultSerdes) Unmarshal(data []byte, v any) error {
+func (uppercaseResultSerdes) Unmarshal(_ durable.SerdesContext, data []byte, v any) error {
 	s, ok := v.(*string)
 	if !ok {
 		return json.Unmarshal(data, v)

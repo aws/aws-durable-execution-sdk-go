@@ -14,7 +14,7 @@ import (
 // returns the data as-is (the checkpoint contains the uppercase value).
 type uppercaseSerdes struct{}
 
-func (uppercaseSerdes) Marshal(v any) ([]byte, error) {
+func (uppercaseSerdes) Marshal(_ durable.SerdesContext, v any) ([]byte, error) {
 	s, ok := v.(string)
 	if !ok {
 		b, err := json.Marshal(v)
@@ -26,7 +26,7 @@ func (uppercaseSerdes) Marshal(v any) ([]byte, error) {
 	return []byte(strings.ToUpper(s)), nil
 }
 
-func (uppercaseSerdes) Unmarshal(data []byte, v any) error {
+func (uppercaseSerdes) Unmarshal(_ durable.SerdesContext, data []byte, v any) error {
 	// The stored value is raw uppercase text (not JSON-encoded).
 	if sp, ok := v.(*string); ok {
 		*sp = string(data)

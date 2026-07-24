@@ -9,11 +9,11 @@ import (
 type wrappedSerdes struct{}
 type wrapped struct { Wrapped string `json:"wrapped"` }
 
-func (wrappedSerdes) Marshal(v any) ([]byte, error) {
+func (wrappedSerdes) Marshal(_ durable.SerdesContext, v any) ([]byte, error) {
 	s := v.(string)
 	return json.Marshal(wrapped{Wrapped: s})
 }
-func (wrappedSerdes) Unmarshal(data []byte, v any) error {
+func (wrappedSerdes) Unmarshal(_ durable.SerdesContext, data []byte, v any) error {
 	var w wrapped
 	if err := json.Unmarshal(data, &w); err != nil { return err }
 	ptr := v.(*string)

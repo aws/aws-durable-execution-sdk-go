@@ -13,7 +13,7 @@ import (
 // opSerdes serializes the whole BatchResult as "OPSERDE:X,Y".
 type opSerdes struct{}
 
-func (opSerdes) Marshal(v any) ([]byte, error) {
+func (opSerdes) Marshal(_ durable.SerdesContext, v any) ([]byte, error) {
 	br, ok := v.(durable.BatchResult[string])
 	if !ok {
 		return nil, fmt.Errorf("opSerdes: unexpected type %T", v)
@@ -21,7 +21,7 @@ func (opSerdes) Marshal(v any) ([]byte, error) {
 	return []byte("OPSERDE:" + strings.Join(br.Results(), ",")), nil
 }
 
-func (opSerdes) Unmarshal(data []byte, v any) error {
+func (opSerdes) Unmarshal(_ durable.SerdesContext, data []byte, v any) error {
 	s := string(data)
 	if !strings.HasPrefix(s, "OPSERDE:") {
 		return fmt.Errorf("opSerdes: unexpected format %q", s)
