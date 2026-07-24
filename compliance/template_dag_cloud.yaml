@@ -1,0 +1,95 @@
+# DAG cloud-integration SAM harness for the ALPHA SDK (suffix -DagAlphaGo).
+#
+# Deploys the four DAG compliance handlers (compliance/dag/dag_*) as durable
+# Lambda functions using PREBUILT linux/amd64 bootstrap binaries on the
+# provided.al2023 runtime (no Docker/finch: BuildMethod makefile just copies
+# publish/<handler>/bootstrap, produced by ./build_examples.sh dag).
+#
+# It is the alpha counterpart of the old core's dag-integ-template.yaml, and
+# targets account 730758745077 / us-west-2 with the pre-existing execution
+# role DurableFunctionsIntegrationTestRole. Functions are namespaced with a
+# -DagAlphaGo suffix so they never collide with the core -DagIntegGo stack.
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Durable Execution DAG cloud integration - alpha SDK (Go, prebuilt bootstrap)
+
+Parameters:
+  ExecutionRoleArn:
+    Type: String
+    Default: arn:aws:iam::730758745077:role/DurableFunctionsIntegrationTestRole
+    Description: Pre-existing Lambda execution role with durable-execution permissions.
+
+Globals:
+  Function:
+    Runtime: provided.al2023
+    Architectures:
+      - x86_64
+    Timeout: 300
+    MemorySize: 128
+
+Resources:
+  DagDiamond:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: dag-diamond-DagAlphaGo
+      CodeUri: publish/dag_diamond/
+      Handler: bootstrap
+      Role: !Ref ExecutionRoleArn
+      Description: DAG diamond fan-out/fan-in with typed dependency injection
+      DurableConfig:
+        ExecutionTimeout: 300
+        RetentionPeriodInDays: 7
+
+  DagCompensation:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: dag-compensation-DagAlphaGo
+      CodeUri: publish/dag_compensation/
+      Handler: bootstrap
+      Role: !Ref ExecutionRoleArn
+      Description: DAG trigger-rule compensation (COMPLETED_WITH_FAILURES)
+      DurableConfig:
+        ExecutionTimeout: 300
+        RetentionPeriodInDays: 7
+
+  DagRunIf:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: dag-run-if-DagAlphaGo
+      CodeUri: publish/dag_run_if/
+      Handler: bootstrap
+      Role: !Ref ExecutionRoleArn
+      Description: DAG per-task conditional execution via WithRunIf
+      DurableConfig:
+        ExecutionTimeout: 300
+        RetentionPeriodInDays: 7
+
+  DagWaitResume:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: dag-wait-DagAlphaGo
+      CodeUri: publish/dag_wait_resume/
+      Handler: bootstrap
+      Role: !Ref ExecutionRoleArn
+      Description: DAG in-graph Wait task suspending and resuming the invocation
+      DurableConfig:
+        ExecutionTimeout: 300
+        RetentionPeriodInDays: 7
+
+Outputs:
+  DagDiamondArn:
+    Value: !GetAtt DagDiamond.Arn
+  DagCompensationArn:
+    Value: !GetAtt DagCompensation.Arn
+  DagRunIfArn:
+    Value: !GetAtt DagRunIf.Arn
+  DagWaitResumeArn:
+    Value: !GetAtt DagWaitResume.Arn
