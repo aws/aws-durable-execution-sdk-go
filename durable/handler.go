@@ -11,8 +11,10 @@ import (
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-lambda-go/lambdacontext"
+	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
 	"github.com/aws/aws-sdk-go-v2/config"
 	lambdaservice "github.com/aws/aws-sdk-go-v2/service/lambda"
+	smithymw "github.com/aws/smithy-go/middleware"
 )
 
 // Handler is a durable function handler. It receives the deserialized
@@ -376,7 +378,11 @@ func (h *durableHandler[I, O]) lambdaClient(ctx context.Context) (ExecutionClien
 		h.client = h.options.client
 		return h.client, nil
 	}
-	cfg, err := config.LoadDefaultConfig(ctx)
+	cfg, err := config.LoadDefaultConfig(ctx,
+		config.WithAPIOptions([]func(*smithymw.Stack) error{
+			awsmiddleware.AddUserAgentKeyValue(userAgentKey, Version),
+		}),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("durable: load AWS config: %w", err)
 	}
