@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-lambda-go/lambdacontext"
@@ -171,48 +172,79 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	pd := newPluginDispatcher(h.options.plugins)
 
 	isFirstInvocation := len(state.operations) <= 1
-	invInfo := InvocationHookInfo{
-		ExecutionArn:      in.DurableExecutionArn,
-		IsFirstInvocation: isFirstInvocation,
-	}
 
-	// OnOperationChange: fire for operations that changed externally.
+	// Build updated operations map for both InvocationHookInfo and
+	// OnOperationChange (Item 11: map[string]OperationHookInfo keyed by ID).
+	var updatedOpsMap map[string]OperationHookInfo
 	if pd != nil && len(in.UpdatedOperationIds) > 0 {
-		var updated []OperationHookInfo
+		updatedOpsMap = make(map[string]OperationHookInfo, len(in.UpdatedOperationIds))
 		for _, uid := range in.UpdatedOperationIds {
-			op := state.get(uid)
+			// UpdatedOperationIds carry wire IDs (already hashed), so look
+			// up directly; state.get would hash a second time and miss.
+			op := state.getByWireID(uid)
 			if op == nil {
 				continue
 			}
-			updated = append(updated, OperationHookInfo{
-				ExecutionArn: in.DurableExecutionArn,
-				ID:           uid,
-				Name:         op.name,
-				Type:         op.opType,
-				SubType:      op.subType,
-				Status:       toPluginOperationStatus(op.status),
-				IsReplay:     true,
-			})
-		}
-		if len(updated) > 0 {
-			changeInfo := OperationChangeHookInfo{
-				ExecutionArn:      in.DurableExecutionArn,
-				UpdatedOperations: updated,
+			updatedOpsMap[uid] = OperationHookInfo{
+				ExecutionArn:   in.DurableExecutionArn,
+				ID:             uid,
+				Name:           op.name,
+				Type:           op.opType,
+				SubType:        op.subType,
+				Status:         toPluginOperationStatus(op.status),
+				IsReplay:       true,
+				ParentID:       op.parentID,
+				StartTimestamp: op.startTimestamp,
+				EndTimestamp:   op.endTimestamp,
+				Result:         op.operationResult(),
+				Error:          op.operationError(),
 			}
-			dispatchNotification(pd, func(p *Plugin) {
-				if p.OnOperationChange != nil {
-					p.OnOperationChange(changeInfo)
-				}
-			})
 		}
 	}
 
-	// OnInvocationStart
+	// ExecutionStartTimestamp: sourced from the root EXECUTION operation's
+	// own StartTimestamp in the wire payload (the first operation).
+	var execStartTimestamp time.Time
+	if len(state.operations) > 0 {
+		for _, op := range state.operations {
+			if op.opType == "EXECUTION" {
+				execStartTimestamp = op.startTimestamp
+				break
+			}
+		}
+	}
+
+	// ExecutionInput: the raw unmarshaled customer event. We pass the
+	// already-deserialized typed event as any.
+	var execInput any = event
+
+	invInfo := InvocationHookInfo{
+		ExecutionArn:            in.DurableExecutionArn,
+		IsFirstInvocation:       isFirstInvocation,
+		ExecutionInput:          execInput,
+		ExecutionStartTimestamp: execStartTimestamp,
+		UpdatedOperations:       updatedOpsMap,
+	}
+
+	// Item 12: OnInvocationStart fires BEFORE OnOperationChange.
 	dispatchNotification(pd, func(p *Plugin) {
 		if p.OnInvocationStart != nil {
-			p.OnInvocationStart(invInfo)
+			p.OnInvocationStart(ctx, invInfo)
 		}
 	})
+
+	// OnOperationChange: fire for operations that changed externally.
+	if pd != nil && len(updatedOpsMap) > 0 {
+		changeInfo := OperationChangeHookInfo{
+			ExecutionArn:      in.DurableExecutionArn,
+			UpdatedOperations: updatedOpsMap,
+		}
+		dispatchNotification(pd, func(p *Plugin) {
+			if p.OnOperationChange != nil {
+				p.OnOperationChange(ctx, changeInfo)
+			}
+		})
+	}
 
 	// The user handler runs on its own goroutine, which owns the root
 	// context: durable operations are claimed there in program order.
@@ -273,7 +305,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 				return nil
 			}
 			return func(fn func() (any, error)) (any, error) {
-				return p.WrapInvocation(invInfo, fn)
+				return p.WrapInvocation(ctx, invInfo, fn)
 			}
 		},
 		runHandler,
@@ -287,9 +319,10 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		// OnInvocationEnd with PENDING.
 		dispatchNotification(pd, func(p *Plugin) {
 			if p.OnInvocationEnd != nil {
-				p.OnInvocationEnd(InvocationEndHookInfo{
+				p.OnInvocationEnd(ctx, InvocationEndHookInfo{
 					ExecutionArn: in.DurableExecutionArn,
 					Status:       PluginInvocationPending,
+					// ExecutionResult/ExecutionError are nil on suspension.
 				})
 			}
 		})
@@ -297,9 +330,10 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	case wrapErr != nil:
 		dispatchNotification(pd, func(p *Plugin) {
 			if p.OnInvocationEnd != nil {
-				p.OnInvocationEnd(InvocationEndHookInfo{
-					ExecutionArn: in.DurableExecutionArn,
-					Status:       PluginInvocationFailed,
+				p.OnInvocationEnd(ctx, InvocationEndHookInfo{
+					ExecutionArn:   in.DurableExecutionArn,
+					Status:         PluginInvocationFailed,
+					ExecutionError: wrapErr,
 				})
 			}
 		})
@@ -310,9 +344,10 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	default:
 		dispatchNotification(pd, func(p *Plugin) {
 			if p.OnInvocationEnd != nil {
-				p.OnInvocationEnd(InvocationEndHookInfo{
-					ExecutionArn: in.DurableExecutionArn,
-					Status:       PluginInvocationSucceeded,
+				p.OnInvocationEnd(ctx, InvocationEndHookInfo{
+					ExecutionArn:    in.DurableExecutionArn,
+					Status:          PluginInvocationSucceeded,
+					ExecutionResult: wrapResult,
 				})
 			}
 		})

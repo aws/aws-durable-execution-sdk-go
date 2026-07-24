@@ -3,6 +3,7 @@ package durable
 import (
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
@@ -140,14 +141,16 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 
 	attemptInfo := AttemptHookInfo{
 		OperationHookInfo: OperationHookInfo{
-			ExecutionArn: ec.executionArn,
-			ID:           id,
-			Name:         name,
-			Type:         string(types.OperationTypeStep),
-			SubType:      operationSubTypeWaitForCondition,
-			Status:       PluginOperationStarted,
-			Attempt:      attempt,
-			IsReplay:     ec.mode == modeReplay || ec.mode == modeReplaySucceededContext,
+			ExecutionArn:   ec.executionArn,
+			ID:             id,
+			Name:           name,
+			Type:           string(types.OperationTypeStep),
+			SubType:        operationSubTypeWaitForCondition,
+			Status:         PluginOperationStarted,
+			Attempt:        attempt,
+			IsReplay:       ec.mode == modeReplay || ec.mode == modeReplaySucceededContext,
+			ParentID:       ec.parentWireID(),
+			StartTimestamp: time.Now(),
 		},
 		Attempt: attempt,
 	}
@@ -155,7 +158,7 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 	// OnOperationAttemptStart
 	dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
 		if p.OnOperationAttemptStart != nil {
-			p.OnOperationAttemptStart(attemptInfo)
+			p.OnOperationAttemptStart(ec, attemptInfo)
 		}
 	})
 
@@ -169,7 +172,7 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 				return nil
 			}
 			return func(innerFn func() (any, error)) (any, error) {
-				return p.WrapOperationAttemptFn(attemptInfo, innerFn)
+				return p.WrapOperationAttemptFn(ec, attemptInfo, innerFn)
 			}
 		},
 		func() (any, error) {
@@ -188,7 +191,7 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 		// OnOperationAttemptEnd with FAILED outcome.
 		dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
 			if p.OnOperationAttemptEnd != nil {
-				p.OnOperationAttemptEnd(AttemptEndHookInfo{
+				p.OnOperationAttemptEnd(ec, AttemptEndHookInfo{
 					OperationHookInfo: attemptInfo.OperationHookInfo,
 					Attempt:           attempt,
 					Outcome:           PluginAttemptFailed,
@@ -214,7 +217,7 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 	// OnOperationAttemptEnd with SUCCEEDED outcome (check ran without error).
 	dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
 		if p.OnOperationAttemptEnd != nil {
-			p.OnOperationAttemptEnd(AttemptEndHookInfo{
+			p.OnOperationAttemptEnd(ec, AttemptEndHookInfo{
 				OperationHookInfo: attemptInfo.OperationHookInfo,
 				Attempt:           attempt,
 				Outcome:           PluginAttemptSucceeded,

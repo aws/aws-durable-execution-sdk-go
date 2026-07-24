@@ -1,6 +1,7 @@
 package durable
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -55,7 +56,7 @@ func TestWrapPanicsOnSecondEmptyPlugin(t *testing.T) {
 		}
 	}()
 	handler := func(_ Context, _ string) (string, error) { return "", nil }
-	valid := Plugin{OnInvocationStart: func(InvocationHookInfo) {}}
+	valid := Plugin{OnInvocationStart: func(context.Context, InvocationHookInfo) {}}
 	Wrap(handler, WithPlugins(valid, Plugin{}))
 }
 
@@ -70,7 +71,7 @@ func TestWrapAcceptsValidConfig(t *testing.T) {
 
 func TestWrapAcceptsValidConfigWithAllOptions(t *testing.T) {
 	handler := func(_ Context, _ string) (string, error) { return "", nil }
-	plugin := Plugin{OnInvocationStart: func(InvocationHookInfo) {}}
+	plugin := Plugin{OnInvocationStart: func(context.Context, InvocationHookInfo) {}}
 	h := Wrap(handler,
 		WithLogger(newDefaultLogger("test")),
 		WithPlugins(plugin),
@@ -123,7 +124,7 @@ func TestValidateHandlerOptions(t *testing.T) {
 			name: "valid plugin",
 			opts: &handlerOptions{
 				plugins: []Plugin{
-					{OnInvocationStart: func(InvocationHookInfo) {}},
+					{OnInvocationStart: func(context.Context, InvocationHookInfo) {}},
 				},
 			},
 			wantErr: false,
@@ -140,7 +141,7 @@ func TestValidateHandlerOptions(t *testing.T) {
 			name: "multiple plugins, second empty",
 			opts: &handlerOptions{
 				plugins: []Plugin{
-					{OnInvocationEnd: func(InvocationEndHookInfo) {}},
+					{OnInvocationEnd: func(context.Context, InvocationEndHookInfo) {}},
 					{},
 				},
 			},

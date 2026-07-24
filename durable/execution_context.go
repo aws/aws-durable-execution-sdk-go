@@ -99,6 +99,15 @@ func (c *execContext) IsReplaying() bool {
 	return c.mode == modeReplay || c.mode == modeReplaySucceededContext
 }
 
+// parentWireID returns the hashed wire-format parent context ID for use in
+// OperationHookInfo.ParentID. Returns empty string for root-level operations.
+func (c *execContext) parentWireID() string {
+	if c.ids.prefix == "" {
+		return ""
+	}
+	return hashID(c.ids.prefix)
+}
+
 // claimOperation validates goroutine ownership, refreshes the replay mode
 // for the pending operation, and claims the next operation ID. Every
 // durable operation begins with a claimOperation call on its context.

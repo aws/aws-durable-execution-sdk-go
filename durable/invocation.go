@@ -1,5 +1,7 @@
 package durable
 
+import "time"
+
 // invocationInput is the payload the durable execution service delivers to
 // a durable function invocation. It carries the execution identity, the
 // checkpoint token for this invocation cycle, and the first page of the
@@ -31,10 +33,13 @@ type initialExecutionState struct {
 // invocation payload, narrowed to the fields the engine consumes.
 type wireOperation struct {
 	Id                   string                    `json:"Id"`
+	ParentId             string                    `json:"ParentId,omitempty"`
 	Status               string                    `json:"Status"`
 	Type                 string                    `json:"Type,omitempty"`
 	SubType              string                    `json:"SubType,omitempty"`
 	Name                 string                    `json:"Name,omitempty"`
+	StartTimestamp       string                    `json:"StartTimestamp,omitempty"`
+	EndTimestamp         string                    `json:"EndTimestamp,omitempty"`
 	ExecutionDetails     *wireExecutionDetails     `json:"ExecutionDetails,omitempty"`
 	StepDetails          *wireStepDetails          `json:"StepDetails,omitempty"`
 	ChainedInvokeDetails *wireChainedInvokeDetails `json:"ChainedInvokeDetails,omitempty"`
@@ -95,11 +100,22 @@ func (in *initialExecutionState) toOperations() []*operation {
 	ops := make([]*operation, 0, len(in.Operations))
 	for _, w := range in.Operations {
 		op := &operation{
-			id:      w.Id,
-			status:  operationStatus(w.Status),
-			opType:  w.Type,
-			subType: w.SubType,
-			name:    w.Name,
+			id:       w.Id,
+			parentID: w.ParentId,
+			status:   operationStatus(w.Status),
+			opType:   w.Type,
+			subType:  w.SubType,
+			name:     w.Name,
+		}
+		if w.StartTimestamp != "" {
+			if t, err := time.Parse(time.RFC3339Nano, w.StartTimestamp); err == nil {
+				op.startTimestamp = t
+			}
+		}
+		if w.EndTimestamp != "" {
+			if t, err := time.Parse(time.RFC3339Nano, w.EndTimestamp); err == nil {
+				op.endTimestamp = t
+			}
 		}
 		if sd := w.StepDetails; sd != nil {
 			op.step = &stepDetails{attempt: sd.Attempt, result: sd.Result}

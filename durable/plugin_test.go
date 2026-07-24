@@ -22,14 +22,14 @@ func TestPluginFanOutJoinsBeforeProceeding(t *testing.T) {
 	started := make(chan struct{}, 2)
 
 	p1 := Plugin{
-		OnInvocationStart: func(_ InvocationHookInfo) {
+		OnInvocationStart: func(_ context.Context, _ InvocationHookInfo) {
 			started <- struct{}{}
 			time.Sleep(10 * time.Millisecond)
 			count.Add(1)
 		},
 	}
 	p2 := Plugin{
-		OnInvocationStart: func(_ InvocationHookInfo) {
+		OnInvocationStart: func(_ context.Context, _ InvocationHookInfo) {
 			started <- struct{}{}
 			time.Sleep(10 * time.Millisecond)
 			count.Add(1)
@@ -39,7 +39,7 @@ func TestPluginFanOutJoinsBeforeProceeding(t *testing.T) {
 	pd := newPluginDispatcher([]Plugin{p1, p2})
 	dispatchNotification(pd, func(p *Plugin) {
 		if p.OnInvocationStart != nil {
-			p.OnInvocationStart(InvocationHookInfo{})
+			p.OnInvocationStart(context.Background(), InvocationHookInfo{})
 		}
 	})
 
@@ -52,13 +52,13 @@ func TestPluginFanOutJoinsBeforeProceeding(t *testing.T) {
 // never affect execution.
 func TestPluginPanicSwallowed(t *testing.T) {
 	panicker := Plugin{
-		OnInvocationStart: func(_ InvocationHookInfo) {
+		OnInvocationStart: func(_ context.Context, _ InvocationHookInfo) {
 			panic("plugin exploded")
 		},
 	}
 	var called atomic.Bool
 	good := Plugin{
-		OnInvocationStart: func(_ InvocationHookInfo) {
+		OnInvocationStart: func(_ context.Context, _ InvocationHookInfo) {
 			called.Store(true)
 		},
 	}
@@ -67,7 +67,7 @@ func TestPluginPanicSwallowed(t *testing.T) {
 	// Must not panic.
 	dispatchNotification(pd, func(p *Plugin) {
 		if p.OnInvocationStart != nil {
-			p.OnInvocationStart(InvocationHookInfo{})
+			p.OnInvocationStart(context.Background(), InvocationHookInfo{})
 		}
 	})
 
@@ -83,7 +83,7 @@ func TestPluginErrorSwallowedCustomerErrorPreserved(t *testing.T) {
 
 	// Plugin that panics — its panic should be skipped and inner fn called.
 	panicker := Plugin{
-		WrapInvocation: func(_ InvocationHookInfo, fn func() (any, error)) (any, error) {
+		WrapInvocation: func(_ context.Context, _ InvocationHookInfo, fn func() (any, error)) (any, error) {
 			panic("wrap panic")
 		},
 	}
@@ -95,7 +95,7 @@ func TestPluginErrorSwallowedCustomerErrorPreserved(t *testing.T) {
 				return nil
 			}
 			return func(fn func() (any, error)) (any, error) {
-				return p.WrapInvocation(InvocationHookInfo{}, fn)
+				return p.WrapInvocation(context.Background(), InvocationHookInfo{}, fn)
 			}
 		},
 		func() (any, error) {
@@ -121,7 +121,7 @@ func TestPluginWrapCompositionOrder(t *testing.T) {
 	}
 
 	p1 := Plugin{
-		WrapInvocation: func(_ InvocationHookInfo, fn func() (any, error)) (any, error) {
+		WrapInvocation: func(_ context.Context, _ InvocationHookInfo, fn func() (any, error)) (any, error) {
 			record("p1-before")
 			result, err := fn()
 			record("p1-after")
@@ -129,7 +129,7 @@ func TestPluginWrapCompositionOrder(t *testing.T) {
 		},
 	}
 	p2 := Plugin{
-		WrapInvocation: func(_ InvocationHookInfo, fn func() (any, error)) (any, error) {
+		WrapInvocation: func(_ context.Context, _ InvocationHookInfo, fn func() (any, error)) (any, error) {
 			record("p2-before")
 			result, err := fn()
 			record("p2-after")
@@ -144,7 +144,7 @@ func TestPluginWrapCompositionOrder(t *testing.T) {
 				return nil
 			}
 			return func(fn func() (any, error)) (any, error) {
-				return p.WrapInvocation(InvocationHookInfo{}, fn)
+				return p.WrapInvocation(context.Background(), InvocationHookInfo{}, fn)
 			}
 		},
 		func() (any, error) {
@@ -174,12 +174,12 @@ func TestPluginNilHookFieldsSkipped(t *testing.T) {
 	// Should not panic.
 	dispatchNotification(pd, func(p *Plugin) {
 		if p.OnInvocationStart != nil {
-			p.OnInvocationStart(InvocationHookInfo{})
+			p.OnInvocationStart(context.Background(), InvocationHookInfo{})
 		}
 	})
 	dispatchNotification(pd, func(p *Plugin) {
 		if p.OnOperationStart != nil {
-			p.OnOperationStart(OperationHookInfo{})
+			p.OnOperationStart(context.Background(), OperationHookInfo{})
 		}
 	})
 
@@ -190,7 +190,7 @@ func TestPluginNilHookFieldsSkipped(t *testing.T) {
 				return nil
 			}
 			return func(fn func() (any, error)) (any, error) {
-				return p.WrapInvocation(InvocationHookInfo{}, fn)
+				return p.WrapInvocation(context.Background(), InvocationHookInfo{}, fn)
 			}
 		},
 		func() (any, error) {
@@ -242,7 +242,7 @@ func TestPluginIsReplayOnSecondRun(t *testing.T) {
 	var mu sync.Mutex
 
 	plugin := Plugin{
-		OnOperationStart: func(info OperationHookInfo) {
+		OnOperationStart: func(_ context.Context, info OperationHookInfo) {
 			mu.Lock()
 			isReplayValues = append(isReplayValues, info.IsReplay)
 			mu.Unlock()
@@ -298,7 +298,7 @@ func TestPluginIsReplayOnSecondRun(t *testing.T) {
 func TestPluginPendingOnInvocationEnd(t *testing.T) {
 	var endStatus PluginInvocationStatus
 	plugin := Plugin{
-		OnInvocationEnd: func(info InvocationEndHookInfo) {
+		OnInvocationEnd: func(_ context.Context, info InvocationEndHookInfo) {
 			endStatus = info.Status
 		},
 	}
@@ -325,7 +325,7 @@ func TestPluginPendingOnInvocationEnd(t *testing.T) {
 func TestPluginConcurrentDispatchRace(t *testing.T) {
 	var count atomic.Int64
 	plugin := Plugin{
-		OnOperationStart: func(_ OperationHookInfo) {
+		OnOperationStart: func(_ context.Context, _ OperationHookInfo) {
 			count.Add(1)
 		},
 	}
@@ -340,7 +340,7 @@ func TestPluginConcurrentDispatchRace(t *testing.T) {
 			defer wg.Done()
 			dispatchNotification(pd, func(p *Plugin) {
 				if p.OnOperationStart != nil {
-					p.OnOperationStart(OperationHookInfo{})
+					p.OnOperationStart(context.Background(), OperationHookInfo{})
 				}
 			})
 		}()
@@ -356,18 +356,18 @@ func TestPluginConcurrentDispatchRace(t *testing.T) {
 // plugins, with later plugins overriding earlier ones.
 func TestPluginEnrichLogContext(t *testing.T) {
 	p1 := Plugin{
-		EnrichLogContext: func() map[string]string {
-			return map[string]string{"key1": "val1", "shared": "from-p1"}
+		EnrichLogContext: func(_ context.Context) map[string]any {
+			return map[string]any{"key1": "val1", "shared": "from-p1"}
 		},
 	}
 	p2 := Plugin{
-		EnrichLogContext: func() map[string]string {
-			return map[string]string{"key2": "val2", "shared": "from-p2"}
+		EnrichLogContext: func(_ context.Context) map[string]any {
+			return map[string]any{"key2": "val2", "shared": "from-p2"}
 		},
 	}
 
 	pd := newPluginDispatcher([]Plugin{p1, p2})
-	result := enrichLogContext(pd)
+	result := enrichLogContext(context.Background(), pd)
 
 	if result["key1"] != "val1" {
 		t.Fatalf("expected key1=val1, got %q", result["key1"])
@@ -385,18 +385,18 @@ func TestPluginEnrichLogContext(t *testing.T) {
 // is swallowed.
 func TestPluginEnrichLogContextPanicSwallowed(t *testing.T) {
 	p1 := Plugin{
-		EnrichLogContext: func() map[string]string {
+		EnrichLogContext: func(_ context.Context) map[string]any {
 			panic("boom")
 		},
 	}
 	p2 := Plugin{
-		EnrichLogContext: func() map[string]string {
-			return map[string]string{"k": "v"}
+		EnrichLogContext: func(_ context.Context) map[string]any {
+			return map[string]any{"k": "v"}
 		},
 	}
 
 	pd := newPluginDispatcher([]Plugin{p1, p2})
-	result := enrichLogContext(pd)
+	result := enrichLogContext(context.Background(), pd)
 
 	if result["k"] != "v" {
 		t.Fatalf("expected k=v, got %q", result["k"])
@@ -409,7 +409,7 @@ func TestPluginEnrichLogContextPanicSwallowed(t *testing.T) {
 func TestPluginOperationHooksNotFiredForPendingOps(t *testing.T) {
 	var opStartCalled atomic.Bool
 	plugin := Plugin{
-		OnOperationStart: func(_ OperationHookInfo) {
+		OnOperationStart: func(_ context.Context, _ OperationHookInfo) {
 			opStartCalled.Store(true)
 		},
 	}
@@ -443,14 +443,14 @@ func TestPluginOperationHooksNotFiredForPendingOps(t *testing.T) {
 func TestPluginSinglePluginNoGoroutineSpawn(t *testing.T) {
 	var called bool
 	p := Plugin{
-		OnInvocationStart: func(_ InvocationHookInfo) {
+		OnInvocationStart: func(_ context.Context, _ InvocationHookInfo) {
 			called = true
 		},
 	}
 	pd := newPluginDispatcher([]Plugin{p})
 	dispatchNotification(pd, func(p *Plugin) {
 		if p.OnInvocationStart != nil {
-			p.OnInvocationStart(InvocationHookInfo{})
+			p.OnInvocationStart(context.Background(), InvocationHookInfo{})
 		}
 	})
 	if !called {
@@ -470,7 +470,7 @@ func TestPluginWrapChildContextFn(t *testing.T) {
 	}
 
 	plugin := Plugin{
-		WrapChildContextFn: func(_ OperationHookInfo, fn func() (any, error)) (any, error) {
+		WrapChildContextFn: func(_ context.Context, _ OperationHookInfo, fn func() (any, error)) (any, error) {
 			record("wrap-before")
 			r, e := fn()
 			record("wrap-after")
@@ -513,12 +513,12 @@ func TestPluginAttemptHooksFire(t *testing.T) {
 	var mu sync.Mutex
 
 	plugin := Plugin{
-		OnOperationAttemptStart: func(info AttemptHookInfo) {
+		OnOperationAttemptStart: func(_ context.Context, info AttemptHookInfo) {
 			mu.Lock()
 			starts = append(starts, info.Attempt)
 			mu.Unlock()
 		},
-		OnOperationAttemptEnd: func(info AttemptEndHookInfo) {
+		OnOperationAttemptEnd: func(_ context.Context, info AttemptEndHookInfo) {
 			mu.Lock()
 			ends = append(ends, info)
 			mu.Unlock()
@@ -545,6 +545,305 @@ func TestPluginAttemptHooksFire(t *testing.T) {
 	if len(ends) != 1 || ends[0].Outcome != PluginAttemptSucceeded {
 		t.Fatalf("expected attempt end [SUCCEEDED], got %v", ends)
 	}
+}
+
+// --- S1 plugin-layer upgrade tests ---
+
+// TestPluginInvocationStartBeforeOperationChange verifies the dispatch
+// ordering contract: OnInvocationStart fires before OnOperationChange.
+func TestPluginInvocationStartBeforeOperationChange(t *testing.T) {
+	var order []string
+	var mu sync.Mutex
+	record := func(s string) {
+		mu.Lock()
+		order = append(order, s)
+		mu.Unlock()
+	}
+
+	plugin := Plugin{
+		OnInvocationStart: func(_ context.Context, _ InvocationHookInfo) {
+			record("invocation-start")
+		},
+		OnOperationChange: func(_ context.Context, _ OperationChangeHookInfo) {
+			record("operation-change")
+		},
+	}
+
+	handler := Wrap(func(ctx Context, event string) (string, error) {
+		return Step(ctx, "s1", func(StepContext) (string, error) {
+			return "ok", nil
+		})
+	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
+
+	ops := []wireOperation{
+		{Id: "exec", Status: "STARTED", Type: "EXECUTION", ExecutionDetails: &wireExecutionDetails{InputPayload: `"hello"`}},
+		{Id: hashID("1"), Status: "SUCCEEDED", Type: "STEP", SubType: "Step", Name: "s1", StepDetails: &wireStepDetails{Attempt: 1, Result: `"ok"`}},
+	}
+	payload := makePluginPayloadWithUpdated(t, "arn:test:order", "tok1", ops, []string{hashID("1")})
+	if _, err := handler.Invoke(makePluginContext(), payload); err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(order) != 2 || order[0] != "invocation-start" || order[1] != "operation-change" {
+		t.Fatalf("expected [invocation-start operation-change], got %v", order)
+	}
+}
+
+// TestPluginUpdatedOperationsMapKeyedByID verifies that UpdatedOperations is
+// delivered as a map keyed by operation ID, on both OnInvocationStart and
+// OnOperationChange, with the new per-operation fields populated.
+func TestPluginUpdatedOperationsMapKeyedByID(t *testing.T) {
+	var startInfo InvocationHookInfo
+	var changeInfo OperationChangeHookInfo
+	var mu sync.Mutex
+
+	plugin := Plugin{
+		OnInvocationStart: func(_ context.Context, info InvocationHookInfo) {
+			mu.Lock()
+			startInfo = info
+			mu.Unlock()
+		},
+		OnOperationChange: func(_ context.Context, info OperationChangeHookInfo) {
+			mu.Lock()
+			changeInfo = info
+			mu.Unlock()
+		},
+	}
+
+	handler := Wrap(func(ctx Context, event string) (string, error) {
+		return Step(ctx, "s1", func(StepContext) (string, error) {
+			return "ok", nil
+		})
+	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
+
+	stepID := hashID("1")
+	ops := []wireOperation{
+		{Id: "exec", Status: "STARTED", Type: "EXECUTION", ExecutionDetails: &wireExecutionDetails{InputPayload: `"hello"`}},
+		{
+			Id: stepID, Status: "SUCCEEDED", Type: "STEP", SubType: "Step", Name: "s1",
+			StartTimestamp: "2026-07-24T00:00:01Z",
+			EndTimestamp:   "2026-07-24T00:00:02Z",
+			StepDetails:    &wireStepDetails{Attempt: 1, Result: `"ok"`},
+		},
+	}
+	payload := makePluginPayloadWithUpdated(t, "arn:test:map", "tok1", ops, []string{stepID})
+	if _, err := handler.Invoke(makePluginContext(), payload); err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	for name, updated := range map[string]map[string]OperationHookInfo{
+		"OnInvocationStart": startInfo.UpdatedOperations,
+		"OnOperationChange": changeInfo.UpdatedOperations,
+	} {
+		op, ok := updated[stepID]
+		if !ok {
+			t.Fatalf("%s: expected UpdatedOperations keyed by %q, got %v", name, stepID, updated)
+		}
+		if op.Name != "s1" || op.Status != PluginOperationSucceeded || !op.IsReplay {
+			t.Fatalf("%s: unexpected operation info: %+v", name, op)
+		}
+		if op.StartTimestamp.IsZero() || op.EndTimestamp.IsZero() {
+			t.Fatalf("%s: expected wire timestamps populated, got %+v", name, op)
+		}
+		if op.Result != `"ok"` {
+			t.Fatalf("%s: expected Result %q, got %q", name, `"ok"`, op.Result)
+		}
+	}
+}
+
+// TestPluginInvocationInfoFieldsPopulated verifies ExecutionInput,
+// ExecutionStartTimestamp, ExecutionResult, and ExecutionError carry real
+// values on the invocation-level hooks.
+func TestPluginInvocationInfoFieldsPopulated(t *testing.T) {
+	var startInfo InvocationHookInfo
+	var endInfo InvocationEndHookInfo
+	var mu sync.Mutex
+
+	plugin := Plugin{
+		OnInvocationStart: func(_ context.Context, info InvocationHookInfo) {
+			mu.Lock()
+			startInfo = info
+			mu.Unlock()
+		},
+		OnInvocationEnd: func(_ context.Context, info InvocationEndHookInfo) {
+			mu.Lock()
+			endInfo = info
+			mu.Unlock()
+		},
+	}
+
+	handler := Wrap(func(ctx Context, event string) (string, error) {
+		return "result-" + event, nil
+	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
+
+	ops := []wireOperation{
+		{
+			Id: "exec", Status: "STARTED", Type: "EXECUTION",
+			StartTimestamp:   "2026-07-24T00:00:00Z",
+			ExecutionDetails: &wireExecutionDetails{InputPayload: `"hello"`},
+		},
+	}
+	payload := makePluginPayload(t, "arn:test:fields", "tok1", ops)
+	if _, err := handler.Invoke(makePluginContext(), payload); err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if got, ok := startInfo.ExecutionInput.(string); !ok || got != "hello" {
+		t.Fatalf("expected ExecutionInput \"hello\", got %#v", startInfo.ExecutionInput)
+	}
+	if startInfo.ExecutionStartTimestamp.IsZero() {
+		t.Fatal("expected ExecutionStartTimestamp populated from wire payload")
+	}
+	if endInfo.Status != PluginInvocationSucceeded {
+		t.Fatalf("expected SUCCEEDED, got %q", endInfo.Status)
+	}
+	if endInfo.ExecutionResult == nil {
+		t.Fatal("expected ExecutionResult populated on success")
+	}
+	if endInfo.ExecutionError != nil {
+		t.Fatalf("expected nil ExecutionError on success, got %v", endInfo.ExecutionError)
+	}
+}
+
+// TestPluginInvocationEndErrorPopulated verifies ExecutionError carries the
+// handler error on failed invocations.
+func TestPluginInvocationEndErrorPopulated(t *testing.T) {
+	var endInfo InvocationEndHookInfo
+	var mu sync.Mutex
+
+	plugin := Plugin{
+		OnInvocationEnd: func(_ context.Context, info InvocationEndHookInfo) {
+			mu.Lock()
+			endInfo = info
+			mu.Unlock()
+		},
+	}
+
+	handlerErr := errors.New("handler failed")
+	handler := Wrap(func(ctx Context, event string) (string, error) {
+		return "", handlerErr
+	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
+
+	payload := makePluginPayload(t, "arn:test:fail", "tok1", nil)
+	if _, err := handler.Invoke(makePluginContext(), payload); err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if endInfo.Status != PluginInvocationFailed {
+		t.Fatalf("expected FAILED, got %q", endInfo.Status)
+	}
+	if endInfo.ExecutionError == nil {
+		t.Fatal("expected ExecutionError populated on failure")
+	}
+	if endInfo.ExecutionResult != nil {
+		t.Fatalf("expected nil ExecutionResult on failure, got %v", endInfo.ExecutionResult)
+	}
+}
+
+// TestPluginContextThreadedToHooks verifies the context.Context passed to
+// Invoke is visible in notification hooks (value threading).
+func TestPluginContextThreadedToHooks(t *testing.T) {
+	type ctxKey struct{}
+	var seen atomic.Bool
+
+	plugin := Plugin{
+		OnInvocationStart: func(ctx context.Context, _ InvocationHookInfo) {
+			if v, ok := ctx.Value(ctxKey{}).(string); ok && v == "threaded" {
+				seen.Store(true)
+			}
+		},
+	}
+
+	handler := Wrap(func(ctx Context, event string) (string, error) {
+		return "ok", nil
+	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
+
+	ctx := context.WithValue(context.Background(), ctxKey{}, "threaded")
+	payload := makePluginPayload(t, "arn:test:ctx", "tok1", nil)
+	if _, err := handler.Invoke(ctx, payload); err != nil {
+		t.Fatal(err)
+	}
+
+	if !seen.Load() {
+		t.Fatal("expected invocation ctx value visible in OnInvocationStart")
+	}
+}
+
+// TestPluginOperationHookParentIDAndTimestamps verifies live operation hooks
+// carry ParentID (empty at root) and a non-zero StartTimestamp.
+func TestPluginOperationHookParentIDAndTimestamps(t *testing.T) {
+	var infos []OperationHookInfo
+	var mu sync.Mutex
+
+	plugin := Plugin{
+		OnOperationStart: func(_ context.Context, info OperationHookInfo) {
+			mu.Lock()
+			infos = append(infos, info)
+			mu.Unlock()
+		},
+	}
+
+	handler := Wrap(func(ctx Context, event string) (string, error) {
+		return Step(ctx, "root-step", func(StepContext) (string, error) {
+			return "ok", nil
+		})
+	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
+
+	payload := makePluginPayload(t, "arn:test:parent", "tok1", nil)
+	if _, err := handler.Invoke(makePluginContext(), payload); err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(infos) != 1 {
+		t.Fatalf("expected 1 OnOperationStart, got %d", len(infos))
+	}
+	if infos[0].ParentID != "" {
+		t.Fatalf("expected empty ParentID for root-level step, got %q", infos[0].ParentID)
+	}
+	if infos[0].StartTimestamp.IsZero() {
+		t.Fatal("expected non-zero StartTimestamp on live OnOperationStart")
+	}
+}
+
+// TestPluginEnrichLogContextAnyValues verifies map[string]any values of
+// mixed types survive the merge.
+func TestPluginEnrichLogContextAnyValues(t *testing.T) {
+	p := Plugin{
+		EnrichLogContext: func(_ context.Context) map[string]any {
+			return map[string]any{"str": "v", "num": 42, "flag": true}
+		},
+	}
+	pd := newPluginDispatcher([]Plugin{p})
+	result := enrichLogContext(context.Background(), pd)
+
+	if result["str"] != "v" || result["num"] != 42 || result["flag"] != true {
+		t.Fatalf("expected mixed-type values preserved, got %v", result)
+	}
+}
+
+func makePluginPayloadWithUpdated(t *testing.T, arn, token string, ops []wireOperation, updatedIDs []string) []byte {
+	t.Helper()
+	in := invocationInput{
+		DurableExecutionArn:   arn,
+		CheckpointToken:       token,
+		UpdatedOperationIds:   updatedIDs,
+		InitialExecutionState: initialExecutionState{Operations: ops},
+	}
+	b, err := json.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }
 
 // --- Test helpers ---

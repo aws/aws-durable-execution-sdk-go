@@ -3,6 +3,7 @@ package durable
 import (
 	"crypto/md5" //nolint:gosec // identifier encoding, not cryptography
 	"encoding/hex"
+	"time"
 )
 
 // operationStatus mirrors the OperationStatus values of the Lambda durable
@@ -37,10 +38,17 @@ func (s operationStatus) terminal() bool {
 // engine consumes them.
 type operation struct {
 	id       string
+	parentID string
 	status   operationStatus
 	opType   string // wire Type (e.g. "STEP", "BATCH", "CONTEXT")
 	subType  string // wire SubType (e.g. "Step", "WaitForCondition")
 	name     string // caller-supplied operation name
+
+	// startTimestamp and endTimestamp are parsed from the wire payload's
+	// ISO 8601 strings. Zero when absent from the payload.
+	startTimestamp time.Time
+	endTimestamp   time.Time
+
 	step     *stepDetails
 	invoke   *invokeDetails
 	childCtx *contextDetails
@@ -131,6 +139,13 @@ func (s *executionState) get(positionalID string) *operation {
 	return s.operations[hashID(positionalID)]
 }
 
+// getByWireID returns the checkpointed operation for an already-hashed wire
+// operation ID, or nil if unknown. Used for IDs the service supplies in wire
+// form (e.g. UpdatedOperationIds), which must not be hashed again.
+func (s *executionState) getByWireID(wireID string) *operation {
+	return s.operations[wireID]
+}
+
 // hashID converts a positional operation ID to its wire form: the first 16
 // hex characters of its MD5 digest. MD5 is an identifier encoding here, not
 // a security mechanism; 16 hex characters carry 64 bits, so collisions are
@@ -138,4 +153,44 @@ func (s *executionState) get(positionalID string) *operation {
 func hashID(positionalID string) string {
 	sum := md5.Sum([]byte(positionalID))
 	return hex.EncodeToString(sum[:])[:16]
+}
+
+// operationResult returns the serialized result string for a terminal
+// operation, or empty if unavailable. Used to populate OperationHookInfo.Result.
+func (op *operation) operationResult() string {
+	if op == nil {
+		return ""
+	}
+	switch {
+	case op.step != nil:
+		return op.step.result
+	case op.invoke != nil:
+		return op.invoke.result
+	case op.childCtx != nil:
+		return op.childCtx.result
+	case op.callback != nil:
+		return op.callback.result
+	default:
+		return ""
+	}
+}
+
+// operationError returns the error for a failed operation, or nil if not
+// applicable. Used to populate OperationHookInfo.Error.
+func (op *operation) operationError() error {
+	if op == nil {
+		return nil
+	}
+	switch {
+	case op.step != nil && op.step.errType != "":
+		return &replayedError{errType: op.step.errType, message: op.step.errMessage}
+	case op.invoke != nil && op.invoke.errType != "":
+		return &replayedError{errType: op.invoke.errType, message: op.invoke.errMessage}
+	case op.childCtx != nil && op.childCtx.errType != "":
+		return &replayedError{errType: op.childCtx.errType, message: op.childCtx.errMessage}
+	case op.callback != nil && op.callback.errType != "":
+		return &replayedError{errType: op.callback.errType, message: op.callback.errMessage}
+	default:
+		return nil
+	}
 }

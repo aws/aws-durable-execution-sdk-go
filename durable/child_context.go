@@ -3,6 +3,7 @@ package durable
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
@@ -109,13 +110,15 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 	child := ec.child(id, ec.owner, mode)
 
 	opInfo := OperationHookInfo{
-		ExecutionArn: ec.executionArn,
-		ID:           id,
-		Name:         name,
-		Type:         string(types.OperationTypeContext),
-		SubType:      operationSubTypeRunInChildContext,
-		Status:       PluginOperationStarted,
-		IsReplay:     ec.mode == modeReplay || ec.mode == modeReplaySucceededContext,
+		ExecutionArn:   ec.executionArn,
+		ID:             id,
+		Name:           name,
+		Type:           string(types.OperationTypeContext),
+		SubType:        operationSubTypeRunInChildContext,
+		Status:         PluginOperationStarted,
+		IsReplay:       ec.mode == modeReplay || ec.mode == modeReplaySucceededContext,
+		ParentID:       ec.parentWireID(),
+		StartTimestamp: time.Now(),
 	}
 
 	// WrapChildContextFn wraps the child body execution.
@@ -125,7 +128,7 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 				return nil
 			}
 			return func(innerFn func() (any, error)) (any, error) {
-				return p.WrapChildContextFn(opInfo, innerFn)
+				return p.WrapChildContextFn(ec, opInfo, innerFn)
 			}
 		},
 		func() (any, error) {

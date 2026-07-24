@@ -1,6 +1,10 @@
 package durable
 
-import "sync"
+import (
+	"context"
+	"sync"
+	"time"
+)
 
 // Plugin configures an EXPERIMENTAL instrumentation plugin that observes
 // durable execution lifecycle events. Plugins implement only the hooks they
@@ -19,77 +23,77 @@ type Plugin struct {
 	//
 	// EXPERIMENTAL: this field is experimental and may be changed or
 	// removed in future releases.
-	OnInvocationStart func(InvocationHookInfo)
+	OnInvocationStart func(ctx context.Context, info InvocationHookInfo)
 
 	// OnInvocationEnd is called once when the invocation ends, including
 	// with status PENDING on suspension.
 	//
 	// EXPERIMENTAL: this field is experimental and may be changed or
 	// removed in future releases.
-	OnInvocationEnd func(InvocationEndHookInfo)
+	OnInvocationEnd func(ctx context.Context, info InvocationEndHookInfo)
 
 	// OnOperationStart is called when a durable operation begins
 	// execution. Fires on replayed operations with IsReplay=true.
 	//
 	// EXPERIMENTAL: this field is experimental and may be changed or
 	// removed in future releases.
-	OnOperationStart func(OperationHookInfo)
+	OnOperationStart func(ctx context.Context, info OperationHookInfo)
 
 	// OnOperationEnd is called when a durable operation completes. Fires
 	// on replayed operations with IsReplay=true.
 	//
 	// EXPERIMENTAL: this field is experimental and may be changed or
 	// removed in future releases.
-	OnOperationEnd func(OperationHookInfo)
+	OnOperationEnd func(ctx context.Context, info OperationHookInfo)
 
 	// OnOperationAttemptStart is called before each attempt of a
 	// retryable operation (Step, WaitForCondition).
 	//
 	// EXPERIMENTAL: this field is experimental and may be changed or
 	// removed in future releases.
-	OnOperationAttemptStart func(AttemptHookInfo)
+	OnOperationAttemptStart func(ctx context.Context, info AttemptHookInfo)
 
 	// OnOperationAttemptEnd is called after each attempt of a retryable
 	// operation completes.
 	//
 	// EXPERIMENTAL: this field is experimental and may be changed or
 	// removed in future releases.
-	OnOperationAttemptEnd func(AttemptEndHookInfo)
+	OnOperationAttemptEnd func(ctx context.Context, info AttemptEndHookInfo)
 
 	// OnOperationChange is called at invocation start for operations
 	// whose status changed externally between invocations.
 	//
 	// EXPERIMENTAL: this field is experimental and may be changed or
 	// removed in future releases.
-	OnOperationChange func(OperationChangeHookInfo)
+	OnOperationChange func(ctx context.Context, info OperationChangeHookInfo)
 
 	// WrapInvocation wraps the user handler invocation. The outer plugin
 	// (index 0) wraps first. fn must be called exactly once.
 	//
 	// EXPERIMENTAL: this field is experimental and may be changed or
 	// removed in future releases.
-	WrapInvocation func(InvocationHookInfo, func() (any, error)) (any, error)
+	WrapInvocation func(ctx context.Context, info InvocationHookInfo, fn func() (any, error)) (any, error)
 
 	// WrapOperationAttemptFn wraps the execution of an operation attempt
 	// body (step fn, condition check). fn must be called exactly once.
 	//
 	// EXPERIMENTAL: this field is experimental and may be changed or
 	// removed in future releases.
-	WrapOperationAttemptFn func(AttemptHookInfo, func() (any, error)) (any, error)
+	WrapOperationAttemptFn func(ctx context.Context, info AttemptHookInfo, fn func() (any, error)) (any, error)
 
 	// WrapChildContextFn wraps the execution of a child-context function.
 	// fn must be called exactly once.
 	//
 	// EXPERIMENTAL: this field is experimental and may be changed or
 	// removed in future releases.
-	WrapChildContextFn func(OperationHookInfo, func() (any, error)) (any, error)
+	WrapChildContextFn func(ctx context.Context, info OperationHookInfo, fn func() (any, error)) (any, error)
 
 	// EnrichLogContext returns additional key-value pairs to merge into
 	// every log line emitted through the durable context logger.
 	//
 	// EXPERIMENTAL: this field is experimental and may be changed or
 	// removed in future releases.
-	EnrichLogContext func() map[string]string
+	EnrichLogContext func(ctx context.Context) map[string]any
 }
 
 // InvocationHookInfo carries context for invocation-level hooks.
@@ -99,6 +103,30 @@ type Plugin struct {
 type InvocationHookInfo struct {
 	ExecutionArn      string
 	IsFirstInvocation bool
+
+	// ExecutionInput is the deserialized customer event for the execution.
+	// It is the raw unmarshaled value (typically a map or struct).
+	//
+	// EXPERIMENTAL: this field is experimental and may be changed or
+	// removed in future releases.
+	ExecutionInput any
+
+	// ExecutionStartTimestamp is the time the execution was first created,
+	// sourced from the execution operation's StartTimestamp in the wire
+	// payload. Zero when unavailable (e.g. payload lacks timestamp data).
+	//
+	// EXPERIMENTAL: this field is experimental and may be changed or
+	// removed in future releases.
+	ExecutionStartTimestamp time.Time
+
+	// UpdatedOperations contains operations whose status changed
+	// externally between invocations, keyed by operation ID. This
+	// embeds the same data as OnOperationChange to allow plugins that
+	// need both to avoid state ordering dependencies.
+	//
+	// EXPERIMENTAL: this field is experimental and may be changed or
+	// removed in future releases.
+	UpdatedOperations map[string]OperationHookInfo
 }
 
 // InvocationEndHookInfo carries context for the OnInvocationEnd hook.
@@ -108,6 +136,20 @@ type InvocationHookInfo struct {
 type InvocationEndHookInfo struct {
 	ExecutionArn string
 	Status       PluginInvocationStatus
+
+	// ExecutionResult is the handler's return value when the invocation
+	// succeeded. Nil on failure or suspension.
+	//
+	// EXPERIMENTAL: this field is experimental and may be changed or
+	// removed in future releases.
+	ExecutionResult any
+
+	// ExecutionError is the error that caused invocation failure. Nil on
+	// success or suspension.
+	//
+	// EXPERIMENTAL: this field is experimental and may be changed or
+	// removed in future releases.
+	ExecutionError error
 }
 
 // PluginInvocationStatus is the invocation outcome visible to plugins.
@@ -139,6 +181,42 @@ type OperationHookInfo struct {
 	Status       PluginOperationStatus
 	Attempt      int
 	IsReplay     bool
+
+	// ParentID is the ID of the parent context operation, if any. Empty
+	// for top-level (root context) operations. Used by insight to filter
+	// and build the operation tree.
+	//
+	// EXPERIMENTAL: this field is experimental and may be changed or
+	// removed in future releases.
+	ParentID string
+
+	// StartTimestamp is when this operation began. Set on OnOperationStart
+	// and OnOperationEnd; zero on hooks where not yet known.
+	//
+	// EXPERIMENTAL: this field is experimental and may be changed or
+	// removed in future releases.
+	StartTimestamp time.Time
+
+	// EndTimestamp is when this operation reached a terminal state. Set on
+	// OnOperationEnd; zero on OnOperationStart.
+	//
+	// EXPERIMENTAL: this field is experimental and may be changed or
+	// removed in future releases.
+	EndTimestamp time.Time
+
+	// Result is the operation's serialized result (raw wire form), if any.
+	// Set on OnOperationEnd for succeeded operations; empty otherwise.
+	//
+	// EXPERIMENTAL: this field is experimental and may be changed or
+	// removed in future releases.
+	Result string
+
+	// Error is the error the operation failed with, if any. Set on
+	// OnOperationEnd for failed operations; nil otherwise.
+	//
+	// EXPERIMENTAL: this field is experimental and may be changed or
+	// removed in future releases.
+	Error error
 }
 
 // PluginOperationStatus is an operation's lifecycle status visible to
@@ -204,7 +282,7 @@ const (
 // future releases.
 type OperationChangeHookInfo struct {
 	ExecutionArn      string
-	UpdatedOperations []OperationHookInfo
+	UpdatedOperations map[string]OperationHookInfo
 }
 
 // WithPlugins registers instrumentation plugins with the handler.
@@ -310,22 +388,22 @@ func invokeWrapSafely(wrapFn func(func() (any, error)) (any, error), innerFn fun
 
 // enrichLogContext merges all plugins' log context enrichments. Returns nil
 // when d is nil or no plugins provide context.
-func enrichLogContext(d *pluginDispatcher) map[string]string {
+func enrichLogContext(ctx context.Context, d *pluginDispatcher) map[string]any {
 	if d == nil {
 		return nil
 	}
-	var merged map[string]string
+	var merged map[string]any
 	for i := range d.plugins {
 		fn := d.plugins[i].EnrichLogContext
 		if fn == nil {
 			continue
 		}
-		m := safeEnrichLogContext(fn)
+		m := safeEnrichLogContext(ctx, fn)
 		if m == nil {
 			continue
 		}
 		if merged == nil {
-			merged = make(map[string]string, len(m))
+			merged = make(map[string]any, len(m))
 		}
 		for k, v := range m {
 			merged[k] = v
@@ -335,9 +413,9 @@ func enrichLogContext(d *pluginDispatcher) map[string]string {
 }
 
 // safeEnrichLogContext calls fn with panic recovery.
-func safeEnrichLogContext(fn func() map[string]string) (result map[string]string) {
+func safeEnrichLogContext(ctx context.Context, fn func(context.Context) map[string]any) (result map[string]any) {
 	defer func() { _ = recover() }()
-	return fn()
+	return fn(ctx)
 }
 
 // toPluginOperationStatus converts an internal operation status to the

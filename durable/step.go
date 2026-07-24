@@ -154,15 +154,18 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 			// Fire operation hooks for replayed terminal operations.
 			dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
 				if p.OnOperationStart != nil {
-					p.OnOperationStart(OperationHookInfo{
-						ExecutionArn: ec.executionArn,
-						ID:           id,
-						Name:         name,
-						Type:         string(types.OperationTypeStep),
-						SubType:      operationSubTypeStep,
-						Status:       PluginOperationSucceeded,
-						Attempt:      op.step.attempt,
-						IsReplay:     true,
+					p.OnOperationStart(ec, OperationHookInfo{
+						ExecutionArn:   ec.executionArn,
+						ID:             id,
+						Name:           name,
+						Type:           string(types.OperationTypeStep),
+						SubType:        operationSubTypeStep,
+						Status:         PluginOperationSucceeded,
+						Attempt:        op.step.attempt,
+						IsReplay:       true,
+						ParentID:       ec.parentWireID(),
+						StartTimestamp: op.startTimestamp,
+						Result:         op.step.result,
 					})
 				}
 			})
@@ -172,15 +175,19 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 			}
 			dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
 				if p.OnOperationEnd != nil {
-					p.OnOperationEnd(OperationHookInfo{
-						ExecutionArn: ec.executionArn,
-						ID:           id,
-						Name:         name,
-						Type:         string(types.OperationTypeStep),
-						SubType:      operationSubTypeStep,
-						Status:       PluginOperationSucceeded,
-						Attempt:      op.step.attempt,
-						IsReplay:     true,
+					p.OnOperationEnd(ec, OperationHookInfo{
+						ExecutionArn:   ec.executionArn,
+						ID:             id,
+						Name:           name,
+						Type:           string(types.OperationTypeStep),
+						SubType:        operationSubTypeStep,
+						Status:         PluginOperationSucceeded,
+						Attempt:        op.step.attempt,
+						IsReplay:       true,
+						ParentID:       ec.parentWireID(),
+						StartTimestamp: op.startTimestamp,
+						EndTimestamp:   op.endTimestamp,
+						Result:         op.step.result,
 					})
 				}
 			})
@@ -192,15 +199,18 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 			}
 			dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
 				if p.OnOperationStart != nil {
-					p.OnOperationStart(OperationHookInfo{
-						ExecutionArn: ec.executionArn,
-						ID:           id,
-						Name:         name,
-						Type:         string(types.OperationTypeStep),
-						SubType:      operationSubTypeStep,
-						Status:       PluginOperationFailed,
-						Attempt:      op.step.attempt,
-						IsReplay:     true,
+					p.OnOperationStart(ec, OperationHookInfo{
+						ExecutionArn:   ec.executionArn,
+						ID:             id,
+						Name:           name,
+						Type:           string(types.OperationTypeStep),
+						SubType:        operationSubTypeStep,
+						Status:         PluginOperationFailed,
+						Attempt:        op.step.attempt,
+						IsReplay:       true,
+						ParentID:       ec.parentWireID(),
+						StartTimestamp: op.startTimestamp,
+						Error:          &replayedError{errType: op.step.errType, message: op.step.errMessage},
 					})
 				}
 			})
@@ -211,15 +221,19 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 			}
 			dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
 				if p.OnOperationEnd != nil {
-					p.OnOperationEnd(OperationHookInfo{
-						ExecutionArn: ec.executionArn,
-						ID:           id,
-						Name:         name,
-						Type:         string(types.OperationTypeStep),
-						SubType:      operationSubTypeStep,
-						Status:       PluginOperationFailed,
-						Attempt:      op.step.attempt,
-						IsReplay:     true,
+					p.OnOperationEnd(ec, OperationHookInfo{
+						ExecutionArn:   ec.executionArn,
+						ID:             id,
+						Name:           name,
+						Type:           string(types.OperationTypeStep),
+						SubType:        operationSubTypeStep,
+						Status:         PluginOperationFailed,
+						Attempt:        op.step.attempt,
+						IsReplay:       true,
+						ParentID:       ec.parentWireID(),
+						StartTimestamp: op.startTimestamp,
+						EndTimestamp:   op.endTimestamp,
+						Error:          stepErr.Err,
 					})
 				}
 			})
@@ -247,17 +261,20 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 	}
 
 	// OnOperationStart for live execution.
+	startTime := time.Now()
 	dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
 		if p.OnOperationStart != nil {
-			p.OnOperationStart(OperationHookInfo{
-				ExecutionArn: ec.executionArn,
-				ID:           id,
-				Name:         name,
-				Type:         string(types.OperationTypeStep),
-				SubType:      operationSubTypeStep,
-				Status:       PluginOperationStarted,
-				Attempt:      attempt,
-				IsReplay:     isReplay,
+			p.OnOperationStart(ec, OperationHookInfo{
+				ExecutionArn:   ec.executionArn,
+				ID:             id,
+				Name:           name,
+				Type:           string(types.OperationTypeStep),
+				SubType:        operationSubTypeStep,
+				Status:         PluginOperationStarted,
+				Attempt:        attempt,
+				IsReplay:       isReplay,
+				ParentID:       ec.parentWireID(),
+				StartTimestamp: startTime,
 			})
 		}
 	})
@@ -268,30 +285,37 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 	if err == nil {
 		dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
 			if p.OnOperationEnd != nil {
-				p.OnOperationEnd(OperationHookInfo{
-					ExecutionArn: ec.executionArn,
-					ID:           id,
-					Name:         name,
-					Type:         string(types.OperationTypeStep),
-					SubType:      operationSubTypeStep,
-					Status:       PluginOperationSucceeded,
-					Attempt:      attempt,
-					IsReplay:     isReplay,
+				p.OnOperationEnd(ec, OperationHookInfo{
+					ExecutionArn:   ec.executionArn,
+					ID:             id,
+					Name:           name,
+					Type:           string(types.OperationTypeStep),
+					SubType:        operationSubTypeStep,
+					Status:         PluginOperationSucceeded,
+					Attempt:        attempt,
+					IsReplay:       isReplay,
+					ParentID:       ec.parentWireID(),
+					StartTimestamp: startTime,
+					EndTimestamp:   time.Now(),
 				})
 			}
 		})
 	} else if !errors.Is(err, errSuspendExecution) {
 		dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
 			if p.OnOperationEnd != nil {
-				p.OnOperationEnd(OperationHookInfo{
-					ExecutionArn: ec.executionArn,
-					ID:           id,
-					Name:         name,
-					Type:         string(types.OperationTypeStep),
-					SubType:      operationSubTypeStep,
-					Status:       PluginOperationFailed,
-					Attempt:      attempt,
-					IsReplay:     isReplay,
+				p.OnOperationEnd(ec, OperationHookInfo{
+					ExecutionArn:   ec.executionArn,
+					ID:             id,
+					Name:           name,
+					Type:           string(types.OperationTypeStep),
+					SubType:        operationSubTypeStep,
+					Status:         PluginOperationFailed,
+					Attempt:        attempt,
+					IsReplay:       isReplay,
+					ParentID:       ec.parentWireID(),
+					StartTimestamp: startTime,
+					EndTimestamp:   time.Now(),
+					Error:          err,
 				})
 			}
 		})
@@ -315,14 +339,16 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 
 	attemptInfo := AttemptHookInfo{
 		OperationHookInfo: OperationHookInfo{
-			ExecutionArn: ec.executionArn,
-			ID:           id,
-			Name:         name,
-			Type:         string(types.OperationTypeStep),
-			SubType:      operationSubTypeStep,
-			Status:       PluginOperationStarted,
-			Attempt:      attempt,
-			IsReplay:     ec.mode == modeReplay || ec.mode == modeReplaySucceededContext,
+			ExecutionArn:   ec.executionArn,
+			ID:             id,
+			Name:           name,
+			Type:           string(types.OperationTypeStep),
+			SubType:        operationSubTypeStep,
+			Status:         PluginOperationStarted,
+			Attempt:        attempt,
+			IsReplay:       ec.mode == modeReplay || ec.mode == modeReplaySucceededContext,
+			ParentID:       ec.parentWireID(),
+			StartTimestamp: time.Now(),
 		},
 		Attempt: attempt,
 	}
@@ -330,7 +356,7 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 	// OnOperationAttemptStart
 	dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
 		if p.OnOperationAttemptStart != nil {
-			p.OnOperationAttemptStart(attemptInfo)
+			p.OnOperationAttemptStart(ec, attemptInfo)
 		}
 	})
 
@@ -344,7 +370,7 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 				return nil
 			}
 			return func(innerFn func() (any, error)) (any, error) {
-				return p.WrapOperationAttemptFn(attemptInfo, innerFn)
+				return p.WrapOperationAttemptFn(ec, attemptInfo, innerFn)
 			}
 		},
 		func() (any, error) {
@@ -362,7 +388,7 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 		// OnOperationAttemptEnd with FAILED outcome.
 		dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
 			if p.OnOperationAttemptEnd != nil {
-				p.OnOperationAttemptEnd(AttemptEndHookInfo{
+				p.OnOperationAttemptEnd(ec, AttemptEndHookInfo{
 					OperationHookInfo: attemptInfo.OperationHookInfo,
 					Attempt:           attempt,
 					Outcome:           PluginAttemptFailed,
@@ -377,7 +403,7 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 	if err != nil {
 		dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
 			if p.OnOperationAttemptEnd != nil {
-				p.OnOperationAttemptEnd(AttemptEndHookInfo{
+				p.OnOperationAttemptEnd(ec, AttemptEndHookInfo{
 					OperationHookInfo: attemptInfo.OperationHookInfo,
 					Attempt:           attempt,
 					Outcome:           PluginAttemptFailed,
@@ -397,7 +423,7 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 	// OnOperationAttemptEnd with SUCCEEDED outcome.
 	dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
 		if p.OnOperationAttemptEnd != nil {
-			p.OnOperationAttemptEnd(AttemptEndHookInfo{
+			p.OnOperationAttemptEnd(ec, AttemptEndHookInfo{
 				OperationHookInfo: attemptInfo.OperationHookInfo,
 				Attempt:           attempt,
 				Outcome:           PluginAttemptSucceeded,
