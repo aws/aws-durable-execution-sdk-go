@@ -623,8 +623,8 @@ func TestPluginUpdatedOperationsMapKeyedByID(t *testing.T) {
 		{Id: "exec", Status: "STARTED", Type: "EXECUTION", ExecutionDetails: &wireExecutionDetails{InputPayload: `"hello"`}},
 		{
 			Id: stepID, Status: "SUCCEEDED", Type: "STEP", SubType: "Step", Name: "s1",
-			StartTimestamp: "2026-07-24T00:00:01Z",
-			EndTimestamp:   "2026-07-24T00:00:02Z",
+			StartTimestamp: flexTimestamp{Time: time.Date(2026, 7, 24, 0, 0, 1, 0, time.UTC), Valid: true},
+			EndTimestamp:   flexTimestamp{Time: time.Date(2026, 7, 24, 0, 0, 2, 0, time.UTC), Valid: true},
 			StepDetails:    &wireStepDetails{Attempt: 1, Result: `"ok"`},
 		},
 	}
@@ -683,7 +683,7 @@ func TestPluginInvocationInfoFieldsPopulated(t *testing.T) {
 	ops := []wireOperation{
 		{
 			Id: "exec", Status: "STARTED", Type: "EXECUTION",
-			StartTimestamp:   "2026-07-24T00:00:00Z",
+			StartTimestamp:   flexTimestamp{Time: time.Date(2026, 7, 24, 0, 0, 0, 0, time.UTC), Valid: true},
 			ExecutionDetails: &wireExecutionDetails{InputPayload: `"hello"`},
 		},
 	}

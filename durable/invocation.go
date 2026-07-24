@@ -1,6 +1,48 @@
 package durable
 
-import "time"
+import (
+	"encoding/json"
+	"strconv"
+	"time"
+)
+
+// flexTimestamp handles timestamps from the backend that may arrive as either
+// an RFC3339 string or a numeric epoch-milliseconds value.
+type flexTimestamp struct {
+	Time  time.Time
+	Valid bool
+}
+
+func (ft flexTimestamp) MarshalJSON() ([]byte, error) {
+	if !ft.Valid {
+		return []byte("null"), nil
+	}
+	return json.Marshal(ft.Time.Format(time.RFC3339Nano))
+}
+
+func (ft *flexTimestamp) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		return nil
+	}
+	// Try as string first (RFC3339).
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil && s != "" {
+		if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+			ft.Time = t
+			ft.Valid = true
+		}
+		return nil
+	}
+	// Try as number (epoch milliseconds).
+	var n json.Number
+	if err := json.Unmarshal(data, &n); err == nil {
+		if ms, err := strconv.ParseInt(n.String(), 10, 64); err == nil {
+			ft.Time = time.UnixMilli(ms)
+			ft.Valid = true
+		}
+	}
+	return nil
+}
 
 // invocationInput is the payload the durable execution service delivers to
 // a durable function invocation. It carries the execution identity, the
@@ -38,8 +80,8 @@ type wireOperation struct {
 	Type                 string                    `json:"Type,omitempty"`
 	SubType              string                    `json:"SubType,omitempty"`
 	Name                 string                    `json:"Name,omitempty"`
-	StartTimestamp       string                    `json:"StartTimestamp,omitempty"`
-	EndTimestamp         string                    `json:"EndTimestamp,omitempty"`
+	StartTimestamp       flexTimestamp             `json:"StartTimestamp,omitempty"`
+	EndTimestamp         flexTimestamp             `json:"EndTimestamp,omitempty"`
 	ExecutionDetails     *wireExecutionDetails     `json:"ExecutionDetails,omitempty"`
 	StepDetails          *wireStepDetails          `json:"StepDetails,omitempty"`
 	ChainedInvokeDetails *wireChainedInvokeDetails `json:"ChainedInvokeDetails,omitempty"`
@@ -107,15 +149,11 @@ func (in *initialExecutionState) toOperations() []*operation {
 			subType:  w.SubType,
 			name:     w.Name,
 		}
-		if w.StartTimestamp != "" {
-			if t, err := time.Parse(time.RFC3339Nano, w.StartTimestamp); err == nil {
-				op.startTimestamp = t
-			}
+		if w.StartTimestamp.Valid {
+			op.startTimestamp = w.StartTimestamp.Time
 		}
-		if w.EndTimestamp != "" {
-			if t, err := time.Parse(time.RFC3339Nano, w.EndTimestamp); err == nil {
-				op.endTimestamp = t
-			}
+		if w.EndTimestamp.Valid {
+			op.endTimestamp = w.EndTimestamp.Time
 		}
 		if sd := w.StepDetails; sd != nil {
 			op.step = &stepDetails{attempt: sd.Attempt, result: sd.Result}
