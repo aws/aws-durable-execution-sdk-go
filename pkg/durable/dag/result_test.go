@@ -4,6 +4,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/operations"
 )
 
 func mkExec(name string, status TaskStatus, result any, err error) TaskExecution {
@@ -76,11 +78,11 @@ func TestDagResult_JSONRoundTrip_WithErrorAndLazyTyping(t *testing.T) {
 		{Name: "c", Status: StatusSkipped, SkipReason: SkipRunIf, kind: kindPlain},
 	}, CompletedWithFailures)
 
-	data, err := SerializeDagResult(r)
+	data, err := serializeDagResult(r)
 	if err != nil {
 		t.Fatalf("serialize: %v", err)
 	}
-	back, err := RestoreDagResult(data)
+	back, err := restoreDagResult(data)
 	if err != nil {
 		t.Fatalf("restore: %v", err)
 	}
@@ -112,11 +114,11 @@ func TestDagResult_NestedDagRecursion(t *testing.T) {
 		{Name: "sub", Status: StatusSucceeded, result: inner, kind: kindDag, CompletedAt: time.Now()},
 	}, AllCompleted)
 
-	data, err := SerializeDagResult(outer)
+	data, err := serializeDagResult(outer)
 	if err != nil {
 		t.Fatalf("serialize: %v", err)
 	}
-	back, err := RestoreDagResult(data)
+	back, err := restoreDagResult(data)
 	if err != nil {
 		t.Fatalf("restore: %v", err)
 	}
@@ -129,5 +131,46 @@ func TestDagResult_NestedDagRecursion(t *testing.T) {
 	leaf, err := Result(sub, hleaf)
 	if err != nil || leaf != 99 {
 		t.Fatalf("nested leaf value: v=%v err=%v", leaf, err)
+	}
+}
+
+// TestDagResult_BatchKindRoundTrip guards fix #4: a kindBatch task result
+// (a Map/Parallel BatchResult stored as json.RawMessage) survives the
+// serialize/restore cycle and is lazily typed via Result[BatchResult[T]].
+// Before BatchResult.UnmarshalJSON existed, the restore path failed because
+// json.Unmarshal could not decode ItemResult.Err (an error interface).
+func TestDagResult_BatchKindRoundTrip(t *testing.T) {
+	br := BatchResult[int]{
+		Items: []operations.ItemResult[int]{
+			{Value: 10},
+			{Value: 20, Err: errors.New("boom")},
+		},
+		CompletionReason: operations.CompletionReasonAllCompleted,
+	}
+	r := newDagResult([]TaskExecution{
+		{Name: "batchtask", Status: StatusSucceeded, result: br, kind: kindBatch, CompletedAt: time.Now()},
+	}, AllCompleted)
+
+	data, err := serializeDagResult(r)
+	if err != nil {
+		t.Fatalf("serialize: %v", err)
+	}
+	back, err := restoreDagResult(data)
+	if err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	h := TaskHandle[BatchResult[int]]{name: "batchtask", kind: kindBatch}
+	got, err := Result(back, h)
+	if err != nil {
+		t.Fatalf("Result[BatchResult[int]]: %v", err)
+	}
+	if len(got.Items) != 2 || got.Items[0].Value != 10 || got.Items[1].Value != 20 {
+		t.Fatalf("batch item values lost: %+v", got.Items)
+	}
+	if got.Items[1].Err == nil {
+		t.Fatalf("batch item error string lost on round-trip")
+	}
+	if got.CompletionReason != operations.CompletionReasonAllCompleted {
+		t.Fatalf("batch completion reason lost: %v", got.CompletionReason)
 	}
 }

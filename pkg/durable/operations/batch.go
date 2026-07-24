@@ -1622,6 +1622,32 @@ func (r BatchResult[T]) MarshalJSON() ([]byte, error) {
 	return json.Marshal(wire)
 }
 
+// UnmarshalJSON is the symmetric inverse of MarshalJSON: it decodes the
+// batchResultWire object form back into a BatchResult[T], restoring each
+// item's flattened error string as a generic error (the concrete error
+// type is not preserved across the wire, exactly as deserializeBatchResult
+// and every other operation's error-checkpointing already behave). Without
+// this method a plain json.Unmarshal into BatchResult[T] fails, because
+// ItemResult.Err is a non-nil-friendly error interface - which is exactly
+// what broke the DAG's kindBatch lazy-typing restore path (a Map/Parallel
+// task result stored as json.RawMessage and later typed via Result[T]).
+func (r *BatchResult[T]) UnmarshalJSON(data []byte) error {
+	var wire batchResultWire[T]
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	items := make([]ItemResult[T], len(wire.Items))
+	for i, w := range wire.Items {
+		items[i] = ItemResult[T]{Value: w.Value}
+		if w.Err != "" {
+			items[i].Err = fmt.Errorf("%s", w.Err)
+		}
+	}
+	r.Items = items
+	r.CompletionReason = wire.CompletionReason
+	return nil
+}
+
 // int32Counter is a tiny atomic-ish counter guarded by a mutex, used to
 // track failures-so-far across concurrently running goroutines for the
 // completion-threshold check. Not using sync/atomic directly to keep the

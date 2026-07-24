@@ -99,7 +99,7 @@ func serializeTaskExecution(te TaskExecution) (serializedTaskExecution, error) {
 		if te.kind == kindDag {
 			// Nested DAG: recurse into its own serialized form.
 			if sub, ok := te.result.(*DagResult); ok {
-				raw, err = SerializeDagResult(sub)
+				raw, err = serializeDagResult(sub)
 			} else if len(te.rawResult) > 0 {
 				raw = te.rawResult
 			} else {
@@ -118,12 +118,12 @@ func serializeTaskExecution(te TaskExecution) (serializedTaskExecution, error) {
 	return out, nil
 }
 
-// SerializeDagResult encodes a DagResult to JSON (used for aggregate
-// checkpoint persistence / large-payload offload).
-//
-// Experimental: This API is experimental and may be changed or removed in
-// future releases.
-func SerializeDagResult(r *DagResult) ([]byte, error) {
+// serializeDagResult encodes a DagResult to JSON. It is an internal helper
+// (not part of the replay path: the DAG re-executes register + reads
+// per-task checkpoints on replay - see DAG_SPEC_GO.md §7/§14 - so this is
+// NOT wired to the aggregate-checkpoint/large-payload offload yet, hence
+// unexported until it is).
+func serializeDagResult(r *DagResult) ([]byte, error) {
 	sr := serializedDagResult{CompletionReason: r.reason, Summary: r.summary}
 	for _, te := range r.tasks {
 		ste, err := serializeTaskExecution(te)
@@ -135,13 +135,11 @@ func SerializeDagResult(r *DagResult) ([]byte, error) {
 	return json.Marshal(sr)
 }
 
-// RestoreDagResult decodes a DagResult from JSON, recursively restoring
+// restoreDagResult decodes a DagResult from JSON, recursively restoring
 // nested DAG results. Plain/batch results are kept as raw JSON and typed
-// lazily by Result[T].
-//
-// Experimental: This API is experimental and may be changed or removed in
-// future releases.
-func RestoreDagResult(data []byte) (*DagResult, error) {
+// lazily by Result[T] (batch results rely on BatchResult.UnmarshalJSON).
+// Internal helper - see serializeDagResult's doc for why it is unexported.
+func restoreDagResult(data []byte) (*DagResult, error) {
 	var sr serializedDagResult
 	if err := json.Unmarshal(data, &sr); err != nil {
 		return nil, err
@@ -165,7 +163,7 @@ func RestoreDagResult(data []byte) (*DagResult, error) {
 		}
 		if ste.Status == StatusSucceeded && len(ste.Result) > 0 {
 			if ste.Kind == kindDag {
-				sub, err := RestoreDagResult(ste.Result)
+				sub, err := restoreDagResult(ste.Result)
 				if err != nil {
 					return nil, err
 				}
