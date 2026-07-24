@@ -18,6 +18,15 @@ import (
 type dagRuntime interface {
 	Prefix() string
 	NewNamedChild(entityID, name string) *dcontext.Context
+	// NewMaterializedChild / FinishMaterializedChild materialize the DAG
+	// SCOPE container as a durably-checkpointed CONTEXT operation so that
+	// every task CONTEXT op nested under it (and, transitively, every task
+	// STEP op) has a valid, already-recorded ParentID on the real backend
+	// (see dag_seam.go). A bare NewNamedChild only builds the scope
+	// in-memory, which the real CheckpointDurableExecution API rejects with
+	// "Invalid parent operation id".
+	NewMaterializedChild(entityID, name, subType string) (*dcontext.Context, bool, error)
+	FinishMaterializedChild(entityID, name, subType string, opErr error) error
 	ExecManager() *execmgr.Manager
 }
 
@@ -67,20 +76,55 @@ func Dag(dc DurableContext, name string, register func(d *Context), opts ...Opti
 
 	var hooks schedHooks
 	sctx := context.Background()
+	// scopeID/scopeDone track the DAG's own container CONTEXT op so it can
+	// be finished (CONTEXT/SUCCEED) after the graph drains; empty scopeID
+	// marks the non-runtime path (no scope materialized).
+	var (
+		dctxReal      dagRuntime
+		scopeID       string
+		scopeTerminal bool
+	)
 
 	if isReal {
 		// Name-based scope for this DAG's task IDs, folding the DAG name in
 		// so sibling DAGs in the same parent don't collide and nested DAGs
-		// recurse.
-		dagScope := dctx.NewNamedChild(
-			dcontext.HashOperationID(dcontext.TaskEntityID(parentPrefix, name)), name,
-		)
+		// recurse. The scope is MATERIALIZED as a CONTEXT op (not just an
+		// in-memory child) so every task CONTEXT op nested under it has a
+		// valid, already-checkpointed ParentID on the real backend.
+		scopeID = dcontext.HashOperationID(dcontext.TaskEntityID(parentPrefix, name))
+		dagScope, alreadyTerminal, err := dctx.NewMaterializedChild(scopeID, name, dcontext.DagContextSubType)
+		if err != nil {
+			return nil, err
+		}
+		dctxReal = dctx
+		scopeTerminal = alreadyTerminal
 		em := dctx.ExecManager()
 		hooks = schedHooks{
 			runTask: func(def *taskDef, deps Deps) (any, error) {
+				// Materialize this task's OWN container CONTEXT op under the
+				// DAG scope (CONTEXT + inner STEP per task, mirroring a Map
+				// item / RunInChildContext) so the task's STEP/START has a
+				// valid parent. def.run is ALWAYS executed - even when the
+				// container is already terminal on replay - so the task's
+				// inner operation fast-paths and returns its correctly-typed
+				// result for DagResult reconstruction; alreadyTerminal only
+				// gates the terminal CONTEXT checkpoint.
 				taskID := dcontext.HashOperationID(dcontext.TaskEntityID(dagScope.Prefix(), def.name))
-				taskChild := dagScope.NewNamedChild(taskID, def.name)
-				return def.run(taskChild, deps)
+				taskChild, taskTerminal, cerr := dagScope.NewMaterializedChild(taskID, def.name, dcontext.DagContextSubType)
+				if cerr != nil {
+					return nil, cerr
+				}
+				result, runErr := def.run(taskChild, deps)
+				if taskTerminal || operations.IsSuspended(runErr) {
+					// Container already terminal on record, or the body
+					// merely paused: do not (re-)record a terminal CONTEXT
+					// transition (would corrupt replay).
+					return result, runErr
+				}
+				if ferr := dagScope.FinishMaterializedChild(taskID, def.name, dcontext.DagContextSubType, runErr); ferr != nil {
+					return result, ferr
+				}
+				return result, runErr
 			},
 			isSuspend: operations.IsSuspended,
 		}
@@ -107,6 +151,19 @@ func Dag(dc DurableContext, name string, register func(d *Context), opts ...Opti
 	execs, reason, suspended := s.run(sctx)
 	if suspended {
 		return nil, operations.ErrSuspended
+	}
+
+	// The graph drained: finish the DAG's own container CONTEXT op
+	// (CONTEXT/SUCCEED, ReplayChildren) so it is not left dangling in the
+	// STARTED state. Skipped when the scope was already terminal on a prior
+	// invocation (replay of a fully-completed DAG) or on the non-runtime
+	// path (scopeID == ""). The DAG itself never fails at the container
+	// level - individual task failures are reported inside DagResult - so
+	// this is always a SUCCEED.
+	if scopeID != "" && !scopeTerminal {
+		if err := dctxReal.FinishMaterializedChild(scopeID, name, dcontext.DagContextSubType, nil); err != nil {
+			return nil, err
+		}
 	}
 
 	res := newDagResult(execs, reason)
