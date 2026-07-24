@@ -4,8 +4,22 @@ import (
 	"context"
 
 	dcontext "github.com/aws/aws-durable-execution-sdk-go/pkg/durable/context"
+	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/execmgr"
 	"github.com/aws/aws-durable-execution-sdk-go/pkg/durable/operations"
 )
+
+// dagRuntime is the minimal slice of the concrete base-SDK context that the
+// DAG entry needs to derive name-based task IDs (Prefix/NewNamedChild) and
+// coordinate suspension (ExecManager). Asserting against this behavioral
+// interface rather than the concrete *dcontext.Context documents exactly
+// what the DAG depends on and keeps the seam narrow; a context that does
+// not satisfy it (e.g. a pure-logic/test stub) falls back to direct
+// execution with no name-based IDs or suspend coordination.
+type dagRuntime interface {
+	Prefix() string
+	NewNamedChild(entityID, name string) *dcontext.Context
+	ExecManager() *execmgr.Manager
+}
 
 // Dag declares and runs a directed acyclic graph of tasks. The register
 // callback builds the graph by calling the free registration functions
@@ -31,7 +45,7 @@ import (
 func Dag(dc DurableContext, name string, register func(d *Context), opts ...Option) (*DagResult, error) {
 	cfg := buildConfig(opts)
 
-	dctx, isReal := dc.(*dcontext.Context)
+	dctx, isReal := dc.(dagRuntime)
 	parentPrefix := ""
 	if isReal {
 		parentPrefix = dctx.Prefix()

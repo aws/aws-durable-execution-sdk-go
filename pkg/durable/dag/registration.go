@@ -198,6 +198,13 @@ func Parallel[Out any](d *Context, name string, deps []AnyHandle, branches []Bra
 // avoid clashing with the top-level Dag entry function; see DAG_SPEC_GO.md
 // §2.3's nested dag.Dag.) Result type is *DagResult.
 //
+// The same opts slice is applied at BOTH levels: the task-level fields
+// (deps/trigger/runIf/retry etc.) govern how this node participates in the
+// parent DAG, and the DAG-level fields (maxConcurrency/completion/default
+// trigger etc.) govern the nested DAG's own scheduling. Each level ignores
+// options it does not recognize, so forwarding the whole slice is benign;
+// pass only options meaningful to the intended level to avoid surprise.
+//
 // Experimental: This API is experimental and may be changed or removed in
 // future releases.
 func SubDag(d *Context, name string, deps []AnyHandle, register func(sub *Context), opts ...Option) TaskHandle[*DagResult] {

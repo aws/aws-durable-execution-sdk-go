@@ -137,6 +137,21 @@ func (s *scheduler) run(ctx context.Context) ([]TaskExecution, CompletionReason,
 			s.mu.Unlock()
 			break
 		}
+		if nInFlight == 0 {
+			// Reaching here implies progressed==true (the !progressed drain
+			// above already returned). A synchronous skip resolved THIS pass
+			// can free a dependent that appears EARLIER than its dependency
+			// in registration order (legal via DependsOn ordering edges) and
+			// so was skipped over by startReady's single forward pass. There
+			// is nothing in-flight to ever wake a parked parent, so parking
+			// here would deadlock the pure-logic path and spuriously suspend
+			// the real-runtime path (active count -> 0 => Suspended fires).
+			// Instead loop to re-scan; this terminates because every
+			// progressing pass settles >=1 task and any task actually
+			// started leaves nInFlight>0 (so we do reach the park below).
+			s.mu.Unlock()
+			continue
+		}
 
 		// 3. Park: mark ourselves parked and publish a fresh wake channel
 		// ATOMICALLY with the (empty) pending check above (same lock hold).

@@ -474,3 +474,110 @@ func TestScheduler_CustomCompletionAfterSkip(t *testing.T) {
 		t.Fatalf("custom predicate must fire on a SKIP settle; reason=%v want CustomCompletionFailed", reason)
 	}
 }
+
+// runSchedTimeout runs the scheduler but fails the test (rather than hanging
+// the whole run) if it does not return within d. The park BLOCKER manifests
+// on the pure-logic path as a permanent deadlock, so a timeout is the only
+// way to surface it as a fast, clear failure.
+func runSchedTimeout(t *testing.T, sc *scheduler, d time.Duration) ([]TaskExecution, CompletionReason, bool) {
+	t.Helper()
+	type res struct {
+		execs  []TaskExecution
+		reason CompletionReason
+		susp   bool
+	}
+	ch := make(chan res, 1)
+	go func() {
+		e, r, s := sc.run(context.Background())
+		ch <- res{e, r, s}
+	}()
+	select {
+	case r := <-ch:
+		return r.execs, r.reason, r.susp
+	case <-time.After(d):
+		t.Fatalf("scheduler.run did not return within %v (park deadlock)", d)
+		return nil, "", false
+	}
+}
+
+// TestScheduler_SkipFreesEarlierDependent is the regression guard for the
+// park BLOCKER (loop-2): a synchronous skip resolved in one startReady pass
+// can free a dependent that appears EARLIER in registration order (legal via
+// a DependsOn ordering edge) and so is not re-scanned that pass. With zero
+// tasks in-flight the parent must NOT park (no worker exists to wake it):
+// the pure-logic path would deadlock and the real-runtime path would
+// spuriously suspend. All prior skip/cascade tests register dependents AFTER
+// dependencies, so they never exercised this ordering.
+func TestScheduler_SkipFreesEarlierDependent(t *testing.T) {
+	// ── single upstream ──────────────────────────────────────────────
+	// y registered BEFORE x; y depends on x; x is skipped synchronously
+	// (runIf=false). y then skips (cascade under default AllSuccess).
+	d := newContext("")
+	y := Step(d, "y", nil, func(_ Deps, _ StepContext) (int, error) { return 0, nil })
+	x := Step(d, "x", nil, func(_ Deps, _ StepContext) (int, error) { return 0, nil }, WithRunIf(func(Deps) bool { return false }))
+	y.DependsOn(x)
+
+	sc := newScheduler(d.tasks, 0, nil, schedHooks{
+		runTask:   func(def *taskDef, _ Deps) (any, error) { return 0, nil },
+		isSuspend: func(error) bool { return false },
+	})
+	execs, reason, susp := runSchedTimeout(t, sc, 2*time.Second)
+	if susp {
+		t.Fatal("single-upstream: spurious suspension for a fully-resolvable DAG")
+	}
+	st := statusByName(execs)
+	if st["x"] != StatusSkipped || st["y"] != StatusSkipped {
+		t.Fatalf("single-upstream: want both skipped, got %v", st)
+	}
+	if reason != AllCompleted {
+		t.Fatalf("single-upstream: reason=%v want AllCompleted", reason)
+	}
+
+	// ── multi upstream ───────────────────────────────────────────────
+	// y registered BEFORE x1,x2; both upstreams skipped synchronously in
+	// the same pass; y is freed only after they settle and must not park.
+	d2 := newContext("")
+	y2 := Step(d2, "y", nil, func(_ Deps, _ StepContext) (int, error) { return 0, nil })
+	x1 := Step(d2, "x1", nil, func(_ Deps, _ StepContext) (int, error) { return 0, nil }, WithRunIf(func(Deps) bool { return false }))
+	x2 := Step(d2, "x2", nil, func(_ Deps, _ StepContext) (int, error) { return 0, nil }, WithRunIf(func(Deps) bool { return false }))
+	y2.DependsOn(x1, x2)
+
+	sc2 := newScheduler(d2.tasks, 0, nil, schedHooks{
+		runTask:   func(def *taskDef, _ Deps) (any, error) { return 0, nil },
+		isSuspend: func(error) bool { return false },
+	})
+	execs2, reason2, susp2 := runSchedTimeout(t, sc2, 2*time.Second)
+	if susp2 {
+		t.Fatal("multi-upstream: spurious suspension for a fully-resolvable DAG")
+	}
+	st2 := statusByName(execs2)
+	if st2["x1"] != StatusSkipped || st2["x2"] != StatusSkipped || st2["y"] != StatusSkipped {
+		t.Fatalf("multi-upstream: want all skipped, got %v", st2)
+	}
+	if reason2 != AllCompleted {
+		t.Fatalf("multi-upstream: reason=%v want AllCompleted", reason2)
+	}
+
+	// ── real-runtime model: same inverted-order synchronous skip must not
+	// spuriously suspend when execmgr accounting/Suspended is wired in. ──
+	d3 := newContext("")
+	y3 := Step(d3, "y", nil, func(_ Deps, _ StepContext) (int, error) { return 0, nil })
+	x3 := Step(d3, "x", nil, func(_ Deps, _ StepContext) (int, error) { return 0, nil }, WithRunIf(func(Deps) bool { return false }))
+	y3.DependsOn(x3)
+	em := newRaceExecMgr()
+	em.Register() // parent goroutine enters run() registered
+	sc3 := newScheduler(d3.tasks, 0, nil, schedHooks{
+		runTask:     func(def *taskDef, _ Deps) (any, error) { return 0, nil },
+		register:    em.Register,
+		deregister:  em.Deregister,
+		suspendedCh: em.Suspended,
+		isSuspend:   func(error) bool { return false },
+	})
+	_, reason3, susp3 := runSchedTimeout(t, sc3, 2*time.Second)
+	if susp3 {
+		t.Fatal("real-runtime: spurious suspension on inverted-order synchronous skip")
+	}
+	if reason3 != AllCompleted {
+		t.Fatalf("real-runtime: reason=%v want AllCompleted", reason3)
+	}
+}
