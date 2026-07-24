@@ -1,4 +1,4 @@
-.PHONY: build vet lint test check fmt
+.PHONY: build vet lint test check check-all fmt
 
 build:
 	go build ./...
@@ -16,3 +16,8 @@ fmt:
 	golangci-lint fmt ./...
 
 check: build vet lint test
+
+# Run the full CI battery across all modules (durable, insight,
+# compliance, examples) — same checks as .github/workflows/ci.yml.
+check-all:
+	sh scripts/ci-local.sh
