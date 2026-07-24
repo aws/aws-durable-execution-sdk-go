@@ -40,16 +40,20 @@ Verification (whole module): `go build ./...` ✓, `go vet ./...` ✓,
   deterministic and order-independent (§4 Route A).
 - **Re-execution replay model** (§7, §8.1): the aggregate `DagResult` is
   recomputed by re-running `register` + the scheduler each replay; each task
-  hits its own per-op checkpoint fast-path. Serialize/RestoreDagResult exist
-  for offload/inspection but the control-flow path is re-execution.
+  hits its own per-op checkpoint fast-path. Internal serialize/restore
+  helpers exist for future offload/inspection but the control-flow path is
+  re-execution (they are unexported until actually wired).
 - **Scheduler is injected with hooks** (`schedHooks`) so scheduling logic is
   unit-testable with a fake runner while the real wiring plugs in execmgr's
   Register/Deregister/Suspended and `operations.IsSuspended`.
 - **Suspend protocol**: mirrors the base batch scheduler's parent-park +
-  register hand-off, generalized to a streaming completion loop with a
-  pre-drain to avoid spuriously reaching a zero active count while a
-  completion is pending. Verified end-to-end by a Wait-task suspend/resume
-  test under the SkipTime local runner.
+  register hand-off, generalized to a streaming completion loop. Completions
+  are delivered into a mutex-guarded pending queue (not a separate channel),
+  so the main loop's park decision and a worker's hand-off decision are
+  serialized by a single lock — the active count can never spuriously reach
+  zero while a completion is pending. Verified by a Wait-task suspend/resume
+  test under the SkipTime local runner and a high-iteration no-spurious-
+  suspension test against a faithful execmgr model.
 - **Additive base-SDK export**: `operations.ErrSuspended` / `IsSuspended`
   (reuse-enabling; lets the DAG recognize the suspend sentinel).
 - **Nested DAG** registered via `SubDag` (named to avoid clashing with the

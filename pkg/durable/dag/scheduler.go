@@ -44,11 +44,27 @@ type scheduler struct {
 	state    map[string]*TaskExecution // terminal (or STARTED) states by name
 	inFlight map[string]struct{}
 
+	// pending holds task completions delivered by worker goroutines but
+	// not yet folded into state by the main loop. Completions are
+	// delivered INTO this mutex-guarded queue (never via a separate
+	// channel) so that the main loop's decision to park (deregister) and a
+	// worker's decision to hand a registration back are serialized by the
+	// SAME lock - this is the single-lock protocol the base batchScheduler
+	// uses to avoid the two-independent-signals spurious-suspension bug
+	// (see batch.go runBatch bugs #1/#2). Guarded by mu.
+	pending []taskDone
 	// parentParked mirrors the base batch scheduler's parentDeregistered:
 	// true while the main loop goroutine has deregistered itself and is
-	// waiting, so a finishing task can hand a registration back to it and
-	// avoid the active-count spuriously hitting zero. Guarded by mu.
+	// waiting for a completion, so the finishing worker that observes it
+	// hands a registration back (before its own Deregister) and the active
+	// count never spuriously hits zero. Cleared by whichever worker
+	// performs the hand-off. Guarded by mu.
 	parentParked bool
+	// wakeCh is created fresh under mu each time the main loop parks; the
+	// hand-off worker closes it to wake the parked parent. A per-park
+	// channel (rather than a reused buffered one) means there is never a
+	// stale wake token to cause a spurious unpark. Guarded by mu.
+	wakeCh chan struct{}
 	// suspending is set once any task returns the suspend sentinel: the
 	// whole invocation is going to suspend, so no new tasks start.
 	suspending bool
@@ -84,59 +100,70 @@ func newScheduler(tasks []*taskDef, maxConc int, completion *DagCompletionConfig
 // (in which case the caller must propagate the suspend signal, and the
 // returned executions/reason are not authoritative).
 func (s *scheduler) run(ctx context.Context) ([]TaskExecution, CompletionReason, bool) {
-	// Buffered so task goroutines never block delivering completions.
-	done := make(chan taskDone, len(s.tasks)+1)
-
 	for {
 		// 1. Resolve skips synchronously and start ready tasks (bounded).
-		progressed := s.startReady(ctx, done)
+		progressed := s.startReady(ctx)
 
 		s.mu.Lock()
+		// 2. Drain any already-delivered completion FIRST, under the same
+		// lock that guards the park decision below. This is the crux of the
+		// single-lock protocol: a worker delivers its completion into
+		// s.pending under s.mu, so if any completion arrived we observe it
+		// here and never proceed to park. Draining and the park decision
+		// therefore cannot straddle an independent signal.
+		if len(s.pending) > 0 {
+			d := s.pending[0]
+			s.pending = s.pending[1:]
+			s.mu.Unlock()
+			s.handleDone(d)
+			continue
+		}
+
 		nInFlight := len(s.inFlight)
 		allSettled := len(s.state) == len(s.tasks)
 		completing := s.completing
 		suspending := s.suspending
-		s.mu.Unlock()
 
 		if suspending && nInFlight == 0 {
+			s.mu.Unlock()
 			return nil, "", true
 		}
 		if (completing || allSettled) && nInFlight == 0 {
+			s.mu.Unlock()
 			break
 		}
 		if nInFlight == 0 && !progressed {
 			// Drained: nothing in-flight and nothing new could start.
+			s.mu.Unlock()
 			break
 		}
 
-		// 2a. Pre-drain any already-delivered completions WITHOUT parking,
-		// so we never park (deregister) while a completion is pending -
-		// which would let the active count spuriously reach zero.
-		select {
-		case d := <-done:
-			s.handleDone(d)
-			continue
-		default:
-		}
-
-		// 2b. Park (deregister) and wait for a completion or a suspension.
-		s.mu.Lock()
+		// 3. Park: mark ourselves parked and publish a fresh wake channel
+		// ATOMICALLY with the (empty) pending check above (same lock hold).
+		// A worker finishing concurrently now either (a) took s.mu before
+		// us, in which case it appended to s.pending and we would have
+		// drained it above rather than reaching here, or (b) takes s.mu
+		// after us, sees parentParked, and performs the Register hand-off
+		// before its own Deregister - so the active count never spuriously
+		// reaches zero while a completion is pending.
 		s.parentParked = true
+		s.wakeCh = make(chan struct{})
+		wakeCh := s.wakeCh
 		s.mu.Unlock()
+
 		if s.hooks.deregister != nil {
 			s.hooks.deregister()
 		}
-
 		var suspCh <-chan struct{}
 		if s.hooks.suspendedCh != nil {
 			suspCh = s.hooks.suspendedCh()
 		}
 		select {
-		case d := <-done:
-			// The finishing task performed the register hand-off on our
-			// behalf (see the task goroutine below), so we are registered
-			// again without an explicit Register call here.
-			s.handleDone(d)
+		case <-wakeCh:
+			// A worker delivered a completion into s.pending. For a normal
+			// completion it also performed the Register hand-off on our
+			// behalf (before its own Deregister), so we are registered
+			// again without an explicit Register here. Loop to drain.
 		case <-suspCh:
 			// Whole invocation suspended; in-flight goroutines are
 			// abandoned exactly as the base batch scheduler abandons its
@@ -151,7 +178,7 @@ func (s *scheduler) run(ctx context.Context) ([]TaskExecution, CompletionReason,
 // startReady evaluates readiness and starts (or skips) as many tasks as
 // concurrency allows. Returns whether it changed any state (started or
 // skipped at least one task) — used to detect a drained graph.
-func (s *scheduler) startReady(ctx context.Context, done chan taskDone) bool {
+func (s *scheduler) startReady(ctx context.Context) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -161,6 +188,11 @@ func (s *scheduler) startReady(ctx context.Context, done chan taskDone) bool {
 	progressed := false
 
 	for _, t := range s.tasks {
+		// A skip (below) may trigger custom/threshold completion mid-loop;
+		// once completing, start no further tasks.
+		if s.completing || s.suspending {
+			break
+		}
 		if _, settled := s.state[t.name]; settled {
 			continue
 		}
@@ -205,36 +237,65 @@ func (s *scheduler) startReady(ctx context.Context, done chan taskDone) bool {
 		go func(def *taskDef, dp Deps) {
 			result, err := s.hooks.runTask(def, dp)
 			susp := err != nil && s.hooks.isSuspend != nil && s.hooks.isSuspend(err)
-
 			if susp {
-				// The operation already deregistered itself before
-				// blocking (base SDK contract), so this goroutine must
-				// NOT deregister again and must NOT hand off. The whole
-				// invocation will suspend via the Suspended channel.
-				done <- taskDone{name: def.name, susp: true}
+				s.deliverSuspend(def.name)
 				return
 			}
-
-			// Normal completion: perform the register hand-off if the
-			// parent is currently parked, so the active count never
-			// spuriously reaches zero while a completion is pending
-			// (mirrors the base batch scheduler's branchFinished).
-			s.mu.Lock()
-			handoff := s.parentParked
-			if handoff {
-				s.parentParked = false
-			}
-			s.mu.Unlock()
-			if handoff && s.hooks.register != nil {
-				s.hooks.register()
-			}
-			if s.hooks.deregister != nil {
-				s.hooks.deregister()
-			}
-			done <- taskDone{name: def.name, result: result, err: err}
+			s.deliverDone(taskDone{name: def.name, result: result, err: err})
 		}(t, deps)
 	}
 	return progressed
+}
+
+// deliverDone records a normal task completion into the mutex-guarded
+// pending queue and, if the main loop has parked, performs the execmgr
+// Register hand-off (BEFORE this goroutine's own Deregister) then wakes it.
+// This is the single-lock protocol ported from the base batchScheduler
+// (batch.go branchFinished): the completion, the read of parentParked, and
+// the hand-off decision all happen under s.mu, so the active count can
+// never spuriously reach zero while a completion is pending.
+func (s *scheduler) deliverDone(d taskDone) {
+	s.mu.Lock()
+	s.pending = append(s.pending, d)
+	handoff := s.parentParked
+	var wakeCh chan struct{}
+	if handoff {
+		s.parentParked = false
+		wakeCh = s.wakeCh
+	}
+	s.mu.Unlock()
+
+	if handoff && s.hooks.register != nil {
+		// Register on the parent's behalf BEFORE our own Deregister so the
+		// two overlap for one instant instead of the count touching zero.
+		s.hooks.register()
+	}
+	if s.hooks.deregister != nil {
+		s.hooks.deregister()
+	}
+	if handoff {
+		close(wakeCh)
+	}
+}
+
+// deliverSuspend records that a task suspended and wakes a parked parent.
+// Unlike deliverDone it performs NO Register/Deregister: the operation that
+// suspended already deregistered this goroutine before blocking (base SDK
+// contract), and letting the active count fall is what lets the genuine
+// invocation-wide suspension fire (via the Suspended channel).
+func (s *scheduler) deliverSuspend(name string) {
+	s.mu.Lock()
+	s.pending = append(s.pending, taskDone{name: name, susp: true})
+	parked := s.parentParked
+	var wakeCh chan struct{}
+	if parked {
+		s.parentParked = false
+		wakeCh = s.wakeCh
+	}
+	s.mu.Unlock()
+	if parked {
+		close(wakeCh)
+	}
 }
 
 // handleDone records a settled task and re-evaluates the completion policy.
@@ -385,6 +446,10 @@ func (s *scheduler) recordSkipLocked(t *taskDef, reason SkipReason) {
 		Name: t.name, Status: StatusSkipped, SkipReason: reason,
 		StartedAt: now, CompletedAt: now, kind: kindFor(s.tasks, t.name),
 	}
+	// A skip is a settle: re-evaluate the completion policy so a custom
+	// ShouldComplete predicate sees SKIPPED items and a skip-terminated DAG
+	// reports the right reason (spec §2.10 - "each time a task settles").
+	s.evaluateCompletionLocked()
 }
 
 func (s *scheduler) countsLocked() (succ, fail, total int) {
@@ -396,7 +461,12 @@ func (s *scheduler) countsLocked() (succ, fail, total int) {
 			fail++
 		}
 	}
-	return succ, fail, len(s.state)
+	// total is the fixed number of tasks in the DAG (matching the base
+	// batchCompletion.total = len(items)), NOT the settled-so-far count -
+	// otherwise the ToleratedFailurePercentage denominator would be the
+	// number of tasks settled so far, making the first failure read as
+	// 100% and tripping any tolerance immediately.
+	return succ, fail, len(s.tasks)
 }
 
 func (s *scheduler) completionStatusLocked() DagCompletionStatus {

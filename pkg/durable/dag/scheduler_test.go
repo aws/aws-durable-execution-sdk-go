@@ -317,3 +317,160 @@ func TestScheduler_EmptyDag(t *testing.T) {
 		t.Fatalf("empty dag reason=%v want AllCompleted", reason)
 	}
 }
+
+// raceExecMgr is a faithful in-test model of execmgr.Manager's
+// active-goroutine accounting and Suspended-channel semantics (the SAME
+// close-at-zero / swap-fresh-channel-on-register-from-zero behavior), so
+// the scheduler's park/hand-off protocol is exercised against a real
+// suspension signal rather than a no-op fake. See execmgr.go.
+type raceExecMgr struct {
+	mu     sync.Mutex
+	active int
+	susp   chan struct{}
+}
+
+func newRaceExecMgr() *raceExecMgr { return &raceExecMgr{susp: make(chan struct{})} }
+
+func (m *raceExecMgr) Register() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.active++
+	if m.active == 1 {
+		select {
+		case <-m.susp:
+			m.susp = make(chan struct{})
+		default:
+		}
+	}
+}
+
+func (m *raceExecMgr) Deregister() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.active--
+	if m.active <= 0 {
+		select {
+		case <-m.susp:
+		default:
+			close(m.susp)
+		}
+	}
+}
+
+func (m *raceExecMgr) Suspended() <-chan struct{} {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.susp
+}
+
+// TestScheduler_NoSpuriousSuspension is the regression guard for the
+// park+hand-off BLOCKER: it runs a bounded-concurrency DAG whose tasks all
+// complete normally (never suspend) many times against a real execmgr
+// model, and asserts the scheduler NEVER reports suspension. Before the
+// single-lock fix, the parent's lock-free pre-drain of the done channel
+// could race its decision to park, letting the final select pick
+// suspension for a DAG whose tasks had all completed (reproduced 5/20000).
+func TestScheduler_NoSpuriousSuspension(t *testing.T) {
+	const iters = 8000
+	const n = 6
+	for it := 0; it < iters; it++ {
+		d := newContext("")
+		for i := 0; i < n; i++ {
+			Step(d, fmt.Sprintf("t%d", i), nil, func(_ Deps, _ StepContext) (int, error) { return 0, nil })
+		}
+		em := newRaceExecMgr()
+		em.Register() // parent (handler) goroutine enters run() registered
+		hooks := schedHooks{
+			runTask: func(_ *taskDef, _ Deps) (any, error) {
+				// A tiny delay widens the window where a worker completes
+				// right as the parent parks - the exact race being guarded.
+				time.Sleep(3 * time.Microsecond)
+				return 0, nil
+			},
+			register:    em.Register,
+			deregister:  em.Deregister,
+			suspendedCh: em.Suspended,
+			isSuspend:   func(error) bool { return false },
+		}
+		s := newScheduler(d.tasks, 2, nil, hooks)
+		execs, _, susp := s.run(context.Background())
+		if susp {
+			t.Fatalf("iteration %d: spurious suspension for a DAG whose tasks all completed", it)
+		}
+		if len(execs) != n {
+			t.Fatalf("iteration %d: want %d execs, got %d", it, n, len(execs))
+		}
+	}
+}
+
+// TestScheduler_ThresholdFailurePercentage guards fix #2: the
+// ToleratedFailurePercentage denominator is the fixed task count, not the
+// settled-so-far count. With maxConc=1 (deterministic order) a single
+// failure among 4 tasks is 25% and must NOT trip a 50% tolerance (before
+// the fix the first failure read as 100% and tripped immediately).
+func TestScheduler_ThresholdFailurePercentage(t *testing.T) {
+	pct := 50.0
+
+	// Only the first task fails => 25% of 4 => under tolerance => full drain.
+	d := newContext("")
+	for i := 0; i < 4; i++ {
+		Step(d, fmt.Sprintf("t%d", i), nil, func(_ Deps, _ StepContext) (int, error) { return 0, nil })
+	}
+	execs, reason := runSched(d, 1, &DagCompletionConfig{ToleratedFailurePercentage: &pct}, func(def *taskDef, _ Deps) (any, error) {
+		if def.name == "t0" {
+			return 0, errors.New("boom")
+		}
+		return 0, nil
+	})
+	if reason != CompletedWithFailures {
+		t.Fatalf("one failure of four (25%%) must not trip 50%% tolerance; reason=%v", reason)
+	}
+	if len(execs) != 4 {
+		t.Fatalf("all four tasks should have drained, got %d", len(execs))
+	}
+
+	// Enough failures to genuinely exceed 50% => trips FailureToleranceExceeded.
+	d2 := newContext("")
+	for i := 0; i < 4; i++ {
+		Step(d2, fmt.Sprintf("t%d", i), nil, func(_ Deps, _ StepContext) (int, error) { return 0, nil })
+	}
+	_, reason2 := runSched(d2, 1, &DagCompletionConfig{ToleratedFailurePercentage: &pct}, func(def *taskDef, _ Deps) (any, error) {
+		return 0, errors.New("boom") // all fail; at t2 => 3/4 = 75% > 50%
+	})
+	if reason2 != FailureToleranceExceeded {
+		t.Fatalf("majority failures should trip 50%% tolerance; reason=%v", reason2)
+	}
+}
+
+// TestScheduler_CustomCompletionAfterSkip guards fix #3: a custom
+// ShouldComplete predicate is evaluated after a SKIP settles (spec §2.10).
+// A root failure skips its child; the predicate completes-with-failure the
+// moment it observes a SKIPPED item. Before the fix, recordSkip did not
+// re-evaluate completion, so the DAG drained to CompletedWithFailures and
+// the custom reason was lost.
+func TestScheduler_CustomCompletionAfterSkip(t *testing.T) {
+	d := newContext("")
+	root := Step(d, "root", nil, func(_ Deps, _ StepContext) (int, error) { return 0, nil })
+	// child inherits default ALL_SUCCESS; root fails => child skipped.
+	Step(d, "child", []AnyHandle{root}, func(_ Deps, _ StepContext) (int, error) { return 0, nil })
+
+	completion := &DagCompletionConfig{
+		ShouldComplete: func(st DagCompletionStatus) CompletionDecision {
+			for _, it := range st.Items {
+				if it.Status == StatusSkipped {
+					return CompleteDag(OutcomeFailed)
+				}
+			}
+			return ContinueDag()
+		},
+	}
+	_, reason := runSched(d, 1, completion, func(def *taskDef, _ Deps) (any, error) {
+		if def.name == "root" {
+			return 0, errors.New("boom")
+		}
+		return 0, nil
+	})
+	if reason != CustomCompletionFailed {
+		t.Fatalf("custom predicate must fire on a SKIP settle; reason=%v want CustomCompletionFailed", reason)
+	}
+}
