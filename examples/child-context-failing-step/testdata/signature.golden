@@ -1,0 +1,20 @@
+[
+  {
+    "type": "CONTEXT",
+    "subType": "RunInChildContext",
+    "name": "child-with-failure",
+    "status": "FAILED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "failing-step",
+    "status": "FAILED"
+  },
+  {
+    "type": "WAIT",
+    "subType": "Wait",
+    "name": "wait-after-failure",
+    "status": "SUCCEEDED"
+  }
+]

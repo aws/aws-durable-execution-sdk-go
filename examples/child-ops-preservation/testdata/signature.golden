@@ -1,0 +1,26 @@
+[
+  {
+    "type": "CONTEXT",
+    "subType": "RunInChildContext",
+    "name": "failing-branch",
+    "status": "FAILED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "child-step-ok",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "child-step-boom",
+    "status": "FAILED"
+  },
+  {
+    "type": "WAIT",
+    "subType": "Wait",
+    "name": "cooldown",
+    "status": "SUCCEEDED"
+  }
+]

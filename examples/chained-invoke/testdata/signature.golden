@@ -1,0 +1,20 @@
+[
+  {
+    "type": "CHAINED_INVOKE",
+    "subType": "ChainedInvoke",
+    "name": "chain-validate",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CHAINED_INVOKE",
+    "subType": "ChainedInvoke",
+    "name": "chain-process",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CHAINED_INVOKE",
+    "subType": "ChainedInvoke",
+    "name": "chain-confirm",
+    "status": "SUCCEEDED"
+  }
+]
