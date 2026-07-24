@@ -14,11 +14,11 @@ import (
 
 // Result captures whether the error chain was preserved.
 type Result struct {
-	Found    bool   `json:"found"`
-	ErrMsg   string `json:"errMsg,omitempty"`
-	Depth    int    `json:"depth"`
-	IsOpErr  bool   `json:"isOpErr"`
-	IsChild  bool   `json:"isChild"`
+	Found   bool   `json:"found"`
+	ErrMsg  string `json:"errMsg,omitempty"`
+	Depth   int    `json:"depth"`
+	IsOpErr bool   `json:"isOpErr"`
+	IsChild bool   `json:"isChild"`
 }
 
 func handler(ctx durable.Context, _ any) (Result, error) {

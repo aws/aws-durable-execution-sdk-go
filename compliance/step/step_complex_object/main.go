@@ -22,7 +22,7 @@ type response struct {
 func handler(ctx durable.Context, event input) (response, error) {
 	return durable.Step(ctx, "", func(_ durable.StepContext) (response, error) {
 		return response{
-			User:  user{Name: event.Name, Tags: event.Tags},
+			User:  user(event),
 			Count: len(event.Tags),
 		}, nil
 	})

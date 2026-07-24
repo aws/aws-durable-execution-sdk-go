@@ -3,6 +3,7 @@ package main
 
 import (
 	"time"
+
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
 )
 
@@ -12,11 +13,15 @@ func handler(ctx durable.Context, _ any) ([]string, error) {
 			return durable.Step(childCtx, "", func(_ durable.StepContext) (string, error) { return "b0", nil })
 		}},
 		{Func: func(childCtx durable.Context) (string, error) {
-			if err := durable.Wait(childCtx, "", 2*time.Second); err != nil { return "", err }
+			if err := durable.Wait(childCtx, "", 2*time.Second); err != nil {
+				return "", err
+			}
 			return "b1", nil
 		}},
 	}, durable.WithMaxConcurrency(1))
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	return result.Results(), nil
 }
 
