@@ -97,3 +97,169 @@ type TaskExecution struct {
 	// kind drives recursive restore of nested batch/dag results.
 	kind resultKind
 }
+
+// DagResult is the aggregate outcome of a DAG run: per-task executions in
+// registration order, plus the completion reason. Task failures are
+// reported here (via Err), not as the error return of Dag(...).
+//
+// Experimental: This API is experimental and may be changed or removed in
+// future releases.
+type DagResult struct {
+	tasks   []TaskExecution
+	byName  map[string]*TaskExecution
+	reason  CompletionReason
+	summary string // observability-only; never read on replay
+}
+
+func newDagResult(execs []TaskExecution, reason CompletionReason) *DagResult {
+	r := &DagResult{tasks: execs, reason: reason, byName: make(map[string]*TaskExecution, len(execs))}
+	for i := range r.tasks {
+		r.byName[r.tasks[i].Name] = &r.tasks[i]
+	}
+	return r
+}
+
+// Result returns the typed result of the task referenced by h. Returns
+// ErrDepNotAvailable if the task did not succeed, or ErrDepTypeMismatch on a
+// type/serialization edge.
+//
+// Experimental: This API is experimental and may be changed or removed in
+// future releases.
+func Result[T any](r *DagResult, h TaskHandle[T]) (T, error) {
+	var zero T
+	te, ok := r.byName[h.name]
+	if !ok || te.Status != StatusSucceeded {
+		return zero, ErrDepNotAvailable
+	}
+	if te.result != nil {
+		v, ok := te.result.(T)
+		if !ok {
+			return zero, ErrDepTypeMismatch
+		}
+		return v, nil
+	}
+	// Lazy unmarshal from rawResult (replay path).
+	if len(te.rawResult) > 0 {
+		v, err := unmarshalResult[T](te.rawResult)
+		if err != nil {
+			return zero, err
+		}
+		te.result = v
+		return v, nil
+	}
+	return zero, ErrDepNotAvailable
+}
+
+// Status returns the status of a task by name or handle, and false if the
+// task never started (absent from results).
+//
+// Experimental: This API is experimental and may be changed or removed in
+// future releases.
+func (r *DagResult) Status(nameOrHandle any) (TaskStatus, bool) {
+	name := ""
+	switch v := nameOrHandle.(type) {
+	case string:
+		name = v
+	case AnyHandle:
+		name = v.taskName()
+	default:
+		return "", false
+	}
+	te, ok := r.byName[name]
+	if !ok {
+		return "", false
+	}
+	return te.Status, true
+}
+
+func (r *DagResult) filter(status TaskStatus) []TaskExecution {
+	var out []TaskExecution
+	for _, te := range r.tasks {
+		if te.Status == status {
+			out = append(out, te)
+		}
+	}
+	return out
+}
+
+// Succeeded returns the succeeded task executions.
+//
+// Experimental: This API is experimental and may be changed or removed in
+// future releases.
+func (r *DagResult) Succeeded() []TaskExecution { return r.filter(StatusSucceeded) }
+
+// Failed returns the failed task executions.
+//
+// Experimental: This API is experimental and may be changed or removed in
+// future releases.
+func (r *DagResult) Failed() []TaskExecution { return r.filter(StatusFailed) }
+
+// Skipped returns the skipped task executions.
+//
+// Experimental: This API is experimental and may be changed or removed in
+// future releases.
+func (r *DagResult) Skipped() []TaskExecution { return r.filter(StatusSkipped) }
+
+// Results returns a copy of all task executions keyed by name.
+//
+// Experimental: This API is experimental and may be changed or removed in
+// future releases.
+func (r *DagResult) Results() map[string]TaskExecution {
+	out := make(map[string]TaskExecution, len(r.tasks))
+	for _, te := range r.tasks {
+		out[te.Name] = te
+	}
+	return out
+}
+
+// SuccessCount returns the number of succeeded tasks.
+//
+// Experimental: This API is experimental and may be changed or removed in
+// future releases.
+func (r *DagResult) SuccessCount() int { return len(r.filter(StatusSucceeded)) }
+
+// FailureCount returns the number of failed tasks.
+//
+// Experimental: This API is experimental and may be changed or removed in
+// future releases.
+func (r *DagResult) FailureCount() int { return len(r.filter(StatusFailed)) }
+
+// SkippedCount returns the number of skipped tasks.
+//
+// Experimental: This API is experimental and may be changed or removed in
+// future releases.
+func (r *DagResult) SkippedCount() int { return len(r.filter(StatusSkipped)) }
+
+// TotalCount returns the number of recorded task executions.
+//
+// Experimental: This API is experimental and may be changed or removed in
+// future releases.
+func (r *DagResult) TotalCount() int { return len(r.tasks) }
+
+// CompletionReason returns why the DAG stopped scheduling.
+//
+// Experimental: This API is experimental and may be changed or removed in
+// future releases.
+func (r *DagResult) CompletionReason() CompletionReason { return r.reason }
+
+// Err returns a *DagExecutionError when at least one task failed or the DAG
+// was custom-completed with a failure outcome; otherwise nil. This is the
+// idiomatic-Go analog of the JS throwIfError().
+//
+// Experimental: This API is experimental and may be changed or removed in
+// future releases.
+func (r *DagResult) Err() error {
+	if r.FailureCount() == 0 && r.reason != CustomCompletionFailed {
+		return nil
+	}
+	firstFailed := ""
+	var cause error
+	for _, te := range r.tasks {
+		if te.Status == StatusFailed {
+			firstFailed = te.Name
+			cause = te.Err
+			break
+		}
+	}
+	return &DagExecutionError{FirstFailed: firstFailed, cause: cause}
+}
