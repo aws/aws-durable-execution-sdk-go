@@ -40,3 +40,11 @@ type RenderingSizeLimiter interface {
 // DefaultMaxRecordSizeBytesLog is the default maximum record size in
 // bytes for the LambdaLogExporter (256 KB minus overhead).
 const DefaultMaxRecordSizeBytesLog = 256 * 1024
+
+// DefaultMaxRecordSizeBytesS3 is the default maximum record size in
+// bytes for the S3Exporter (5 MB).
+const DefaultMaxRecordSizeBytesS3 = 5 * 1024 * 1024
+
+// DefaultMaxRecordSizeBytesFirehose is the default maximum record size
+// in bytes for the FirehoseExporter (1 MB).
+const DefaultMaxRecordSizeBytesFirehose = 1 * 1024 * 1024
