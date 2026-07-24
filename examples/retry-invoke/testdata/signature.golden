@@ -1,0 +1,32 @@
+[
+  {
+    "type": "CHAINED_INVOKE",
+    "subType": "ChainedInvoke",
+    "name": "invoke-1",
+    "status": "FAILED"
+  },
+  {
+    "type": "WAIT",
+    "subType": "Wait",
+    "name": "retry-wait-1",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CHAINED_INVOKE",
+    "subType": "ChainedInvoke",
+    "name": "invoke-2",
+    "status": "FAILED"
+  },
+  {
+    "type": "WAIT",
+    "subType": "Wait",
+    "name": "retry-wait-2",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CHAINED_INVOKE",
+    "subType": "ChainedInvoke",
+    "name": "invoke-3",
+    "status": "SUCCEEDED"
+  }
+]

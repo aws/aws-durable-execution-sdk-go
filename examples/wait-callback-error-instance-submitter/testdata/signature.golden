@@ -1,0 +1,24 @@
+[
+  {
+    "type": "CONTEXT",
+    "subType": "WaitForCallback",
+    "name": "submitter-test",
+    "status": "FAILED"
+  },
+  {
+    "type": "CALLBACK",
+    "subType": "Callback",
+    "status": "STARTED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "status": "FAILED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "check-error-type",
+    "status": "SUCCEEDED"
+  }
+]
