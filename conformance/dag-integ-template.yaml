@@ -1,0 +1,101 @@
+# DAG cloud-integration SAM harness (namespaced, suffix -DagIntegGo).
+#
+# A DELIBERATELY MINIMAL sibling of this directory's full template.yaml
+# (the 148-function upstream-conformance harness). It deploys ONLY the
+# four DAG cloud-integration functions (dag-diamond, dag-compensation,
+# dag-runif, dag-wait - see handlers/dag_*.go), reusing the SAME shared
+# container image (conformance/Dockerfile) and the SAME
+# CONFORMANCE_TEST_ID-selects-a-registered-handler mechanism every
+# function in template.yaml already uses (see registry.go / handlers.go).
+#
+# It is a separate stack (namespaced FunctionNames with a -DagIntegGo
+# suffix) rather than four more functions bolted onto template.yaml so
+# it can be deployed/torn down independently and never collides with, or
+# is picked up by, the upstream numbered-requirement conformance runner
+# (those DAG ids are string-named, not "<suite>-<n>" - see
+# handlers/dag_common.go's own doc comment). Driven by
+# conformance/dag_cloud_integration_test.go's CloudTestRunner-based test.
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Go SDK DAG cloud-integration harness (four DAG functions, one shared image).
+
+Parameters:
+  ImageUri:
+    Type: String
+    Description: >
+      Pre-built ECR image URI (repo:tag or repo@sha256:digest) for the
+      conformance/ Go module's container image, built via `finch build`
+      from conformance/Dockerfile (repo root as build context) and pushed
+      to an ECR repo in the target region - the SAME image template.yaml
+      uses, since the DAG handlers are compiled into the same binary.
+
+Globals:
+  Function:
+    Timeout: 60
+    MemorySize: 512
+    Architectures:
+      - arm64
+    DurableConfig:
+      ExecutionTimeout: 120
+      RetentionPeriodInDays: 1
+
+Resources:
+  # Shared execution role - a plain Lambda trust policy plus the durable
+  # managed policy, identical to template.yaml's ConformanceExecutionRole.
+  DagIntegExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicDurableExecutionRolePolicy
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  DagDiamond:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: dag-diamond-DagIntegGo
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt DagIntegExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "dag-diamond"
+
+  DagCompensation:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: dag-compensation-DagIntegGo
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt DagIntegExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "dag-compensation"
+
+  DagRunIf:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: dag-runif-DagIntegGo
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt DagIntegExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "dag-runif"
+
+  DagWait:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: dag-wait-DagIntegGo
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Role: !GetAtt DagIntegExecutionRole.Arn
+      Environment:
+        Variables:
+          CONFORMANCE_TEST_ID: "dag-wait"
