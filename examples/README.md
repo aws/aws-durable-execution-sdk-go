@@ -49,6 +49,7 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [child-context-basic](child-context-basic/main.go) | RunInChildContext | SUCCEEDED |
 | [child-context-virtual](child-context-virtual/main.go) | RunInChildContext (virtual) | SUCCEEDED |
 | [child-context-serdes](child-context-serdes/main.go) | RunInChildContext, WithChildSerdes | SUCCEEDED |
+| [child-context-serdes-large-payload](child-context-serdes-large-payload/main.go) | RunInChildContext, FileSystemSerdes (>256KB) | SUCCEEDED |
 | [child-context-large-data](child-context-large-data/main.go) | RunInChildContext (ReplayChildren) | SUCCEEDED |
 | [child-context-error-propagation](child-context-error-propagation/main.go) | RunInChildContext, error propagation | SUCCEEDED |
 | [child-context-failing-step](child-context-failing-step/main.go) | RunInChildContext, Step failure | SUCCEEDED |
@@ -109,6 +110,7 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [parallel-tolerated-failure](parallel-tolerated-failure/main.go) | Parallel, WithToleratedFailureCount | SUCCEEDED |
 | [parallel-tolerated-failure-percentage](parallel-tolerated-failure-percentage/main.go) | Parallel, WithToleratedFailurePercentage | SUCCEEDED |
 | [parallel-virtual-context](parallel-virtual-context/main.go) | Parallel, WithNesting (NestingFlat) | SUCCEEDED |
+| [parallel-heterogeneous](parallel-heterogeneous/main.go) | Parallel, Step, Wait, Invoke | SUCCEEDED |
 
 ### Future Combinators & Concurrency
 
