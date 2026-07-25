@@ -149,7 +149,7 @@ func TestChildContextInheritsStateAndPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claimOperation(): %v", err)
 	}
-	child := c.child(entityID, currentGoroutineOwner(), c.mode)
+	child := c.child(entityID, currentGoroutineOwner(), executionMode(c.mode.Load()))
 
 	id, err := child.claimOperation()
 	if err != nil {

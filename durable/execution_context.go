@@ -2,6 +2,7 @@ package durable
 
 import (
 	"context"
+	"sync/atomic"
 
 	"github.com/aws/aws-lambda-go/lambdacontext"
 )
@@ -34,7 +35,10 @@ type execContext struct {
 	lambdaCtx    *lambdacontext.LambdaContext
 	logger       Logger
 
-	mode  executionMode
+	// mode tracks the execution's replay lifecycle position. Accessed
+	// atomically because child goroutines read it concurrently with the
+	// owning goroutine's refreshReplayMode write.
+	mode  atomic.Int32
 	ids   *opIDs
 	owner goroutineOwner
 	state *executionState
@@ -68,25 +72,26 @@ var _ Context = (*execContext)(nil)
 // execution operation exist.
 func newExecContext(ctx context.Context, executionArn string, lambdaCtx *lambdacontext.LambdaContext, logger Logger, state *executionState) *execContext {
 	mode := modeExecution
-	if len(state.operations) > 1 {
+	if state.numOperations() > 1 {
 		mode = modeReplay
 	}
 	// Sync logger replay state with initial mode.
 	if toggler, ok := logger.(replayToggler); ok {
 		toggler.setReplaying(mode == modeReplay || mode == modeReplaySucceededContext)
 	}
-	return &execContext{
+	ec := &execContext{
 		Context:      ctx,
 		executionArn: executionArn,
 		lambdaCtx:    lambdaCtx,
 		logger:       logger,
-		mode:         mode,
 		ids:          &opIDs{},
 		owner:        currentGoroutineOwner(),
 		state:        state,
 		serdes:       jsonSerdes{},
 		suspend:      newSuspendSignal(),
 	}
+	ec.mode.Store(int32(mode))
+	return ec
 }
 
 func (c *execContext) ExecutionArn() string { return c.executionArn }
@@ -105,7 +110,8 @@ func (c *execContext) LambdaContext() *lambdacontext.LambdaContext { return c.la
 func (c *execContext) Logger() Logger { return c.logger }
 
 func (c *execContext) IsReplaying() bool {
-	return c.mode == modeReplay || c.mode == modeReplaySucceededContext
+	m := executionMode(c.mode.Load())
+	return m == modeReplay || m == modeReplaySucceededContext
 }
 
 // parentWireID returns the hashed wire-format parent context ID for use in
@@ -145,7 +151,7 @@ func (c *execContext) claimOperation() (string, error) {
 // child operation IS checkpointed under "<pendingID>-1". Probe that child
 // before concluding that replay has finished.
 func (c *execContext) refreshReplayMode() {
-	if c.mode != modeReplay {
+	if executionMode(c.mode.Load()) != modeReplay {
 		return
 	}
 	pendingID := c.ids.peek()
@@ -155,7 +161,7 @@ func (c *execContext) refreshReplayMode() {
 	if c.state.get(pendingID+"-1") != nil {
 		return
 	}
-	c.mode = modeExecution
+	c.mode.Store(int32(modeExecution))
 	// Notify the logger that replay has ended.
 	if toggler, ok := c.logger.(replayToggler); ok {
 		toggler.setReplaying(false)
@@ -170,12 +176,11 @@ func (c *execContext) refreshReplayMode() {
 // goroutine that runs the child function, captured by the caller after that
 // goroutine starts.
 func (c *execContext) child(entityID string, owner goroutineOwner, mode executionMode) *execContext {
-	return &execContext{
+	child := &execContext{
 		Context:              c.Context,
 		executionArn:         c.executionArn,
 		lambdaCtx:            c.lambdaCtx,
 		logger:               c.logger,
-		mode:                 mode,
 		ids:                  c.ids.child(entityID),
 		owner:                owner,
 		state:                c.state,
@@ -185,4 +190,6 @@ func (c *execContext) child(entityID string, owner goroutineOwner, mode executio
 		checkpointer:         c.checkpointer,
 		pluginDispatcher:     c.pluginDispatcher,
 	}
+	child.mode.Store(int32(mode))
+	return child
 }

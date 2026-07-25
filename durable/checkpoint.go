@@ -149,10 +149,11 @@ func (cp *checkpointer) checkpoint(ctx context.Context, updates []types.Operatio
 		// subsequent reads (e.g. reading CallbackId after START) see
 		// backend-assigned fields.
 		if cp.state != nil && out.NewExecutionState != nil {
+			ops := make([]*operation, 0, len(out.NewExecutionState.Operations))
 			for _, apiOp := range out.NewExecutionState.Operations {
-				rec := operationFromAPI(apiOp)
-				cp.state.operations[rec.id] = rec
+				ops = append(ops, operationFromAPI(apiOp))
 			}
+			cp.state.merge(ops)
 		}
 		return nil
 	}

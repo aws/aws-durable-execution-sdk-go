@@ -3,6 +3,7 @@ package durable
 import (
 	"crypto/md5" //nolint:gosec // identifier encoding, not cryptography
 	"encoding/hex"
+	"sync"
 	"time"
 )
 
@@ -122,6 +123,10 @@ type stepDetails struct {
 // MD5 hashes of the positional operation ID; get hashes internally so
 // callers use positional IDs throughout.
 type executionState struct {
+	// mu protects the operations map from concurrent read/write access.
+	// Readers (get, getByWireID, len, range) take RLock; writers (merge)
+	// take Lock.
+	mu         sync.RWMutex
 	operations map[string]*operation
 }
 
@@ -136,14 +141,51 @@ func newExecutionState(ops []*operation) *executionState {
 // get returns the checkpointed operation for the positional ID, or nil if
 // the operation has not been checkpointed.
 func (s *executionState) get(positionalID string) *operation {
-	return s.operations[hashID(positionalID)]
+	s.mu.RLock()
+	op := s.operations[hashID(positionalID)]
+	s.mu.RUnlock()
+	return op
 }
 
 // getByWireID returns the checkpointed operation for an already-hashed wire
 // operation ID, or nil if unknown. Used for IDs the service supplies in wire
 // form (e.g. UpdatedOperationIds), which must not be hashed again.
 func (s *executionState) getByWireID(wireID string) *operation {
-	return s.operations[wireID]
+	s.mu.RLock()
+	op := s.operations[wireID]
+	s.mu.RUnlock()
+	return op
+}
+
+// merge inserts or replaces operations in the map. Callers that hold
+// checkpointer.mu must call merge (not assign to the map directly) so that
+// the lock order checkpointer.mu → executionState.mu is respected.
+func (s *executionState) merge(ops []*operation) {
+	s.mu.Lock()
+	for _, op := range ops {
+		s.operations[op.id] = op
+	}
+	s.mu.Unlock()
+}
+
+// numOperations returns the number of checkpointed operations.
+func (s *executionState) numOperations() int {
+	s.mu.RLock()
+	n := len(s.operations)
+	s.mu.RUnlock()
+	return n
+}
+
+// rangeOperations calls fn for each operation in the map. If fn returns
+// false, iteration stops.
+func (s *executionState) rangeOperations(fn func(*operation) bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, op := range s.operations {
+		if !fn(op) {
+			return
+		}
+	}
 }
 
 // hashID converts a positional operation ID to its wire form: the first 16
