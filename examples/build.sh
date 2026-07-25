@@ -45,6 +45,7 @@ EXAMPLES="
   child-context-basic
   child-context-virtual
   child-context-serdes
+  child-context-serdes-large-payload
   child-context-large-data
   child-context-error-propagation
   child-context-failing-step
@@ -95,6 +96,7 @@ EXAMPLES="
   parallel-tolerated-failure
   parallel-tolerated-failure-percentage
   parallel-virtual-context
+  parallel-heterogeneous
   future-all
   future-all-settled
   future-all-wait

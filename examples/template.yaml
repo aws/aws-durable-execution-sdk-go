@@ -501,6 +501,25 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 60
 
+  ChildContextSerdesLargePayloadFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-child-context-serdes-large-payload
+      CodeUri: .aws-sam/build-artifacts/child-context-serdes-large-payload/
+      Handler: bootstrap
+      Timeout: 120
+      MemorySize: 512
+      Description: Child context with filesystem serdes round-tripping payload above 256KB
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
   ChildContextLargeDataFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -1363,6 +1382,26 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 60
 
+  ParallelHeterogeneousFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-parallel-heterogeneous
+      CodeUri: .aws-sam/build-artifacts/parallel-heterogeneous/
+      Handler: bootstrap
+      Description: Parallel with branches using Step, Wait, and Invoke
+      Role: !GetAtt DurableFunctionRole.Arn
+      Environment:
+        Variables:
+          FUNCTION_NAME_PREFIX: !Ref FunctionNamePrefix
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
   # --- Slice 6: Future Combinators & Concurrency examples ---
 
   FutureAllFunction:
@@ -2061,6 +2100,9 @@ Outputs:
   ChildContextSerdesFunction:
     Description: Child Context Serdes Function ARN
     Value: !GetAtt ChildContextSerdesFunction.Arn
+  ChildContextSerdesLargePayloadFunction:
+    Description: Child Context Serdes Large Payload Function ARN
+    Value: !GetAtt ChildContextSerdesLargePayloadFunction.Arn
   ChildContextLargeDataFunction:
     Description: Child Context Large Data Function ARN
     Value: !GetAtt ChildContextLargeDataFunction.Arn
@@ -2211,6 +2253,9 @@ Outputs:
   ParallelVirtualContextFunction:
     Description: Parallel Virtual Context Function ARN
     Value: !GetAtt ParallelVirtualContextFunction.Arn
+  ParallelHeterogeneousFunction:
+    Description: Parallel Heterogeneous Function ARN
+    Value: !GetAtt ParallelHeterogeneousFunction.Arn
   FutureAllFunction:
     Description: Future All Function ARN
     Value: !GetAtt FutureAllFunction.Arn
