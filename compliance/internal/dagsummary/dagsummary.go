@@ -22,6 +22,18 @@ type Summary struct {
 	Branch string `json:"branch,omitempty"`
 	// Marker proves post-resume replay (wait handler only).
 	Marker string `json:"marker,omitempty"`
+	// Group carries the child task result (childdag handler only).
+	Group int `json:"group,omitempty"`
+	// Done carries the downstream step result (childdag/wfcdag handlers).
+	Done int `json:"done,omitempty"`
+	// Sum carries the map aggregation result (mapdag handler only).
+	Sum int `json:"sum,omitempty"`
+	// Join carries the parallel join result (paralleldag handler only).
+	Join string `json:"join,omitempty"`
+	// Poll carries the final waitForCondition state (wfcdag handler only).
+	Poll int `json:"poll,omitempty"`
+	// Post carries the downstream step result (outerdag handler only).
+	Post int `json:"post,omitempty"`
 }
 
 // From builds a Summary from a drained DagResult.
