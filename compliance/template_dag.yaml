@@ -34,7 +34,7 @@ Resources:
   DagDiamond:
     Type: AWS::Serverless::Function
     TestingMetadata:
-      TestDescription: ["dag-diamond"]
+      TestDescription: ["10-1"]
     Metadata:
       BuildMethod: makefile
     Properties:
@@ -52,7 +52,7 @@ Resources:
   DagCompensation:
     Type: AWS::Serverless::Function
     TestingMetadata:
-      TestDescription: ["dag-compensation"]
+      TestDescription: ["10-2"]
     Metadata:
       BuildMethod: makefile
     Properties:
@@ -70,7 +70,7 @@ Resources:
   DagRunIf:
     Type: AWS::Serverless::Function
     TestingMetadata:
-      TestDescription: ["dag-run-if"]
+      TestDescription: ["10-3"]
     Metadata:
       BuildMethod: makefile
     Properties:
@@ -88,7 +88,7 @@ Resources:
   DagWaitResume:
     Type: AWS::Serverless::Function
     TestingMetadata:
-      TestDescription: ["dag-wait-resume"]
+      TestDescription: ["10-4"]
     Metadata:
       BuildMethod: makefile
     Properties:
