@@ -95,6 +95,114 @@ func AssertGoldenSignature(t *testing.T, result *TestResult, goldenPath string) 
 	}
 }
 
+// AssertGoldenSignatureUnordered compares the event signature of result
+// against a golden file at goldenPath using multiset (count-based)
+// comparison rather than positional comparison. Use this when operations
+// execute in parallel branches whose checkpoint ordering is
+// non-deterministic.
+//
+// The golden file records WHICH operations must be present and how many
+// of each, but NOT their order.
+//
+// Like [AssertGoldenSignature], setting UPDATE_GOLDEN=1 regenerates the
+// golden file. The golden file format is identical (a JSON array of
+// [OperationSignature]); only the comparison semantics differ.
+func AssertGoldenSignatureUnordered(t *testing.T, result *TestResult, goldenPath string) {
+	t.Helper()
+
+	actual := EventSignature(result)
+
+	if os.Getenv("UPDATE_GOLDEN") == "1" {
+		writeGolden(t, goldenPath, actual)
+		t.Logf("wrote golden file %s (UPDATE_GOLDEN=1)", goldenPath)
+		return
+	}
+
+	expected, err := readGolden(goldenPath)
+	if err != nil {
+		t.Fatalf("reading golden file %q: %v\nRun with UPDATE_GOLDEN=1 to create it.", goldenPath, err)
+	}
+
+	if !signatureSetsEqual(expected, actual) {
+		expectedJSON, _ := json.MarshalIndent(expected, "", "  ")
+		actualJSON, _ := json.MarshalIndent(actual, "", "  ")
+		t.Fatalf(
+			"operation signature set mismatch against %q\n\nExpected (golden, unordered):\n%s\n\nActual:\n%s\n\nRegenerate with: UPDATE_GOLDEN=1 go test -run %s ./...",
+			goldenPath, expectedJSON, actualJSON, t.Name(),
+		)
+	}
+}
+
+// AssertSignatureContains verifies that the event signature of result
+// contains all of the required operations (as a subset). Additional
+// operations in the actual signature are tolerated. Use this when a
+// fire-and-forget async operation may or may not produce a checkpoint
+// entry depending on goroutine timing (e.g. [durable.WaitAsync]).
+//
+// Each required signature must appear at least once in the actual
+// signature. Duplicate required entries require multiple actual matches.
+func AssertSignatureContains(t *testing.T, result *TestResult, required []OperationSignature) {
+	t.Helper()
+
+	actual := EventSignature(result)
+	counts := make(map[OperationSignature]int, len(actual))
+	for _, sig := range actual {
+		counts[sig]++
+	}
+
+	for _, req := range required {
+		if counts[req] <= 0 {
+			actualJSON, _ := json.MarshalIndent(actual, "", "  ")
+			reqJSON, _ := json.MarshalIndent(required, "", "  ")
+			t.Fatalf(
+				"required operation not found in signature\n\nMissing: %+v\n\nRequired:\n%s\n\nActual:\n%s",
+				req, reqJSON, actualJSON,
+			)
+		}
+		counts[req]--
+	}
+}
+
+// AssertSignatureExcludes verifies that none of the excluded operations
+// appear in the event signature. Use alongside [AssertSignatureContains]
+// when specific operations must NOT be present.
+func AssertSignatureExcludes(t *testing.T, result *TestResult, excluded []OperationSignature) {
+	t.Helper()
+
+	actual := EventSignature(result)
+	actualSet := make(map[OperationSignature]bool, len(actual))
+	for _, sig := range actual {
+		actualSet[sig] = true
+	}
+
+	for _, exc := range excluded {
+		if actualSet[exc] {
+			actualJSON, _ := json.MarshalIndent(actual, "", "  ")
+			t.Fatalf(
+				"excluded operation found in signature\n\nUnexpected: %+v\n\nActual:\n%s",
+				exc, actualJSON,
+			)
+		}
+	}
+}
+
+func signatureSetsEqual(a, b []OperationSignature) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	counts := make(map[OperationSignature]int, len(a))
+	for _, sig := range a {
+		counts[sig]++
+	}
+	for _, sig := range b {
+		counts[sig]--
+		if counts[sig] < 0 {
+			return false
+		}
+	}
+	return true
+}
+
 func signaturesEqual(a, b []OperationSignature) bool {
 	if len(a) != len(b) {
 		return false
