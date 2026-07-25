@@ -45,18 +45,25 @@ import (
 //
 // # Materialization
 //
-// Each DAG materializes a scope CONTEXT operation (SubType "Dag"), and each
-// task materializes its own CONTEXT operation (SubType "DagTask") nested
-// under the scope, whose inner operation (STEP/WAIT/...) then runs beneath
-// it. The scope and each task are checkpointed START-before-body — the same
-// pattern RunInChildContext and Map/Parallel use — so every nested
-// operation always has a valid, already-recorded ParentId.
+// Each DAG materializes a single scope CONTEXT operation (SubType "Dag").
+// Each task's underlying operation (STEP/WAIT/CONTEXT/...) is then
+// checkpointed DIRECTLY under that scope with a deterministic NAME-BASED id
+// "{scopeId}-DAG_NODE_T_{name}" — there is no per-task container operation.
+// The scope is checkpointed START-before-body (as RunInChildContext and
+// Map/Parallel do) so every task op always has a valid, already-recorded
+// ParentId (the scope). This flat model costs N+1 checkpoints for N tasks
+// (one scope + one op per task) rather than the 2N+1 of a per-task-container
+// design.
 
-// Wire subtypes for DAG scope and task container CONTEXT operations.
-const (
-	operationSubTypeDag     = "Dag"
-	operationSubTypeDagTask = "DagTask"
-)
+// operationSubTypeDag is the wire subtype for the DAG scope CONTEXT
+// operation. Tasks are flat name-based ops under it (no task container).
+const operationSubTypeDag = "Dag"
+
+// dagTaskIDPrefix is the reserved id segment for a task's underlying
+// operation: its full id is "{scopeId}-DAG_NODE_T_{name}". The
+// "DAG_NODE_T_" substring is reserved in task-name validation so a task
+// name can never collide with this scheme.
+const dagTaskIDPrefix = "DAG_NODE_T_"
 
 // Dag declares and runs a directed acyclic graph of tasks. The register
 // callback builds the graph by calling the free registration functions
@@ -72,10 +79,10 @@ const (
 //     mirroring the JS reject-vs-resolve split. The DAG container itself
 //     never fails.
 //
-// Each task runs under a deterministic child context (the scope's positional
-// child id) so task operation IDs are stable across replays; the aggregate
-// DagResult is reconstructed by re-execution on replay while each task hits
-// its own per-operation checkpoint fast-path.
+// Each task's underlying operation runs directly under the DAG scope with a
+// deterministic name-based id, so task operation IDs are stable across
+// replays; the aggregate DagResult is reconstructed by re-execution on
+// replay while each task hits its own per-operation checkpoint fast-path.
 //
 // Experimental: This API is experimental and may be changed or removed in
 // future releases.
@@ -114,42 +121,33 @@ func Dag(ctx Context, name string, register func(d *DagBuilder), opts ...DagOpti
 		return nil, err
 	}
 
-	// Pre-claim task container ids in registration order (deterministic
-	// across replays), on the owning goroutine, before any worker runs.
-	taskIDs := make(map[string]string, len(d.tasks))
-	for _, t := range d.tasks {
-		taskIDs[t.name] = scopeEc.ids.next()
-	}
+	// Pre-claim nothing per task: task operations use NAME-BASED ids
+	// ("{scopeId}-DAG_NODE_T_{name}") minted independently per task, so the
+	// enclosing counter advances by exactly one (the scope) for the whole
+	// DAG regardless of task count, and concurrent tasks share no mutable
+	// id state.
 
 	hooks := dagSchedHooks{
 		isSuspend:   func(err error) bool { return errors.Is(err, errSuspendExecution) },
 		suspendedCh: ec.suspend.done,
 		runTask: func(def *dagTaskDef, deps Deps) (any, error) {
-			taskID := taskIDs[def.name]
-			// Materialize the task's own container CONTEXT op under the DAG
-			// scope. def.run is ALWAYS executed — even when the container is
-			// already terminal on replay — so the task's inner operation
-			// fast-paths and returns its correctly-typed result for
-			// DagResult reconstruction; taskTerminal only gates the terminal
-			// CONTEXT checkpoint.
-			taskChild, taskTerminal, _, cerr := dagMaterializeChild(scopeEc, taskID, def.name, operationSubTypeDagTask)
-			if cerr != nil {
-				return nil, cerr
-			}
-			result, runErr := def.run(taskChild, deps)
-			// Suspension is not a task failure: propagate it unchanged so the
-			// invocation ends PENDING and the task resumes later. Never
-			// checkpoint a terminal transition and never wrap it.
+			// FLAT model: run the task's single underlying operation
+			// DIRECTLY under the DAG scope with a name-based id; there is
+			// no per-task container. childNamed captures THIS worker
+			// goroutine as owner and derives the replay mode from the
+			// underlying op's checkpoint, so a completed task fast-paths
+			// and returns its correctly-typed result for DagResult
+			// reconstruction.
+			suffix := dagTaskIDPrefix + def.name
+			taskCtx := scopeEc.childNamed(suffix)
+			result, runErr := def.run(taskCtx, deps)
+			// Suspension is not a task failure: propagate it unchanged so
+			// the invocation ends PENDING and the task resumes later.
 			if errors.Is(runErr, errSuspendExecution) {
 				return result, runErr
 			}
-			if !taskTerminal {
-				if ferr := dagFinishChild(scopeEc, taskID, def.name, operationSubTypeDagTask, runErr); ferr != nil {
-					return result, ferr
-				}
-			}
 			if runErr != nil {
-				return result, &DagTaskFailedError{Name: def.name, TaskID: taskID, Err: runErr}
+				return result, &DagTaskFailedError{Name: def.name, TaskID: scopeEc.ids.formatSuffix(suffix), Err: runErr}
 			}
 			return result, nil
 		},
@@ -180,12 +178,13 @@ func Dag(ctx Context, name string, register func(d *DagBuilder), opts ...DagOpti
 	return res, nil
 }
 
-// dagMaterializeChild claims the CONTEXT-op START for a DAG scope or task
-// container whose positional id has already been claimed, mirroring the
-// START-before-body recipe of RunInChildContext and the batch child items.
-// It returns the child execContext, whether the container was already
-// terminal on a prior invocation (caller must then skip the matching
-// finish), and the checkpointed operation (nil on first execution).
+// dagMaterializeChild claims the CONTEXT-op START for the DAG scope, whose
+// positional id has already been claimed, mirroring the START-before-body
+// recipe of RunInChildContext and the batch child items. It returns the
+// scope execContext, whether the scope was already terminal on a prior
+// invocation (caller must then skip the matching finish), and the
+// checkpointed operation (nil on first execution). Tasks are flat name-based
+// ops under the returned scope and do not use this helper.
 func dagMaterializeChild(parent *execContext, id, name, subType string) (*execContext, bool, *operation, error) {
 	op := parent.state.get(id)
 	if err := validateReplayConsistency(op, string(types.OperationTypeContext), subType, name); err != nil {

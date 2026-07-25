@@ -186,3 +186,28 @@ func (c *execContext) child(entityID string, owner goroutineOwner, mode executio
 		pluginDispatcher:     c.pluginDispatcher,
 	}
 }
+
+// childNamed creates a per-task DAG context that runs a task's single
+// underlying operation DIRECTLY under this (scope) context, using a
+// NAME-BASED id ("{scopeId}-{suffix}") instead of a positional one, and with
+// ParentId equal to the scope. There is no intervening per-task CONTEXT
+// container: the task's op is a flat child of the DAG scope.
+//
+// The returned context is owned by the CALLING goroutine (captured here), so
+// concurrent DAG workers each own their own context. Because the id is
+// name-based, the context needs no positional counter and shares no mutable
+// id state with siblings, so concurrent tasks stay replay-deterministic
+// without the confinement that forces Map/Parallel to give each item its own
+// iteration CONTEXT op. The replay mode is derived from whether the
+// underlying op (or, for a nested-context task, its first child) is already
+// checkpointed.
+func (c *execContext) childNamed(suffix string) *execContext {
+	id := c.ids.formatSuffix(suffix)
+	mode := modeExecution
+	if c.state.get(id) != nil || c.state.get(id+"-1") != nil {
+		mode = modeReplay
+	}
+	nc := c.child(c.ids.prefix, currentGoroutineOwner(), mode)
+	nc.ids.named = suffix
+	return nc
+}

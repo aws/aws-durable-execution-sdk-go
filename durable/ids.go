@@ -12,10 +12,24 @@ import (
 type opIDs struct {
 	prefix  string
 	counter int
+	// named, when non-empty, is the suffix that the NEXT claimed ID uses
+	// instead of the positional counter, yielding "{prefix}-{named}". The
+	// DAG layer sets it so a task's single underlying operation gets a
+	// deterministic NAME-BASED id derived from the task name rather than a
+	// shared positional counter. That is what lets concurrent DAG tasks run
+	// flat under one scope context: their ids never touch a shared mutable
+	// counter, so there is no cross-goroutine race to confine. It is
+	// consumed by the first next() call and never auto-increments.
+	named string
 }
 
 // next claims and returns the next operation ID.
 func (ids *opIDs) next() string {
+	if ids.named != "" {
+		s := ids.formatSuffix(ids.named)
+		ids.named = ""
+		return s
+	}
 	ids.counter++
 	return ids.format(ids.counter)
 }
@@ -23,6 +37,9 @@ func (ids *opIDs) next() string {
 // peek returns the ID that the next call to next will claim, without
 // claiming it.
 func (ids *opIDs) peek() string {
+	if ids.named != "" {
+		return ids.formatSuffix(ids.named)
+	}
 	return ids.format(ids.counter + 1)
 }
 
@@ -46,9 +63,15 @@ func (ids *opIDs) child(entityID string) *opIDs {
 }
 
 func (ids *opIDs) format(n int) string {
-	s := strconv.Itoa(n)
+	return ids.formatSuffix(strconv.Itoa(n))
+}
+
+// formatSuffix joins the context prefix and a raw suffix ("{prefix}-{suffix}",
+// or just the suffix at the root). Used for both positional (numeric) and
+// name-based operation IDs.
+func (ids *opIDs) formatSuffix(suffix string) string {
 	if ids.prefix == "" {
-		return s
+		return suffix
 	}
-	return ids.prefix + "-" + s
+	return ids.prefix + "-" + suffix
 }

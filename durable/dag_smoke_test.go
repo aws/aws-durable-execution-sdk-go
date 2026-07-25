@@ -63,8 +63,9 @@ func diamondHandler(ctx durable.Context, _ struct{}) (diamondOut, error) {
 }
 
 // TestDagDiamondSmoke proves the ported DAG core runs a diamond graph end to
-// end via the local test runner: correct DagResult accessors, and the
-// expected CONTEXT/Dag scope op plus one CONTEXT/DagTask op per task.
+// end via the local test runner: correct DagResult accessors, and the FLAT
+// materialization — one CONTEXT/Dag scope op with each task's STEP op
+// directly beneath it (no per-task CONTEXT/DagTask container), for N+1 ops.
 func TestDagDiamondSmoke(t *testing.T) {
 	runner := durabletest.NewLocalRunner(diamondHandler)
 	result := runner.RunUntilComplete(t, struct{}{})
@@ -87,8 +88,9 @@ func TestDagDiamondSmoke(t *testing.T) {
 		t.Errorf("reason = %q, want ALL_COMPLETED", out.Reason)
 	}
 
-	// The DAG must materialize a CONTEXT/Dag scope op and one CONTEXT/DagTask
-	// op per task, so nested STEP ops always have a valid recorded parent.
+	// FLAT model: exactly one CONTEXT/Dag scope op and NO per-task
+	// CONTEXT/DagTask container ops. Each task's underlying op is a flat
+	// child of the scope.
 	var dagScopes, dagTasks int
 	for _, op := range result.OperationsByType("CONTEXT") {
 		switch op.SubType {
@@ -101,7 +103,13 @@ func TestDagDiamondSmoke(t *testing.T) {
 	if dagScopes != 1 {
 		t.Errorf("CONTEXT/Dag scope ops = %d, want 1", dagScopes)
 	}
-	if dagTasks != 4 {
-		t.Errorf("CONTEXT/DagTask ops = %d, want 4", dagTasks)
+	if dagTasks != 0 {
+		t.Errorf("CONTEXT/DagTask ops = %d, want 0 (flat model has no per-task container)", dagTasks)
+	}
+
+	// The four task STEP ops are checkpointed directly (N+1 total ops:
+	// 1 scope + 4 steps). Confirm there are exactly four STEP ops.
+	if steps := len(result.OperationsByType("STEP")); steps != 4 {
+		t.Errorf("STEP ops = %d, want 4 (one flat step per task)", steps)
 	}
 }
