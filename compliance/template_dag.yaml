@@ -29,7 +29,26 @@ Resources:
             Action:
             - lambda:CheckpointDurableExecution
             - lambda:GetDurableExecutionState
+            - lambda:InvokeFunction
             Resource: '*'
+
+  # Target functions (no TestingMetadata; invoked by DagInvoke handler)
+
+  TargetEcho:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/target_echo/
+      Handler: bootstrap
+      Description: Echo target function (waits briefly, echoes input)
+      Role:
+        Fn::GetAtt:
+        - DurableFunctionRole
+        - Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
 
   DagDiamond:
     Type: AWS::Serverless::Function
@@ -185,6 +204,45 @@ Resources:
       CodeUri: publish/dag_nested/
       Handler: bootstrap
       Description: DAG task that is itself a nested DAG / sub-dag (flat nested Dag container)
+      Role:
+        Fn::GetAtt:
+        - DurableFunctionRole
+        - Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
+  DagInvoke:
+    Type: AWS::Serverless::Function
+    TestingMetadata:
+      TestDescription: ["10-10"]
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/dag_invoke/
+      Handler: bootstrap
+      Description: DAG task that is a durable invoke of the echo target function
+      Role:
+        Fn::GetAtt:
+        - DurableFunctionRole
+        - Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+      Environment:
+        Variables:
+          TARGET_FUNCTION_NAME: !Sub "${TargetEcho.Arn}:$LATEST"
+
+  DagCallback:
+    Type: AWS::Serverless::Function
+    TestingMetadata:
+      TestDescription: ["10-11"]
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/dag_callback/
+      Handler: bootstrap
+      Description: DAG task that is a wait-for-callback completed externally
       Role:
         Fn::GetAtt:
         - DurableFunctionRole

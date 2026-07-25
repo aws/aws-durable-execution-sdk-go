@@ -32,8 +32,14 @@ type Summary struct {
 	Join string `json:"join,omitempty"`
 	// Poll carries the final waitForCondition state (wfcdag handler only).
 	Poll int `json:"poll,omitempty"`
-	// Post carries the downstream step result (outerdag handler only).
-	Post int `json:"post,omitempty"`
+	// Post carries a downstream step result. It is an int for the outerdag
+	// handler (post=50) and a string for the callbackdag handler
+	// (post="<payload>_done"), so it is typed as any to serialize either.
+	Post any `json:"post,omitempty"`
+	// Call carries the invoke task result (invokedag handler only).
+	Call int `json:"call,omitempty"`
+	// Cb carries the callback task result (callbackdag handler only).
+	Cb string `json:"cb,omitempty"`
 }
 
 // From builds a Summary from a drained DagResult.

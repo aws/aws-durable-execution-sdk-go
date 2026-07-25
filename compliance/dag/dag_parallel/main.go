@@ -2,12 +2,20 @@
 // parallel task of two named branches feeding a downstream join step. It
 // returns a dagsummary.Summary as its top-level result for cloud assertion.
 //
-// Graph: fork(DagParallel left->"L", right->"R") -> join(step[fork])="L-R".
-// Expected: all SUCCEEDED, ALL_COMPLETED, join="L-R", counts [2,0,0,2].
+// Graph: fork(DagParallel left->"L", right->"R") -> join(step[fork]).
+//
+// The join reads ONLY the aggregate ParallelResult/BatchResult handed to it
+// as the dep value (success count and total branch count) and returns
+// "<succeeded>/<size>" = "2/2". It does not read individual branch values,
+// so this scenario is expressible identically across all four SDKs
+// (Java cannot read parallel branch values from within a step body). Reading
+// child branch values is covered separately by 10-6 (map).
+//
+// Expected: all SUCCEEDED, ALL_COMPLETED, join="2/2", counts [2,0,0,2].
 package main
 
 import (
-	"strings"
+	"fmt"
 
 	"github.com/aws/aws-durable-execution-sdk-go/compliance/internal/dagsummary"
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
@@ -30,7 +38,8 @@ func handler(ctx durable.Context, _ struct{}) (dagsummary.Summary, error) {
 				if err != nil {
 					return "", err
 				}
-				return strings.Join(br.Results(), "-"), nil
+				// Aggregate-only join: success count over total branch count.
+				return fmt.Sprintf("%d/%d", br.SuccessCount(), br.TotalCount()), nil
 			})
 	}, durable.WithDagMaxConcurrency(1))
 	if err != nil {
