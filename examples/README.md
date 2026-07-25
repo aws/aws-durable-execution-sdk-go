@@ -97,7 +97,9 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [map-min-successful](map-min-successful/main.go) | Map, WithCompletion (min successful) | SUCCEEDED |
 | [map-tolerated-failure-count](map-tolerated-failure-count/main.go) | Map, WithToleratedFailureCount | SUCCEEDED |
 | [map-failure-threshold](map-failure-threshold/main.go) | Map, fail-fast threshold | SUCCEEDED |
+| [map-tolerated-failure-percentage](map-tolerated-failure-percentage/main.go) | Map, WithToleratedFailurePercentage | SUCCEEDED |
 | [map-completion-config-issue](map-completion-config-issue/main.go) | Map, early-completion partial results | SUCCEEDED |
+| [map-virtual-context](map-virtual-context/main.go) | Map, WithNesting (NestingFlat) | SUCCEEDED |
 | [parallel-basic](parallel-basic/main.go) | Parallel, WithMaxConcurrency | SUCCEEDED |
 | [parallel-empty](parallel-empty/main.go) | Parallel (no branches) | SUCCEEDED |
 | [parallel-invoke](parallel-invoke/main.go) | Parallel, Invoke | SUCCEEDED |
@@ -105,6 +107,8 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [parallel-error-preservation](parallel-error-preservation/main.go) | Parallel, error ordering | SUCCEEDED |
 | [parallel-min-successful](parallel-min-successful/main.go) | Parallel, WithCompletion (min successful) | SUCCEEDED |
 | [parallel-tolerated-failure](parallel-tolerated-failure/main.go) | Parallel, WithToleratedFailureCount | SUCCEEDED |
+| [parallel-tolerated-failure-percentage](parallel-tolerated-failure-percentage/main.go) | Parallel, WithToleratedFailurePercentage | SUCCEEDED |
+| [parallel-virtual-context](parallel-virtual-context/main.go) | Parallel, WithNesting (NestingFlat) | SUCCEEDED |
 
 ### Future Combinators & Concurrency
 
@@ -136,11 +140,13 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [context-validation-step](context-validation-step/main.go) | Step, goroutine validation | FAILED |
 | [context-validation-wait-condition](context-validation-wait-condition/main.go) | WaitForCondition, goroutine validation | FAILED |
 | [error-determinism](error-determinism/main.go) | Step, error replay consistency | SUCCEEDED |
+| [error-handling-taxonomy](error-handling-taxonomy/main.go) | errors.As, StepError, InvokeError, CallbackError | SUCCEEDED |
 | [serde-basic](serde-basic/main.go) | Step, WithStepSerdes | SUCCEEDED |
 | [serde-custom-config](serde-custom-config/main.go) | WithSerdes (handler-level) | SUCCEEDED |
 | [logger-after-wait](logger-after-wait/main.go) | Wait, WithLogger, replay suppression | SUCCEEDED |
 | [logger-after-callback](logger-after-callback/main.go) | WaitForCallback, WithLogger | SUCCEEDED |
 | [logger-log-levels](logger-log-levels/main.go) | WithLogger, all log levels | SUCCEEDED |
+| [plugin-lifecycle](plugin-lifecycle/main.go) | WithPlugins, hook lifecycle ordering | SUCCEEDED |
 
 ### Showcase & Edge Cases
 
