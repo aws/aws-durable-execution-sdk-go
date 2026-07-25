@@ -264,3 +264,81 @@ Resources:
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
+
+  WaitForConditionBasicLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${WaitForConditionBasic}"
+      RetentionInDays: 7
+
+  WaitForConditionImmediateLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${WaitForConditionImmediate}"
+      RetentionInDays: 7
+
+  WaitForConditionWithNameLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${WaitForConditionWithName}"
+      RetentionInDays: 7
+
+  WaitForConditionCustomInitialStateLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${WaitForConditionCustomInitialState}"
+      RetentionInDays: 7
+
+  WaitForConditionFixedDelayLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${WaitForConditionFixedDelay}"
+      RetentionInDays: 7
+
+  WaitForConditionMaxAttemptsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${WaitForConditionMaxAttempts}"
+      RetentionInDays: 7
+
+  WaitForConditionCheckThrowsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${WaitForConditionCheckThrows}"
+      RetentionInDays: 7
+
+  WaitForConditionCheckThrowsCaughtLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${WaitForConditionCheckThrowsCaught}"
+      RetentionInDays: 7
+
+  WaitForConditionComplexObjectLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${WaitForConditionComplexObject}"
+      RetentionInDays: 7
+
+  WaitForConditionNullResultLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${WaitForConditionNullResult}"
+      RetentionInDays: 7
+
+  WaitForConditionCustomSerdesLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${WaitForConditionCustomSerdes}"
+      RetentionInDays: 7
+
+  WaitForConditionThenStepLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${WaitForConditionThenStep}"
+      RetentionInDays: 7
+
+  WaitForConditionMultipleSequentialLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${WaitForConditionMultipleSequential}"
+      RetentionInDays: 7

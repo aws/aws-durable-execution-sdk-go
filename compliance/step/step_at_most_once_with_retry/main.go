@@ -4,9 +4,10 @@ package main
 import (
 	"fmt"
 	"os"
+	"time"
 
-	"github.com/aws/aws-durable-execution-sdk-go/durable"
 	"github.com/aws/aws-durable-execution-sdk-go/compliance/internal/attempts"
+	"github.com/aws/aws-durable-execution-sdk-go/durable"
 )
 
 func handler(ctx durable.Context, event string) (string, error) {
@@ -16,7 +17,9 @@ func handler(ctx durable.Context, event string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		fmt.Println(event)
+		// Raw stdout write: the SDK's context logger suppresses emissions during
+		// replay, and custom runtimes do not get platform-injected execution metadata.
+		fmt.Printf("{\"executionArn\":%q,\"msg\":%q}\n", executionID, event)
 		if count < 2 {
 			os.Exit(1)
 		}
@@ -25,7 +28,7 @@ func handler(ctx durable.Context, event string) (string, error) {
 		durable.WithSemantics(durable.AtMostOncePerRetry),
 		durable.WithRetry(durable.NewRetryStrategy(durable.RetryConfig{
 			MaxAttempts:  3,
-			InitialDelay: 1,
+			InitialDelay: time.Second,
 			Jitter:       durable.JitterNone,
 		})))
 }

@@ -434,3 +434,123 @@ Resources:
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
+
+  StepBasicLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${StepBasic}"
+      RetentionInDays: 7
+
+  StepWithNameLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${StepWithName}"
+      RetentionInDays: 7
+
+  StepNestedLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${StepNested}"
+      RetentionInDays: 7
+
+  StepComplexObjectLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${StepComplexObject}"
+      RetentionInDays: 7
+
+  StepNullResultLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${StepNullResult}"
+      RetentionInDays: 7
+
+  StepCustomSerdesLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${StepCustomSerdes}"
+      RetentionInDays: 7
+
+  StepLoggingLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${StepLogging}"
+      RetentionInDays: 7
+
+  StepAndWaitReplayLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${StepAndWaitReplay}"
+      RetentionInDays: 7
+
+  StepReplaySkipsSucceededLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${StepReplaySkipsSucceeded}"
+      RetentionInDays: 7
+
+  StepReplayRethrowsFailedLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${StepReplayRethrowsFailed}"
+      RetentionInDays: 7
+
+  StepWithRetryLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${StepWithRetry}"
+      RetentionInDays: 7
+
+  StepRetryExhaustionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${StepRetryExhaustion}"
+      RetentionInDays: 7
+
+  StepDefaultRetryLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${StepDefaultRetry}"
+      RetentionInDays: 7
+
+  StepRetryCustomConfigLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${StepRetryCustomConfig}"
+      RetentionInDays: 7
+
+  StepRetrySpecificExceptionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${StepRetrySpecificException}"
+      RetentionInDays: 7
+
+  StepRetryNonRetryableLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${StepRetryNonRetryable}"
+      RetentionInDays: 7
+
+  StepAtMostOnceNoRetryLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${StepAtMostOnceNoRetry}"
+      RetentionInDays: 7
+
+  StepAtMostOnceWithRetryLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${StepAtMostOnceWithRetry}"
+      RetentionInDays: 7
+
+  StepWithErrorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${StepWithError}"
+      RetentionInDays: 7
+
+  StepErrorCaughtLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${StepErrorCaught}"
+      RetentionInDays: 7
