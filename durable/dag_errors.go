@@ -19,6 +19,7 @@ var (
 	_ error = (*DagExecutionError)(nil)
 	_ error = (*DagError)(nil)
 	_ error = (*DagTaskFailedError)(nil)
+	_ error = (*DagPredicateError)(nil)
 )
 
 // DagError indicates that a DAG scope-level operation failed. It is the DAG
@@ -80,6 +81,40 @@ func (e *DagTaskFailedError) As(target interface{}) bool {
 	}
 	return false
 }
+
+// DagPredicateError indicates that a task's runIf predicate panicked. A
+// runIf is specified as a synchronous, deterministic, pure predicate over
+// resolved upstream results, so a panic there is a defect in deterministic
+// code, not a business outcome. It therefore ABORTS the DAG rather than
+// being reinterpreted as a task failure: recording it as a failure would
+// silently drive every downstream ALL_FAILED / ANY_FAILED / ALL_DONE
+// compensation path off a defect in the scheduler's own decision-making. The
+// offending task is given no terminal state, no further tasks start, and
+// [Dag] returns this error so the DAG container checkpoints a failure.
+//
+// The recovered panic value is wrapped as the cause (with the stack
+// preserved); when the panic value was itself an error it is wrapped with
+// %w, so [errors.Is] / [errors.As] reach the original.
+//
+// Experimental: This API is experimental and may be changed or removed in
+// future releases.
+type DagPredicateError struct {
+	// Name is the offending task's name (the task whose runIf panicked).
+	Name string
+	// Err is the recovered panic value formatted as an error, with the
+	// stack trace preserved.
+	Err error
+}
+
+func (e *DagPredicateError) Error() string {
+	return fmt.Sprintf("durable: dag task %q runIf predicate panicked: %v", e.Name, e.Err)
+}
+
+// Unwrap exposes the wrapped panic cause for errors.Is/errors.As traversal.
+//
+// Experimental: This API is experimental and may be changed or removed in
+// future releases.
+func (e *DagPredicateError) Unwrap() error { return e.Err }
 
 // DagValidationError aggregates all registration/validation problems
 // detected before any task is scheduled.

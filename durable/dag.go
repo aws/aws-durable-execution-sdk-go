@@ -72,12 +72,16 @@ const dagTaskIDPrefix = "DAG_NODE_T_"
 //
 //   - err != nil: a registration/validation/config failure (nothing was
 //     scheduled), e.g. *DagValidationError, a cycle error, or a
-//     *DagInvalidConfigError. On suspension it propagates the SDK's internal
-//     suspend signal so the invocation pauses.
+//     *DagInvalidConfigError; or a *DagPredicateError when a task's runIf
+//     predicate panicked (a defect in a deterministic predicate ABORTS the
+//     DAG — the offending task gets no terminal state, no further tasks run,
+//     and the container checkpoints a failure). On suspension it propagates
+//     the SDK's internal suspend signal so the invocation pauses.
 //   - err == nil: the DAG drained (or early-completed). Individual task
-//     failures are reported INSIDE the result via res.ThrowIfError(),
-//     mirroring the JS reject-vs-resolve split. The DAG container itself
-//     never fails.
+//     failures (including a panicking task BODY) are reported INSIDE the
+//     result via res.ThrowIfError(), mirroring the JS reject-vs-resolve
+//     split. The DAG container does not fail for a task-level failure; it
+//     fails only on a predicate abort as described above.
 //
 // Each task's underlying operation runs directly under the DAG scope with a
 // deterministic name-based id, so task operation IDs are stable across
@@ -164,9 +168,23 @@ func Dag(ctx Context, name string, register func(d *DagBuilder), opts ...DagOpti
 
 	s := newDagScheduler(d.tasks, maxConc, cfg.completion, hooks)
 	s.defaultTrigger = cfg.defaultTrigger
-	execs, reason, suspended := s.run(ec)
+	execs, reason, suspended, abortErr := s.run(ec)
 	if suspended {
 		return nil, errSuspendExecution
+	}
+	if abortErr != nil {
+		// A task's runIf predicate panicked: the DAG ABORTS. The offending
+		// task has no terminal state, no further tasks were started, and
+		// in-flight workers (if any) have drained. Checkpoint the container
+		// as FAILED so the defect is durable and visible in the history,
+		// then surface the typed *DagPredicateError to the caller — no
+		// DagResult is produced.
+		if !scopeTerminal {
+			if err := dagFinishChild(ec, scopeID, name, operationSubTypeDag, abortErr); err != nil {
+				return nil, err
+			}
+		}
+		return nil, abortErr
 	}
 
 	// The graph drained: finish the DAG's own container CONTEXT op

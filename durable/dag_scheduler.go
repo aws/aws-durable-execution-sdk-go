@@ -30,12 +30,13 @@ type dagSchedHooks struct {
 	// sentinel (nil-safe: treated as "never" when unset).
 	isSuspend func(error) bool
 	// failTask shapes a scheduler-side task fault (a recovered panic in the
-	// worker goroutine, or in the synchronous runIf) into the same
-	// task-failure error a normal runTask error is wrapped in, so the error
-	// taxonomy (DagTaskFailedError -> *OperationError) is identical
-	// regardless of where the fault surfaced. The runtime wires this to
-	// build a DagTaskFailedError with the task's scoped id. Nil-safe: the
-	// bare cause is used when unset (unit tests with a fake runner).
+	// worker goroutine) into the same task-failure error a normal runTask
+	// error is wrapped in, so the error taxonomy (DagTaskFailedError ->
+	// *OperationError) is identical regardless of where the fault surfaced.
+	// The runtime wires this to build a DagTaskFailedError with the task's
+	// scoped id. Nil-safe: the bare cause is used when unset (unit tests
+	// with a fake runner). A panicking runIf does NOT use this hook: it
+	// aborts the DAG with a DagPredicateError rather than failing a task.
 	failTask func(def *dagTaskDef, cause error) error
 	// now supplies timestamps (defaults to time.Now).
 	now func() time.Time
@@ -75,6 +76,15 @@ type dagScheduler struct {
 	// whole invocation is going to suspend, so no new tasks start.
 	suspending bool
 
+	// aborting is set once a task's runIf predicate panics. A defect in a
+	// deterministic, pure predicate aborts the whole DAG: the offending
+	// task gets no terminal state, no new tasks start, and run() surfaces
+	// abortErr once any in-flight workers have drained. First writer wins,
+	// so a sibling completing (or a later predicate panic) during the drain
+	// cannot downgrade or overwrite the abort.
+	aborting bool
+	abortErr error
+
 	completing     bool
 	completeReason DagCompletionReason
 	completeSet    bool
@@ -102,8 +112,11 @@ func newDagScheduler(tasks []*dagTaskDef, maxConc int, completion *DagCompletion
 }
 
 // run executes the graph and returns the per-task executions (registration
-// order), the completion reason, and whether the invocation suspended.
-func (s *dagScheduler) run(ctx context.Context) ([]TaskExecution, DagCompletionReason, bool) {
+// order), the completion reason, whether the invocation suspended, and a
+// non-nil abort error if a task's runIf predicate panicked. Suspension and
+// abort are mutually exclusive with a normal drain: on either, the execs and
+// reason are zero-valued and the caller acts on the flag/error instead.
+func (s *dagScheduler) run(ctx context.Context) ([]TaskExecution, DagCompletionReason, bool, error) {
 	for {
 		// 1. Resolve skips synchronously and start ready tasks (bounded).
 		progressed := s.startReady(ctx)
@@ -123,10 +136,22 @@ func (s *dagScheduler) run(ctx context.Context) ([]TaskExecution, DagCompletionR
 		allSettled := len(s.state) == len(s.tasks)
 		completing := s.completing
 		suspending := s.suspending
+		aborting := s.aborting
+		abortErr := s.abortErr
 
 		if suspending && nInFlight == 0 {
 			s.mu.Unlock()
-			return nil, "", true
+			return nil, "", true, nil
+		}
+		if aborting && nInFlight == 0 {
+			// A runIf predicate panicked. Any workers started on earlier
+			// passes have now drained, so nothing leaks and no task
+			// checkpoint can race the container FAIL that Dag() writes
+			// next. Surface the typed abort error; the drained siblings'
+			// outcomes were folded into state but cannot change it, and
+			// suspension (checked above and via suspCh below) still wins.
+			s.mu.Unlock()
+			return nil, "", false, abortErr
 		}
 		if (completing || allSettled) && nInFlight == 0 {
 			s.mu.Unlock()
@@ -169,12 +194,14 @@ func (s *dagScheduler) run(ctx context.Context) ([]TaskExecution, DagCompletionR
 		case <-suspCh:
 			// Whole invocation suspended; in-flight goroutines are
 			// abandoned exactly as the batch scheduler abandons its
-			// branches.
-			return nil, "", true
+			// branches. Suspension outranks a pending abort: on replay the
+			// deterministic runIf panics again and aborts then.
+			return nil, "", true, nil
 		}
 	}
 
-	return s.finalize()
+	execs, reason, susp := s.finalize()
+	return execs, reason, susp, nil
 }
 
 // startReady evaluates readiness and starts (or skips) as many tasks as
@@ -183,13 +210,13 @@ func (s *dagScheduler) startReady(ctx context.Context) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.completing || s.suspending {
+	if s.completing || s.suspending || s.aborting {
 		return false
 	}
 	progressed := false
 
 	for _, t := range s.tasks {
-		if s.completing || s.suspending {
+		if s.completing || s.suspending || s.aborting {
 			break
 		}
 		if _, settled := s.state[t.name]; settled {
@@ -216,11 +243,15 @@ func (s *dagScheduler) startReady(ctx context.Context) bool {
 		if t.runIf != nil {
 			run, runIfErr := s.evalRunIf(t, deps)
 			if runIfErr != nil {
-				// A panicking runIf is a task-level fault, not an
-				// invocation abort: fail this task and let the graph drain.
-				s.recordFailedLocked(t, runIfErr)
-				progressed = true
-				continue
+				// A panicking runIf is a defect in a deterministic, pure
+				// predicate — not a business outcome. ABORT the whole DAG:
+				// record NO terminal state for this task and start nothing
+				// further, so run() surfaces the typed error and Dag()
+				// checkpoints a container failure. Reinterpreting it as a
+				// task FAILED would drive downstream ALL_FAILED / ANY_FAILED
+				// / ALL_DONE compensation off a scheduler-side defect.
+				s.beginAbortLocked(runIfErr)
+				return progressed
 			}
 			if !run {
 				s.recordSkipLocked(t, SkipRunIf)
@@ -453,37 +484,42 @@ func (s *dagScheduler) buildDepsLocked(t *dagTaskDef) Deps {
 // evalRunIf evaluates a task's runIf predicate with panic recovery. runIf
 // runs SYNCHRONOUSLY on the scheduler goroutine (it decides whether a task
 // even starts), so unlike a task body it is NOT covered by the worker-entry
-// recover. A panic here would otherwise unwind through run()/Dag() and abort
-// the entire invocation instead of failing one task; recover it and report a
-// task-level failure, matching the step-body model. Runs under s.mu, but the
-// recover touches no shared state, and runIf itself only inspects Deps.
+// recover. A panic here must never reach the runtime; recover it and convert
+// it into a *DagPredicateError so the caller can ABORT the DAG. runIf is a
+// deterministic, pure predicate, so a panic is a defect in the graph's own
+// decision-making, not a task outcome — it is deliberately NOT shaped into a
+// DagTaskFailedError. Runs under s.mu, but the recover touches no shared
+// state, and runIf itself only inspects Deps.
 func (s *dagScheduler) evalRunIf(t *dagTaskDef, deps Deps) (run bool, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			run = false
-			cause := fmt.Errorf("durable: dag task %q runIf panicked: %v\n%s", t.name, r, debug.Stack())
-			if s.hooks.failTask != nil {
-				err = s.hooks.failTask(t, cause)
+			var cause error
+			if e, ok := r.(error); ok {
+				// Wrap with %w so errors.Is/errors.As reach the original,
+				// and keep the stack as the other recover sites format it.
+				cause = fmt.Errorf("durable: dag task %q runIf panicked: %w\n%s", t.name, e, debug.Stack())
 			} else {
-				err = cause
+				cause = fmt.Errorf("durable: dag task %q runIf panicked: %v\n%s", t.name, r, debug.Stack())
 			}
+			err = &DagPredicateError{Name: t.name, Err: cause}
 		}
 	}()
 	return t.runIf(deps), nil
 }
 
-// recordFailedLocked settles a task as FAILED in-memory and re-evaluates the
-// completion policy. Used for a synchronous runIf panic: the task never
-// materialized an operation, so there is no checkpoint to write (invisible on
-// the wire) — the failure lives only in the in-memory execution state, and on
-// replay the same deterministic panic reproduces it.
-func (s *dagScheduler) recordFailedLocked(t *dagTaskDef, err error) {
-	now := s.hooks.now()
-	s.state[t.name] = &TaskExecution{
-		Name: t.name, Status: StatusFailed, Err: err,
-		StartedAt: now, CompletedAt: now, kind: dagKindFor(s.tasks, t.name),
+// beginAbortLocked marks the DAG as aborting because a task's runIf
+// predicate panicked. The offending task is given NO terminal state (a
+// predicate defect is not a task outcome), no new tasks start, and run()
+// returns err once any in-flight workers have drained. First writer wins so
+// a sibling completing (or a later predicate panic) during the drain cannot
+// downgrade or overwrite the cause.
+func (s *dagScheduler) beginAbortLocked(err error) {
+	if s.aborting {
+		return
 	}
-	s.evaluateCompletionLocked()
+	s.aborting = true
+	s.abortErr = err
 }
 
 func (s *dagScheduler) recordSkipLocked(t *dagTaskDef, reason SkipReason) {

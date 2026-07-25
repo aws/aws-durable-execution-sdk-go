@@ -14,9 +14,12 @@ import (
 // runSched builds a scheduler over d's tasks with a fake runner and runs it.
 func runSched(d *DagBuilder, maxConc int, completion *DagCompletionConfig, runTask func(def *dagTaskDef, deps Deps) (any, error)) ([]TaskExecution, DagCompletionReason) {
 	s := newDagScheduler(d.tasks, maxConc, completion, dagSchedHooks{runTask: runTask})
-	execs, reason, susp := s.run(context.Background())
+	execs, reason, susp, abortErr := s.run(context.Background())
 	if susp {
 		panic("unexpected suspend in test")
+	}
+	if abortErr != nil {
+		panic("unexpected abort in test: " + abortErr.Error())
 	}
 	return execs, reason
 }
@@ -261,9 +264,12 @@ func TestDagScheduler_DefaultTriggerRuleApplied(t *testing.T) {
 		return 0, nil
 	}})
 	s.defaultTrigger = AllDone
-	execs, reason, susp := s.run(context.Background())
+	execs, reason, susp, abortErr := s.run(context.Background())
 	if susp {
 		t.Fatal("unexpected suspend")
+	}
+	if abortErr != nil {
+		t.Fatalf("unexpected abort: %v", abortErr)
 	}
 	st := statusByName(execs)
 	if st["root"] != StatusFailed {
@@ -371,9 +377,12 @@ func TestDagScheduler_NoSpuriousSuspension(t *testing.T) {
 			isSuspend:   func(error) bool { return false },
 		}
 		s := newDagScheduler(d.tasks, 2, nil, hooks)
-		execs, _, susp := s.run(context.Background())
+		execs, _, susp, abortErr := s.run(context.Background())
 		if susp {
 			t.Fatalf("iteration %d: spurious suspension for a DAG whose tasks all completed", it)
+		}
+		if abortErr != nil {
+			t.Fatalf("iteration %d: unexpected abort: %v", it, abortErr)
 		}
 		if len(execs) != n {
 			t.Fatalf("iteration %d: want %d execs, got %d", it, n, len(execs))
@@ -457,7 +466,7 @@ func runSchedTimeout(t *testing.T, sc *dagScheduler, d time.Duration) ([]TaskExe
 	}
 	ch := make(chan res, 1)
 	go func() {
-		e, r, s := sc.run(context.Background())
+		e, r, s, _ := sc.run(context.Background())
 		ch <- res{e, r, s}
 	}()
 	select {
@@ -577,29 +586,50 @@ func TestDagScheduler_WorkerPanicFailsTaskNotProcess(t *testing.T) {
 	}
 }
 
-// TestDagScheduler_RunIfPanicFailsTaskNotProcess exercises the synchronous
-// runIf recover: a panicking predicate fails only that task (the task never
-// starts) and the graph still drains.
-func TestDagScheduler_RunIfPanicFailsTaskNotProcess(t *testing.T) {
+// TestDagScheduler_RunIfPanicAbortsDag exercises the synchronous runIf
+// recover under the abort contract (review finding H5): a panicking predicate
+// is a defect in deterministic, pure code, so it ABORTS the DAG with a typed
+// *DagPredicateError instead of being recorded as a task failure. The recover
+// still runs (the process survives), the offending task gets NO terminal
+// state, and no further task — including a downstream ALL_FAILED compensation
+// task — is started.
+func TestDagScheduler_RunIfPanicAbortsDag(t *testing.T) {
+	errBoom := errors.New("runIf boom")
 	d := newDagBuilder()
-	DagStep(d, "boom", nil, func(_ Deps, _ StepContext) (int, error) { return 0, nil },
-		WithRunIf(func(Deps) bool { panic("runIf boom") }))
-	DagStep(d, "ok", nil, func(_ Deps, _ StepContext) (int, error) { return 0, nil })
+	boom := DagStep(d, "boom", nil, func(_ Deps, _ StepContext) (int, error) { return 0, nil },
+		WithRunIf(func(Deps) bool { panic(errBoom) }))
+	// Downstream ALL_FAILED compensation: under the OLD task-failure
+	// semantics this would fire; under the abort contract it must not run.
+	DagStep(d, "refund", []AnyHandle{boom}, func(_ Deps, _ StepContext) (int, error) { return 0, nil },
+		WithTriggerRule(AllFailed))
+	// Independent sibling registered AFTER boom: proves the scheduler starts
+	// nothing further once it aborts.
+	DagStep(d, "later", nil, func(_ Deps, _ StepContext) (int, error) { return 0, nil })
 
-	execs, reason := runSched(d, 0, nil, func(def *dagTaskDef, _ Deps) (any, error) { return 0, nil })
-	st := statusByName(execs)
-	if st["boom"] != StatusFailed {
-		t.Fatalf("task with panicking runIf should be FAILED, got %v", st["boom"])
+	s := newDagScheduler(d.tasks, 0, nil, dagSchedHooks{
+		runTask: func(_ *dagTaskDef, _ Deps) (any, error) { return 0, nil },
+	})
+	execs, _, susp, abortErr := s.run(context.Background())
+
+	if susp {
+		t.Fatal("a predicate panic must abort, not suspend")
 	}
-	if st["ok"] != StatusSucceeded {
-		t.Fatalf("sibling should still complete, got %v", st["ok"])
+	if abortErr == nil {
+		t.Fatal("expected a typed abort error, got nil")
 	}
-	if reason != CompletedWithFailures {
-		t.Fatalf("reason=%v want CompletedWithFailures", reason)
+	var pe *DagPredicateError
+	if !errors.As(abortErr, &pe) {
+		t.Fatalf("abort error should be *DagPredicateError, got %T: %v", abortErr, abortErr)
 	}
-	for _, e := range execs {
-		if e.Name == "boom" && (e.Err == nil || !strings.Contains(e.Err.Error(), "runIf panicked")) {
-			t.Fatalf("boom.Err should describe the runIf panic, got %v", e.Err)
-		}
+	if pe.Name != "boom" {
+		t.Fatalf("predicate error should name the offending task, got %q", pe.Name)
+	}
+	if !errors.Is(abortErr, errBoom) {
+		t.Fatalf("abort error should unwrap to the original panic value, got %v", abortErr)
+	}
+	// No task settled: not the offending task, not the ALL_FAILED downstream,
+	// not the independent sibling.
+	if st := statusByName(execs); len(st) != 0 {
+		t.Fatalf("abort must leave no terminal task states, got %v", st)
 	}
 }

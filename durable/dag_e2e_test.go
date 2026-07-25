@@ -456,57 +456,78 @@ func TestDagE2E_PanicInTaskIsContainedAsFailure(t *testing.T) {
 	}
 }
 
-// TestDagE2E_PanicInRunIfIsContainedAsFailure is a regression guard for the
-// synchronous runIf path of BLOCKER B2 / GO-H1. runIf is evaluated on the
-// scheduler goroutine (not a worker), so it is not covered by the worker
-// recover; a panic there must still fail only that task rather than aborting
-// the whole invocation.
-func TestDagE2E_PanicInRunIfIsContainedAsFailure(t *testing.T) {
+// TestDagE2E_PanicInRunIfAbortsDag is the end-to-end guard for the runIf
+// abort contract (review finding H5). runIf is evaluated on the scheduler
+// goroutine (not a worker), so it is not covered by the worker recover; a
+// panic there must be recovered (never reach the runtime) but then ABORT the
+// DAG with a typed *DagPredicateError rather than be recorded as a task
+// failure. The process survives, Dag returns the typed error and no
+// DagResult, the container checkpoints a failure, and the downstream
+// ALL_FAILED compensation task never runs.
+func TestDagE2E_PanicInRunIfAbortsDag(t *testing.T) {
+	var refundRuns int32
 	type out struct {
-		DagErr     bool
-		BoomStatus string
-		OkStatus   string
-		Failures   int
-		Reason     string
+		HadErr     bool
+		IsPredErr  bool
+		PredTask   string
+		ResNil     bool
+		ErrMsg     string
+		RefundRuns int32
 	}
 	handler := func(dc durable.Context, _ struct{}) (out, error) {
 		res, err := durable.Dag(dc, "wf", func(d *durable.DagBuilder) {
-			durable.DagStep(d, "boom", nil, func(_ durable.Deps, _ durable.StepContext) (int, error) {
-				return 0, nil
-			}, durable.WithRunIf(func(durable.Deps) bool { panic("runIf exploded") }))
-			durable.DagStep(d, "ok", nil, func(_ durable.Deps, _ durable.StepContext) (int, error) {
-				return 1, nil
-			})
+			boom := durable.DagStep(d, "boom", nil,
+				func(_ durable.Deps, _ durable.StepContext) (int, error) { return 0, nil },
+				durable.WithRunIf(func(durable.Deps) bool { panic("runIf exploded") }))
+			// Downstream ALL_FAILED compensation: under the OLD task-failure
+			// semantics boom would be FAILED and this would fire (a defect
+			// issuing a refund). Under the abort contract it must never run.
+			durable.DagStep(d, "refund", []durable.AnyHandle{boom},
+				func(_ durable.Deps, _ durable.StepContext) (int, error) {
+					atomic.AddInt32(&refundRuns, 1)
+					return 0, nil
+				}, durable.WithTriggerRule(durable.AllFailed))
 		})
-		if err != nil {
-			return out{}, err
+		var pe *durable.DagPredicateError
+		o := out{
+			HadErr:     err != nil,
+			IsPredErr:  errors.As(err, &pe),
+			ResNil:     res == nil,
+			RefundRuns: atomic.LoadInt32(&refundRuns),
 		}
-		boom, _ := res.Status("boom")
-		ok, _ := res.Status("ok")
-		return out{
-			DagErr:     res.ThrowIfError() != nil,
-			BoomStatus: string(boom),
-			OkStatus:   string(ok),
-			Failures:   res.FailureCount(),
-			Reason:     string(res.CompletionReason()),
-		}, nil
+		if err != nil {
+			o.ErrMsg = err.Error()
+		}
+		if pe != nil {
+			o.PredTask = pe.Name
+		}
+		return o, nil
 	}
 	runner := durabletest.NewLocalRunner(handler)
 	result := runner.RunUntilComplete(t, struct{}{})
 	if result.Status != durabletest.Succeeded {
-		t.Fatalf("handler should succeed (runIf panic contained, invocation not aborted), got %s (%+v)", result.Status, result.Error)
+		t.Fatalf("handler should return normally after catching the abort (process alive, panic recovered), got %s (%+v)", result.Status, result.Error)
 	}
 	o, err := durabletest.ResultAs[out](result)
 	if err != nil {
 		t.Fatalf("ResultAs: %v", err)
 	}
-	if o.BoomStatus != string(durable.StatusFailed) {
-		t.Fatalf("task with panicking runIf should be FAILED, got %q", o.BoomStatus)
+	if !o.HadErr {
+		t.Fatal("Dag must return a non-nil error when a runIf predicate panics")
 	}
-	if o.OkStatus != string(durable.StatusSucceeded) {
-		t.Fatalf("sibling should still complete, got %q", o.OkStatus)
+	if !o.IsPredErr {
+		t.Fatalf("Dag error should be a *DagPredicateError, got %q", o.ErrMsg)
 	}
-	if !o.DagErr || o.Failures != 1 || o.Reason != string(durable.CompletedWithFailures) {
-		t.Fatalf("runIf panic not contained as a single task failure: %+v", o)
+	if o.PredTask != "boom" {
+		t.Fatalf("predicate error should name the offending task, got %q", o.PredTask)
+	}
+	if !o.ResNil {
+		t.Fatal("Dag must not return a DagResult on a predicate abort")
+	}
+	if o.RefundRuns != 0 {
+		t.Fatalf("downstream ALL_FAILED task must not run on a predicate abort, ran %d time(s)", o.RefundRuns)
+	}
+	if !strings.Contains(o.ErrMsg, "runIf") || !strings.Contains(o.ErrMsg, "panicked") {
+		t.Fatalf("abort error should describe the runIf panic, got %q", o.ErrMsg)
 	}
 }
