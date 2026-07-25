@@ -1639,6 +1639,23 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 120
 
+  PluginLifecycleFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-plugin-lifecycle
+      CodeUri: .aws-sam/build-artifacts/plugin-lifecycle/
+      Handler: bootstrap
+      Description: WithPlugins hook lifecycle and ordering
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
   SerdeBasicFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -1804,6 +1821,23 @@ Resources:
       CodeUri: .aws-sam/build-artifacts/error-determinism/
       Handler: bootstrap
       Description: Deterministic error handling across replay boundaries
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  ErrorHandlingTaxonomyFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-error-handling-taxonomy
+      CodeUri: .aws-sam/build-artifacts/error-handling-taxonomy/
+      Handler: bootstrap
+      Description: Error taxonomy with errors.As matching for StepError, InvokeError, CallbackError
       Role: !GetAtt DurableFunctionRole.Arn
       DurableConfig:
         RetentionPeriodInDays: 7
@@ -2225,6 +2259,9 @@ Outputs:
   LoggerLogLevelsFunction:
     Description: Logger Log Levels Function ARN
     Value: !GetAtt LoggerLogLevelsFunction.Arn
+  PluginLifecycleFunction:
+    Description: Plugin Lifecycle Function ARN
+    Value: !GetAtt PluginLifecycleFunction.Arn
   SerdeBasicFunction:
     Description: Serde Basic Function ARN
     Value: !GetAtt SerdeBasicFunction.Arn
@@ -2255,6 +2292,9 @@ Outputs:
   ErrorDeterminismFunction:
     Description: Error Determinism Function ARN
     Value: !GetAtt ErrorDeterminismFunction.Arn
+  ErrorHandlingTaxonomyFunction:
+    Description: Error Handling Taxonomy Function ARN
+    Value: !GetAtt ErrorHandlingTaxonomyFunction.Arn
   HandlerErrorFunction:
     Description: Handler Error Function ARN
     Value: !GetAtt HandlerErrorFunction.Arn

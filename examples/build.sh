@@ -111,6 +111,7 @@ EXAMPLES="
   logger-after-wait
   logger-after-callback
   logger-log-levels
+  plugin-lifecycle
   serde-basic
   serde-custom-config
   context-validation-child
@@ -121,6 +122,7 @@ EXAMPLES="
   force-checkpoint-wait
   force-checkpoint-step-retry
   error-determinism
+  error-handling-taxonomy
   handler-error
   hello-world
   simple-execution

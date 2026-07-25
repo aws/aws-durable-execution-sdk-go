@@ -140,11 +140,13 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [context-validation-step](context-validation-step/main.go) | Step, goroutine validation | FAILED |
 | [context-validation-wait-condition](context-validation-wait-condition/main.go) | WaitForCondition, goroutine validation | FAILED |
 | [error-determinism](error-determinism/main.go) | Step, error replay consistency | SUCCEEDED |
+| [error-handling-taxonomy](error-handling-taxonomy/main.go) | errors.As, StepError, InvokeError, CallbackError | SUCCEEDED |
 | [serde-basic](serde-basic/main.go) | Step, WithStepSerdes | SUCCEEDED |
 | [serde-custom-config](serde-custom-config/main.go) | WithSerdes (handler-level) | SUCCEEDED |
 | [logger-after-wait](logger-after-wait/main.go) | Wait, WithLogger, replay suppression | SUCCEEDED |
 | [logger-after-callback](logger-after-callback/main.go) | WaitForCallback, WithLogger | SUCCEEDED |
 | [logger-log-levels](logger-log-levels/main.go) | WithLogger, all log levels | SUCCEEDED |
+| [plugin-lifecycle](plugin-lifecycle/main.go) | WithPlugins, hook lifecycle ordering | SUCCEEDED |
 
 ### Showcase & Edge Cases
 
