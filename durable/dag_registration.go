@@ -72,7 +72,7 @@ func DagCallback[T any](d *DagBuilder, name string, deps []AnyHandle, submit Dag
 		if cfg.retry != nil {
 			copts = append(copts, WithSubmitterRetry(cfg.retry))
 		}
-		return WaitForCallback[T](taskCtx, name, func(sc StepContext, callbackID string) error {
+		return dagCallbackContainer[T](taskCtx, name, func(sc StepContext, callbackID string) error {
 			return submit(dp, sc, callbackID)
 		}, copts...)
 	}

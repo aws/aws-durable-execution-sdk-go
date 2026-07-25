@@ -256,6 +256,66 @@ func runWaitForCallbackBody[O any](child *execContext, name string, submitter fu
 	return result, nil
 }
 
+// dagCallbackContainer runs the native WaitForCallback operation inside an
+// outer container context checkpointed with SubType "Callback". A DAG
+// callback task materializes as a Callback container (whose Id/Name identify
+// the DAG task node) whose body is the native WaitForCallback operation,
+// matching the cross-language wire shape: ContextStarted(Callback) ->
+// ContextStarted(WaitForCallback) -> ... -> ContextSucceeded(WaitForCallback)
+// -> ContextSucceeded(Callback). This wrapper is DAG-specific; a standalone
+// WaitForCallback emits only the WaitForCallback context.
+//
+// The container reuses the DAG's own CONTEXT-op recipe (dagMaterializeChild /
+// dagFinishChild), so like the DAG scope it is checkpointed with
+// ReplayChildren: the body re-runs on replay and the inner WaitForCallback
+// fast-paths from its own checkpoint, returning the correctly typed result.
+func dagCallbackContainer[O any](ctx Context, name string, submitter func(StepContext, string) error, opts ...CallbackOption) (O, error) {
+	var zero O
+	ec, ok := ctx.(*execContext)
+	if !ok {
+		return zero, fmt.Errorf("durable: dag callback %q: Context was not created by the SDK", name)
+	}
+
+	id, err := ec.claimOperation()
+	if err != nil {
+		return zero, err
+	}
+
+	child, terminal, op, err := dagMaterializeChild(ec, id, name, operationSubTypeCallback)
+	if err != nil {
+		return zero, err
+	}
+	if terminal && op != nil && op.status == statusFailed {
+		cause := &replayedError{errType: "Error", message: "dag callback failed"}
+		if op.childCtx != nil {
+			cause = &replayedError{errType: op.childCtx.errType, message: op.childCtx.errMessage}
+		}
+		return zero, &ChildContextError{Name: name, Err: cause}
+	}
+
+	result, fnErr := WaitForCallback[O](child, name, submitter, opts...)
+	if fnErr != nil {
+		// Suspension is not a failure: propagate it unchanged so the
+		// invocation ends PENDING and the callback resumes later.
+		if errors.Is(fnErr, errSuspendExecution) {
+			return zero, fnErr
+		}
+		if !terminal {
+			if cerr := dagFinishChild(ec, id, name, operationSubTypeCallback, fnErr); cerr != nil {
+				return zero, cerr
+			}
+		}
+		return zero, fnErr
+	}
+
+	if !terminal {
+		if err := dagFinishChild(ec, id, name, operationSubTypeCallback, nil); err != nil {
+			return zero, err
+		}
+	}
+	return result, nil
+}
+
 // wfcbFailedError constructs the appropriate error when a WaitForCallback
 // context has a FAILED checkpointed status.
 func wfcbFailedError(op *operation, name string) error {
