@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -539,5 +540,66 @@ func TestDagScheduler_SkipFreesEarlierDependent(t *testing.T) {
 	}
 	if reason3 != AllCompleted {
 		t.Fatalf("real-runtime: reason=%v want AllCompleted", reason3)
+	}
+}
+
+// TestDagScheduler_WorkerPanicFailsTaskNotProcess exercises the
+// goroutine-entry recover directly: a runTask that panics must be turned into
+// a task failure (delivered through the normal deliverDone path) so the
+// panicking task is FAILED, siblings still complete, and the DAG drains with
+// COMPLETED_WITH_FAILURES — never a process crash. Uses the fake runner, so
+// failTask is unset and the recover falls back to the bare cause.
+func TestDagScheduler_WorkerPanicFailsTaskNotProcess(t *testing.T) {
+	d := newDagBuilder()
+	DagStep(d, "boom", nil, func(_ Deps, _ StepContext) (int, error) { return 0, nil })
+	DagStep(d, "ok", nil, func(_ Deps, _ StepContext) (int, error) { return 0, nil })
+
+	execs, reason := runSched(d, 0, nil, func(def *dagTaskDef, _ Deps) (any, error) {
+		if def.name == "boom" {
+			panic("worker boom")
+		}
+		return 0, nil
+	})
+	st := statusByName(execs)
+	if st["boom"] != StatusFailed {
+		t.Fatalf("panicking worker task should be FAILED, got %v", st["boom"])
+	}
+	if st["ok"] != StatusSucceeded {
+		t.Fatalf("sibling should still complete, got %v", st["ok"])
+	}
+	if reason != CompletedWithFailures {
+		t.Fatalf("reason=%v want CompletedWithFailures", reason)
+	}
+	for _, e := range execs {
+		if e.Name == "boom" && (e.Err == nil || !strings.Contains(e.Err.Error(), "panicked")) {
+			t.Fatalf("boom.Err should describe the panic, got %v", e.Err)
+		}
+	}
+}
+
+// TestDagScheduler_RunIfPanicFailsTaskNotProcess exercises the synchronous
+// runIf recover: a panicking predicate fails only that task (the task never
+// starts) and the graph still drains.
+func TestDagScheduler_RunIfPanicFailsTaskNotProcess(t *testing.T) {
+	d := newDagBuilder()
+	DagStep(d, "boom", nil, func(_ Deps, _ StepContext) (int, error) { return 0, nil },
+		WithRunIf(func(Deps) bool { panic("runIf boom") }))
+	DagStep(d, "ok", nil, func(_ Deps, _ StepContext) (int, error) { return 0, nil })
+
+	execs, reason := runSched(d, 0, nil, func(def *dagTaskDef, _ Deps) (any, error) { return 0, nil })
+	st := statusByName(execs)
+	if st["boom"] != StatusFailed {
+		t.Fatalf("task with panicking runIf should be FAILED, got %v", st["boom"])
+	}
+	if st["ok"] != StatusSucceeded {
+		t.Fatalf("sibling should still complete, got %v", st["ok"])
+	}
+	if reason != CompletedWithFailures {
+		t.Fatalf("reason=%v want CompletedWithFailures", reason)
+	}
+	for _, e := range execs {
+		if e.Name == "boom" && (e.Err == nil || !strings.Contains(e.Err.Error(), "runIf panicked")) {
+			t.Fatalf("boom.Err should describe the runIf panic, got %v", e.Err)
+		}
 	}
 }

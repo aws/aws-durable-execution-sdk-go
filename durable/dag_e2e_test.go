@@ -388,3 +388,125 @@ func TestDagE2E_OrderIndependenceReplay(t *testing.T) {
 		t.Fatalf("unexpected diamond result: %+v", aThenB)
 	}
 }
+
+// TestDagE2E_PanicInTaskIsContainedAsFailure is a regression guard for
+// BLOCKER B2. A panic in user code reachable from the scheduler worker
+// goroutine but OUTSIDE any core-op recover — here a DagMap items() func,
+// which runs in the worker goroutine before Map() is entered — must NOT
+// crash the process. It must be converted into a clean task failure so the
+// panicking task is FAILED, siblings still complete, and the DAG drains with
+// COMPLETED_WITH_FAILURES. Before the fix this aborted the test binary.
+func TestDagE2E_PanicInTaskIsContainedAsFailure(t *testing.T) {
+	type out struct {
+		DagErr     bool
+		ErrMsg     string
+		BoomStatus string
+		OkStatus   string
+		Failures   int
+		Success    int
+		Reason     string
+	}
+	handler := func(dc durable.Context, _ struct{}) (out, error) {
+		res, err := durable.Dag(dc, "wf", func(d *durable.DagBuilder) {
+			durable.DagMap(d, "boom", nil,
+				func(_ durable.Deps) []int { panic("items exploded") },
+				func(_ durable.Context, item int, _ int) (int, error) { return item, nil })
+			durable.DagStep(d, "ok", nil, func(_ durable.Deps, _ durable.StepContext) (int, error) {
+				return 1, nil
+			})
+		})
+		if err != nil {
+			return out{}, err
+		}
+		boom, _ := res.Status("boom")
+		ok, _ := res.Status("ok")
+		o := out{
+			DagErr:     res.ThrowIfError() != nil,
+			BoomStatus: string(boom),
+			OkStatus:   string(ok),
+			Failures:   res.FailureCount(),
+			Success:    res.SucceededCount(),
+			Reason:     string(res.CompletionReason()),
+		}
+		if e := res.ThrowIfError(); e != nil {
+			o.ErrMsg = e.Error()
+		}
+		return o, nil
+	}
+	runner := durabletest.NewLocalRunner(handler)
+	result := runner.RunUntilComplete(t, struct{}{})
+	if result.Status != durabletest.Succeeded {
+		t.Fatalf("handler should succeed (panic contained as task failure, process alive), got %s (%+v)", result.Status, result.Error)
+	}
+	o, err := durabletest.ResultAs[out](result)
+	if err != nil {
+		t.Fatalf("ResultAs: %v", err)
+	}
+	if o.BoomStatus != string(durable.StatusFailed) {
+		t.Fatalf("panicking task should be FAILED, got %q", o.BoomStatus)
+	}
+	if o.OkStatus != string(durable.StatusSucceeded) {
+		t.Fatalf("sibling should still complete, got %q", o.OkStatus)
+	}
+	if !o.DagErr || o.Failures != 1 || o.Success != 1 || o.Reason != string(durable.CompletedWithFailures) {
+		t.Fatalf("panic not contained as a single task failure: %+v", o)
+	}
+	if !strings.Contains(o.ErrMsg, "panicked") {
+		t.Fatalf("task-failure error should carry the panic; got %q", o.ErrMsg)
+	}
+}
+
+// TestDagE2E_PanicInRunIfIsContainedAsFailure is a regression guard for the
+// synchronous runIf path of BLOCKER B2 / GO-H1. runIf is evaluated on the
+// scheduler goroutine (not a worker), so it is not covered by the worker
+// recover; a panic there must still fail only that task rather than aborting
+// the whole invocation.
+func TestDagE2E_PanicInRunIfIsContainedAsFailure(t *testing.T) {
+	type out struct {
+		DagErr     bool
+		BoomStatus string
+		OkStatus   string
+		Failures   int
+		Reason     string
+	}
+	handler := func(dc durable.Context, _ struct{}) (out, error) {
+		res, err := durable.Dag(dc, "wf", func(d *durable.DagBuilder) {
+			durable.DagStep(d, "boom", nil, func(_ durable.Deps, _ durable.StepContext) (int, error) {
+				return 0, nil
+			}, durable.WithRunIf(func(durable.Deps) bool { panic("runIf exploded") }))
+			durable.DagStep(d, "ok", nil, func(_ durable.Deps, _ durable.StepContext) (int, error) {
+				return 1, nil
+			})
+		})
+		if err != nil {
+			return out{}, err
+		}
+		boom, _ := res.Status("boom")
+		ok, _ := res.Status("ok")
+		return out{
+			DagErr:     res.ThrowIfError() != nil,
+			BoomStatus: string(boom),
+			OkStatus:   string(ok),
+			Failures:   res.FailureCount(),
+			Reason:     string(res.CompletionReason()),
+		}, nil
+	}
+	runner := durabletest.NewLocalRunner(handler)
+	result := runner.RunUntilComplete(t, struct{}{})
+	if result.Status != durabletest.Succeeded {
+		t.Fatalf("handler should succeed (runIf panic contained, invocation not aborted), got %s (%+v)", result.Status, result.Error)
+	}
+	o, err := durabletest.ResultAs[out](result)
+	if err != nil {
+		t.Fatalf("ResultAs: %v", err)
+	}
+	if o.BoomStatus != string(durable.StatusFailed) {
+		t.Fatalf("task with panicking runIf should be FAILED, got %q", o.BoomStatus)
+	}
+	if o.OkStatus != string(durable.StatusSucceeded) {
+		t.Fatalf("sibling should still complete, got %q", o.OkStatus)
+	}
+	if !o.DagErr || o.Failures != 1 || o.Reason != string(durable.CompletedWithFailures) {
+		t.Fatalf("runIf panic not contained as a single task failure: %+v", o)
+	}
+}

@@ -130,6 +130,15 @@ func Dag(ctx Context, name string, register func(d *DagBuilder), opts ...DagOpti
 	hooks := dagSchedHooks{
 		isSuspend:   func(err error) bool { return errors.Is(err, errSuspendExecution) },
 		suspendedCh: ec.suspend.done,
+		// failTask shapes a scheduler-side task fault (a recovered panic in
+		// the worker goroutine or in the synchronous runIf) into the same
+		// DagTaskFailedError a normal task error is wrapped in below, using
+		// the task's scoped id so the error taxonomy is identical wherever
+		// the fault surfaced.
+		failTask: func(def *dagTaskDef, cause error) error {
+			suffix := dagTaskIDPrefix + def.name
+			return &DagTaskFailedError{Name: def.name, TaskID: scopeEc.ids.formatSuffix(suffix), Err: cause}
+		},
 		runTask: func(def *dagTaskDef, deps Deps) (any, error) {
 			// FLAT model: run the task's single underlying operation
 			// DIRECTLY under the DAG scope with a name-based id; there is

@@ -2,6 +2,8 @@ package durable
 
 import (
 	"context"
+	"fmt"
+	"runtime/debug"
 	"sync"
 	"time"
 )
@@ -27,6 +29,14 @@ type dagSchedHooks struct {
 	// isSuspend reports whether an error from runTask is the suspend
 	// sentinel (nil-safe: treated as "never" when unset).
 	isSuspend func(error) bool
+	// failTask shapes a scheduler-side task fault (a recovered panic in the
+	// worker goroutine, or in the synchronous runIf) into the same
+	// task-failure error a normal runTask error is wrapped in, so the error
+	// taxonomy (DagTaskFailedError -> *OperationError) is identical
+	// regardless of where the fault surfaced. The runtime wires this to
+	// build a DagTaskFailedError with the task's scoped id. Nil-safe: the
+	// bare cause is used when unset (unit tests with a fake runner).
+	failTask func(def *dagTaskDef, cause error) error
 	// now supplies timestamps (defaults to time.Now).
 	now func() time.Time
 }
@@ -203,10 +213,20 @@ func (s *dagScheduler) startReady(ctx context.Context) bool {
 			continue
 		}
 		deps := s.buildDepsLocked(t)
-		if t.runIf != nil && !t.runIf(deps) {
-			s.recordSkipLocked(t, SkipRunIf)
-			progressed = true
-			continue
+		if t.runIf != nil {
+			run, runIfErr := s.evalRunIf(t, deps)
+			if runIfErr != nil {
+				// A panicking runIf is a task-level fault, not an
+				// invocation abort: fail this task and let the graph drain.
+				s.recordFailedLocked(t, runIfErr)
+				progressed = true
+				continue
+			}
+			if !run {
+				s.recordSkipLocked(t, SkipRunIf)
+				progressed = true
+				continue
+			}
 		}
 		// Respect concurrency bound (0 or negative = unbounded).
 		if s.maxConc > 0 && len(s.inFlight) >= s.maxConc {
@@ -222,7 +242,34 @@ func (s *dagScheduler) startReady(ctx context.Context) bool {
 			s.hooks.register()
 		}
 		go func(def *dagTaskDef, dp Deps) {
-			result, err := s.hooks.runTask(def, dp)
+			var result any
+			var err error
+			// Recover at the goroutine ENTRY so a panic anywhere reachable
+			// from this worker becomes a clean task failure instead of
+			// crashing the whole process. Core op bodies (Step/Child/...)
+			// have their own recover, but the DAG-specific code that runs
+			// here around them is NOT otherwise covered: DagMap items(),
+			// DagInvoke payload(), and the runTask wrapper itself. Convert
+			// the panic into a task failure delivered through the normal
+			// deliverDone path so inFlight clears, siblings drain, and the
+			// DAG completes with COMPLETED_WITH_FAILURES.
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						result = nil
+						cause := fmt.Errorf("durable: dag task %q panicked: %v\n%s", def.name, r, debug.Stack())
+						if s.hooks.failTask != nil {
+							err = s.hooks.failTask(def, cause)
+						} else {
+							err = cause
+						}
+					}
+				}()
+				result, err = s.hooks.runTask(def, dp)
+			}()
+			// Suspension is signaled as an error value (never a panic), so
+			// it flows through here unchanged and must still propagate as a
+			// suspension, not a failure.
 			susp := err != nil && s.hooks.isSuspend != nil && s.hooks.isSuspend(err)
 			if susp {
 				s.deliverSuspend(def.name)
@@ -401,6 +448,42 @@ func (s *dagScheduler) buildDepsLocked(t *dagTaskDef) Deps {
 		}
 	}
 	return newDeps(m)
+}
+
+// evalRunIf evaluates a task's runIf predicate with panic recovery. runIf
+// runs SYNCHRONOUSLY on the scheduler goroutine (it decides whether a task
+// even starts), so unlike a task body it is NOT covered by the worker-entry
+// recover. A panic here would otherwise unwind through run()/Dag() and abort
+// the entire invocation instead of failing one task; recover it and report a
+// task-level failure, matching the step-body model. Runs under s.mu, but the
+// recover touches no shared state, and runIf itself only inspects Deps.
+func (s *dagScheduler) evalRunIf(t *dagTaskDef, deps Deps) (run bool, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			run = false
+			cause := fmt.Errorf("durable: dag task %q runIf panicked: %v\n%s", t.name, r, debug.Stack())
+			if s.hooks.failTask != nil {
+				err = s.hooks.failTask(t, cause)
+			} else {
+				err = cause
+			}
+		}
+	}()
+	return t.runIf(deps), nil
+}
+
+// recordFailedLocked settles a task as FAILED in-memory and re-evaluates the
+// completion policy. Used for a synchronous runIf panic: the task never
+// materialized an operation, so there is no checkpoint to write (invisible on
+// the wire) — the failure lives only in the in-memory execution state, and on
+// replay the same deterministic panic reproduces it.
+func (s *dagScheduler) recordFailedLocked(t *dagTaskDef, err error) {
+	now := s.hooks.now()
+	s.state[t.name] = &TaskExecution{
+		Name: t.name, Status: StatusFailed, Err: err,
+		StartedAt: now, CompletedAt: now, kind: dagKindFor(s.tasks, t.name),
+	}
+	s.evaluateCompletionLocked()
 }
 
 func (s *dagScheduler) recordSkipLocked(t *dagTaskDef, reason SkipReason) {
