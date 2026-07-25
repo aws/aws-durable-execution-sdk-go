@@ -83,7 +83,9 @@ EXAMPLES="
   map-min-successful
   map-tolerated-failure-count
   map-failure-threshold
+  map-tolerated-failure-percentage
   map-completion-config-issue
+  map-virtual-context
   parallel-basic
   parallel-empty
   parallel-invoke
@@ -91,6 +93,8 @@ EXAMPLES="
   parallel-error-preservation
   parallel-min-successful
   parallel-tolerated-failure
+  parallel-tolerated-failure-percentage
+  parallel-virtual-context
   future-all
   future-all-settled
   future-all-wait

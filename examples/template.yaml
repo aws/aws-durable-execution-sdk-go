@@ -1156,6 +1156,23 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 120
 
+  MapToleratedFailurePercentageFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-map-tolerated-failure-percentage
+      CodeUri: .aws-sam/build-artifacts/map-tolerated-failure-percentage/
+      Handler: bootstrap
+      Description: Map with ToleratedFailurePercentage exceeded
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
   MapCompletionConfigIssueFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -1172,6 +1189,23 @@ Resources:
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 120
+
+  MapVirtualContextFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-map-virtual-context
+      CodeUri: .aws-sam/build-artifacts/map-virtual-context/
+      Handler: bootstrap
+      Description: Map with NestingFlat (virtual context)
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
 
   ParallelBasicFunction:
     Type: AWS::Serverless::Function
@@ -1294,6 +1328,40 @@ Resources:
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 120
+
+  ParallelToleratedFailurePercentageFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-parallel-tolerated-failure-percentage
+      CodeUri: .aws-sam/build-artifacts/parallel-tolerated-failure-percentage/
+      Handler: bootstrap
+      Description: Parallel with ToleratedFailurePercentage exceeded
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  ParallelVirtualContextFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-parallel-virtual-context
+      CodeUri: .aws-sam/build-artifacts/parallel-virtual-context/
+      Handler: bootstrap
+      Description: Parallel with NestingFlat (virtual context)
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
 
   # --- Slice 6: Future Combinators & Concurrency examples ---
 
@@ -2073,9 +2141,15 @@ Outputs:
   MapFailureThresholdFunction:
     Description: Map Failure Threshold Function ARN
     Value: !GetAtt MapFailureThresholdFunction.Arn
+  MapToleratedFailurePercentageFunction:
+    Description: Map Tolerated Failure Percentage Function ARN
+    Value: !GetAtt MapToleratedFailurePercentageFunction.Arn
   MapCompletionConfigIssueFunction:
     Description: Map Completion Config Issue Function ARN
     Value: !GetAtt MapCompletionConfigIssueFunction.Arn
+  MapVirtualContextFunction:
+    Description: Map Virtual Context Function ARN
+    Value: !GetAtt MapVirtualContextFunction.Arn
   ParallelBasicFunction:
     Description: Parallel Basic Function ARN
     Value: !GetAtt ParallelBasicFunction.Arn
@@ -2097,6 +2171,12 @@ Outputs:
   ParallelToleratedFailureFunction:
     Description: Parallel Tolerated Failure Function ARN
     Value: !GetAtt ParallelToleratedFailureFunction.Arn
+  ParallelToleratedFailurePercentageFunction:
+    Description: Parallel Tolerated Failure Percentage Function ARN
+    Value: !GetAtt ParallelToleratedFailurePercentageFunction.Arn
+  ParallelVirtualContextFunction:
+    Description: Parallel Virtual Context Function ARN
+    Value: !GetAtt ParallelVirtualContextFunction.Arn
   FutureAllFunction:
     Description: Future All Function ARN
     Value: !GetAtt FutureAllFunction.Arn
