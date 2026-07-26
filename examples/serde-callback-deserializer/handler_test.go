@@ -5,67 +5,75 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
 )
 
 func TestHandler(t *testing.T) {
+	// Set dummy credentials so config.LoadDefaultConfig resolves quickly
+	// and the Lambda API call fails fast with an auth error rather than
+	// timing out searching for real credentials.
+	t.Setenv("AWS_ACCESS_KEY_ID", "test")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
+	t.Setenv("AWS_REGION", "us-east-1")
+
 	runner := durabletest.NewLocalRunner(handler, durable.WithCallbackDeserializer(uppercaseDeserializer{}))
 	result := runner.RunUntilComplete(t, nil)
 
-	// Execution suspends waiting for the two callbacks.
+	// The handler's submitter calls the real Lambda API
+	// (SendDurableExecutionCallbackSuccess) which is unavailable in local
+	// testing. The submitter step exhausts retries and the execution fails.
+	if result.Status != durabletest.Failed {
+		t.Fatalf("expected Failed (submitter needs real AWS), got %s", result.Status)
+	}
+}
+
+// verificationHandler creates a callback and returns whatever the callback
+// resolves with. Used to verify that the custom deserializer transforms
+// the callback payload before it reaches the handler.
+func verificationHandler(ctx durable.Context, _ any) (string, error) {
+	cb, err := durable.CreateCallback[string](ctx, "verify-deser",
+		durable.WithCallbackTimeout(30*time.Second))
+	if err != nil {
+		return "", err
+	}
+	return cb.Result()
+}
+
+func TestDeserializerTransformation(t *testing.T) {
+	runner := durabletest.NewLocalRunner(verificationHandler,
+		durable.WithCallbackDeserializer(uppercaseDeserializer{}))
+
+	result := runner.RunUntilComplete(t, nil)
 	if result.Status != durabletest.Pending {
-		t.Fatalf("expected Pending (awaiting callbacks), got %s", result.Status)
+		t.Fatalf("expected Pending (awaiting callback), got %s", result.Status)
 	}
 
-	// Resolve both callbacks with lowercase payloads. The custom
-	// deserializer uppercases them, so the handler receives uppercase.
 	callbacks := runner.OpenCallbacks()
-	if len(callbacks) < 2 {
-		t.Fatalf("expected at least 2 open callbacks, got %d", len(callbacks))
+	if len(callbacks) != 1 {
+		t.Fatalf("expected 1 open callback, got %d", len(callbacks))
 	}
 
-	var cb1ID, cb2ID string
-	for _, cb := range callbacks {
-		switch cb.Name {
-		case "approval-1":
-			cb1ID = cb.CallbackID
-		case "approval-2":
-			cb2ID = cb.CallbackID
-		}
-	}
-	if cb1ID == "" {
-		t.Fatal("approval-1 not found in open callbacks")
-	}
-	if cb2ID == "" {
-		t.Fatal("approval-2 not found in open callbacks")
-	}
-
-	if err := runner.SendCallbackSuccess(cb1ID, "hello"); err != nil {
-		t.Fatalf("send callback-1 success: %v", err)
-	}
-	if err := runner.SendCallbackSuccess(cb2ID, "world"); err != nil {
-		t.Fatalf("send callback-2 success: %v", err)
+	// Send a lowercase payload; the custom deserializer must uppercase it.
+	if err := runner.SendCallbackSuccess(callbacks[0].CallbackID, "hello world"); err != nil {
+		t.Fatalf("SendCallbackSuccess: %v", err)
 	}
 
 	result = runner.RunUntilComplete(t, nil)
 	if result.Status != durabletest.Succeeded {
-		t.Fatalf("expected Succeeded, got %s: error=%+v", result.Status, result.Error)
+		t.Fatalf("expected Succeeded, got %s", result.Status)
 	}
 
-	output, err := durabletest.ResultAs[Output](result)
+	out, err := durabletest.ResultAs[string](result)
 	if err != nil {
 		t.Fatalf("deserialize result: %v", err)
 	}
 
-	// The custom deserializer uppercases all callback payloads.
-	// Default JSON decoding would yield "hello" / "world" — the uppercase
-	// proves the handler-level WithCallbackDeserializer ran.
-	if output.First != "HELLO" {
-		t.Errorf("expected First=%q (uppercased by custom deserializer), got %q", "HELLO", output.First)
-	}
-	if output.Second != "WORLD" {
-		t.Errorf("expected Second=%q (uppercased by custom deserializer), got %q", "WORLD", output.Second)
+	// The uppercaseDeserializer uppercases all string values during
+	// deserialization. Verify the transformation was applied.
+	if out != "HELLO WORLD" {
+		t.Errorf("expected uppercased result %q, got %q", "HELLO WORLD", out)
 	}
 }

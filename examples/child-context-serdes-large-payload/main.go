@@ -40,7 +40,8 @@ func handler(ctx durable.Context, _ any) (Output, error) {
 					// Deterministic payload: repeating pattern that is
 					// trivially verifiable but exceeds 256KB.
 					return strings.Repeat("ABCDEFGHIJ", payloadSize/10), nil
-				})
+				},
+				durable.WithStepSerdes(serdes))
 		},
 		durable.WithChildSerdes(serdes))
 	if err != nil {

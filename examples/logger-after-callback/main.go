@@ -1,5 +1,5 @@
 // Command logger-after-callback demonstrates replay-aware logging across a
-// callback suspend/resume boundary. The log line before createCallback
+// callback suspend/resume boundary. The log line before WaitForCallback
 // appears only during the first invocation; on the resume invocation
 // (triggered by the callback response), replayed operations suppress log
 // output so "before-callback" does NOT appear again.
@@ -10,6 +10,14 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/aws/aws-sdk-go-v2/config"
+	lambdasvc "github.com/aws/aws-sdk-go-v2/service/lambda"
+
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
 )
 
@@ -22,12 +30,14 @@ type result struct {
 func handler(ctx durable.Context, _ any) (result, error) {
 	ctx.Logger().Info("before-callback", "phase", "live")
 
-	cb, err := durable.CreateCallback[string](ctx, "my-callback")
-	if err != nil {
-		return result{}, err
-	}
-
-	value, err := cb.Result()
+	value, err := durable.WaitForCallback[string](ctx, "my-callback",
+		func(sctx durable.StepContext, callbackID string) error {
+			sctx.Logger().Info("Submitter sending callback success",
+				"callbackId", callbackID)
+			return completeCallback(callbackID, "callback-resolved")
+		},
+		durable.WithCallbackTimeout(30*time.Second),
+	)
 	if err != nil {
 		return result{}, err
 	}
@@ -46,9 +56,24 @@ func handler(ctx durable.Context, _ any) (result, error) {
 
 	return result{
 		Message:    "done",
-		CallbackID: cb.ID(),
+		CallbackID: "self-resolved",
 		Result:     value,
 	}, nil
+}
+
+func completeCallback(callbackID, value string) error {
+	cfg, err := config.LoadDefaultConfig(context.Background())
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	client := lambdasvc.NewFromConfig(cfg)
+	resultPayload, _ := json.Marshal(value)
+	_, err = client.SendDurableExecutionCallbackSuccess(context.Background(),
+		&lambdasvc.SendDurableExecutionCallbackSuccessInput{
+			CallbackId: &callbackID,
+			Result:     resultPayload,
+		})
+	return err
 }
 
 func main() { durable.Start(handler) }

@@ -126,7 +126,7 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [future-race-wait](future-race-wait/main.go) | Go, Race, WaitAsync | SUCCEEDED |
 | [future-combinators-mixed](future-combinators-mixed/main.go) | Go, All, Any, Race | SUCCEEDED |
 | [future-replay](future-replay/main.go) | Go, Future replay determinism | SUCCEEDED |
-| [future-unhandled-error](future-unhandled-error/main.go) | Go, unhandled Future error | FAILED |
+| [future-unhandled-error](future-unhandled-error/main.go) | Go, unhandled Future error | SUCCEEDED |
 | [concurrent-wait](concurrent-wait/main.go) | Go, WaitAsync | SUCCEEDED |
 | [concurrent-operations](concurrent-operations/main.go) | Go, StepAsync, WaitAsync | SUCCEEDED |
 | [concurrent-callback-submitter](concurrent-callback-submitter/main.go) | Go, WaitForCallback | SUCCEEDED |

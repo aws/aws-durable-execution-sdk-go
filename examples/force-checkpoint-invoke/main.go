@@ -7,6 +7,7 @@ package main
 
 import (
 	"encoding/json"
+	"os"
 	"time"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
@@ -17,6 +18,15 @@ type event struct {
 }
 
 func handler(ctx durable.Context, ev event) (string, error) {
+	functionNames := ev.FunctionNames
+	if len(functionNames) == 0 {
+		prefix := os.Getenv("FUNCTION_NAME_PREFIX")
+		if prefix == "" {
+			prefix = "v2-"
+		}
+		target := prefix + "go-invoke-simple-target:$LATEST"
+		functionNames = []string{target, target, target}
+	}
 	results, err := durable.Parallel(ctx, "force-cp-block", []durable.Branch[any]{
 		// Branch 1: Long-running step that blocks invocation termination.
 		{Name: "long-running", Func: func(branchCtx durable.Context) (any, error) {
@@ -30,15 +40,15 @@ func handler(ctx durable.Context, ev event) (string, error) {
 			type payload struct {
 				Input string `json:"input"`
 			}
-			_, err := durable.Invoke[json.RawMessage](branchCtx, "invoke-1", ev.FunctionNames[0], payload{Input: "data-1"})
+			_, err := durable.Invoke[json.RawMessage](branchCtx, "invoke-1", functionNames[0], payload{Input: "data-1"})
 			if err != nil {
 				return nil, err
 			}
-			_, err = durable.Invoke[json.RawMessage](branchCtx, "invoke-2", ev.FunctionNames[1], payload{Input: "data-2"})
+			_, err = durable.Invoke[json.RawMessage](branchCtx, "invoke-2", functionNames[1], payload{Input: "data-2"})
 			if err != nil {
 				return nil, err
 			}
-			_, err = durable.Invoke[json.RawMessage](branchCtx, "invoke-3", ev.FunctionNames[2], payload{Input: "data-3"})
+			_, err = durable.Invoke[json.RawMessage](branchCtx, "invoke-3", functionNames[2], payload{Input: "data-3"})
 			if err != nil {
 				return nil, err
 			}

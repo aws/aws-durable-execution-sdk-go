@@ -52,7 +52,6 @@ var expectFailed = map[string]bool{
 	"retry-exhaustion":                  true,
 	"retry-callback":                    true,
 	"child-ops-invalid-depth":           true,
-	"future-unhandled-error":            true,
 	"context-validation-child":          true,
 	"context-validation-step":           true,
 	"context-validation-wait-condition": true,

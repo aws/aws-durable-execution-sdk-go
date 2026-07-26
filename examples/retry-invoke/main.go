@@ -10,6 +10,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
@@ -38,6 +39,15 @@ type Result struct {
 }
 
 func handler(ctx durable.Context, event Input) (Result, error) {
+	targetFunction := event.TargetFunction
+	if targetFunction == "" {
+		prefix := os.Getenv("FUNCTION_NAME_PREFIX")
+		if prefix == "" {
+			prefix = "v2-"
+		}
+		targetFunction = prefix + "go-retry-invoke-target:$LATEST"
+	}
+
 	maxAttempts := event.MaxAttempts
 	if maxAttempts == 0 {
 		maxAttempts = 3
@@ -50,7 +60,7 @@ func handler(ctx durable.Context, event Input) (Result, error) {
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		name := fmt.Sprintf("invoke-%d", attempt)
-		result, err := durable.Invoke[json.RawMessage](ctx, name, event.TargetFunction,
+		result, err := durable.Invoke[json.RawMessage](ctx, name, targetFunction,
 			TargetInput{Attempt: attempt, FailUntilAttempt: failUntil})
 		if err == nil {
 			return Result{Response: result, Attempts: attempt}, nil

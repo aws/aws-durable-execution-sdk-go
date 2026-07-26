@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/json"
+	"os"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
 )
@@ -16,9 +17,21 @@ type Input struct {
 }
 
 func handler(ctx durable.Context, event Input) (json.RawMessage, error) {
+	functionName := event.FunctionName
+	if functionName == "" {
+		prefix := os.Getenv("FUNCTION_NAME_PREFIX")
+		if prefix == "" {
+			prefix = "v2-"
+		}
+		functionName = prefix + "go-invoke-tenant-target-v2:$LATEST"
+	}
+	tenantID := event.TenantID
+	if tenantID == "" {
+		tenantID = "tenant-001"
+	}
 	return durable.Invoke[json.RawMessage](ctx, "invoke-tenant",
-		event.FunctionName, event.Payload,
-		durable.WithTenantID(event.TenantID))
+		functionName, event.Payload,
+		durable.WithTenantID(tenantID))
 }
 
 func main() { durable.Start(handler) }

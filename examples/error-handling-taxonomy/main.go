@@ -5,11 +5,20 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"time"
+
+	"github.com/aws/aws-sdk-go-v2/config"
+	lambdasvc "github.com/aws/aws-sdk-go-v2/service/lambda"
+	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
 )
+
+// Void is a placeholder for steps returning no value.
+type Void = struct{}
 
 // Output records the taxonomy of each error the handler encountered.
 type Output struct {
@@ -78,11 +87,41 @@ func handler(ctx durable.Context, _ any) (Output, error) {
 		}
 	}
 
-	// 3. Provoke a CallbackError: create a callback the test will fail.
-	cb, err := durable.CreateCallback[string](ctx, "failing-callback")
+	// 3. Provoke a CallbackError: create a callback then send an external
+	// failure via the Lambda API. The failure resolves the callback with a
+	// typed CallbackError, distinct from the StepError a submitter failure
+	// would produce.
+	cb, err := durable.CreateCallback[string](ctx, "failing-callback",
+		durable.WithCallbackTimeout(30*time.Second))
 	if err != nil {
 		return Output{}, err
 	}
+
+	// Send the failure in a step. In cloud the API resolves the callback;
+	// in local testing the step fails (no endpoint) and the test resolves
+	// the callback externally via runner.SendCallbackFailure.
+	callbackID := cb.ID()
+	_, err = durable.Step[Void](ctx, "send-callback-failure", func(_ durable.StepContext) (Void, error) {
+		cfg, err := config.LoadDefaultConfig(context.Background())
+		if err != nil {
+			return Void{}, fmt.Errorf("load config: %w", err)
+		}
+		client := lambdasvc.NewFromConfig(cfg)
+		errMsg := "deliberate callback failure"
+		errType := "CallbackError"
+		_, err = client.SendDurableExecutionCallbackFailure(
+			context.Background(),
+			&lambdasvc.SendDurableExecutionCallbackFailureInput{
+				CallbackId: &callbackID,
+				Error: &types.ErrorObject{
+					ErrorMessage: &errMsg,
+					ErrorType:    &errType,
+				},
+			})
+		return Void{}, err
+	}, durable.WithRetry(durable.NoRetry()))
+	_ = err // Step failure is expected locally; cloud succeeds and resolves the callback.
+
 	_, err = cb.Result()
 	if err != nil {
 		var cbErr *durable.CallbackError

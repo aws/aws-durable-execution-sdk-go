@@ -10,6 +10,13 @@ import (
 )
 
 func TestHandler(t *testing.T) {
+	// Set dummy credentials so config.LoadDefaultConfig resolves quickly
+	// and the Lambda API call fails fast with an auth error rather than
+	// timing out searching for real credentials.
+	t.Setenv("AWS_ACCESS_KEY_ID", "test")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
+	t.Setenv("AWS_REGION", "us-east-1")
+
 	runner := durabletest.NewLocalRunner(handler)
 
 	// First run: Step fails synchronously (caught), Invoke suspends.
@@ -23,22 +30,25 @@ func TestHandler(t *testing.T) {
 		t.Fatalf("FailChainedInvoke: %v", err)
 	}
 
-	// Second run: replays past Step and Invoke failure (caught), CreateCallback suspends.
+	// Second run: replays past Step and Invoke failures (caught),
+	// CreateCallback creates callback, send-callback-failure Step fails
+	// (no real endpoint, error discarded), cb.Result() suspends.
 	result = runner.RunUntilComplete(t, nil)
 	if result.Status != durabletest.Pending {
 		t.Fatalf("expected Pending (awaiting callback), got %s", result.Status)
 	}
 
-	// Fail the callback externally.
-	cbs := runner.OpenCallbacks()
-	if len(cbs) == 0 {
-		t.Fatal("expected at least one open callback")
+	// Send a callback failure externally to produce a genuine CallbackError.
+	callbacks := runner.OpenCallbacks()
+	if len(callbacks) != 1 {
+		t.Fatalf("expected 1 open callback, got %d", len(callbacks))
 	}
-	if err := runner.SendCallbackFailure(cbs[0].CallbackID, "ValidationError", "invalid payload"); err != nil {
+	if err := runner.SendCallbackFailure(callbacks[0].CallbackID, "CallbackError", "deliberate callback failure"); err != nil {
 		t.Fatalf("SendCallbackFailure: %v", err)
 	}
 
-	// Third run: replays past Step, Invoke, and callback failure (caught). Handler returns Output.
+	// Third run: callback resolves with CallbackError (caught), handler
+	// returns Output with all three error types matched.
 	result = runner.RunUntilComplete(t, nil)
 	if result.Status != durabletest.Succeeded {
 		t.Fatalf("expected Succeeded, got %s", result.Status)

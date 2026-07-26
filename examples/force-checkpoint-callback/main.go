@@ -6,8 +6,13 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/config"
+	lambdasvc "github.com/aws/aws-sdk-go-v2/service/lambda"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
 )
@@ -23,27 +28,33 @@ func handler(ctx durable.Context, _ any) (string, error) {
 		}},
 		// Branch 2: Sequential callbacks that need force checkpoint.
 		{Name: "callbacks", Func: func(branchCtx durable.Context) (any, error) {
-			cb1, err := durable.CreateCallback[string](branchCtx, "callback-1")
+			_, err := durable.WaitForCallback[string](branchCtx, "callback-1",
+				func(_ durable.StepContext, callbackID string) error {
+					return completeCallback(callbackID, "cb1-done")
+				},
+				durable.WithCallbackTimeout(30*time.Second),
+			)
 			if err != nil {
-				return nil, err
-			}
-			if _, err := cb1.Result(); err != nil {
 				return nil, err
 			}
 
-			cb2, err := durable.CreateCallback[string](branchCtx, "callback-2")
+			_, err = durable.WaitForCallback[string](branchCtx, "callback-2",
+				func(_ durable.StepContext, callbackID string) error {
+					return completeCallback(callbackID, "cb2-done")
+				},
+				durable.WithCallbackTimeout(30*time.Second),
+			)
 			if err != nil {
-				return nil, err
-			}
-			if _, err := cb2.Result(); err != nil {
 				return nil, err
 			}
 
-			cb3, err := durable.CreateCallback[string](branchCtx, "callback-3")
+			_, err = durable.WaitForCallback[string](branchCtx, "callback-3",
+				func(_ durable.StepContext, callbackID string) error {
+					return completeCallback(callbackID, "cb3-done")
+				},
+				durable.WithCallbackTimeout(30*time.Second),
+			)
 			if err != nil {
-				return nil, err
-			}
-			if _, err := cb3.Result(); err != nil {
 				return nil, err
 			}
 
@@ -56,6 +67,21 @@ func handler(ctx durable.Context, _ any) (string, error) {
 
 	b, _ := json.Marshal(results)
 	return string(b), nil
+}
+
+func completeCallback(callbackID, value string) error {
+	cfg, err := config.LoadDefaultConfig(context.Background())
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	client := lambdasvc.NewFromConfig(cfg)
+	result, _ := json.Marshal(value)
+	_, err = client.SendDurableExecutionCallbackSuccess(context.Background(),
+		&lambdasvc.SendDurableExecutionCallbackSuccessInput{
+			CallbackId: &callbackID,
+			Result:     result,
+		})
+	return err
 }
 
 func main() { durable.Start(handler) }

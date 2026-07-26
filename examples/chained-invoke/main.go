@@ -7,6 +7,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
 )
@@ -38,27 +39,41 @@ type Result struct {
 }
 
 func handler(ctx durable.Context, event Input) (Result, error) {
+	targetFunction := event.TargetFunction
+	if targetFunction == "" {
+		prefix := os.Getenv("FUNCTION_NAME_PREFIX")
+		if prefix == "" {
+			prefix = "v2-"
+		}
+		targetFunction = prefix + "go-invoke-simple-target:$LATEST"
+	}
+
+	orderID := event.OrderID
+	if orderID == "" {
+		orderID = "ORD-DEFAULT"
+	}
+
 	stages := []string{"validate", "process", "confirm"}
 	var results []StageResult
 
 	for _, stage := range stages {
-		payload := StageRequest{OrderID: event.OrderID, Stage: stage}
+		payload := StageRequest{OrderID: orderID, Stage: stage}
 
 		raw, err := durable.Invoke[json.RawMessage](ctx,
-			fmt.Sprintf("chain-%s", stage), event.TargetFunction, payload)
+			fmt.Sprintf("chain-%s", stage), targetFunction, payload)
 		if err != nil {
-			return Result{OrderID: event.OrderID, Stages: results}, err
+			return Result{OrderID: orderID, Stages: results}, err
 		}
 
 		var sr StageResult
 		if err := json.Unmarshal(raw, &sr); err != nil {
-			return Result{OrderID: event.OrderID, Stages: results},
+			return Result{OrderID: orderID, Stages: results},
 				fmt.Errorf("chain-%s: unmarshal result: %w", stage, err)
 		}
 		results = append(results, sr)
 	}
 
-	return Result{OrderID: event.OrderID, Stages: results, Complete: true}, nil
+	return Result{OrderID: orderID, Stages: results, Complete: true}, nil
 }
 
 func main() { durable.Start(handler) }

@@ -6,9 +6,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
+
+	"github.com/aws/aws-sdk-go-v2/config"
+	lambdasvc "github.com/aws/aws-sdk-go-v2/service/lambda"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
 )
@@ -37,27 +42,42 @@ type Output struct {
 }
 
 func handler(ctx durable.Context, _ any) (Output, error) {
-	cb1, err := durable.CreateCallback[string](ctx, "approval-1")
-	if err != nil {
-		return Output{}, fmt.Errorf("create callback-1: %w", err)
-	}
-
-	cb2, err := durable.CreateCallback[string](ctx, "approval-2")
-	if err != nil {
-		return Output{}, fmt.Errorf("create callback-2: %w", err)
-	}
-
-	first, err := cb1.Result()
+	first, err := durable.WaitForCallback[string](ctx, "approval-1",
+		func(_ durable.StepContext, callbackID string) error {
+			return completeCallback(callbackID, "hello first")
+		},
+		durable.WithCallbackTimeout(30*time.Second),
+	)
 	if err != nil {
 		return Output{}, fmt.Errorf("callback-1 result: %w", err)
 	}
 
-	second, err := cb2.Result()
+	second, err := durable.WaitForCallback[string](ctx, "approval-2",
+		func(_ durable.StepContext, callbackID string) error {
+			return completeCallback(callbackID, "hello second")
+		},
+		durable.WithCallbackTimeout(30*time.Second),
+	)
 	if err != nil {
 		return Output{}, fmt.Errorf("callback-2 result: %w", err)
 	}
 
 	return Output{First: first, Second: second}, nil
+}
+
+func completeCallback(callbackID, value string) error {
+	cfg, err := config.LoadDefaultConfig(context.Background())
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	client := lambdasvc.NewFromConfig(cfg)
+	result, _ := json.Marshal(value)
+	_, err = client.SendDurableExecutionCallbackSuccess(context.Background(),
+		&lambdasvc.SendDurableExecutionCallbackSuccessInput{
+			CallbackId: &callbackID,
+			Result:     result,
+		})
+	return err
 }
 
 func main() { durable.Start(handler, durable.WithCallbackDeserializer(uppercaseDeserializer{})) }

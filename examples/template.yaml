@@ -221,6 +221,9 @@ Resources:
       Handler: bootstrap
       Description: Retry loop around durable Invoke
       Role: !GetAtt DurableFunctionRole.Arn
+      Environment:
+        Variables:
+          FUNCTION_NAME_PREFIX: !Ref FunctionNamePrefix
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 120
@@ -378,6 +381,9 @@ Resources:
       Handler: bootstrap
       Description: Simple durable invoke of another function
       Role: !GetAtt DurableFunctionRole.Arn
+      Environment:
+        Variables:
+          FUNCTION_NAME_PREFIX: !Ref FunctionNamePrefix
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 120
@@ -412,6 +418,9 @@ Resources:
       Handler: bootstrap
       Description: Durable invoke with tenant ID isolation
       Role: !GetAtt DurableFunctionRole.Arn
+      Environment:
+        Variables:
+          FUNCTION_NAME_PREFIX: !Ref FunctionNamePrefix
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 120
@@ -424,11 +433,13 @@ Resources:
       FunctionName: !Join
         - ''
         - - !Ref FunctionNamePrefix
-          - go-invoke-tenant-target
+          - go-invoke-tenant-target-v2
       CodeUri: .aws-sam/build-artifacts/invoke-tenant-target/
       Handler: bootstrap
       Description: Target function for tenant-isolated invocations
       Role: !GetAtt DurableFunctionRole.Arn
+      TenancyConfig:
+        TenantIsolationMode: PER_TENANT
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 60
@@ -446,6 +457,9 @@ Resources:
       Handler: bootstrap
       Description: Sequential chain of durable invocations
       Role: !GetAtt DurableFunctionRole.Arn
+      Environment:
+        Variables:
+          FUNCTION_NAME_PREFIX: !Ref FunctionNamePrefix
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -1881,6 +1895,9 @@ Resources:
       Handler: bootstrap
       Description: Force checkpoint with parallel long step and sequential invokes
       Role: !GetAtt DurableFunctionRole.Arn
+      Environment:
+        Variables:
+          FUNCTION_NAME_PREFIX: !Ref FunctionNamePrefix
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
