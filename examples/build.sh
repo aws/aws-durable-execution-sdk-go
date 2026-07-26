@@ -88,6 +88,7 @@ EXAMPLES="
   map-high-concurrency-invoke
   map-tolerated-failure-percentage
   map-completion-config-issue
+  map-error-type-preservation
   map-virtual-context
   parallel-basic
   parallel-empty

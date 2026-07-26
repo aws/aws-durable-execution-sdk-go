@@ -1155,6 +1155,23 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 60
 
+  MapErrorTypePreservationFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-map-error-type-preservation
+      CodeUri: .aws-sam/build-artifacts/map-error-type-preservation/
+      Handler: bootstrap
+      Description: Map demonstrating SDK error wrapper type preservation through replay
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
   MapMinSuccessfulFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -2299,6 +2316,9 @@ Outputs:
   MapErrorPreservationFunction:
     Description: Map Error Preservation Function ARN
     Value: !GetAtt MapErrorPreservationFunction.Arn
+  MapErrorTypePreservationFunction:
+    Description: Map Error Type Preservation Function ARN
+    Value: !GetAtt MapErrorTypePreservationFunction.Arn
   MapMinSuccessfulFunction:
     Description: Map Min Successful Function ARN
     Value: !GetAtt MapMinSuccessfulFunction.Arn
