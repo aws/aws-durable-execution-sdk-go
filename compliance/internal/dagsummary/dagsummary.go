@@ -16,8 +16,16 @@ type Summary struct {
 	Statuses map[string]string `json:"statuses"`
 	// Counts is [succeeded, failed, skipped, total].
 	Counts [4]int `json:"counts"`
-	// Merge carries the diamond merge result (diamond handler only).
-	Merge int `json:"merge,omitempty"`
+	// Merge carries the merge result of a fan-in task. It is an int for the
+	// diamond handler (merge=31) and a string for the concurrent handlers
+	// (overlap merge="SsFf", suspend merge="SF"), so it is typed as any to
+	// serialize either under the single "merge" key the language-neutral
+	// YAML asserts against.
+	Merge any `json:"merge,omitempty"`
+	// PeakConcurrency is the maximum number of instrumented tasks observed
+	// running at once (concurrent-overlap handler only). It proves the DAG
+	// genuinely overlapped tasks rather than serializing them.
+	PeakConcurrency int `json:"peakConcurrency,omitempty"`
 	// Branch names the runIf branch that ran (runif handler only).
 	Branch string `json:"branch,omitempty"`
 	// Marker proves post-resume replay (wait handler only).

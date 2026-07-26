@@ -250,3 +250,57 @@ Resources:
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
+
+  DagRunIfAbort:
+    Type: AWS::Serverless::Function
+    TestingMetadata:
+      TestDescription: ["10-12"]
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/dag_run_if_abort/
+      Handler: bootstrap
+      Description: DAG runIf abort - a throwing predicate aborts the DAG with a typed error (execution FAILS)
+      Role:
+        Fn::GetAtt:
+        - DurableFunctionRole
+        - Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
+  DagConcurrentOverlap:
+    Type: AWS::Serverless::Function
+    TestingMetadata:
+      TestDescription: ["10-13"]
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/dag_concurrent_overlap/
+      Handler: bootstrap
+      Description: DAG real concurrent overlap in one invocation (name-based task ids under out-of-order completion)
+      Role:
+        Fn::GetAtt:
+        - DurableFunctionRole
+        - Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
+  DagConcurrentSuspend:
+    Type: AWS::Serverless::Function
+    TestingMetadata:
+      TestDescription: ["10-14"]
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/dag_concurrent_suspend/
+      Handler: bootstrap
+      Description: DAG inverted readiness across a suspend (two waits in flight, downstream pair starts across resumes)
+      Role:
+        Fn::GetAtt:
+        - DurableFunctionRole
+        - Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
