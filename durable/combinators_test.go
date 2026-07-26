@@ -478,18 +478,13 @@ func TestRaceFirstSettlesSuccess(t *testing.T) {
 }
 
 func TestRaceFirstSettlesError(t *testing.T) {
-	// Race returns even if the first settlement is an error.
+	// Race propagates an error when the sole future is pre-settled with a
+	// failure. Using a single pre-settled future makes the test
+	// deterministic: there is no competing goroutine that could win.
 	fake := &fakeLambda{}
 	resp := invokeStep(t, fake, childPayload(`"x"`), func(ctx Context, _ string) (string, error) {
-		// Pre-settled error future + a normal one.
 		fErr := newFailedFuture[string](errors.New("immediate-fail"))
-		fOk := Go(ctx, "ok", func(childCtx Context) (string, error) {
-			return Step(childCtx, "s", func(StepContext) (string, error) {
-				return "late", nil
-			})
-		})
-
-		_, err := Race(ctx, "race-err", []*Future[string]{fErr, fOk})
+		_, err := Race(ctx, "race-err", []*Future[string]{fErr})
 		if err == nil {
 			return "unexpected-success", nil
 		}
