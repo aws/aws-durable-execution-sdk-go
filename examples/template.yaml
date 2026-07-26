@@ -515,6 +515,23 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 60
 
+  ChildContextSerdesVirtualFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-child-context-serdes-virtual
+      CodeUri: .aws-sam/build-artifacts/child-context-serdes-virtual/
+      Handler: bootstrap
+      Description: Virtual child context with custom serializer
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
   ChildContextSerdesLargePayloadFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -1223,6 +1240,23 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 120
 
+  MapFailureThresholdPercentageFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-map-failure-threshold-percentage
+      CodeUri: .aws-sam/build-artifacts/map-failure-threshold-percentage/
+      Handler: bootstrap
+      Description: Map where failure percentage exceeds tolerance causing FAILED state
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
   MapHighConcurrencyInvokeFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -1399,6 +1433,23 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 60
 
+  ParallelMinSuccessfulCallbackFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-parallel-min-successful-callback
+      CodeUri: .aws-sam/build-artifacts/parallel-min-successful-callback/
+      Handler: bootstrap
+      Description: Parallel with MinSuccessful using Step and WaitForCallback branches
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
   ParallelToleratedFailureFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -1428,6 +1479,40 @@ Resources:
       CodeUri: .aws-sam/build-artifacts/parallel-tolerated-failure-percentage/
       Handler: bootstrap
       Description: Parallel with ToleratedFailurePercentage exceeded
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  ParallelFailureThresholdCountFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-parallel-failure-threshold-count
+      CodeUri: .aws-sam/build-artifacts/parallel-failure-threshold-count/
+      Handler: bootstrap
+      Description: Parallel fail-fast with ToleratedFailureCount=0
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  ParallelFailureThresholdPercentageFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-parallel-failure-threshold-percentage
+      CodeUri: .aws-sam/build-artifacts/parallel-failure-threshold-percentage/
+      Handler: bootstrap
+      Description: Parallel where failure percentage exceeds tolerance causing FAILED state
       Role: !GetAtt DurableFunctionRole.Arn
       DurableConfig:
         RetentionPeriodInDays: 7
@@ -2205,6 +2290,9 @@ Outputs:
   ChildContextSerdesFunction:
     Description: Child Context Serdes Function ARN
     Value: !GetAtt ChildContextSerdesFunction.Arn
+  ChildContextSerdesVirtualFunction:
+    Description: Child Context Serdes Virtual Function ARN
+    Value: !GetAtt ChildContextSerdesVirtualFunction.Arn
   ChildContextSerdesLargePayloadFunction:
     Description: Child Context Serdes Large Payload Function ARN
     Value: !GetAtt ChildContextSerdesLargePayloadFunction.Arn
@@ -2328,6 +2416,9 @@ Outputs:
   MapFailureThresholdFunction:
     Description: Map Failure Threshold Function ARN
     Value: !GetAtt MapFailureThresholdFunction.Arn
+  MapFailureThresholdPercentageFunction:
+    Description: Map Failure Threshold Percentage Function ARN
+    Value: !GetAtt MapFailureThresholdPercentageFunction.Arn
   MapHighConcurrencyInvokeFunction:
     Description: Map High Concurrency Invoke Function ARN
     Value: !GetAtt MapHighConcurrencyInvokeFunction.Arn
@@ -2358,12 +2449,21 @@ Outputs:
   ParallelMinSuccessfulFunction:
     Description: Parallel Min Successful Function ARN
     Value: !GetAtt ParallelMinSuccessfulFunction.Arn
+  ParallelMinSuccessfulCallbackFunction:
+    Description: Parallel Min Successful Callback Function ARN
+    Value: !GetAtt ParallelMinSuccessfulCallbackFunction.Arn
   ParallelToleratedFailureFunction:
     Description: Parallel Tolerated Failure Function ARN
     Value: !GetAtt ParallelToleratedFailureFunction.Arn
   ParallelToleratedFailurePercentageFunction:
     Description: Parallel Tolerated Failure Percentage Function ARN
     Value: !GetAtt ParallelToleratedFailurePercentageFunction.Arn
+  ParallelFailureThresholdCountFunction:
+    Description: Parallel Failure Threshold Count Function ARN
+    Value: !GetAtt ParallelFailureThresholdCountFunction.Arn
+  ParallelFailureThresholdPercentageFunction:
+    Description: Parallel Failure Threshold Percentage Function ARN
+    Value: !GetAtt ParallelFailureThresholdPercentageFunction.Arn
   ParallelVirtualContextFunction:
     Description: Parallel Virtual Context Function ARN
     Value: !GetAtt ParallelVirtualContextFunction.Arn

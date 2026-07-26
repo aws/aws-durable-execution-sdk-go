@@ -49,6 +49,7 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [child-context-basic](child-context-basic/main.go) | RunInChildContext | SUCCEEDED |
 | [child-context-virtual](child-context-virtual/main.go) | RunInChildContext (virtual) | SUCCEEDED |
 | [child-context-serdes](child-context-serdes/main.go) | RunInChildContext, WithChildSerdes | SUCCEEDED |
+| [child-context-serdes-virtual](child-context-serdes-virtual/main.go) | RunInChildContextAsync, WithChildSerdes (virtual) | SUCCEEDED |
 | [child-context-serdes-large-payload](child-context-serdes-large-payload/main.go) | RunInChildContext, FileSystemSerdes (>256KB) | SUCCEEDED |
 | [child-context-large-data](child-context-large-data/main.go) | RunInChildContext (ReplayChildren) | SUCCEEDED |
 | [child-context-error-propagation](child-context-error-propagation/main.go) | RunInChildContext, error propagation | SUCCEEDED |
@@ -99,6 +100,7 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [map-min-successful](map-min-successful/main.go) | Map, WithCompletion (min successful) | SUCCEEDED |
 | [map-tolerated-failure-count](map-tolerated-failure-count/main.go) | Map, WithToleratedFailureCount | SUCCEEDED |
 | [map-failure-threshold](map-failure-threshold/main.go) | Map, fail-fast threshold | SUCCEEDED |
+| [map-failure-threshold-percentage](map-failure-threshold-percentage/main.go) | Map, ToleratedFailurePercentage (failure propagated) | FAILED |
 | [map-high-concurrency-invoke](map-high-concurrency-invoke/main.go) | Map, Invoke, WithMaxConcurrency | SUCCEEDED |
 | [map-tolerated-failure-percentage](map-tolerated-failure-percentage/main.go) | Map, WithToleratedFailurePercentage | SUCCEEDED |
 | [map-completion-config-issue](map-completion-config-issue/main.go) | Map, early-completion partial results | SUCCEEDED |
@@ -109,8 +111,11 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [parallel-wait](parallel-wait/main.go) | Parallel, Wait | SUCCEEDED |
 | [parallel-error-preservation](parallel-error-preservation/main.go) | Parallel, error ordering | SUCCEEDED |
 | [parallel-min-successful](parallel-min-successful/main.go) | Parallel, WithCompletion (min successful) | SUCCEEDED |
+| [parallel-min-successful-callback](parallel-min-successful-callback/main.go) | Parallel, MinSuccessful, WaitForCallback | SUCCEEDED |
 | [parallel-tolerated-failure](parallel-tolerated-failure/main.go) | Parallel, WithToleratedFailureCount | SUCCEEDED |
 | [parallel-tolerated-failure-percentage](parallel-tolerated-failure-percentage/main.go) | Parallel, WithToleratedFailurePercentage | SUCCEEDED |
+| [parallel-failure-threshold-count](parallel-failure-threshold-count/main.go) | Parallel, fail-fast ToleratedFailureCount=0 (failure propagated) | FAILED |
+| [parallel-failure-threshold-percentage](parallel-failure-threshold-percentage/main.go) | Parallel, ToleratedFailurePercentage (failure propagated) | FAILED |
 | [parallel-virtual-context](parallel-virtual-context/main.go) | Parallel, WithNesting (NestingFlat) | SUCCEEDED |
 | [parallel-heterogeneous](parallel-heterogeneous/main.go) | Parallel, Step, Wait, Invoke | SUCCEEDED |
 

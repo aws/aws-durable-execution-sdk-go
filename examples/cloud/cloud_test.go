@@ -49,13 +49,16 @@ const executionTimeout = 15 * time.Minute
 // FAILED (see examples/README.md). Every other example is expected to end
 // SUCCEEDED.
 var expectFailed = map[string]bool{
-	"retry-exhaustion":                  true,
-	"retry-callback":                    true,
-	"child-ops-invalid-depth":           true,
-	"context-validation-child":          true,
-	"context-validation-step":           true,
-	"context-validation-wait-condition": true,
-	"handler-error":                     true,
+	"retry-exhaustion":                      true,
+	"retry-callback":                        true,
+	"child-ops-invalid-depth":               true,
+	"context-validation-child":              true,
+	"context-validation-step":               true,
+	"context-validation-wait-condition":     true,
+	"handler-error":                         true,
+	"map-failure-threshold-percentage":      true,
+	"parallel-failure-threshold-count":      true,
+	"parallel-failure-threshold-percentage": true,
 }
 
 // companions are deployed functions that only serve as invoke targets or

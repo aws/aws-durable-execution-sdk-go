@@ -45,6 +45,7 @@ EXAMPLES="
   child-context-basic
   child-context-virtual
   child-context-serdes
+  child-context-serdes-virtual
   child-context-serdes-large-payload
   child-context-large-data
   child-context-error-propagation
@@ -85,6 +86,7 @@ EXAMPLES="
   map-min-successful
   map-tolerated-failure-count
   map-failure-threshold
+  map-failure-threshold-percentage
   map-high-concurrency-invoke
   map-tolerated-failure-percentage
   map-completion-config-issue
@@ -96,8 +98,11 @@ EXAMPLES="
   parallel-wait
   parallel-error-preservation
   parallel-min-successful
+  parallel-min-successful-callback
   parallel-tolerated-failure
   parallel-tolerated-failure-percentage
+  parallel-failure-threshold-count
+  parallel-failure-threshold-percentage
   parallel-virtual-context
   parallel-heterogeneous
   future-all
