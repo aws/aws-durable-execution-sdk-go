@@ -1,0 +1,20 @@
+[
+  {
+    "type": "CONTEXT",
+    "subType": "RunInChildContext",
+    "name": "parent-block",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "RunInChildContext",
+    "name": "child-block",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "leaf-step",
+    "status": "SUCCEEDED"
+  }
+]

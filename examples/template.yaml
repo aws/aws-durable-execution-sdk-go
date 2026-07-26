@@ -592,6 +592,23 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
 
+  ChildContextNestedBlocksFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-child-context-nested-blocks
+      CodeUri: .aws-sam/build-artifacts/child-context-nested-blocks/
+      Handler: bootstrap
+      Description: RunInChildContext nested parent to child to grandchild
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
   ChildOpsPreservationFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -1175,6 +1192,26 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 120
 
+  MapHighConcurrencyInvokeFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-map-high-concurrency-invoke
+      CodeUri: .aws-sam/build-artifacts/map-high-concurrency-invoke/
+      Handler: bootstrap
+      Description: Map with Invoke per item at WithMaxConcurrency(5)
+      Role: !GetAtt DurableFunctionRole.Arn
+      Environment:
+        Variables:
+          FUNCTION_NAME_PREFIX: !Ref FunctionNamePrefix
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
   MapToleratedFailurePercentageFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -1712,6 +1749,23 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 120
 
+  SerdeCallbackDeserializerFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-serde-callback-deserializer
+      CodeUri: .aws-sam/build-artifacts/serde-callback-deserializer/
+      Handler: bootstrap
+      Description: Handler-level WithCallbackDeserializer for custom callback deserialization
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
   SerdeCustomConfigFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -2115,6 +2169,9 @@ Outputs:
   ChildContextCheckpointSizeLimitFunction:
     Description: Child Context Checkpoint Size Limit Function ARN
     Value: !GetAtt ChildContextCheckpointSizeLimitFunction.Arn
+  ChildContextNestedBlocksFunction:
+    Description: Child Context Nested Blocks Function ARN
+    Value: !GetAtt ChildContextNestedBlocksFunction.Arn
   ChildOpsPreservationFunction:
     Description: Child Ops Preservation Function ARN
     Value: !GetAtt ChildOpsPreservationFunction.Arn
@@ -2217,6 +2274,9 @@ Outputs:
   MapFailureThresholdFunction:
     Description: Map Failure Threshold Function ARN
     Value: !GetAtt MapFailureThresholdFunction.Arn
+  MapHighConcurrencyInvokeFunction:
+    Description: Map High Concurrency Invoke Function ARN
+    Value: !GetAtt MapHighConcurrencyInvokeFunction.Arn
   MapToleratedFailurePercentageFunction:
     Description: Map Tolerated Failure Percentage Function ARN
     Value: !GetAtt MapToleratedFailurePercentageFunction.Arn
@@ -2310,6 +2370,9 @@ Outputs:
   SerdeBasicFunction:
     Description: Serde Basic Function ARN
     Value: !GetAtt SerdeBasicFunction.Arn
+  SerdeCallbackDeserializerFunction:
+    Description: Serde Callback Deserializer Function ARN
+    Value: !GetAtt SerdeCallbackDeserializerFunction.Arn
   SerdeCustomConfigFunction:
     Description: Serde Custom Config Function ARN
     Value: !GetAtt SerdeCustomConfigFunction.Arn

@@ -50,6 +50,7 @@ EXAMPLES="
   child-context-error-propagation
   child-context-failing-step
   child-context-checkpoint-size-limit
+  child-context-nested-blocks
   child-ops-preservation
   child-ops-invalid-depth
   callback-sender
@@ -84,6 +85,7 @@ EXAMPLES="
   map-min-successful
   map-tolerated-failure-count
   map-failure-threshold
+  map-high-concurrency-invoke
   map-tolerated-failure-percentage
   map-completion-config-issue
   map-virtual-context
@@ -115,6 +117,7 @@ EXAMPLES="
   logger-log-levels
   plugin-lifecycle
   serde-basic
+  serde-callback-deserializer
   serde-custom-config
   context-validation-child
   context-validation-step
