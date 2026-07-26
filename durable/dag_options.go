@@ -204,7 +204,12 @@ func WithBatchMaxConcurrency(n int) DagOption {
 // WithDagMaxConcurrency bounds how many top-level DAG tasks run
 // concurrently (the DAG fan-out limit). It is a DAG-level option: pass it
 // to [Dag], not to a task registration. A value <= 0 is a configuration
-// error. To bound the inner fan-out of a Map/Parallel task, use
+// error. When this option is not set, the DAG defaults to
+// [DefaultDagMaxConcurrency] (40) top-level tasks rather than running
+// unbounded. Since a value <= 0 is rejected, the API can no longer express
+// a genuinely unbounded scheduler; pass a bound at least as large as the
+// task count (e.g. math.MaxInt32) for effectively-unbounded behavior. To
+// bound the inner fan-out of a Map/Parallel task, use
 // [WithBatchMaxConcurrency].
 //
 // Experimental: This API is experimental and may be changed or removed in
