@@ -422,3 +422,117 @@ Resources:
       Environment:
         Variables:
           TARGET_FUNCTION_NAME: !Sub "${TargetEcho.Arn}:$LATEST"
+
+  TargetEchoLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${TargetEcho}"
+      RetentionInDays: 7
+
+  TargetEchoTenantLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${TargetEchoTenant}"
+      RetentionInDays: 7
+
+  TargetErrorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${TargetError}"
+      RetentionInDays: 7
+
+  InvokeBasicLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${InvokeBasic}"
+      RetentionInDays: 7
+
+  InvokeWithNameLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${InvokeWithName}"
+      RetentionInDays: 7
+
+  InvokeComplexObjectLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${InvokeComplexObject}"
+      RetentionInDays: 7
+
+  InvokeNullResultLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${InvokeNullResult}"
+      RetentionInDays: 7
+
+  InvokeTargetFailsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${InvokeTargetFails}"
+      RetentionInDays: 7
+
+  InvokeTargetFailsCaughtLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${InvokeTargetFailsCaught}"
+      RetentionInDays: 7
+
+  InvokeLargePayloadLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${InvokeLargePayload}"
+      RetentionInDays: 7
+
+  InvokeWithTenantIdLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${InvokeWithTenantId}"
+      RetentionInDays: 7
+
+  InvokeReplaySkipsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${InvokeReplaySkips}"
+      RetentionInDays: 7
+
+  InvokeReplayRethrowsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${InvokeReplayRethrows}"
+      RetentionInDays: 7
+
+  StepThenInvokeLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${StepThenInvoke}"
+      RetentionInDays: 7
+
+  InvokeThenStepLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${InvokeThenStep}"
+      RetentionInDays: 7
+
+  InvokeInChildContextLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${InvokeInChildContext}"
+      RetentionInDays: 7
+
+  InvokeMultipleSequentialLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${InvokeMultipleSequential}"
+      RetentionInDays: 7
+
+  InvokeCustomPayloadSerdesLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${InvokeCustomPayloadSerdes}"
+      RetentionInDays: 7
+
+  InvokeCustomResultSerdesLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${InvokeCustomResultSerdes}"
+      RetentionInDays: 7

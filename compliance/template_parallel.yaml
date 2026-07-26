@@ -426,3 +426,135 @@ Resources:
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
+
+  ParallelBasicLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ParallelBasic}"
+      RetentionInDays: 7
+
+  ParallelBranchesOnlyLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ParallelBranchesOnly}"
+      RetentionInDays: 7
+
+  ParallelNamedBranchesLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ParallelNamedBranches}"
+      RetentionInDays: 7
+
+  ParallelHeterogeneousLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ParallelHeterogeneous}"
+      RetentionInDays: 7
+
+  ParallelEmptyLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ParallelEmpty}"
+      RetentionInDays: 7
+
+  ParallelFailFastLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ParallelFailFast}"
+      RetentionInDays: 7
+
+  ParallelThrowIfErrorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ParallelThrowIfError}"
+      RetentionInDays: 7
+
+  ParallelMinSuccessfulLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ParallelMinSuccessful}"
+      RetentionInDays: 7
+
+  ParallelToleratedWithinLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ParallelToleratedWithin}"
+      RetentionInDays: 7
+
+  ParallelToleratedExceededLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ParallelToleratedExceeded}"
+      RetentionInDays: 7
+
+  ParallelConcurrentLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ParallelConcurrent}"
+      RetentionInDays: 7
+
+  ParallelFlatLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ParallelFlat}"
+      RetentionInDays: 7
+
+  ParallelToleratedPctLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ParallelToleratedPct}"
+      RetentionInDays: 7
+
+  ParallelReplaySkipsSucceededLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ParallelReplaySkipsSucceeded}"
+      RetentionInDays: 7
+
+  ParallelCustomSerdeLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ParallelCustomSerde}"
+      RetentionInDays: 7
+
+  ParallelAllFailLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ParallelAllFail}"
+      RetentionInDays: 7
+
+  ParallelMinNotReachedLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ParallelMinNotReached}"
+      RetentionInDays: 7
+
+  ParallelCombinedConfigLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ParallelCombinedConfig}"
+      RetentionInDays: 7
+
+  ParallelBadConcurrencyLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ParallelBadConcurrency}"
+      RetentionInDays: 7
+
+  ParallelAccessorsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ParallelAccessors}"
+      RetentionInDays: 7
+
+  ParallelNestedLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ParallelNested}"
+      RetentionInDays: 7
+
+  ParallelPctBoundaryLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ParallelPctBoundary}"
+      RetentionInDays: 7

@@ -1,0 +1,66 @@
+name: CI
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [alpha]
+  pull_request:
+    branches: [alpha]
+
+jobs:
+  check:
+    name: check (${{ matrix.module.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - { name: durable, dir: "." }
+          - { name: insight, dir: "insight" }
+          - { name: compliance, dir: "compliance" }
+          - { name: examples, dir: "examples" }
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: ${{ matrix.module.dir }}/go.sum
+
+      - name: Build
+        working-directory: ${{ matrix.module.dir }}
+        run: go build ./...
+
+      - name: Vet
+        working-directory: ${{ matrix.module.dir }}
+        run: go vet ./...
+
+      # The cloud test harness is build-tagged out of normal builds;
+      # make sure it still compiles.
+      - name: Vet cloud test harness
+        if: matrix.module.name == 'examples'
+        working-directory: examples
+        run: go vet -tags cloud ./cloud
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.0.0
+        with:
+          version: v2.12.2
+          working-directory: ${{ matrix.module.dir }}
+
+      - name: Check formatting
+        working-directory: ${{ matrix.module.dir }}
+        run: |
+          diff=$(golangci-lint fmt --diff ./...)
+          if [ -n "$diff" ]; then
+            echo "$diff"
+            echo "Files are not properly formatted. Run 'make fmt' (or 'golangci-lint fmt ./...')."
+            exit 1
+          fi
+
+      - name: Test
+        working-directory: ${{ matrix.module.dir }}
+        run: go test -race ./...

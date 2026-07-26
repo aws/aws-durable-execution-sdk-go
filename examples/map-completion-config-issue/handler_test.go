@@ -21,13 +21,32 @@ func TestHandler(t *testing.T) {
 	if err != nil {
 		t.Fatalf("deserialize result: %v", err)
 	}
-	if output.TotalItems != 5 {
-		t.Errorf("expected TotalItems=5, got %d", output.TotalItems)
+
+	// With MinSuccessful=2 and MaxConcurrency=3 over 5 items (2 of which
+	// always fail after MaxAttempts=2), the batch completes with reason
+	// MIN_SUCCESSFUL_REACHED. The failing items (indices 1,3) always
+	// exhaust their retries, so HasFailures is always true.
+	//
+	// The number of items dispatched before the completion signal is not
+	// deterministic, so only the structural invariant is asserted:
+	// TotalItems == SuccessfulCount + FailedCount.
+	if output.TotalItems != output.SuccessfulCount+output.FailedCount {
+		t.Errorf("expected TotalItems == SuccessfulCount + FailedCount, got %d != %d + %d",
+			output.TotalItems, output.SuccessfulCount, output.FailedCount)
 	}
 	if output.SuccessfulCount < 2 {
-		t.Errorf("expected at least 2 successful items, got %d", output.SuccessfulCount)
+		t.Errorf("expected SuccessfulCount >= 2 (MinSuccessful guarantee), got %d", output.SuccessfulCount)
+	}
+	if output.FailedCount != 2 {
+		t.Errorf("expected FailedCount == 2 (items 1,3 always exhaust MaxAttempts=2), got %d", output.FailedCount)
 	}
 	if !output.HasFailures {
-		t.Error("expected HasFailures=true")
+		t.Error("expected HasFailures == true (items 1,3 fail)")
+	}
+	if output.BatchStatus != "FAILED" {
+		t.Errorf("expected BatchStatus == FAILED (HasFailures is true), got %s", output.BatchStatus)
+	}
+	if output.CompletionNote != "MIN_SUCCESSFUL_REACHED" {
+		t.Errorf("expected CompletionNote == MIN_SUCCESSFUL_REACHED, got %s", output.CompletionNote)
 	}
 }

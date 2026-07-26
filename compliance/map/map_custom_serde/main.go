@@ -3,6 +3,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
@@ -12,14 +13,20 @@ import (
 type wrapSerdes struct{}
 
 func (wrapSerdes) Marshal(_ durable.SerdesContext, v any) ([]byte, error) {
-	s := v.(string)
+	s, ok := v.(string)
+	if !ok {
+		return nil, fmt.Errorf("unexpected type %T, want string", v)
+	}
 	return []byte("wrapped:" + s), nil
 }
 
 func (wrapSerdes) Unmarshal(_ durable.SerdesContext, data []byte, v any) error {
 	s := string(data)
 	unwrapped := strings.TrimPrefix(s, "wrapped:")
-	ptr := v.(*string)
+	ptr, ok := v.(*string)
+	if !ok {
+		return fmt.Errorf("unexpected type %T, want *string", v)
+	}
 	*ptr = unwrapped
 	return nil
 }

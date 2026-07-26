@@ -45,10 +45,12 @@ EXAMPLES="
   child-context-basic
   child-context-virtual
   child-context-serdes
+  child-context-serdes-large-payload
   child-context-large-data
   child-context-error-propagation
   child-context-failing-step
   child-context-checkpoint-size-limit
+  child-context-nested-blocks
   child-ops-preservation
   child-ops-invalid-depth
   callback-sender
@@ -83,7 +85,10 @@ EXAMPLES="
   map-min-successful
   map-tolerated-failure-count
   map-failure-threshold
+  map-high-concurrency-invoke
+  map-tolerated-failure-percentage
   map-completion-config-issue
+  map-virtual-context
   parallel-basic
   parallel-empty
   parallel-invoke
@@ -91,6 +96,9 @@ EXAMPLES="
   parallel-error-preservation
   parallel-min-successful
   parallel-tolerated-failure
+  parallel-tolerated-failure-percentage
+  parallel-virtual-context
+  parallel-heterogeneous
   future-all
   future-all-settled
   future-all-wait
@@ -107,7 +115,10 @@ EXAMPLES="
   logger-after-wait
   logger-after-callback
   logger-log-levels
+  plugin-lifecycle
+  insight-plugin
   serde-basic
+  serde-callback-deserializer
   serde-custom-config
   context-validation-child
   context-validation-step
@@ -117,6 +128,7 @@ EXAMPLES="
   force-checkpoint-wait
   force-checkpoint-step-retry
   error-determinism
+  error-handling-taxonomy
   handler-error
   hello-world
   simple-execution

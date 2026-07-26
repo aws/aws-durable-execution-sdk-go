@@ -116,7 +116,7 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 		Type:           string(types.OperationTypeContext),
 		SubType:        operationSubTypeRunInChildContext,
 		Status:         PluginOperationStarted,
-		IsReplay:       ec.mode == modeReplay || ec.mode == modeReplaySucceededContext,
+		IsReplay:       ec.IsReplaying(),
 		ParentID:       ec.parentWireID(),
 		StartTimestamp: time.Now(),
 	}

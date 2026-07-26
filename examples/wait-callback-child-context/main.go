@@ -29,8 +29,8 @@ type ChildResult struct {
 }
 
 type Result struct {
-	ParentResult     ParentData  `json:"parentResult"`
-	ChildCtxResult   ChildResult `json:"childContextResult"`
+	ParentResult   ParentData  `json:"parentResult"`
+	ChildCtxResult ChildResult `json:"childContextResult"`
 }
 
 func selfComplete[T any](callbackID string, data T) error {

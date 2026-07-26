@@ -240,3 +240,93 @@ Resources:
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
+
+  WfcbBasicLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${WfcbBasic}"
+      RetentionInDays: 7
+
+  WfcbExplicitNameLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${WfcbExplicitName}"
+      RetentionInDays: 7
+
+  WfcbAnonymousLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${WfcbAnonymous}"
+      RetentionInDays: 7
+
+  WfcbExternalFailureLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${WfcbExternalFailure}"
+      RetentionInDays: 7
+
+  WfcbTimeoutLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${WfcbTimeout}"
+      RetentionInDays: 7
+
+  WfcbFailureCaughtLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${WfcbFailureCaught}"
+      RetentionInDays: 7
+
+  WfcbSubmitterRetryLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${WfcbSubmitterRetry}"
+      RetentionInDays: 7
+
+  WfcbInChildContextLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${WfcbInChildContext}"
+      RetentionInDays: 7
+
+  WfcbTwoSequentialLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${WfcbTwoSequential}"
+      RetentionInDays: 7
+
+  WfcbMixedOpsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${WfcbMixedOps}"
+      RetentionInDays: 7
+
+  WfcbJsonResultLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${WfcbJsonResult}"
+      RetentionInDays: 7
+
+  WfcbHeartbeatTimeoutLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${WfcbHeartbeatTimeout}"
+      RetentionInDays: 7
+
+  WfcbHeartbeatSuccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${WfcbHeartbeatSuccess}"
+      RetentionInDays: 7
+
+  WfcbTimeoutCaughtLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${WfcbTimeoutCaught}"
+      RetentionInDays: 7
+
+  WfcbNullResultLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${WfcbNullResult}"
+      RetentionInDays: 7

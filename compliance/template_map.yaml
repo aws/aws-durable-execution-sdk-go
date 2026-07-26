@@ -390,3 +390,123 @@ Resources:
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
+
+  MapBasicLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${MapBasic}"
+      RetentionInDays: 7
+
+  MapItemsOnlyLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${MapItemsOnly}"
+      RetentionInDays: 7
+
+  MapItemIndexLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${MapItemIndex}"
+      RetentionInDays: 7
+
+  MapEmptyLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${MapEmpty}"
+      RetentionInDays: 7
+
+  MapFailFastLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${MapFailFast}"
+      RetentionInDays: 7
+
+  MapThrowIfErrorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${MapThrowIfError}"
+      RetentionInDays: 7
+
+  MapMinSuccessfulLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${MapMinSuccessful}"
+      RetentionInDays: 7
+
+  MapToleratedWithinLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${MapToleratedWithin}"
+      RetentionInDays: 7
+
+  MapToleratedExceededLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${MapToleratedExceeded}"
+      RetentionInDays: 7
+
+  MapToleratedPctLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${MapToleratedPct}"
+      RetentionInDays: 7
+
+  MapConcurrentLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${MapConcurrent}"
+      RetentionInDays: 7
+
+  MapFlatLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${MapFlat}"
+      RetentionInDays: 7
+
+  MapItemNamerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${MapItemNamer}"
+      RetentionInDays: 7
+
+  MapCustomSerdeLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${MapCustomSerde}"
+      RetentionInDays: 7
+
+  MapSuspendIterationLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${MapSuspendIteration}"
+      RetentionInDays: 7
+
+  MapLargeResultLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${MapLargeResult}"
+      RetentionInDays: 7
+
+  MapThenWaitLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${MapThenWait}"
+      RetentionInDays: 7
+
+  MapFailThenWaitLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${MapFailThenWait}"
+      RetentionInDays: 7
+
+  MapOpSerdeLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${MapOpSerde}"
+      RetentionInDays: 7
+
+  MapOpSerdeReplayLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${MapOpSerdeReplay}"
+      RetentionInDays: 7

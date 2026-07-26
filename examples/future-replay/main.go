@@ -17,7 +17,7 @@ type Result struct {
 
 func handler(ctx durable.Context, _ any) (Result, error) {
 	failFuture := durable.StepAsync(ctx, "failure-step", func(_ durable.StepContext) (string, error) {
-		return "", errors.New("This step failed")
+		return "", errors.New("this step failed")
 	}, durable.WithRetry(durable.NoRetry()))
 
 	// AllSettled absorbs the failure — no unhandled error propagation.

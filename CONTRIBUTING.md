@@ -73,6 +73,57 @@ For the `insight/` module:
 cd insight && go test -race ./...
 ```
 
+## Running CI Checks Locally
+
+The full CI check suite runs locally with a single command:
+
+```bash
+sh scripts/ci-local.sh
+```
+
+Or through the Makefile wrapper:
+
+```bash
+make check-all
+```
+
+Both run the following steps in each of the four modules (root/durable,
+insight, compliance, examples):
+
+1. `go build ./...`
+2. `go vet ./...`
+3. `golangci-lint run ./...`
+4. `golangci-lint fmt --diff ./...` (fails if any file is unformatted)
+5. `go test -race ./...`
+
+The examples module also runs `go vet -tags cloud ./cloud` to check the
+cloud test harness compiles.
+
+You can check a single module by passing its path:
+
+```bash
+sh scripts/ci-local.sh examples
+```
+
+### Tool Versions
+
+Tool versions are pinned in `.mise.toml` at the repository root. Run
+`mise install` to install the correct versions:
+
+- Go 1.25 (resolves to the latest patch)
+- golangci-lint 2.12.2
+
+### Checks That Cannot Run Locally
+
+The cloud-tests and conformance-tests workflows need AWS credentials and a
+deployed CloudFormation stack. They run only in CI with the following
+repository secrets:
+
+- `TEST_ROLE_ARN` — IAM role for deploying and invoking test stacks
+- `TEST_ACCOUNT_ID` — AWS account hosting the test infrastructure
+- `SLACK_WEBHOOK_URL_ISSUE` — Slack notification for opened issues
+- `SLACK_WEBHOOK_URL_PR` — Slack notification for opened pull requests
+
 ## Code Style
 
 - Format with `gofmt` (enforced by golangci-lint)

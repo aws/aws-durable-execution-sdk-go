@@ -25,8 +25,8 @@ type FinalStep struct {
 }
 
 type Result struct {
-	StepResult       UserData `json:"stepResult"`
-	CallbackResult   string   `json:"callbackResult"`
+	StepResult       UserData  `json:"stepResult"`
+	CallbackResult   string    `json:"callbackResult"`
 	FinalStep        FinalStep `json:"finalStep"`
 	WorkflowComplete bool      `json:"workflowCompleted"`
 }

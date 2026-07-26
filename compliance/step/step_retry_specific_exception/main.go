@@ -7,8 +7,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/aws/aws-durable-execution-sdk-go/durable"
 	"github.com/aws/aws-durable-execution-sdk-go/compliance/internal/attempts"
+	"github.com/aws/aws-durable-execution-sdk-go/durable"
 )
 
 // TransientError is the custom error type that the retry strategy treats

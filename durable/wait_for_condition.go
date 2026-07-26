@@ -148,7 +148,7 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 			SubType:        operationSubTypeWaitForCondition,
 			Status:         PluginOperationStarted,
 			Attempt:        attempt,
-			IsReplay:       ec.mode == modeReplay || ec.mode == modeReplaySucceededContext,
+			IsReplay:       ec.IsReplaying(),
 			ParentID:       ec.parentWireID(),
 			StartTimestamp: time.Now(),
 		},

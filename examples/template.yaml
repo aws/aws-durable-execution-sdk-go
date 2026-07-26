@@ -501,6 +501,25 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 60
 
+  ChildContextSerdesLargePayloadFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-child-context-serdes-large-payload
+      CodeUri: .aws-sam/build-artifacts/child-context-serdes-large-payload/
+      Handler: bootstrap
+      Timeout: 120
+      MemorySize: 512
+      Description: Child context with filesystem serdes round-tripping payload above 256KB
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
   ChildContextLargeDataFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -572,6 +591,23 @@ Resources:
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
+
+  ChildContextNestedBlocksFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-child-context-nested-blocks
+      CodeUri: .aws-sam/build-artifacts/child-context-nested-blocks/
+      Handler: bootstrap
+      Description: RunInChildContext nested parent to child to grandchild
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
 
   ChildOpsPreservationFunction:
     Type: AWS::Serverless::Function
@@ -1156,6 +1192,43 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 120
 
+  MapHighConcurrencyInvokeFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-map-high-concurrency-invoke
+      CodeUri: .aws-sam/build-artifacts/map-high-concurrency-invoke/
+      Handler: bootstrap
+      Description: Map with Invoke per item at WithMaxConcurrency(5)
+      Role: !GetAtt DurableFunctionRole.Arn
+      Environment:
+        Variables:
+          FUNCTION_NAME_PREFIX: !Ref FunctionNamePrefix
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  MapToleratedFailurePercentageFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-map-tolerated-failure-percentage
+      CodeUri: .aws-sam/build-artifacts/map-tolerated-failure-percentage/
+      Handler: bootstrap
+      Description: Map with ToleratedFailurePercentage exceeded
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
   MapCompletionConfigIssueFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -1172,6 +1245,23 @@ Resources:
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 120
+
+  MapVirtualContextFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-map-virtual-context
+      CodeUri: .aws-sam/build-artifacts/map-virtual-context/
+      Handler: bootstrap
+      Description: Map with NestingFlat (virtual context)
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
 
   ParallelBasicFunction:
     Type: AWS::Serverless::Function
@@ -1291,6 +1381,60 @@ Resources:
       Handler: bootstrap
       Description: Parallel with ToleratedFailureCount allowing bounded failures
       Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  ParallelToleratedFailurePercentageFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-parallel-tolerated-failure-percentage
+      CodeUri: .aws-sam/build-artifacts/parallel-tolerated-failure-percentage/
+      Handler: bootstrap
+      Description: Parallel with ToleratedFailurePercentage exceeded
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  ParallelVirtualContextFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-parallel-virtual-context
+      CodeUri: .aws-sam/build-artifacts/parallel-virtual-context/
+      Handler: bootstrap
+      Description: Parallel with NestingFlat (virtual context)
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  ParallelHeterogeneousFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-parallel-heterogeneous
+      CodeUri: .aws-sam/build-artifacts/parallel-heterogeneous/
+      Handler: bootstrap
+      Description: Parallel with branches using Step, Wait, and Invoke
+      Role: !GetAtt DurableFunctionRole.Arn
+      Environment:
+        Variables:
+          FUNCTION_NAME_PREFIX: !Ref FunctionNamePrefix
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 120
@@ -1571,6 +1715,40 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 120
 
+  PluginLifecycleFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-plugin-lifecycle
+      CodeUri: .aws-sam/build-artifacts/plugin-lifecycle/
+      Handler: bootstrap
+      Description: WithPlugins hook lifecycle and ordering
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  InsightPluginFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-insight-plugin
+      CodeUri: .aws-sam/build-artifacts/insight-plugin/
+      Handler: bootstrap
+      Description: Workflow Insight plugin with custom config
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
   SerdeBasicFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -1583,6 +1761,23 @@ Resources:
       CodeUri: .aws-sam/build-artifacts/serde-basic/
       Handler: bootstrap
       Description: Per-operation custom serdes using WithStepSerdes
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  SerdeCallbackDeserializerFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-serde-callback-deserializer
+      CodeUri: .aws-sam/build-artifacts/serde-callback-deserializer/
+      Handler: bootstrap
+      Description: Handler-level WithCallbackDeserializer for custom callback deserialization
       Role: !GetAtt DurableFunctionRole.Arn
       DurableConfig:
         RetentionPeriodInDays: 7
@@ -1736,6 +1931,23 @@ Resources:
       CodeUri: .aws-sam/build-artifacts/error-determinism/
       Handler: bootstrap
       Description: Deterministic error handling across replay boundaries
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  ErrorHandlingTaxonomyFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-error-handling-taxonomy
+      CodeUri: .aws-sam/build-artifacts/error-handling-taxonomy/
+      Handler: bootstrap
+      Description: Error taxonomy with errors.As matching for StepError, InvokeError, CallbackError
       Role: !GetAtt DurableFunctionRole.Arn
       DurableConfig:
         RetentionPeriodInDays: 7
@@ -2027,6 +2239,9 @@ Outputs:
   ChildContextSerdesFunction:
     Description: Child Context Serdes Function ARN
     Value: !GetAtt ChildContextSerdesFunction.Arn
+  ChildContextSerdesLargePayloadFunction:
+    Description: Child Context Serdes Large Payload Function ARN
+    Value: !GetAtt ChildContextSerdesLargePayloadFunction.Arn
   ChildContextLargeDataFunction:
     Description: Child Context Large Data Function ARN
     Value: !GetAtt ChildContextLargeDataFunction.Arn
@@ -2039,6 +2254,9 @@ Outputs:
   ChildContextCheckpointSizeLimitFunction:
     Description: Child Context Checkpoint Size Limit Function ARN
     Value: !GetAtt ChildContextCheckpointSizeLimitFunction.Arn
+  ChildContextNestedBlocksFunction:
+    Description: Child Context Nested Blocks Function ARN
+    Value: !GetAtt ChildContextNestedBlocksFunction.Arn
   ChildOpsPreservationFunction:
     Description: Child Ops Preservation Function ARN
     Value: !GetAtt ChildOpsPreservationFunction.Arn
@@ -2141,9 +2359,18 @@ Outputs:
   MapFailureThresholdFunction:
     Description: Map Failure Threshold Function ARN
     Value: !GetAtt MapFailureThresholdFunction.Arn
+  MapHighConcurrencyInvokeFunction:
+    Description: Map High Concurrency Invoke Function ARN
+    Value: !GetAtt MapHighConcurrencyInvokeFunction.Arn
+  MapToleratedFailurePercentageFunction:
+    Description: Map Tolerated Failure Percentage Function ARN
+    Value: !GetAtt MapToleratedFailurePercentageFunction.Arn
   MapCompletionConfigIssueFunction:
     Description: Map Completion Config Issue Function ARN
     Value: !GetAtt MapCompletionConfigIssueFunction.Arn
+  MapVirtualContextFunction:
+    Description: Map Virtual Context Function ARN
+    Value: !GetAtt MapVirtualContextFunction.Arn
   ParallelBasicFunction:
     Description: Parallel Basic Function ARN
     Value: !GetAtt ParallelBasicFunction.Arn
@@ -2165,6 +2392,15 @@ Outputs:
   ParallelToleratedFailureFunction:
     Description: Parallel Tolerated Failure Function ARN
     Value: !GetAtt ParallelToleratedFailureFunction.Arn
+  ParallelToleratedFailurePercentageFunction:
+    Description: Parallel Tolerated Failure Percentage Function ARN
+    Value: !GetAtt ParallelToleratedFailurePercentageFunction.Arn
+  ParallelVirtualContextFunction:
+    Description: Parallel Virtual Context Function ARN
+    Value: !GetAtt ParallelVirtualContextFunction.Arn
+  ParallelHeterogeneousFunction:
+    Description: Parallel Heterogeneous Function ARN
+    Value: !GetAtt ParallelHeterogeneousFunction.Arn
   FutureAllFunction:
     Description: Future All Function ARN
     Value: !GetAtt FutureAllFunction.Arn
@@ -2213,9 +2449,18 @@ Outputs:
   LoggerLogLevelsFunction:
     Description: Logger Log Levels Function ARN
     Value: !GetAtt LoggerLogLevelsFunction.Arn
+  PluginLifecycleFunction:
+    Description: Plugin Lifecycle Function ARN
+    Value: !GetAtt PluginLifecycleFunction.Arn
+  InsightPluginFunction:
+    Description: Insight Plugin Function ARN
+    Value: !GetAtt InsightPluginFunction.Arn
   SerdeBasicFunction:
     Description: Serde Basic Function ARN
     Value: !GetAtt SerdeBasicFunction.Arn
+  SerdeCallbackDeserializerFunction:
+    Description: Serde Callback Deserializer Function ARN
+    Value: !GetAtt SerdeCallbackDeserializerFunction.Arn
   SerdeCustomConfigFunction:
     Description: Serde Custom Config Function ARN
     Value: !GetAtt SerdeCustomConfigFunction.Arn
@@ -2243,6 +2488,9 @@ Outputs:
   ErrorDeterminismFunction:
     Description: Error Determinism Function ARN
     Value: !GetAtt ErrorDeterminismFunction.Arn
+  ErrorHandlingTaxonomyFunction:
+    Description: Error Handling Taxonomy Function ARN
+    Value: !GetAtt ErrorHandlingTaxonomyFunction.Arn
   HandlerErrorFunction:
     Description: Handler Error Function ARN
     Value: !GetAtt HandlerErrorFunction.Arn

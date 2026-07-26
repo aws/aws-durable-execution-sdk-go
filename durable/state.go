@@ -123,11 +123,12 @@ type stepDetails struct {
 // MD5 hashes of the positional operation ID; get hashes internally so
 // callers use positional IDs throughout.
 type executionState struct {
-	// mu guards operations for safe concurrent access. Operation bodies
-	// running on multiple goroutines (e.g. Map/Parallel branches or DAG
-	// tasks) read the map via get/getByWireID while the checkpointer merges
-	// backend-returned operations into it. Setup-time accesses (before any
-	// operation goroutine exists) do not require the lock.
+	// mu protects the operations map from concurrent read/write access.
+	// Readers (get, getByWireID, len, range) take RLock; writers (merge)
+	// take Lock. Operation bodies running on multiple goroutines (Map and
+	// Parallel branches, and DAG tasks) read via get/getByWireID while the
+	// checkpointer merges backend-returned operations in. Setup-time
+	// accesses, before any operation goroutine exists, do not need the lock.
 	mu         sync.RWMutex
 	operations map[string]*operation
 }
@@ -144,8 +145,9 @@ func newExecutionState(ops []*operation) *executionState {
 // the operation has not been checkpointed. Safe for concurrent use.
 func (s *executionState) get(positionalID string) *operation {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.operations[hashID(positionalID)]
+	op := s.operations[hashID(positionalID)]
+	s.mu.RUnlock()
+	return op
 }
 
 // getByWireID returns the checkpointed operation for an already-hashed wire
@@ -154,8 +156,40 @@ func (s *executionState) get(positionalID string) *operation {
 // concurrent use.
 func (s *executionState) getByWireID(wireID string) *operation {
 	s.mu.RLock()
+	op := s.operations[wireID]
+	s.mu.RUnlock()
+	return op
+}
+
+// merge inserts or replaces operations in the map. Callers that hold
+// checkpointer.mu must call merge (not assign to the map directly) so that
+// the lock order checkpointer.mu → executionState.mu is respected.
+func (s *executionState) merge(ops []*operation) {
+	s.mu.Lock()
+	for _, op := range ops {
+		s.operations[op.id] = op
+	}
+	s.mu.Unlock()
+}
+
+// numOperations returns the number of checkpointed operations.
+func (s *executionState) numOperations() int {
+	s.mu.RLock()
+	n := len(s.operations)
+	s.mu.RUnlock()
+	return n
+}
+
+// rangeOperations calls fn for each operation in the map. If fn returns
+// false, iteration stops.
+func (s *executionState) rangeOperations(fn func(*operation) bool) {
+	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.operations[wireID]
+	for _, op := range s.operations {
+		if !fn(op) {
+			return
+		}
+	}
 }
 
 // set records or replaces an operation. Safe for concurrent use; called by

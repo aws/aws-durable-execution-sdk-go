@@ -173,7 +173,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	// Plugin dispatcher: nil when no plugins are registered (zero overhead).
 	pd := newPluginDispatcher(h.options.plugins)
 
-	isFirstInvocation := len(state.operations) <= 1
+	isFirstInvocation := state.numOperations() <= 1
 
 	// Build updated operations map for both InvocationHookInfo and
 	// OnOperationChange (Item 11: map[string]OperationHookInfo keyed by ID).
@@ -207,13 +207,14 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	// ExecutionStartTimestamp: sourced from the root EXECUTION operation's
 	// own StartTimestamp in the wire payload (the first operation).
 	var execStartTimestamp time.Time
-	if len(state.operations) > 0 {
-		for _, op := range state.operations {
+	if state.numOperations() > 0 {
+		state.rangeOperations(func(op *operation) bool {
 			if op.opType == "EXECUTION" {
 				execStartTimestamp = op.startTimestamp
-				break
+				return false
 			}
-		}
+			return true
+		})
 	}
 
 	// ExecutionInput: the raw unmarshaled customer event. We pass the

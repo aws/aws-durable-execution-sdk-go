@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/aws/aws-durable-execution-sdk-go/durable"
 	"github.com/aws/aws-durable-execution-sdk-go/compliance/internal/attempts"
+	"github.com/aws/aws-durable-execution-sdk-go/durable"
 )
 
 func handler(ctx durable.Context, _ any) (string, error) {

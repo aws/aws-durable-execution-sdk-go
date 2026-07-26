@@ -120,3 +120,33 @@ Resources:
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 7200
+
+  WaitBasicLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${WaitBasic}"
+      RetentionInDays: 7
+
+  WaitWithNameLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${WaitWithName}"
+      RetentionInDays: 7
+
+  WaitMultipleSequentialLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${WaitMultipleSequential}"
+      RetentionInDays: 7
+
+  WaitDurationUnitsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${WaitDurationUnits}"
+      RetentionInDays: 7
+
+  WaitLongDurationLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${WaitLongDuration}"
+      RetentionInDays: 7

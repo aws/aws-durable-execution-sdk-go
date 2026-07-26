@@ -386,3 +386,111 @@ Resources:
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
+
+  ChildBasicLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ChildBasic}"
+      RetentionInDays: 7
+
+  ChildWithNameLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ChildWithName}"
+      RetentionInDays: 7
+
+  ChildMultipleStepsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ChildMultipleSteps}"
+      RetentionInDays: 7
+
+  ChildErrorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ChildError}"
+      RetentionInDays: 7
+
+  ChildErrorCaughtLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ChildErrorCaught}"
+      RetentionInDays: 7
+
+  ChildNestedLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ChildNested}"
+      RetentionInDays: 7
+
+  ChildRetryLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ChildRetry}"
+      RetentionInDays: 7
+
+  ChildRetryExhaustionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ChildRetryExhaustion}"
+      RetentionInDays: 7
+
+  ChildReplayLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ChildReplay}"
+      RetentionInDays: 7
+
+  ChildStepAndWaitLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ChildStepAndWait}"
+      RetentionInDays: 7
+
+  ChildLargePayloadLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ChildLargePayload}"
+      RetentionInDays: 7
+
+  ChildInterruptedLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ChildInterrupted}"
+      RetentionInDays: 7
+
+  ChildWaitReplayLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ChildWaitReplay}"
+      RetentionInDays: 7
+
+  ChildCustomSerdesLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ChildCustomSerdes}"
+      RetentionInDays: 7
+
+  ChildErrorNoStepLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ChildErrorNoStep}"
+      RetentionInDays: 7
+
+  ChildNullResultLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ChildNullResult}"
+      RetentionInDays: 7
+
+  ChildPrintOnlyLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ChildPrintOnly}"
+      RetentionInDays: 7
+
+  ChildStepWaitAfterLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ChildStepWaitAfter}"
+      RetentionInDays: 7

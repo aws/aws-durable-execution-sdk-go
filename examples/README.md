@@ -49,10 +49,12 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [child-context-basic](child-context-basic/main.go) | RunInChildContext | SUCCEEDED |
 | [child-context-virtual](child-context-virtual/main.go) | RunInChildContext (virtual) | SUCCEEDED |
 | [child-context-serdes](child-context-serdes/main.go) | RunInChildContext, WithChildSerdes | SUCCEEDED |
+| [child-context-serdes-large-payload](child-context-serdes-large-payload/main.go) | RunInChildContext, FileSystemSerdes (>256KB) | SUCCEEDED |
 | [child-context-large-data](child-context-large-data/main.go) | RunInChildContext (ReplayChildren) | SUCCEEDED |
 | [child-context-error-propagation](child-context-error-propagation/main.go) | RunInChildContext, error propagation | SUCCEEDED |
 | [child-context-failing-step](child-context-failing-step/main.go) | RunInChildContext, Step failure | SUCCEEDED |
 | [child-context-checkpoint-size-limit](child-context-checkpoint-size-limit/main.go) | RunInChildContext, size limit | SUCCEEDED |
+| [child-context-nested-blocks](child-context-nested-blocks/main.go) | RunInChildContext, nested parent/child/grandchild | SUCCEEDED |
 | [child-ops-preservation](child-ops-preservation/main.go) | RunInChildContext, operation ordering | SUCCEEDED |
 | [child-ops-invalid-depth](child-ops-invalid-depth/main.go) | RunInChildContext, depth validation | FAILED |
 
@@ -97,7 +99,10 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [map-min-successful](map-min-successful/main.go) | Map, WithCompletion (min successful) | SUCCEEDED |
 | [map-tolerated-failure-count](map-tolerated-failure-count/main.go) | Map, WithToleratedFailureCount | SUCCEEDED |
 | [map-failure-threshold](map-failure-threshold/main.go) | Map, fail-fast threshold | SUCCEEDED |
+| [map-high-concurrency-invoke](map-high-concurrency-invoke/main.go) | Map, Invoke, WithMaxConcurrency | SUCCEEDED |
+| [map-tolerated-failure-percentage](map-tolerated-failure-percentage/main.go) | Map, WithToleratedFailurePercentage | SUCCEEDED |
 | [map-completion-config-issue](map-completion-config-issue/main.go) | Map, early-completion partial results | SUCCEEDED |
+| [map-virtual-context](map-virtual-context/main.go) | Map, WithNesting (NestingFlat) | SUCCEEDED |
 | [parallel-basic](parallel-basic/main.go) | Parallel, WithMaxConcurrency | SUCCEEDED |
 | [parallel-empty](parallel-empty/main.go) | Parallel (no branches) | SUCCEEDED |
 | [parallel-invoke](parallel-invoke/main.go) | Parallel, Invoke | SUCCEEDED |
@@ -105,6 +110,9 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [parallel-error-preservation](parallel-error-preservation/main.go) | Parallel, error ordering | SUCCEEDED |
 | [parallel-min-successful](parallel-min-successful/main.go) | Parallel, WithCompletion (min successful) | SUCCEEDED |
 | [parallel-tolerated-failure](parallel-tolerated-failure/main.go) | Parallel, WithToleratedFailureCount | SUCCEEDED |
+| [parallel-tolerated-failure-percentage](parallel-tolerated-failure-percentage/main.go) | Parallel, WithToleratedFailurePercentage | SUCCEEDED |
+| [parallel-virtual-context](parallel-virtual-context/main.go) | Parallel, WithNesting (NestingFlat) | SUCCEEDED |
+| [parallel-heterogeneous](parallel-heterogeneous/main.go) | Parallel, Step, Wait, Invoke | SUCCEEDED |
 
 ### Future Combinators & Concurrency
 
@@ -136,11 +144,14 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [context-validation-step](context-validation-step/main.go) | Step, goroutine validation | FAILED |
 | [context-validation-wait-condition](context-validation-wait-condition/main.go) | WaitForCondition, goroutine validation | FAILED |
 | [error-determinism](error-determinism/main.go) | Step, error replay consistency | SUCCEEDED |
+| [error-handling-taxonomy](error-handling-taxonomy/main.go) | errors.As, StepError, InvokeError, CallbackError | SUCCEEDED |
 | [serde-basic](serde-basic/main.go) | Step, WithStepSerdes | SUCCEEDED |
+| [serde-callback-deserializer](serde-callback-deserializer/main.go) | WithCallbackDeserializer, custom callback deserialization | SUCCEEDED |
 | [serde-custom-config](serde-custom-config/main.go) | WithSerdes (handler-level) | SUCCEEDED |
 | [logger-after-wait](logger-after-wait/main.go) | Wait, WithLogger, replay suppression | SUCCEEDED |
 | [logger-after-callback](logger-after-callback/main.go) | WaitForCallback, WithLogger | SUCCEEDED |
 | [logger-log-levels](logger-log-levels/main.go) | WithLogger, all log levels | SUCCEEDED |
+| [plugin-lifecycle](plugin-lifecycle/main.go) | WithPlugins, hook lifecycle ordering | SUCCEEDED |
 
 ### Showcase & Edge Cases
 

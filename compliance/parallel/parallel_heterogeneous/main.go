@@ -9,7 +9,9 @@ func handler(ctx durable.Context, _ any) ([]any, error) {
 		{Func: func(_ durable.Context) (any, error) { return 42, nil }},
 		{Func: func(_ durable.Context) (any, error) { return map[string]string{"k": "v"}, nil }},
 	}, durable.WithMaxConcurrency(1))
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	return result.Results(), nil
 }
 

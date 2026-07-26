@@ -8,7 +8,9 @@ func handler(ctx durable.Context, _ any) ([]string, error) {
 		{Func: func(_ durable.Context) (string, error) { return "alpha", nil }},
 		{Func: func(_ durable.Context) (string, error) { return "beta", nil }},
 	}, durable.WithMaxConcurrency(1))
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	return result.Results(), nil
 }
 

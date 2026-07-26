@@ -4,7 +4,6 @@
 package main
 
 import (
-	"path/filepath"
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
@@ -26,5 +25,23 @@ func TestHandler(t *testing.T) {
 		t.Errorf("expected %q, got %q", "result", output)
 	}
 
-	durabletest.AssertGoldenSignature(t, result, filepath.Join("testdata", "signature.golden"))
+	// The "complete" step must always be present.
+	// The "background-wait" (fired via WaitAsync) may or may not appear
+	// depending on goroutine timing — it is fire-and-forget.
+	durabletest.AssertSignatureContains(t, result, []durabletest.OperationSignature{
+		{Type: "STEP", SubType: "Step", Name: "complete", Status: "SUCCEEDED"},
+	})
+
+	// Verify that if background-wait appears, it has the expected shape.
+	sig := durabletest.EventSignature(result)
+	for _, op := range sig {
+		if op.Name == "background-wait" {
+			if op.Type != "WAIT" {
+				t.Errorf("expected background-wait type WAIT, got %s", op.Type)
+			}
+			if op.Status != "STARTED" && op.Status != "SUCCEEDED" {
+				t.Errorf("expected background-wait status STARTED or SUCCEEDED, got %s", op.Status)
+			}
+		}
+	}
 }

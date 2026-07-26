@@ -12,9 +12,9 @@ import (
 )
 
 type Result struct {
-	IsCallbackError    bool   `json:"isCallbackError"`
-	ContainsTimedOut   bool   `json:"containsTimedOut"`
-	ErrorMessage       string `json:"errorMessage,omitempty"`
+	IsCallbackError  bool   `json:"isCallbackError"`
+	ContainsTimedOut bool   `json:"containsTimedOut"`
+	ErrorMessage     string `json:"errorMessage,omitempty"`
 }
 
 func handler(ctx durable.Context, _ any) (Result, error) {

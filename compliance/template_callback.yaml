@@ -299,3 +299,117 @@ Resources:
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
+
+  CallbackBasicLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${CallbackBasic}"
+      RetentionInDays: 7
+
+  CallbackWithNameLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${CallbackWithName}"
+      RetentionInDays: 7
+
+  CallbackTimeoutLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${CallbackTimeout}"
+      RetentionInDays: 7
+
+  CallbackHeartbeatTimeoutLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${CallbackHeartbeatTimeout}"
+      RetentionInDays: 7
+
+  CallbackHeartbeatSuccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${CallbackHeartbeatSuccess}"
+      RetentionInDays: 7
+
+  CallbackFailureLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${CallbackFailure}"
+      RetentionInDays: 7
+
+  CallbackStepFailureLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${CallbackStepFailure}"
+      RetentionInDays: 7
+
+  CallbackStepTimeoutLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${CallbackStepTimeout}"
+      RetentionInDays: 7
+
+  CallbackWaitSuccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${CallbackWaitSuccess}"
+      RetentionInDays: 7
+
+  CallbackWaitFailureLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${CallbackWaitFailure}"
+      RetentionInDays: 7
+
+  CallbackWaitTimeoutLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${CallbackWaitTimeout}"
+      RetentionInDays: 7
+
+  CallbackReplayWithWaitLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${CallbackReplayWithWait}"
+      RetentionInDays: 7
+
+  CallbackReplayFailureLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${CallbackReplayFailure}"
+      RetentionInDays: 7
+
+  CallbackReplayTimeoutLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${CallbackReplayTimeout}"
+      RetentionInDays: 7
+
+  CallbackSerdesHappyLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${CallbackSerdesHappy}"
+      RetentionInDays: 7
+
+  CallbackSerdesNumericLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${CallbackSerdesNumeric}"
+      RetentionInDays: 7
+
+  CallbackTwoSequentialLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${CallbackTwoSequential}"
+      RetentionInDays: 7
+
+  CallbackTwoParallelLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${CallbackTwoParallel}"
+      RetentionInDays: 7
+
+  CallbackTwoParallelReverseLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${CallbackTwoParallelReverse}"
+      RetentionInDays: 7

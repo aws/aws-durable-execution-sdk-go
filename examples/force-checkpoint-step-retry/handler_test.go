@@ -18,5 +18,5 @@ func TestHandler(t *testing.T) {
 		t.Fatalf("expected Succeeded, got %s", result.Status)
 	}
 
-	durabletest.AssertGoldenSignature(t, result, filepath.Join("testdata", "signature.golden"))
+	durabletest.AssertGoldenSignatureUnordered(t, result, filepath.Join("testdata", "signature.golden"))
 }

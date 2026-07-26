@@ -143,7 +143,8 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 		attempt = op.step.attempt + 1
 	}
 
-	isReplay := ec.mode == modeReplay || ec.mode == modeReplaySucceededContext
+	currentMode := executionMode(ec.mode.Load())
+	isReplay := currentMode == modeReplay || currentMode == modeReplaySucceededContext
 
 	if op != nil {
 		switch op.status {
@@ -346,7 +347,7 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 			SubType:        operationSubTypeStep,
 			Status:         PluginOperationStarted,
 			Attempt:        attempt,
-			IsReplay:       ec.mode == modeReplay || ec.mode == modeReplaySucceededContext,
+			IsReplay:       ec.IsReplaying(),
 			ParentID:       ec.parentWireID(),
 			StartTimestamp: time.Now(),
 		},
