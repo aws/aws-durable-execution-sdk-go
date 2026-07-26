@@ -4,6 +4,10 @@
 // calling a durable operation from another goroutine produces
 // [durable.ErrWrongGoroutine].
 //
+// The goroutine ownership diagnostic requires the "durablecheck" build tag.
+// Without it, the check is a no-op and this handler succeeds instead of
+// failing.
+//
 // Go adaptation note: The JS SDK validates context scope (parent vs child)
 // immediately at runtime. In Go, the analogous enforcement is goroutine
 // ownership. Using durable.Go creates a new goroutine with its own context;

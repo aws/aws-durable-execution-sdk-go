@@ -3,6 +3,10 @@
 // context from within a durable.Go child goroutine — specifically inside
 // a WaitForCondition check function.
 //
+// The goroutine ownership diagnostic requires the "durablecheck" build tag.
+// Without it, the check is a no-op and this handler succeeds instead of
+// failing.
+//
 // Go adaptation note: The JS SDK validates context scope at the call site.
 // In Go, the enforcement is goroutine ownership: using a parent context
 // from a child goroutine triggers [durable.ErrWrongGoroutine].

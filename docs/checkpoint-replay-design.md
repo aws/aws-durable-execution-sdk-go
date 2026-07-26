@@ -117,9 +117,10 @@ function when the blocking condition resolves.
 
 ## Goroutine Ownership
 
-Each `Context` has an owning goroutine. Durable operations validate that
-the calling goroutine matches the owner before proceeding. A mismatch
-returns `ErrWrongGoroutine` immediately.
+Each `Context` has an owning goroutine. When built with the `durablecheck`
+build tag, durable operations validate that the calling goroutine matches
+the owner before proceeding. A mismatch returns `ErrWrongGoroutine`
+immediately. Without the tag, the check is a no-op for production use.
 
 This rule exists to enforce deterministic ID minting. If two goroutines
 raced to call operations on the same context, the minting order would be

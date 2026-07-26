@@ -140,9 +140,9 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [force-checkpoint-wait](force-checkpoint-wait/main.go) | Wait, force checkpoint | SUCCEEDED |
 | [force-checkpoint-callback](force-checkpoint-callback/main.go) | WaitForCallback, force checkpoint | SUCCEEDED |
 | [force-checkpoint-step-retry](force-checkpoint-step-retry/main.go) | Step, retry, force checkpoint | SUCCEEDED |
-| [context-validation-child](context-validation-child/main.go) | RunInChildContext, goroutine validation | FAILED |
-| [context-validation-step](context-validation-step/main.go) | Step, goroutine validation | FAILED |
-| [context-validation-wait-condition](context-validation-wait-condition/main.go) | WaitForCondition, goroutine validation | FAILED |
+| [context-validation-child](context-validation-child/main.go) | RunInChildContext, goroutine validation (requires `durablecheck` tag) | FAILED |
+| [context-validation-step](context-validation-step/main.go) | Step, goroutine validation (requires `durablecheck` tag) | FAILED |
+| [context-validation-wait-condition](context-validation-wait-condition/main.go) | WaitForCondition, goroutine validation (requires `durablecheck` tag) | FAILED |
 | [error-determinism](error-determinism/main.go) | Step, error replay consistency | SUCCEEDED |
 | [error-handling-taxonomy](error-handling-taxonomy/main.go) | errors.As, StepError, InvokeError, CallbackError | SUCCEEDED |
 | [serde-basic](serde-basic/main.go) | Step, WithStepSerdes | SUCCEEDED |

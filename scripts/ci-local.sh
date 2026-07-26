@@ -34,6 +34,9 @@ for mod in $MODULES; do
     if [ "$mod" = "examples" ]; then
         echo " -> go vet -tags cloud ./cloud"
         go vet -tags cloud ./cloud
+
+        echo " -> go test -tags durablecheck -race ./context-validation-..."
+        go test -tags durablecheck -race ./context-validation-child ./context-validation-step ./context-validation-wait-condition
     fi
 
     echo " -> golangci-lint run ./..."

@@ -64,3 +64,10 @@ jobs:
       - name: Test
         working-directory: ${{ matrix.module.dir }}
         run: go test -race ./...
+
+      # The context-validation examples require the durablecheck build tag
+      # for the goroutine ownership diagnostic to fire during their tests.
+      - name: Test durablecheck examples
+        if: matrix.module.name == 'examples'
+        working-directory: examples
+        run: go test -tags durablecheck -race ./context-validation-child ./context-validation-step ./context-validation-wait-condition
