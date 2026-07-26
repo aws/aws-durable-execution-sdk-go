@@ -26,7 +26,7 @@ func TestHandlerDefaultPath(t *testing.T) {
 	}
 
 	// Clean up files written to the default path.
-	t.Cleanup(func() { os.RemoveAll("/tmp/durable-serdes") })
+	t.Cleanup(func() { _ = os.RemoveAll("/tmp/durable-serdes") })
 
 	entries, err := os.ReadDir("/tmp/durable-serdes")
 	if err != nil {
