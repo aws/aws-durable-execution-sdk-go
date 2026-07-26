@@ -304,3 +304,21 @@ Resources:
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
+
+  DagLargePayload:
+    Type: AWS::Serverless::Function
+    TestingMetadata:
+      TestDescription: ["10-15"]
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/dag_large_payload/
+      Handler: bootstrap
+      Description: DAG >256KB aggregate offloaded and replayed across a suspend (digest before == after proves fidelity through Go's ReplayChildren re-execution)
+      Role:
+        Fn::GetAtt:
+        - DurableFunctionRole
+        - Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300

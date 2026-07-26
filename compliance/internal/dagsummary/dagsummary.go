@@ -48,6 +48,21 @@ type Summary struct {
 	Call int `json:"call,omitempty"`
 	// Cb carries the callback task result (callbackdag handler only).
 	Cb string `json:"cb,omitempty"`
+	// DigestBefore is a language-neutral fingerprint of the aggregate
+	// DagResult computed BEFORE the mid-handler suspend
+	// ("<taskCount>:<totalLength>:<firstCharOfEachTaskInOrder>"),
+	// large-payload handler only.
+	DigestBefore string `json:"digestBefore,omitempty"`
+	// DigestAfter is the same fingerprint recomputed from the REPLAYED
+	// DagResult after the suspend, large-payload handler only. Equality with
+	// DigestBefore proves the >256KB aggregate survived the offload and came
+	// back identical through the SDK's replay strategy (child-body
+	// re-execution for Go).
+	DigestAfter string `json:"digestAfter,omitempty"`
+	// Match reports whether DigestBefore == DigestAfter. It is a *bool so
+	// the key is emitted (true or false) only by the large-payload handler
+	// and omitted entirely by every other handler.
+	Match *bool `json:"match,omitempty"`
 }
 
 // From builds a Summary from a drained DagResult.
