@@ -1732,6 +1732,23 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 60
 
+  InsightPluginFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-insight-plugin
+      CodeUri: .aws-sam/build-artifacts/insight-plugin/
+      Handler: bootstrap
+      Description: Workflow Insight plugin with custom config
+      Role: !GetAtt DurableFunctionRole.Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
   SerdeBasicFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -2367,6 +2384,9 @@ Outputs:
   PluginLifecycleFunction:
     Description: Plugin Lifecycle Function ARN
     Value: !GetAtt PluginLifecycleFunction.Arn
+  InsightPluginFunction:
+    Description: Insight Plugin Function ARN
+    Value: !GetAtt InsightPluginFunction.Arn
   SerdeBasicFunction:
     Description: Serde Basic Function ARN
     Value: !GetAtt SerdeBasicFunction.Arn

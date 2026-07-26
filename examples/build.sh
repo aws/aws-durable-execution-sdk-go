@@ -116,6 +116,7 @@ EXAMPLES="
   logger-after-callback
   logger-log-levels
   plugin-lifecycle
+  insight-plugin
   serde-basic
   serde-callback-deserializer
   serde-custom-config
