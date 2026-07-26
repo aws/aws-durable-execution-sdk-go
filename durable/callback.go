@@ -88,7 +88,7 @@ func CreateCallback[O any](ctx Context, name string, opts ...CallbackOption) (*C
 			if op.callback != nil {
 				callbackID = op.callback.callbackID
 			}
-			fut := newPendingCallbackFuture[O](ec.suspend)
+			fut := newPendingCallbackFuture[O](ec.suspend, ec)
 			return &Callback[O]{id: callbackID, future: fut}, nil
 
 		default:
@@ -114,7 +114,7 @@ func CreateCallback[O any](ctx Context, name string, opts ...CallbackOption) (*C
 	// Return a callback whose Result() fires suspend on first call.
 	// This allows WaitForCallback to run the submitter step between
 	// CreateCallback and cb.Result() in the same invocation.
-	fut := newPendingCallbackFuture[O](ec.suspend)
+	fut := newPendingCallbackFuture[O](ec.suspend, ec)
 
 	return &Callback[O]{id: callbackID, future: fut}, nil
 }

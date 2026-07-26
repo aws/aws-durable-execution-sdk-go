@@ -275,6 +275,12 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 
 	// WrapInvocation: compose around the handler execution.
 	runHandler := func() (any, error) {
+		// Register the root handler goroutine as an active branch.
+		// Deregistration happens only when the handler unwinds with
+		// errSuspendExecution (blocked on a pending operation). A
+		// successful or failed handler return does not deregister:
+		// the invocation completes with that outcome immediately.
+		ec.suspend.registerBranch()
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
@@ -285,12 +291,15 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 			// that constructed it.
 			ec.owner = currentGoroutineOwner()
 			result, err := h.handler(ec, event)
+			if errors.Is(err, errSuspendExecution) {
+				ec.suspend.deregisterBranch()
+			}
 			outcomeCh <- outcome{result: result, err: err}
 		}()
 
 		select {
 		case out := <-outcomeCh:
-			if ec.suspend.fired() {
+			if ec.suspend.fired() || ec.suspend.committed() {
 				return nil, errSuspendExecution
 			}
 			if out.err != nil {

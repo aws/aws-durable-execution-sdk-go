@@ -101,7 +101,9 @@ func InvokeAsync[O, I any](ctx Context, name, functionID string, input I, opts .
 	fut := newFuture[O]()
 	registerFuture(ec.suspend, fut)
 
+	ec.suspend.registerBranch()
 	go func() {
+		defer ec.suspend.deregisterBranch()
 		result, runErr := runInvoke[O, I](ec, id, name, functionID, input, options)
 		fut.settle(result, runErr)
 	}()
@@ -135,7 +137,8 @@ func runInvoke[O, I any](ec *execContext, id, name, functionID string, input I, 
 
 		case statusStarted, statusPending, statusReady, statusCancelled:
 			// The invoked execution has not settled: keep waiting.
-			ec.suspend.fire()
+			ec.blocked.Store(true)
+			ec.suspend.commitPending()
 			return zero, errSuspendExecution
 		}
 	}
@@ -175,7 +178,8 @@ func runInvoke[O, I any](ec *execContext, id, name, functionID string, input I, 
 
 	// The invoked function runs as its own durable execution: suspend and
 	// resume when it settles.
-	ec.suspend.fire()
+	ec.blocked.Store(true)
+	ec.suspend.commitPending()
 	return zero, errSuspendExecution
 }
 

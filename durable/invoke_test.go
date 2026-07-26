@@ -380,6 +380,8 @@ func TestChildContextStepInside(t *testing.T) {
 }
 
 func TestInvokeAfterSuspensionFailsFast(t *testing.T) {
+	// After the first invoke commits to PENDING, subsequent claims on
+	// the same context fail.
 	fake := &fakeLambda{}
 	var secondErr error
 	handlerDone := make(chan struct{})

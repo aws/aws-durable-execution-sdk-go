@@ -61,16 +61,22 @@ func newFuture[O any]() *Future[O] {
 
 // newPendingCallbackFuture creates a future for a callback that is still
 // pending (STARTED or freshly checkpointed START). When Result() is called,
-// it fires the suspend signal — this deferred suspension allows operations
-// between CreateCallback and Result() (e.g. a submitter step in
-// WaitForCallback) to execute in the same invocation.
-func newPendingCallbackFuture[O any](s *suspendSignal) *Future[O] {
+// it commits the invocation to PENDING and deregisters the calling branch —
+// this deferred mechanism allows operations between CreateCallback and
+// Result() (e.g. a submitter step in WaitForCallback) to execute in the
+// same invocation.
+func newPendingCallbackFuture[O any](s *suspendSignal, ec *execContext) *Future[O] {
 	f := newFuture[O]()
 	registerFuture(s, f)
-	// Attach a pre-result hook: when Result() is first called, fire suspend
-	// so the invocation ends PENDING. The fire() call settles this future
-	// (and all other registered futures) with errSuspendExecution.
-	f.preResult = s.fire
+	// Attach a pre-result hook: when Result() is first called, mark this
+	// context as blocked, commit to PENDING, and deregister the branch.
+	// If this is the last active branch, the signal fires and settles
+	// this future.
+	f.preResult = func() {
+		ec.blocked.Store(true)
+		s.commitPending()
+		s.deregisterBranch()
+	}
 	return f
 }
 

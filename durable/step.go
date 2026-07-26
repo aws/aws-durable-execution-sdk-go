@@ -244,7 +244,8 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 			// A retry is scheduled and its timer has not fired.
 			// Suspend; the backend re-invokes when the attempt is due.
 			// Operation hooks NOT fired for still-pending operations.
-			ec.suspend.fire()
+			ec.blocked.Store(true)
+			ec.suspend.commitPending()
 			return zero, errSuspendExecution
 
 		case statusStarted:
@@ -469,7 +470,8 @@ func settleStepFailure[O any](ec *execContext, id, name string, options stepOpti
 
 	// The backend owns the retry timer: suspend and resume in a new
 	// invocation once the delay elapses.
-	ec.suspend.fire()
+	ec.blocked.Store(true)
+	ec.suspend.commitPending()
 	return zero, errSuspendExecution
 }
 

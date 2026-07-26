@@ -43,6 +43,13 @@ type execContext struct {
 	owner goroutineOwner
 	state *executionState
 
+	// blocked is set when an operation on this context enters a pending
+	// state (commits to suspension). Once set, subsequent claims on this
+	// same context fail with errSuspendExecution, preventing user code
+	// that swallows errors from starting new operations. Sibling contexts
+	// (different goroutines) are not affected.
+	blocked atomic.Bool
+
 	// serdes is the handler-level default serializer for operation
 	// results. Per-operation serdes options take precedence.
 	serdes Serdes
@@ -134,6 +141,9 @@ func (c *execContext) parentWireID() string {
 // mode is unchanged.
 func (c *execContext) claimOperation() (string, error) {
 	if c.suspend.fired() {
+		return "", errSuspendExecution
+	}
+	if c.blocked.Load() {
 		return "", errSuspendExecution
 	}
 	if err := c.owner.check(); err != nil {

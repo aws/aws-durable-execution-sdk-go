@@ -94,7 +94,8 @@ func runWaitForCondition[S any](ec *execContext, id, name string, check func(Ste
 			// A retry (continue) is scheduled and its timer has not
 			// fired. Suspend; the backend re-invokes when the delay
 			// elapses.
-			ec.suspend.fire()
+			ec.blocked.Store(true)
+			ec.suspend.commitPending()
 			return zero, errSuspendExecution
 
 		case statusStarted, statusReady:
@@ -274,7 +275,8 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 		return zero, cerr
 	}
 
-	ec.suspend.fire()
+	ec.blocked.Store(true)
+	ec.suspend.commitPending()
 	return zero, errSuspendExecution
 }
 

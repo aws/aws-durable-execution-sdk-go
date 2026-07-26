@@ -274,8 +274,9 @@ func TestStepSuspensionWinsOverUserOutcome(t *testing.T) {
 func TestStepAfterSuspensionFailsFast(t *testing.T) {
 	fake := &fakeLambda{}
 	var secondErr error
-	// Invoke returns as soon as suspension fires, while the handler
-	// goroutine is still unwinding; wait for it before asserting.
+	// After the first step commits to PENDING, subsequent claims on the
+	// same context fail. This prevents user code that swallows errors
+	// from starting new operations.
 	handlerDone := make(chan struct{})
 	invokeStep(t, fake, stepPayload(`""`), func(ctx Context, _ string) (string, error) {
 		defer close(handlerDone)
