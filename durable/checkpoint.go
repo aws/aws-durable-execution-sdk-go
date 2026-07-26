@@ -211,6 +211,7 @@ func operationFromAPI(op types.Operation) *operation {
 		if cd.Error != nil {
 			rec.childCtx.errType = aws.ToString(cd.Error.ErrorType)
 			rec.childCtx.errMessage = aws.ToString(cd.Error.ErrorMessage)
+			rec.childCtx.errData = aws.ToString(cd.Error.ErrorData)
 		}
 	}
 	if cb := op.CallbackDetails; cb != nil {

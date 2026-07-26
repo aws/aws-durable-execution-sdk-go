@@ -175,6 +175,7 @@ func (in *initialExecutionState) toOperations() []*operation {
 			if cd.Error != nil {
 				op.childCtx.errType = cd.Error.ErrorType
 				op.childCtx.errMessage = cd.Error.ErrorMessage
+				op.childCtx.errData = cd.Error.ErrorData
 			}
 		}
 		if cb := w.CallbackDetails; cb != nil {

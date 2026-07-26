@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
@@ -1001,4 +1002,418 @@ func TestBatchCheckpointPayloadRoundTrip(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestBatchCheckpointPreservesInnerErrorType verifies that a failed batch
+// item's inner SDK wrapper type (e.g. StepError) survives the checkpoint
+// round-trip through fromBatchResult → JSON → toBatchResult. Before the fix,
+// errors.As(err, &StepError{}) succeeded on the live error but failed after
+// replay because toBatchResult flattened the chain to ChildContextError →
+// replayedError, losing the concrete wrapper.
+func TestBatchCheckpointPreservesInnerErrorType(t *testing.T) {
+	serdes := jsonSerdes{}
+
+	// Simulate a live batch result where item 1 failed with a StepError
+	// inside a ChildContextError (the common case: a Step inside a Map
+	// iteration fails).
+	liveResult := BatchResult[string]{
+		Items: []BatchItem[string]{
+			{Index: 0, Name: "item-0", Status: BatchItemSucceeded, Result: "ok"},
+			{Index: 1, Name: "item-1", Status: BatchItemFailed, Err: &ChildContextError{
+				Name: "item-1",
+				Err: &StepError{
+					Name:     "fetch-data",
+					Attempts: 3,
+					Err:      fmt.Errorf("connection refused"),
+				},
+			}},
+		},
+		Reason: CompletionAllCompleted,
+	}
+
+	// Verify the live error supports errors.As for StepError.
+	var liveStepErr *StepError
+	if !errors.As(liveResult.Items[1].Err, &liveStepErr) {
+		t.Fatal("live error: errors.As(*StepError) should succeed")
+	}
+	if liveStepErr.Name != "fetch-data" {
+		t.Errorf("live StepError.Name = %q, want %q", liveStepErr.Name, "fetch-data")
+	}
+	if liveStepErr.Attempts != 3 {
+		t.Errorf("live StepError.Attempts = %d, want %d", liveStepErr.Attempts, 3)
+	}
+
+	// Round-trip through checkpoint serialization.
+	payload, err := fromBatchResult(liveResult, serdes, SerdesContext{})
+	if err != nil {
+		t.Fatalf("fromBatchResult: %v", err)
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	var decoded batchCheckpointPayload
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	got, err := toBatchResult[string](decoded, serdes, SerdesContext{})
+	if err != nil {
+		t.Fatalf("toBatchResult: %v", err)
+	}
+
+	// After replay, errors.As for ChildContextError must still succeed.
+	var replayedChild *ChildContextError
+	if !errors.As(got.Items[1].Err, &replayedChild) {
+		t.Fatal("replayed error: errors.As(*ChildContextError) failed")
+	}
+	if replayedChild.Name != "item-1" {
+		t.Errorf("replayed ChildContextError.Name = %q, want %q", replayedChild.Name, "item-1")
+	}
+
+	// KEY ASSERTION: errors.As for the inner StepError must succeed after
+	// replay, matching the live behavior.
+	var replayedStep *StepError
+	if !errors.As(got.Items[1].Err, &replayedStep) {
+		t.Fatal("replayed error: errors.As(*StepError) failed — inner wrapper type lost across replay")
+	}
+	if replayedStep.Name != "fetch-data" {
+		t.Errorf("replayed StepError.Name = %q, want %q", replayedStep.Name, "fetch-data")
+	}
+	if replayedStep.Attempts != 3 {
+		t.Errorf("replayed StepError.Attempts = %d, want %d", replayedStep.Attempts, 3)
+	}
+
+	// The leaf error (user-defined) should be represented as a
+	// replayedError carrying the original type name and message.
+	if replayedStep.Err == nil {
+		t.Fatal("replayed StepError.Err is nil, want non-nil leaf error")
+	}
+	leafErr, ok := replayedStep.Err.(*replayedError)
+	if !ok {
+		t.Fatalf("replayed StepError.Err type = %T, want *replayedError", replayedStep.Err)
+	}
+	if leafErr.errType != "errorString" && leafErr.errType != "Error" {
+		// fmt.Errorf produces *errors.errorString; errorTypeName normalizes
+		// it to "Error".
+		t.Errorf("replayed leaf errType = %q, want %q", leafErr.errType, "Error")
+	}
+	if leafErr.message != "connection refused" {
+		t.Errorf("replayed leaf message = %q, want %q", leafErr.message, "connection refused")
+	}
+}
+
+// TestBatchCheckpointBackwardCompat verifies that a checkpoint payload
+// serialized WITHOUT the new inner wrapper fields (pre-fix format) still
+// deserializes correctly. The ErrType is preserved in replayedError since
+// there is no inner metadata to reconstruct from.
+func TestBatchCheckpointBackwardCompat(t *testing.T) {
+	// Simulate an old-format checkpoint without StepName/StepAttempts/InnerErr fields.
+	oldPayload := `{
+		"results": [
+			{"index": 0, "name": "item-0", "status": 1, "result": "\"ok\""},
+			{"index": 1, "name": "item-1", "status": 2, "errType": "CustomError", "errMessage": "something broke"}
+		],
+		"reason": 0
+	}`
+	var decoded batchCheckpointPayload
+	if err := json.Unmarshal([]byte(oldPayload), &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	got, err := toBatchResult[string](decoded, jsonSerdes{}, SerdesContext{})
+	if err != nil {
+		t.Fatalf("toBatchResult: %v", err)
+	}
+	if len(got.Items) != 2 {
+		t.Fatalf("items = %d, want 2", len(got.Items))
+	}
+	// Failed item should have ChildContextError wrapping replayedError
+	// since "CustomError" is not a known SDK wrapper type.
+	var childErr *ChildContextError
+	if !errors.As(got.Items[1].Err, &childErr) {
+		t.Fatal("errors.As(*ChildContextError) failed")
+	}
+	re, ok := childErr.Err.(*replayedError)
+	if !ok {
+		t.Fatalf("inner error type = %T, want *replayedError", childErr.Err)
+	}
+	if re.errType != "CustomError" {
+		t.Errorf("replayedError.errType = %q, want %q", re.errType, "CustomError")
+	}
+	if re.message != "something broke" {
+		t.Errorf("replayedError.message = %q, want %q", re.message, "something broke")
+	}
+}
+
+// TestBatchCheckpointBackwardCompatStepError verifies that a legacy
+// checkpoint with ErrType="StepError" but NO inner metadata still
+// reconstructs a StepError (with zero-value fields) so errors.As succeeds.
+func TestBatchCheckpointBackwardCompatStepError(t *testing.T) {
+	oldPayload := `{
+		"results": [
+			{"index": 0, "name": "item-0", "status": 2, "errType": "StepError", "errMessage": "durable: step \"x\" failed after 2 attempts: timeout"}
+		],
+		"reason": 0
+	}`
+	var decoded batchCheckpointPayload
+	if err := json.Unmarshal([]byte(oldPayload), &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	got, err := toBatchResult[string](decoded, jsonSerdes{}, SerdesContext{})
+	if err != nil {
+		t.Fatalf("toBatchResult: %v", err)
+	}
+
+	// errors.As for StepError must succeed even without inner metadata.
+	var stepErr *StepError
+	if !errors.As(got.Items[0].Err, &stepErr) {
+		t.Fatal("errors.As(*StepError) failed for legacy checkpoint")
+	}
+	// Without persisted metadata, Name and Attempts are zero-valued.
+	if stepErr.Name != "" {
+		t.Errorf("StepError.Name = %q, want empty (no metadata in legacy checkpoint)", stepErr.Name)
+	}
+	if stepErr.Attempts != 0 {
+		t.Errorf("StepError.Attempts = %d, want 0 (no metadata in legacy checkpoint)", stepErr.Attempts)
+	}
+	// The leaf error should carry the full message since no inner details
+	// are available.
+	if stepErr.Err == nil {
+		t.Fatal("StepError.Err is nil")
+	}
+	re, ok := stepErr.Err.(*replayedError)
+	if !ok {
+		t.Fatalf("StepError.Err type = %T, want *replayedError", stepErr.Err)
+	}
+	if re.errType != "Error" {
+		t.Errorf("leaf errType = %q, want %q", re.errType, "Error")
+	}
+}
+
+// TestRouteB_ErrorDataReconstructsRealValues verifies that the wire-only
+// replay path (Route B) produces real StepError.Name and StepError.Attempts
+// values when ErrorData carries the childErrorData JSON blob. This is the
+// common mid-batch cross-invocation resume case where only
+// op.childCtx.errType, errMessage, and errData are available.
+func TestRouteB_ErrorDataReconstructsRealValues(t *testing.T) {
+	// Simulate the ErrorData that encodeChildErrorData would write for a
+	// StepError with Name="fetch-data", Attempts=3, leaf="connection refused".
+	errData := `{"stepName":"fetch-data","stepAttempts":3,"innerErrType":"Error","innerErrMessage":"connection refused"}`
+
+	// Route B: reconstructInnerError with direct fields empty, errData present.
+	inner := reconstructInnerError("StepError", "durable: step \"fetch-data\" failed after 3 attempts: connection refused", "", 0, "", "", errData)
+
+	// errors.As for StepError must succeed.
+	var stepErr *StepError
+	if !errors.As(inner, &stepErr) {
+		t.Fatal("Route B: errors.As(*StepError) failed — ErrorData not used for reconstruction")
+	}
+	if stepErr.Name != "fetch-data" {
+		t.Errorf("Route B: StepError.Name = %q, want %q", stepErr.Name, "fetch-data")
+	}
+	if stepErr.Attempts != 3 {
+		t.Errorf("Route B: StepError.Attempts = %d, want %d", stepErr.Attempts, 3)
+	}
+	if stepErr.Err == nil {
+		t.Fatal("Route B: StepError.Err is nil")
+	}
+	leaf, ok := stepErr.Err.(*replayedError)
+	if !ok {
+		t.Fatalf("Route B: StepError.Err type = %T, want *replayedError", stepErr.Err)
+	}
+	if leaf.errType != "Error" {
+		t.Errorf("Route B: leaf errType = %q, want %q", leaf.errType, "Error")
+	}
+	if leaf.message != "connection refused" {
+		t.Errorf("Route B: leaf message = %q, want %q", leaf.message, "connection refused")
+	}
+}
+
+// TestRouteB_ErrorDataAbsent verifies graceful fallback when ErrorData is
+// empty (old checkpoints pre-dating the ErrorData enhancement). errors.As
+// for StepError must still succeed; fields are zero-valued.
+func TestRouteB_ErrorDataAbsent(t *testing.T) {
+	inner := reconstructInnerError("StepError", "durable: step \"x\" failed after 2 attempts: timeout", "", 0, "", "", "")
+
+	var stepErr *StepError
+	if !errors.As(inner, &stepErr) {
+		t.Fatal("ErrorData absent: errors.As(*StepError) failed")
+	}
+	// Without ErrorData, Name and Attempts remain zero-valued.
+	if stepErr.Name != "" {
+		t.Errorf("ErrorData absent: StepError.Name = %q, want empty", stepErr.Name)
+	}
+	if stepErr.Attempts != 0 {
+		t.Errorf("ErrorData absent: StepError.Attempts = %d, want 0", stepErr.Attempts)
+	}
+	// Leaf falls back to errMessage since no inner details are available.
+	leaf, ok := stepErr.Err.(*replayedError)
+	if !ok {
+		t.Fatalf("ErrorData absent: StepError.Err type = %T, want *replayedError", stepErr.Err)
+	}
+	if leaf.errType != "Error" {
+		t.Errorf("ErrorData absent: leaf errType = %q, want %q", leaf.errType, "Error")
+	}
+	if leaf.message != "durable: step \"x\" failed after 2 attempts: timeout" {
+		t.Errorf("ErrorData absent: leaf message = %q, want full errMessage", leaf.message)
+	}
+}
+
+// TestRouteB_ErrorDataMalformed verifies graceful fallback when ErrorData
+// contains unparseable content. Must never fail an execution — degrades to
+// the same behavior as absent ErrorData.
+func TestRouteB_ErrorDataMalformed(t *testing.T) {
+	malformedCases := []struct {
+		name    string
+		errData string
+	}{
+		{"not JSON", "this is not json at all"},
+		{"empty object", "{}"},
+		{"wrong structure", `{"foo":"bar","baz":42}`},
+		{"truncated", `{"stepName":"fetch`},
+	}
+	for _, tc := range malformedCases {
+		t.Run(tc.name, func(t *testing.T) {
+			inner := reconstructInnerError("StepError", "step failed", "", 0, "", "", tc.errData)
+
+			// Must not panic or return nil.
+			if inner == nil {
+				t.Fatal("reconstructInnerError returned nil")
+			}
+			// errors.As for StepError must still succeed.
+			var stepErr *StepError
+			if !errors.As(inner, &stepErr) {
+				t.Fatal("malformed ErrorData: errors.As(*StepError) failed")
+			}
+			// Fields degrade to whatever the parse extracted (empty for
+			// wrong-structure/truncated, or zero for empty-object).
+			// The key invariant: no panic, no error propagation.
+		})
+	}
+}
+
+// TestRouteB_UserDefinedLeafStaysStringTyped verifies that a user-defined
+// error type that is NOT an SDK wrapper remains a string-typed replayedError
+// after Route B replay. Only SDK wrapper types (StepError) get concrete
+// reconstruction; user types stay opaque.
+func TestRouteB_UserDefinedLeafStaysStringTyped(t *testing.T) {
+	// ErrorData with a user-defined inner error type.
+	errData := `{"stepName":"process","stepAttempts":1,"innerErrType":"MyCustomError","innerErrMessage":"custom failure"}`
+
+	inner := reconstructInnerError("StepError", "durable: step \"process\" failed after 1 attempts: custom failure", "", 0, "", "", errData)
+
+	var stepErr *StepError
+	if !errors.As(inner, &stepErr) {
+		t.Fatal("errors.As(*StepError) failed")
+	}
+	if stepErr.Name != "process" {
+		t.Errorf("StepError.Name = %q, want %q", stepErr.Name, "process")
+	}
+	if stepErr.Attempts != 1 {
+		t.Errorf("StepError.Attempts = %d, want %d", stepErr.Attempts, 1)
+	}
+	// The leaf MUST be a replayedError with the user type name as string.
+	leaf, ok := stepErr.Err.(*replayedError)
+	if !ok {
+		t.Fatalf("leaf type = %T, want *replayedError", stepErr.Err)
+	}
+	if leaf.errType != "MyCustomError" {
+		t.Errorf("leaf errType = %q, want %q", leaf.errType, "MyCustomError")
+	}
+	if leaf.message != "custom failure" {
+		t.Errorf("leaf message = %q, want %q", leaf.message, "custom failure")
+	}
+}
+
+// TestTruncateInnerErrMessage verifies that innerErrMessage is bounded at
+// maxInnerErrMessageBytes on both the ErrorData (wire) and aggregate
+// checkpoint paths, that the result is valid UTF-8, and that short messages
+// pass through unchanged.
+func TestTruncateInnerErrMessage(t *testing.T) {
+	// Build a message that exceeds the limit. Use a multi-byte rune near the
+	// boundary to verify rune-safe truncation.
+	base := strings.Repeat("a", maxInnerErrMessageBytes-2) + "é" // é = 2 bytes → total = 1024
+	long := base + strings.Repeat("x", 100)                      // well over the limit
+
+	t.Run("long message truncated in ErrorData", func(t *testing.T) {
+		leaf := fmt.Errorf("%s", long)
+		stepErr := &StepError{Name: "op", Attempts: 1, Err: leaf}
+
+		encoded := encodeChildErrorData(stepErr)
+		if encoded == nil {
+			t.Fatal("encodeChildErrorData returned nil")
+		}
+		var d childErrorData
+		if err := json.Unmarshal([]byte(*encoded), &d); err != nil {
+			t.Fatalf("unmarshal ErrorData: %v", err)
+		}
+		if len(d.InnerErrMessage) > maxInnerErrMessageBytes {
+			t.Errorf("ErrorData innerErrMessage length = %d, want <= %d", len(d.InnerErrMessage), maxInnerErrMessageBytes)
+		}
+		if !utf8.ValidString(d.InnerErrMessage) {
+			t.Error("ErrorData innerErrMessage is not valid UTF-8")
+		}
+	})
+
+	t.Run("long message truncated in aggregate payload", func(t *testing.T) {
+		leaf := fmt.Errorf("%s", long)
+		stepErr := &StepError{Name: "op", Attempts: 1, Err: leaf}
+		batchResult := BatchResult[string]{
+			Items: []BatchItem[string]{
+				{Index: 0, Name: "item", Status: BatchItemFailed, Err: &ChildContextError{Name: "item", Err: stepErr}},
+			},
+			Reason: CompletionAllCompleted,
+		}
+		payload, err := fromBatchResult(batchResult, jsonSerdes{}, SerdesContext{})
+		if err != nil {
+			t.Fatalf("fromBatchResult: %v", err)
+		}
+		cp := payload.Results[0]
+		if len(cp.InnerErrMessage) > maxInnerErrMessageBytes {
+			t.Errorf("aggregate InnerErrMessage length = %d, want <= %d", len(cp.InnerErrMessage), maxInnerErrMessageBytes)
+		}
+		if !utf8.ValidString(cp.InnerErrMessage) {
+			t.Error("aggregate InnerErrMessage is not valid UTF-8")
+		}
+	})
+
+	t.Run("short message unchanged", func(t *testing.T) {
+		short := "connection refused"
+		leaf := fmt.Errorf("%s", short)
+		stepErr := &StepError{Name: "op", Attempts: 1, Err: leaf}
+
+		encoded := encodeChildErrorData(stepErr)
+		if encoded == nil {
+			t.Fatal("encodeChildErrorData returned nil")
+		}
+		var d childErrorData
+		if err := json.Unmarshal([]byte(*encoded), &d); err != nil {
+			t.Fatalf("unmarshal ErrorData: %v", err)
+		}
+		if d.InnerErrMessage != short {
+			t.Errorf("short message changed: got %q, want %q", d.InnerErrMessage, short)
+		}
+	})
+
+	t.Run("truncation at rune boundary", func(t *testing.T) {
+		// Place a 3-byte rune (€ = 0xE2 0x82 0xAC) exactly at the boundary.
+		// 1022 bytes of 'a' + '€' (3 bytes) = 1025 bytes total → must truncate
+		// to 1022 (cutting the '€' which would be split).
+		prefix := strings.Repeat("a", maxInnerErrMessageBytes-2) // 1022 bytes
+		msg := prefix + "€"                                      // 1025 bytes
+
+		result := truncateUTF8(msg, maxInnerErrMessageBytes)
+		if len(result) > maxInnerErrMessageBytes {
+			t.Errorf("truncated length = %d, want <= %d", len(result), maxInnerErrMessageBytes)
+		}
+		if !utf8.ValidString(result) {
+			t.Error("truncated result is not valid UTF-8")
+		}
+		// The € should be removed because it can't fit within the limit.
+		if strings.Contains(result, "€") {
+			t.Error("€ should be dropped since it crosses the byte boundary")
+		}
+		if result != prefix {
+			t.Errorf("expected prefix of %d 'a's, got length %d", len(prefix), len(result))
+		}
+	})
 }

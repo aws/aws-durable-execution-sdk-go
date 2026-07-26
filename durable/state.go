@@ -98,10 +98,11 @@ type contextDetails struct {
 	// from the checkpoint.
 	replayChildren bool
 
-	// errType and errMessage describe the child-context failure. Set
-	// when the context failed.
+	// errType, errMessage, and errData describe the child-context failure.
+	// Set when the context failed.
 	errType    string
 	errMessage string
+	errData    string
 }
 
 // stepDetails is the step-specific portion of a checkpointed operation.

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
@@ -796,6 +797,7 @@ func runPreClaimedBatchItem[O any](
 		}
 		update := batchChildUpdate(ec, childID, itemName, childSubType, parentID, types.OperationActionFail)
 		update.Error = errorObject(fnErr)
+		update.Error.ErrorData = encodeChildErrorData(fnErr)
 		if cerr := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); cerr != nil {
 			return BatchItem[O]{}, cerr
 		}
@@ -983,6 +985,7 @@ func runNestedBatchItem[O any](
 		// Checkpoint the failure.
 		update := batchChildUpdate(ec, childID, itemName, childSubType, parentID, types.OperationActionFail)
 		update.Error = errorObject(fnErr)
+		update.Error.ErrorData = encodeChildErrorData(fnErr)
 		if cerr := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); cerr != nil {
 			return BatchItem[O]{}, cerr
 		}
@@ -1066,15 +1069,19 @@ func replayTerminalChildItem[O any](
 		}, nil
 
 	case statusFailed:
-		cause := &replayedError{errType: "Error", message: "item failed"}
+		errType := "Error"
+		errMessage := "item failed"
+		var errData string
 		if op.childCtx != nil {
-			cause = &replayedError{errType: op.childCtx.errType, message: op.childCtx.errMessage}
+			errType = op.childCtx.errType
+			errMessage = op.childCtx.errMessage
+			errData = op.childCtx.errData
 		}
 		return BatchItem[O]{
 			Index:  index,
 			Name:   itemName,
 			Status: BatchItemFailed,
-			Err:    &ChildContextError{Name: itemName, Err: cause},
+			Err:    &ChildContextError{Name: itemName, Err: reconstructInnerError(errType, errMessage, "", 0, "", "", errData)},
 		}, nil
 
 	default:
@@ -1130,11 +1137,15 @@ func replayTerminalBatch[I, O any](
 		return toBatchResult[O](payload, options.itemSerdes, ec.serdesCtx(id))
 
 	case statusFailed:
-		cause := &replayedError{errType: "Error", message: "batch failed"}
+		errType := "Error"
+		errMessage := "batch failed"
+		var errData string
 		if op.childCtx != nil {
-			cause = &replayedError{errType: op.childCtx.errType, message: op.childCtx.errMessage}
+			errType = op.childCtx.errType
+			errMessage = op.childCtx.errMessage
+			errData = op.childCtx.errData
 		}
-		return BatchResult[O]{}, &ChildContextError{Name: name, Err: cause}
+		return BatchResult[O]{}, &ChildContextError{Name: name, Err: reconstructInnerError(errType, errMessage, "", 0, "", "", errData)}
 
 	default:
 		return BatchResult[O]{}, fmt.Errorf("durable: batch %q: unexpected terminal status %s", name, op.status)
@@ -1266,6 +1277,14 @@ type batchCheckpointItem struct {
 	Result     string          `json:"result,omitempty"`
 	ErrType    string          `json:"errType,omitempty"`
 	ErrMessage string          `json:"errMessage,omitempty"`
+
+	// Inner wrapper metadata: persisted when ErrType is a known SDK
+	// wrapper (e.g. "StepError") so replay can reconstruct the concrete
+	// type with matching field values.
+	StepName        string `json:"stepName,omitempty"`
+	StepAttempts    int    `json:"stepAttempts,omitempty"`
+	InnerErrType    string `json:"innerErrType,omitempty"`
+	InnerErrMessage string `json:"innerErrMessage,omitempty"`
 }
 
 // toBatchResult converts a deserialized checkpoint payload back into a
@@ -1290,11 +1309,108 @@ func toBatchResult[O any](payload batchCheckpointPayload, itemSerdes Serdes, sct
 		case BatchItemFailed:
 			items[i].Err = &ChildContextError{
 				Name: cp.Name,
-				Err:  &replayedError{errType: cp.ErrType, message: cp.ErrMessage},
+				Err:  reconstructInnerError(cp.ErrType, cp.ErrMessage, cp.StepName, cp.StepAttempts, cp.InnerErrType, cp.InnerErrMessage, ""),
 			}
 		}
 	}
 	return BatchResult[O]{Items: items, Reason: payload.Reason}, nil
+}
+
+// maxInnerErrMessageBytes is the ceiling for the persisted inner error
+// message. Applied to both ErrorData (wire) and batchCheckpointItem
+// (aggregate payload) so the two routes stay consistent.
+const maxInnerErrMessageBytes = 1024
+
+// truncateUTF8 returns s truncated to at most maxBytes, cutting on a
+// rune boundary so the result is always valid UTF-8.
+func truncateUTF8(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	// Walk backward from the limit to find the last valid rune start.
+	for maxBytes > 0 && !utf8.RuneStart(s[maxBytes]) {
+		maxBytes--
+	}
+	return s[:maxBytes]
+}
+
+// childErrorData carries inner wrapper metadata through ErrorData on child
+// FAIL updates. The same four fields are persisted in the aggregate
+// checkpoint payload (batchCheckpointItem); this struct is used for the
+// per-child ErrorObject.ErrorData so Route B (wire-only replay) can
+// reconstruct the same concrete wrapper chain as Route A.
+type childErrorData struct {
+	StepName        string `json:"stepName,omitempty"`
+	StepAttempts    int    `json:"stepAttempts,omitempty"`
+	InnerErrType    string `json:"innerErrType,omitempty"`
+	InnerErrMessage string `json:"innerErrMessage,omitempty"`
+}
+
+// encodeChildErrorData marshals inner wrapper metadata as a JSON string
+// suitable for ErrorObject.ErrorData. Returns nil if the error does not
+// carry reconstructable inner wrapper data.
+func encodeChildErrorData(err error) *string {
+	var stepErr *StepError
+	if !errors.As(err, &stepErr) {
+		return nil
+	}
+	d := childErrorData{
+		StepName:     stepErr.Name,
+		StepAttempts: stepErr.Attempts,
+	}
+	if stepErr.Err != nil {
+		d.InnerErrType = errorTypeName(stepErr.Err)
+		d.InnerErrMessage = truncateUTF8(stepErr.Err.Error(), maxInnerErrMessageBytes)
+	}
+	raw, marshalErr := json.Marshal(d)
+	if marshalErr != nil {
+		return nil
+	}
+	s := string(raw)
+	return &s
+}
+
+// reconstructInnerError rebuilds the concrete SDK wrapper type from
+// checkpointed error metadata. Known SDK wrapper types (StepError) are
+// reconstructed so errors.As succeeds after replay, matching live behavior.
+// Unknown or user-defined error types remain as replayedError carrying the
+// type name as a string.
+//
+// The errData parameter carries the JSON-encoded childErrorData from the
+// ErrorObject.ErrorData field. When present and parseable, it provides real
+// wrapper field values (stepName, attempts, inner leaf type/message).
+// When absent or malformed, the function falls back to the explicit
+// parameters (from the aggregate payload) or zero values — never fails.
+func reconstructInnerError(errType, errMessage, stepName string, stepAttempts int, innerErrType, innerErrMessage, errData string) error {
+	// If errData is present, attempt to extract inner metadata from it.
+	// This provides real values on Route B (wire-only replay) where the
+	// aggregate payload fields are unavailable.
+	if errData != "" && stepName == "" && innerErrType == "" && innerErrMessage == "" {
+		var d childErrorData
+		if json.Unmarshal([]byte(errData), &d) == nil {
+			stepName = d.StepName
+			stepAttempts = d.StepAttempts
+			innerErrType = d.InnerErrType
+			innerErrMessage = d.InnerErrMessage
+		}
+	}
+
+	switch errType {
+	case "StepError":
+		var leaf error
+		if innerErrType != "" || innerErrMessage != "" {
+			leaf = &replayedError{errType: innerErrType, message: innerErrMessage}
+		} else {
+			leaf = &replayedError{errType: "Error", message: errMessage}
+		}
+		return &StepError{
+			Name:     stepName,
+			Attempts: stepAttempts,
+			Err:      leaf,
+		}
+	default:
+		return &replayedError{errType: errType, message: errMessage}
+	}
 }
 
 // fromBatchResult converts a live [BatchResult] into the checkpoint payload
@@ -1324,6 +1440,17 @@ func fromBatchResult[O any](result BatchResult[O], itemSerdes Serdes, sctx Serde
 				if errors.As(item.Err, &childErr) && childErr.Err != nil {
 					cpItems[i].ErrType = errorTypeName(childErr.Err)
 					cpItems[i].ErrMessage = childErr.Err.Error()
+					// Persist inner wrapper metadata for known SDK types
+					// so replay reconstructs the concrete wrapper chain.
+					var stepErr *StepError
+					if errors.As(childErr.Err, &stepErr) {
+						cpItems[i].StepName = stepErr.Name
+						cpItems[i].StepAttempts = stepErr.Attempts
+						if stepErr.Err != nil {
+							cpItems[i].InnerErrType = errorTypeName(stepErr.Err)
+							cpItems[i].InnerErrMessage = truncateUTF8(stepErr.Err.Error(), maxInnerErrMessageBytes)
+						}
+					}
 				}
 			}
 		}
