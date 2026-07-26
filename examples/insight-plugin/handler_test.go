@@ -39,7 +39,7 @@ func TestHandler(t *testing.T) {
 	plugin := newInsightPlugin(exp)
 
 	runner := durabletest.NewLocalRunner(handler, durable.WithPlugins(plugin.Plugin()))
-	result := runner.RunUntilComplete(t, map[string]string{"orderId": "ord-42"})
+	result := runner.RunUntilComplete(t, map[string]any{"orderId": "ord-42"})
 
 	if result.Status != durabletest.Succeeded {
 		t.Fatalf("expected Succeeded, got %s", result.Status)

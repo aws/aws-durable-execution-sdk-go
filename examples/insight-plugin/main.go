@@ -35,8 +35,8 @@ type Output struct {
 	OrderID string `json:"orderId"`
 }
 
-func handler(ctx durable.Context, input map[string]string) (Output, error) {
-	orderID := input["orderId"]
+func handler(ctx durable.Context, input map[string]any) (Output, error) {
+	orderID, _ := input["orderId"].(string)
 	if orderID == "" {
 		orderID = "unknown"
 	}
