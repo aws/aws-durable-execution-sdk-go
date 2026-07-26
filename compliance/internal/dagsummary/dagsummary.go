@@ -12,8 +12,11 @@ type Summary struct {
 	// Reason is the DAG's completion reason (e.g. ALL_COMPLETED,
 	// COMPLETED_WITH_FAILURES).
 	Reason string `json:"reason"`
-	// Statuses maps each task name to its terminal status.
-	Statuses map[string]string `json:"statuses"`
+	// Statuses maps each task name to its terminal status. Emitted by every
+	// DAG handler except large-payload (10-15), whose contract fixes the
+	// returned summary to exactly {reason, counts, digestBefore, digestAfter,
+	// match}; that handler leaves this nil so omitempty drops the key.
+	Statuses map[string]string `json:"statuses,omitempty"`
 	// Counts is [succeeded, failed, skipped, total].
 	Counts [4]int `json:"counts"`
 	// Merge carries the merge result of a fan-in task. It is an int for the

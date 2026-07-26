@@ -112,6 +112,12 @@ func handler(ctx durable.Context, _ struct{}) (dagsummary.Summary, error) {
 	digestAfter := digest(res)
 
 	sum := dagsummary.From(res)
+	// The 10-15 contract fixes the returned summary to exactly
+	// {reason, counts, digestBefore, digestAfter, match} and NEVER the
+	// payload. From() populates a per-task Statuses map used by the other DAG
+	// handlers; drop it here so (with omitempty) the key is omitted and the
+	// result is byte-shaped to the language-neutral assertion.
+	sum.Statuses = nil
 	sum.DigestBefore = digestBefore
 	sum.DigestAfter = digestAfter
 	match := digestBefore == digestAfter
