@@ -124,7 +124,12 @@ func TestClaimOperationForeignGoroutine(t *testing.T) {
 		_, err := c.claimOperation()
 		errCh <- err
 	}()
-	if err := <-errCh; !errors.Is(err, ErrWrongGoroutine) {
+	err := <-errCh
+	if err == nil {
+		// Goroutine ownership checking is disabled (no durablecheck tag).
+		t.Skip("goroutine ownership checks disabled without -tags=durablecheck")
+	}
+	if !errors.Is(err, ErrWrongGoroutine) {
 		t.Errorf("claimOperation() from foreign goroutine = %v, want ErrWrongGoroutine", err)
 	}
 

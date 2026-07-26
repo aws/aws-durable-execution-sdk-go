@@ -17,6 +17,10 @@ import (
 // A Context is owned by the goroutine it was created on. Durable operations
 // invoked on a Context from any other goroutine fail. Use [Go] to run
 // durable work concurrently.
+//
+// Context is sealed: only the SDK can implement it. External types that
+// embed or imitate this interface will fail to compile because of the
+// unexported method.
 type Context interface {
 	context.Context
 
@@ -35,6 +39,11 @@ type Context interface {
 	// IsReplaying reports whether the execution is currently replaying
 	// previously checkpointed operations.
 	IsReplaying() bool
+
+	// sealed prevents external implementations of Context. Only the SDK
+	// creates valid Context values; passing a non-SDK Context to a durable
+	// operation panics at runtime as defence in depth.
+	sealed()
 }
 
 // StepContext is the context passed to step bodies, condition checks, and
@@ -50,8 +59,8 @@ type StepContext interface {
 	// Logger returns the logger for the current step.
 	Logger() Logger
 
-	// Attempt returns the zero-indexed attempt number for this step
-	// execution. The first attempt is 0.
+	// Attempt returns the 1-based attempt number for this step
+	// execution. The first attempt is 1.
 	Attempt() int
 }
 
@@ -94,24 +103,19 @@ type Deserializer interface {
 	Unmarshal(data []byte, v any) error
 }
 
-// CurrentTime returns a replay-safe wall clock value for the given
-// [Context]. During replay, it returns the zero [time.Time] so that code
-// between durable operations does not produce non-deterministic timestamps.
-// During live execution, it returns time.Now().
+// ExecutionStartTime returns the start timestamp of the durable execution.
+// This is the checkpointed start time of the root EXECUTION operation,
+// recorded by the backend when the execution was created. It is the same
+// value on every invocation of one execution (including replays), making it
+// safe to use between durable operations without introducing
+// non-determinism.
 //
-// Use CurrentTime instead of time.Now() for any timestamp read outside a
-// Step body. Non-deterministic values that must be read fresh (e.g., an
-// actual wall-clock timestamp for business logic) should be computed inside
-// a [Step] so they are checkpointed once and reused verbatim on replay.
-//
-// # Determinism boundary marker
-//
-// This function is a determinism boundary: it intentionally produces
-// different results during replay vs. live execution, ensuring that
-// replayed code paths never diverge based on wall-clock drift.
-func CurrentTime(ctx Context) time.Time {
-	if ctx.IsReplaying() {
+// For a wall-clock timestamp that varies across invocations, compute it
+// inside a [Step] so it is checkpointed once and reused verbatim on replay.
+func ExecutionStartTime(ctx Context) time.Time {
+	ec, ok := ctx.(*execContext)
+	if !ok {
 		return time.Time{}
 	}
-	return time.Now()
+	return ec.executionStartTime
 }

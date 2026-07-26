@@ -3,6 +3,7 @@ package durable
 import (
 	"context"
 	"sync/atomic"
+	"time"
 
 	"github.com/aws/aws-lambda-go/lambdacontext"
 )
@@ -70,9 +71,16 @@ type execContext struct {
 	// pluginDispatcher dispatches lifecycle hooks to registered plugins.
 	// Nil when no plugins are registered (zero overhead).
 	pluginDispatcher *pluginDispatcher
+
+	// executionStartTime is the checkpointed start timestamp of the root
+	// EXECUTION operation. It is the same value on every invocation of
+	// one execution, making it safe to use between durable operations.
+	executionStartTime time.Time
 }
 
 var _ Context = (*execContext)(nil)
+
+func (c *execContext) sealed() {}
 
 // newExecContext creates the root context for one invocation. The mode
 // starts in replay when checkpointed operations beyond the always-present
@@ -199,6 +207,7 @@ func (c *execContext) child(entityID string, owner goroutineOwner, mode executio
 		suspend:              c.suspend,
 		checkpointer:         c.checkpointer,
 		pluginDispatcher:     c.pluginDispatcher,
+		executionStartTime:   c.executionStartTime,
 	}
 	child.mode.Store(int32(mode))
 	return child

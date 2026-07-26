@@ -119,7 +119,9 @@ func StepAsync[O any](ctx Context, name string, fn func(StepContext) (O, error),
 	fut := newFuture[O]()
 	registerFuture(ec.suspend, fut)
 
+	ec.suspend.registerBranch()
 	go func() {
+		defer ec.suspend.deregisterBranch()
 		result, runErr := runStep(ec, id, name, fn, options)
 		fut.settle(result, runErr)
 	}()
@@ -461,8 +463,12 @@ func settleStepFailure[O any](ec *execContext, id, name string, options stepOpti
 
 	update := stepUpdate(ec, id, name, types.OperationActionRetry)
 	update.Error = errorObject(cause)
+	delaySec, delayErr := durationToSeconds(decision.Delay)
+	if delayErr != nil {
+		return zero, fmt.Errorf("durable: step %q: retry delay: %w", name, delayErr)
+	}
 	update.StepOptions = &types.StepOptions{
-		NextAttemptDelaySeconds: aws.Int32(int32(decision.Delay / time.Second)),
+		NextAttemptDelaySeconds: aws.Int32(delaySec),
 	}
 	if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
 		return zero, err
@@ -515,7 +521,7 @@ var _ StepContext = (*stepContext)(nil)
 
 func (c *stepContext) Logger() Logger { return c.logger }
 
-// Attempt returns the zero-indexed attempt number for this step execution.
+// Attempt returns the 1-based attempt number for this step execution.
 func (c *stepContext) Attempt() int { return c.attempt }
 
 // errorObject converts a Go error into the wire error shape recorded with

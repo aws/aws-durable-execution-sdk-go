@@ -14,7 +14,7 @@ func handler(ctx durable.Context, items []int) ([]int, error) {
 	}
 	result, err := durable.Map(ctx, "named-items", items, func(_ durable.Context, item int, _ int) (int, error) {
 		return item * 10, nil
-	}, durable.WithMaxConcurrency(1), durable.WithItemNamer(func(_ any, i int) string {
+	}, durable.WithMaxConcurrency(1), durable.WithItemNamer(func(_ int, i int) string {
 		return fmt.Sprintf("item-%d", items[i])
 	}))
 	if err != nil {

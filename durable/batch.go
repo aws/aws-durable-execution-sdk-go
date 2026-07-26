@@ -405,18 +405,23 @@ func WithCompletion(c CompletionConfig) BatchOption {
 	return batchOptionFunc(func(o *batchOptions) { o.completion = c })
 }
 
-// WithItemNamer sets display names for a [Map] operation's items. namer is
-// called with each item's value and index; callers derive names from
-// item content:
+// WithItemNamer sets display names for a [Map] operation's items. The type
+// parameter I matches the Map's item type, so no type assertion is needed
+// in the namer function:
 //
 //	durable.Map(ctx, "process", orders, processOrder,
-//	    durable.WithItemNamer(func(item any, i int) string {
-//	        return item.(Order).ID
+//	    durable.WithItemNamer(func(item Order, i int) string {
+//	        return item.ID
 //	    }))
 //
 // namer must be a deterministic function of its arguments.
-func WithItemNamer(namer func(item any, index int) string) BatchOption {
-	return batchOptionFunc(func(o *batchOptions) { o.itemNamer = namer })
+func WithItemNamer[I any](namer func(item I, index int) string) BatchOption {
+	return batchOptionFunc(func(o *batchOptions) {
+		o.itemNamer = func(item any, index int) string {
+			typedItem, _ := item.(I)
+			return namer(typedItem, index)
+		}
+	})
 }
 
 // WithBatchSerdes overrides the serializer for each item's result within

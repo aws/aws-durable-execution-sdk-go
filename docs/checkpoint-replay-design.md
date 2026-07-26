@@ -188,9 +188,9 @@ In practice this means:
 
 - **No side effects between operations.** Reading the clock, calling an
   external API, or generating random values between durable operations will
-  produce different results on replay. Use `CurrentTime` for replay-safe
-  timestamps. Put non-deterministic work inside a `Step` so it executes
-  once and its result is reused on replay.
+  produce different results on replay. Use `ExecutionStartTime` when a
+  stable timestamp is enough. Put non-deterministic work inside a `Step` so
+  it executes once and its result is reused on replay.
 
 - **No conditional branching on mutable external state.** If an `if`
   statement between operations reads from a database or environment

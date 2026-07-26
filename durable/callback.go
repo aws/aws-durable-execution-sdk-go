@@ -3,7 +3,6 @@ package durable
 import (
 	"errors"
 	"fmt"
-	"math"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -98,7 +97,11 @@ func CreateCallback[O any](ctx Context, name string, opts ...CallbackOption) (*C
 
 	// First invocation: checkpoint START.
 	update := callbackUpdate(ec, id, name, types.OperationActionStart)
-	update.CallbackOptions = buildCallbackOptions(options)
+	cbOpts, cbErr := buildCallbackOptions(options)
+	if cbErr != nil {
+		return nil, fmt.Errorf("durable: CreateCallback %q: %w", name, cbErr)
+	}
+	update.CallbackOptions = cbOpts
 	if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
 		return nil, err
 	}
@@ -356,23 +359,39 @@ func wfcbContextUpdate(ec *execContext, id, name string, action types.OperationA
 }
 
 // buildCallbackOptions produces the wire CallbackOptions from the SDK
-// options. Returns nil when neither timeout is set.
-func buildCallbackOptions(opts callbackOptions) *types.CallbackOptions {
+// options. Returns a non-nil error if a timeout duration is negative or
+// exceeds the int32 seconds limit. Returns (nil, nil) when neither timeout
+// is set.
+func buildCallbackOptions(opts callbackOptions) (*types.CallbackOptions, error) {
 	timeout := int32(0)
 	heartbeat := int32(0)
 	if opts.timeout > 0 {
-		timeout = int32(math.Ceil(opts.timeout.Seconds()))
+		sec, err := durationToSeconds(opts.timeout)
+		if err != nil {
+			return nil, fmt.Errorf("timeout: %w", err)
+		}
+		timeout = sec
+	} else if opts.timeout < 0 {
+		_, err := durationToSeconds(opts.timeout)
+		return nil, fmt.Errorf("timeout: %w", err)
 	}
 	if opts.heartbeatTimeout > 0 {
-		heartbeat = int32(math.Ceil(opts.heartbeatTimeout.Seconds()))
+		sec, err := durationToSeconds(opts.heartbeatTimeout)
+		if err != nil {
+			return nil, fmt.Errorf("heartbeat timeout: %w", err)
+		}
+		heartbeat = sec
+	} else if opts.heartbeatTimeout < 0 {
+		_, err := durationToSeconds(opts.heartbeatTimeout)
+		return nil, fmt.Errorf("heartbeat timeout: %w", err)
 	}
 	if timeout == 0 && heartbeat == 0 {
-		return nil
+		return nil, nil
 	}
 	return &types.CallbackOptions{
 		TimeoutSeconds:          timeout,
 		HeartbeatTimeoutSeconds: heartbeat,
-	}
+	}, nil
 }
 
 // CallbackOption configures a single callback operation.

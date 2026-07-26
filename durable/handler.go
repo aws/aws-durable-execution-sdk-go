@@ -263,6 +263,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	}
 	ec := newExecContext(ctx, in.DurableExecutionArn, lambdaCtx, logger, state)
 	ec.checkpointer = cp
+	ec.executionStartTime = execStartTimestamp
 	cp.state = state
 	if h.options.serdes != nil {
 		ec.serdes = h.options.serdes

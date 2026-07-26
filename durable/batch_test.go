@@ -298,7 +298,7 @@ func TestMapItemNamer(t *testing.T) {
 	resp := invokeBatch(t, fake, batchPayload(`[1,2]`), func(ctx Context, items []int) ([]int, error) {
 		br, err := Map(ctx, "named-items", items, func(_ Context, item int, _ int) (int, error) {
 			return item * 10, nil
-		}, WithMaxConcurrency(1), WithItemNamer(func(_ any, i int) string {
+		}, WithMaxConcurrency(1), WithItemNamer(func(_ int, i int) string {
 			return fmt.Sprintf("item-%d", items[i])
 		}))
 		if err != nil {

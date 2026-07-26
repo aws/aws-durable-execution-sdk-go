@@ -2,7 +2,6 @@ package durable
 
 import (
 	"fmt"
-	"math"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -83,13 +82,18 @@ func runWait(ec *execContext, id, name string, d time.Duration) error {
 		}
 	}
 
+	waitSec, err := durationToSeconds(d)
+	if err != nil {
+		return fmt.Errorf("durable: Wait %q: %w", name, err)
+	}
+
 	update := types.OperationUpdate{
 		Id:      aws.String(hashID(id)),
 		Type:    types.OperationTypeWait,
 		SubType: aws.String(operationSubTypeWait),
 		Action:  types.OperationActionStart,
 		WaitOptions: &types.WaitOptions{
-			WaitSeconds: aws.Int32(int32(math.Ceil(d.Seconds()))),
+			WaitSeconds: aws.Int32(waitSec),
 		},
 	}
 	if name != "" {

@@ -2,7 +2,6 @@ package durable
 
 import (
 	"fmt"
-	"math"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -262,9 +261,9 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 
 	// Condition not met: checkpoint RETRY with the intermediate state and
 	// the strategy's delay, then suspend.
-	delaySec := int32(math.Ceil(decision.Delay.Seconds()))
-	if delaySec < 1 {
-		delaySec = 1
+	delaySec, delayErr := durationToSeconds(decision.Delay)
+	if delayErr != nil {
+		return zero, fmt.Errorf("durable: WaitForCondition %q: retry delay: %w", name, delayErr)
 	}
 	update := waitForConditionUpdate(ec, id, name, types.OperationActionRetry)
 	update.Payload = aws.String(string(serialized))

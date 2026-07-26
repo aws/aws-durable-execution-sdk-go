@@ -1,3 +1,5 @@
+//go:build durablecheck
+
 package durable
 
 import (
