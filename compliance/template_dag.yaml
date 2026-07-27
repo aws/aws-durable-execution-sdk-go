@@ -322,3 +322,21 @@ Resources:
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
+
+  DagRetry:
+    Type: AWS::Serverless::Function
+    TestingMetadata:
+      TestDescription: ["10-16"]
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/dag_retry/
+      Handler: bootstrap
+      Description: DAG per-task retry recovers a flaky task inside the DAG and its result flows downstream (flaky SUCCEEDED, after runs)
+      Role:
+        Fn::GetAtt:
+        - DurableFunctionRole
+        - Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300

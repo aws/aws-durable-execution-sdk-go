@@ -68,7 +68,6 @@ type dagConfig struct {
 	// dag-level
 	maxConcurrency *int
 	defaultTrigger TriggerRule
-	defaultRetry   RetryStrategy
 	dagSerdes      Serdes
 	completion     *DagCompletionConfig
 	summaryGen     func(*DagResult) string
@@ -92,7 +91,6 @@ const (
 	optBatchMaxConcurrency
 	optMaxConcurrency
 	optDefaultTrigger
-	optDefaultRetry
 	optDagSerdes
 	optCompletion
 	optSummaryGen
@@ -118,8 +116,6 @@ func optionName(id dagOptionID) string {
 		return "WithDagMaxConcurrency"
 	case optDefaultTrigger:
 		return "WithDefaultTriggerRule"
-	case optDefaultRetry:
-		return "WithDefaultRetry"
 	case optDagSerdes:
 		return "WithDagSerdes"
 	case optCompletion:
@@ -227,15 +223,6 @@ func WithDefaultTriggerRule(r TriggerRule) DagOption {
 	return func(c *dagConfig) { c.defaultTrigger = r; c.applied = append(c.applied, optDefaultTrigger) }
 }
 
-// WithDefaultRetry sets the default retry strategy for tasks that do not
-// set their own.
-//
-// Experimental: This API is experimental and may be changed or removed in
-// future releases.
-func WithDefaultRetry(s RetryStrategy) DagOption {
-	return func(c *dagConfig) { c.defaultRetry = s; c.applied = append(c.applied, optDefaultRetry) }
-}
-
 // WithDagSerdes sets the DAG-level default result serializer applied to
 // tasks that do not set their own via [WithDagTaskSerdes]. It is a
 // DAG-level option: pass it to [Dag].
@@ -286,7 +273,6 @@ type DagBuilder struct {
 	tasks         []*dagTaskDef
 	byName        map[string]*dagTaskDef
 	regErrs       []error
-	defaultRetry  RetryStrategy
 	defaultSerdes Serdes
 }
 
@@ -375,10 +361,7 @@ func (d *DagBuilder) validateTaskOptions(name string, op dagOpKind, applied []da
 func (d *DagBuilder) register(name string, deps []AnyHandle, kind dagResultKind, op dagOpKind, opts []DagOption) (*dagTaskDef, dagConfig) {
 	cfg := buildDagConfig(opts)
 	d.validateTaskOptions(name, op, cfg.applied)
-	// Apply DAG-level defaults when the task set none of its own.
-	if cfg.retry == nil {
-		cfg.retry = d.defaultRetry
-	}
+	// Apply the DAG-level default serdes when the task set none of its own.
 	if cfg.serdes == nil {
 		cfg.serdes = d.defaultSerdes
 	}

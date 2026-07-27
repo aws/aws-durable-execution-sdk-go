@@ -1,6 +1,6 @@
 # DAG cloud-integration SAM harness for the ALPHA SDK (suffix -DagAlphaGo).
 #
-# Deploys the four DAG compliance handlers (compliance/dag/dag_*) as durable
+# Deploys the DAG compliance handlers (compliance/dag/dag_*) as durable
 # Lambda functions using PREBUILT linux/amd64 bootstrap binaries on the
 # provided.al2023 runtime (no Docker/finch: BuildMethod makefile just copies
 # publish/<handler>/bootstrap, produced by ./build_examples.sh dag).
@@ -84,6 +84,20 @@ Resources:
         ExecutionTimeout: 300
         RetentionPeriodInDays: 7
 
+  DagRetry:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: dag-retry-DagAlphaGo
+      CodeUri: publish/dag_retry/
+      Handler: bootstrap
+      Role: !Ref ExecutionRoleArn
+      Description: DAG per-task retry recovers a flaky task inside the DAG and its result flows downstream
+      DurableConfig:
+        ExecutionTimeout: 300
+        RetentionPeriodInDays: 7
+
 Outputs:
   DagDiamondArn:
     Value: !GetAtt DagDiamond.Arn
@@ -93,3 +107,5 @@ Outputs:
     Value: !GetAtt DagRunIf.Arn
   DagWaitResumeArn:
     Value: !GetAtt DagWaitResume.Arn
+  DagRetryArn:
+    Value: !GetAtt DagRetry.Arn

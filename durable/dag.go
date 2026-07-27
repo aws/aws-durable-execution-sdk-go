@@ -129,7 +129,6 @@ func Dag(ctx Context, name string, register func(d *DagBuilder), opts ...DagOpti
 	cfg := buildDagConfig(opts)
 
 	d := newDagBuilder()
-	d.defaultRetry = cfg.defaultRetry
 	d.defaultSerdes = cfg.dagSerdes
 	if register != nil {
 		register(d)

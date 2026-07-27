@@ -201,37 +201,54 @@ func TestDagE2E_CustomCompletion(t *testing.T) {
 
 func e2eRuleName(i int) string { return "rule_" + string(rune('0'+i)) }
 
-// TestDagE2E_DefaultRetryApplied proves the DAG-level default retry
-// (WithDefaultRetry) is wired to tasks that set none of their own: a flaky
-// step fails once, then the default retry recovers it.
-func TestDagE2E_DefaultRetryApplied(t *testing.T) {
+// TestDagE2E_TaskRetryRecovers proves the behaviour customers rely on: a
+// per-task retry strategy (WithTaskRetry) reaches the underlying step
+// operation and recovers a flaky task inside a DAG, and the recovered
+// result flows to a downstream dependent. A flaky step throws until its
+// third attempt (StepContext.Attempt() is 1-indexed at runtime), then
+// returns the attempt number; a dependent doubles it.
+func TestDagE2E_TaskRetryRecovers(t *testing.T) {
 	var attempts int32
-	handler := func(dc durable.Context, _ struct{}) (string, error) {
-		res, err := durable.Dag(dc, "retrying", func(d *durable.DagBuilder) {
-			durable.DagStep(d, "flaky", nil, func(_ durable.Deps, _ durable.StepContext) (string, error) {
-				if atomic.AddInt32(&attempts, 1) == 1 {
-					return "", errors.New("transient failure")
+	handler := func(dc durable.Context, _ struct{}) (map[string]int, error) {
+		res, err := durable.Dag(dc, "retrydag", func(d *durable.DagBuilder) {
+			flaky := durable.DagStep(d, "flaky", nil, func(_ durable.Deps, sc durable.StepContext) (int, error) {
+				atomic.AddInt32(&attempts, 1)
+				if sc.Attempt() < 3 {
+					return 0, errors.New("not yet third attempt")
 				}
-				return "ok", nil
+				return sc.Attempt(), nil
+			}, durable.WithTaskRetry(func(_ error, attempt int) durable.RetryDecision {
+				return durable.RetryDecision{Retry: attempt < 3, Delay: 0}
+			}))
+			durable.DagStep(d, "after", []durable.AnyHandle{flaky}, func(deps durable.Deps, _ durable.StepContext) (int, error) {
+				v, _ := durable.Get(deps, flaky)
+				return v * 2, nil
 			})
-		}, durable.WithDefaultRetry(func(_ error, attempt int) durable.RetryDecision {
-			return durable.RetryDecision{Retry: attempt < 2, Delay: 0}
-		}))
+		}, durable.WithDagMaxConcurrency(1))
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		if e := res.ThrowIfError(); e != nil {
-			return "", e
+			return nil, e
 		}
-		return string(res.CompletionReason()), nil
+		f, _ := durable.ResultByName[int](res, "flaky")
+		a, _ := durable.ResultByName[int](res, "after")
+		return map[string]int{"flaky": f, "after": a}, nil
 	}
 	runner := durabletest.NewLocalRunner(handler)
 	result := runner.RunUntilComplete(t, struct{}{})
 	if result.Status != durabletest.Succeeded {
-		t.Fatalf("expected SUCCEEDED (default retry should recover flaky step), got %s (%+v)", result.Status, result.Error)
+		t.Fatalf("expected SUCCEEDED (per-task retry should recover flaky step), got %s (%+v)", result.Status, result.Error)
 	}
-	if atomic.LoadInt32(&attempts) < 2 {
-		t.Fatalf("default retry not applied: attempts=%d (want >=2)", atomic.LoadInt32(&attempts))
+	out, err := durabletest.ResultAs[map[string]int](result)
+	if err != nil {
+		t.Fatalf("ResultAs: %v", err)
+	}
+	if out["flaky"] != 3 || out["after"] != 6 {
+		t.Fatalf("per-task retry result mismatch: got %+v, want flaky=3 after=6", out)
+	}
+	if got := atomic.LoadInt32(&attempts); got != 3 {
+		t.Fatalf("per-task retry attempt count: got %d, want 3", got)
 	}
 }
 
