@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"time"
 
@@ -461,7 +462,7 @@ func settleStepFailure[O any](ec *execContext, id, name string, options stepOpti
 	update := stepUpdate(ec, id, name, types.OperationActionRetry)
 	update.Error = errorObject(cause)
 	update.StepOptions = &types.StepOptions{
-		NextAttemptDelaySeconds: aws.Int32(int32(decision.Delay / time.Second)),
+		NextAttemptDelaySeconds: aws.Int32(retryDelaySeconds(decision.Delay)),
 	}
 	if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
 		return zero, err
@@ -486,6 +487,21 @@ func runStepFunc[O any](ec *execContext, fn func(StepContext) (O, error), attemp
 
 // stepUpdate assembles the shared fields of a step operation update. IDs
 // are hashed to their wire form.
+// retryDelaySeconds converts a retry decision's delay into the wire field the
+// checkpoint API accepts. The service REJECTS NextAttemptDelaySeconds below 1
+// with a ValidationException, which surfaces as an opaque checkpoint failure and
+// fails the operation outright instead of retrying it, so a sub-second delay is
+// clamped to the 1s minimum. Rounds UP so a 1.5s delay waits 2s rather than
+// truncating to 1s. Matches the clamp JS, Python and Java already apply, and the
+// one waitForCondition already applied here.
+func retryDelaySeconds(d time.Duration) int32 {
+	secs := int32(math.Ceil(d.Seconds()))
+	if secs < 1 {
+		return 1
+	}
+	return secs
+}
+
 func stepUpdate(ec *execContext, id, name string, action types.OperationAction) types.OperationUpdate {
 	update := types.OperationUpdate{
 		Id:      aws.String(hashID(id)),
