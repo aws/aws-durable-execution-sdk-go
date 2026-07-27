@@ -99,18 +99,46 @@ that operation and all subsequent ones.
 
 ## Suspension
 
-The `suspendSignal` coordinates suspension across the invocation. When a
-durable operation determines that it cannot proceed (a timer has not
-elapsed, a callback has not arrived, an invoked function has not returned),
-it fires the suspend signal.
+The `suspendSignal` coordinates suspension across the invocation. It has two
+independent mechanisms: a pending commitment, which decides the invocation
+result, and active-branch accounting, which decides when in-flight futures
+are settled.
 
-Firing the signal does three things:
+### Pending commitment
+
+When a durable operation determines that it cannot proceed (a timer has not
+elapsed, a callback has not arrived, an invoked function has not returned),
+it records a pending commitment and returns `errSuspendExecution`. Once a
+commitment stands, the invocation responds with `PENDING` regardless of what
+the handler returns, so user code cannot swallow the error and report a
+bogus success. The handler checks `committed()` for this.
+
+A commitment made by an operation running under a batch branch that its
+parent `Map` or `Parallel` may abandon is recorded against that subtree's
+abandon handle rather than unconditionally. When the parent completes early
+and abandons its outstanding branches, it retires those commitments after
+draining every worker, so work the batch explicitly abandoned does not keep
+the invocation `PENDING`. Retirement cascades to handles minted by nested
+batches. Every other commitment is unconditional and is never retired.
+
+### Active-branch accounting
+
+Concurrent work registers as an active branch before its goroutine starts
+and deregisters when the goroutine finishes. A branch that can still make
+progress keeps running and checkpointing even while a sibling is blocked.
+The signal fires only when the last active branch deregisters while a
+commitment stands. Firing does two things:
 
 1. Closes an internal channel so the handler's select notices immediately.
 2. Settles all registered in-flight futures with `errSuspendExecution` so
    goroutines blocked on `Future.Result()` unwind without hanging.
-3. Records the outcome as final. The handler goroutine's later return value
-   is ignored once suspension is decided.
+
+So the commitment and the firing are separate events, and `committed()` can
+be true well before `fired()` is. Code that needs to know the invocation
+result is already decided uses `committed()`; code that needs to know
+futures have been settled uses `fired()`. A context also carries its own
+`blocked` flag, set when an operation on that context commits, which stops
+further claims on that context without affecting its siblings.
 
 The invocation responds with `PENDING`. The backend will re-invoke the
 function when the blocking condition resolves.
