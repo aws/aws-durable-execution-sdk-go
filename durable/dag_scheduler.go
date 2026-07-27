@@ -57,6 +57,9 @@ type dagScheduler struct {
 	mu       sync.Mutex
 	state    map[string]*TaskExecution // terminal (or STARTED) states by name
 	inFlight map[string]struct{}
+	// startedAt records when each task was dispatched, so a terminal TaskExecution
+	// can report a real startedAt rather than null.
+	startedAt map[string]time.Time
 
 	// pending holds task completions delivered by worker goroutines but not
 	// yet folded into state by the main loop. Completions are delivered
@@ -108,6 +111,7 @@ func newDagScheduler(tasks []*dagTaskDef, maxConc int, completion *DagCompletion
 		hooks:      hooks,
 		state:      map[string]*TaskExecution{},
 		inFlight:   map[string]struct{}{},
+		startedAt:  map[string]time.Time{},
 	}
 }
 
@@ -268,6 +272,7 @@ func (s *dagScheduler) startReady(ctx context.Context) bool {
 		}
 		// Start the task in its own goroutine.
 		s.inFlight[t.name] = struct{}{}
+		s.startedAt[t.name] = s.hooks.now()
 		progressed = true
 		if s.hooks.register != nil {
 			s.hooks.register()
@@ -356,7 +361,12 @@ func (s *dagScheduler) handleDone(d dagTaskDone) {
 		return
 	}
 	now := s.hooks.now()
-	te := &TaskExecution{Name: d.name, CompletedAt: now, kind: dagKindFor(s.tasks, d.name)}
+	te := &TaskExecution{
+		Name:        d.name,
+		StartedAt:   s.startedAt[d.name],
+		CompletedAt: now,
+		kind:        dagKindFor(s.tasks, d.name),
+	}
 	if d.err != nil {
 		te.Status = StatusFailed
 		te.Err = d.err
@@ -411,10 +421,9 @@ func (s *dagScheduler) beginCompletingLocked(reason DagCompletionReason) {
 	s.completing = true
 	s.completeReason = reason
 	s.completeSet = true
-	now := s.hooks.now()
 	for name := range s.inFlight {
 		if _, ok := s.state[name]; !ok {
-			s.state[name] = &TaskExecution{Name: name, Status: StatusStarted, StartedAt: now, kind: dagKindFor(s.tasks, name)}
+			s.state[name] = &TaskExecution{Name: name, Status: StatusStarted, StartedAt: s.startedAt[name], kind: dagKindFor(s.tasks, name)}
 		}
 	}
 }
@@ -523,10 +532,12 @@ func (s *dagScheduler) beginAbortLocked(err error) {
 }
 
 func (s *dagScheduler) recordSkipLocked(t *dagTaskDef, reason SkipReason) {
-	now := s.hooks.now()
+	// A skipped task never ran, so it carries NO timestamps: both stay zero and
+	// serialize as null. Stamping them would report a run that did not happen and
+	// would diverge from the other three SDKs (envelope contract, timestamps).
 	s.state[t.name] = &TaskExecution{
 		Name: t.name, Status: StatusSkipped, SkipReason: reason,
-		StartedAt: now, CompletedAt: now, kind: dagKindFor(s.tasks, t.name),
+		kind: dagKindFor(s.tasks, t.name),
 	}
 	// A skip is a settle: re-evaluate the completion policy so a custom
 	// ShouldComplete predicate sees SKIPPED items and a skip-terminated DAG
