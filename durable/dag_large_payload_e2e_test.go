@@ -4,6 +4,7 @@
 package durable_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -249,20 +250,23 @@ func TestDagE2E_LargePayloadTaskBodiesRunOnce(t *testing.T) {
 }
 
 // TestDagE2E_LargePayloadReExecutionPath is the Go-specific "re-execution
-// path" guard the contract asks each non-envelope SDK for. Go DOES expose a
-// hook to observe which path was taken: the DAG container's checkpointed
-// CONTEXT op carries ReplayChildren, surfaced by the local runner as
-// TestContextDetails.ReplayChildren. This asserts the container replay goes
-// through child-body re-execution (ReplayChildren=true) with NO aggregate or
-// DagSummary envelope stored inline, and that fidelity still holds — the same
-// guarantee the envelope SDK reaches by a different mechanism.
+// path" guard the contract asks each SDK for. Go exposes a hook to observe
+// which path was taken: the DAG container's checkpointed CONTEXT op carries
+// ReplayChildren, surfaced by the local runner as
+// TestContextDetails.ReplayChildren. This asserts that when the per-task
+// detail is too large, the container degrades per the envelope contract: it
+// drops `tasks`, sets ReplayChildren=true (so the backend preserves the child
+// operations that hold the per-task results), and stores the AGGREGATE-ONLY
+// envelope inline (type/counts/completionReason/startedTaskNames) — never the
+// per-task `tasks` array. Fidelity still holds via child-body re-execution.
 //
-// Note on Go's offload semantics: dagFinishChild checkpoints every succeeded
-// DAG container with ReplayChildren=true UNCONDITIONALLY — it is not gated on
-// the 256KB threshold (the container aggregate is never stored inline in any
-// case; only per-task results are checkpointed, each ~50KB here). This
-// confirms DAG_SPEC_CROSS_LANGUAGE.md §2.B.6: Go re-executes the child body
-// via ReplayChildren with no DagSummary envelope anywhere.
+// Note on Go's offload semantics under the converged envelope
+// (ENVELOPE_CONVERGENCE_CONTRACT.md, superseding DAG_SPEC_CROSS_LANGUAGE.md
+// §2.B.6): dagFinishChild now serializes the canonical envelope and gates on
+// the 256KB checkpoint limit exactly like batch.go / child_context.go. A DAG
+// that fits stores its per-task detail inline with no ReplayChildren; only an
+// oversized DAG (like bigdag, ~400KB) drops `tasks` and offloads to its
+// children while retaining the small aggregate summary inline.
 func TestDagE2E_LargePayloadReExecutionPath(t *testing.T) {
 	var bodyRuns [8]int64
 	var handlerEntries int64
@@ -285,13 +289,29 @@ func TestDagE2E_LargePayloadReExecutionPath(t *testing.T) {
 	}
 	if !scope.ContextDetails.ReplayChildren {
 		t.Fatal("bigdag container was NOT checkpointed with ReplayChildren=true; " +
-			"Go must offload/re-execute the child body, not store an aggregate")
+			"an oversized DAG must offload/re-execute the child bodies")
 	}
-	// No aggregate nor DagSummary envelope is stored inline on the container —
-	// the aggregate lives only in the per-task checkpoints.
-	if scope.ContextDetails.Result != "" {
-		t.Fatalf("bigdag container stored a non-empty inline result (%d bytes); "+
-			"Go must not store the aggregate or a DagSummary envelope", len(scope.ContextDetails.Result))
+	// The container stores the AGGREGATE-ONLY envelope: `tasks` is dropped
+	// (the offload signal) but the small summary (type, counts,
+	// completionReason, startedTaskNames) is retained inline per the contract.
+	if scope.ContextDetails.Result == "" {
+		t.Fatal("offloaded bigdag container must still store the aggregate-only envelope inline")
+	}
+	var env map[string]any
+	if uerr := json.Unmarshal([]byte(scope.ContextDetails.Result), &env); uerr != nil {
+		t.Fatalf("offloaded container payload is not a valid envelope: %v", uerr)
+	}
+	if _, hasTasks := env["tasks"]; hasTasks {
+		t.Fatal("offloaded container envelope must NOT carry the per-task `tasks` array")
+	}
+	if env["type"] != "DagResult" {
+		t.Fatalf("offloaded envelope type = %v, want DagResult", env["type"])
+	}
+	if env["completionReason"] != string(durable.AllCompleted) {
+		t.Fatalf("offloaded envelope completionReason = %v, want %s", env["completionReason"], durable.AllCompleted)
+	}
+	if sc, _ := env["successCount"].(float64); int(sc) != 8 {
+		t.Fatalf("offloaded envelope successCount = %v, want 8", env["successCount"])
 	}
 
 	// Fidelity by the re-execution mechanism: same digest, byte-identical p1.

@@ -301,7 +301,7 @@ func dagCallbackContainer[O any](ctx Context, name string, submitter func(StepCo
 			return zero, fnErr
 		}
 		if !terminal {
-			if cerr := dagFinishChild(ec, id, name, operationSubTypeCallback, fnErr); cerr != nil {
+			if cerr := dagFinishChild(ec, id, name, operationSubTypeCallback, fnErr, nil); cerr != nil {
 				return zero, cerr
 			}
 		}
@@ -309,7 +309,7 @@ func dagCallbackContainer[O any](ctx Context, name string, submitter func(StepCo
 	}
 
 	if !terminal {
-		if err := dagFinishChild(ec, id, name, operationSubTypeCallback, nil); err != nil {
+		if err := dagFinishChild(ec, id, name, operationSubTypeCallback, nil, nil); err != nil {
 			return zero, err
 		}
 	}

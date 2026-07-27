@@ -158,9 +158,34 @@ func Dag(ctx Context, name string, register func(d *DagBuilder), opts ...DagOpti
 	if err != nil {
 		return nil, err
 	}
-	scopeEc, scopeTerminal, _, err := dagMaterializeChild(ec, scopeID, name, operationSubTypeDag)
+	scopeEc, scopeTerminal, scopeOp, err := dagMaterializeChild(ec, scopeID, name, operationSubTypeDag)
 	if err != nil {
 		return nil, err
+	}
+
+	// Envelope replay rule. When the DAG container is already
+	// terminal-SUCCEEDED, its checkpoint carries the canonical envelope.
+	//   - tasks present (inline): deserialize and return WITHOUT reading
+	//     children or re-scheduling — task bodies must not re-execute.
+	//   - tasks absent (offloaded, ReplayChildren): fall through to
+	//     reconstruct below by re-running the scheduler (each task fast-paths
+	//     from its own checkpoint), then overlay the envelope's authoritative
+	//     aggregate (started set, completionReason, total).
+	var offloadEnv *dagEnvelope
+	if scopeTerminal && scopeOp != nil && scopeOp.status == statusSucceeded && scopeOp.childCtx != nil {
+		cc := scopeOp.childCtx
+		switch {
+		case !cc.replayChildren && cc.result != "":
+			env, derr := unmarshalDagEnvelope([]byte(cc.result))
+			if derr != nil {
+				return nil, fmt.Errorf("durable: dag %q: deserialize container envelope: %w", name, derr)
+			}
+			return dagEnvelopeToResult(env), nil
+		case cc.replayChildren && cc.result != "":
+			if env, derr := unmarshalDagEnvelope([]byte(cc.result)); derr == nil {
+				offloadEnv = env
+			}
+		}
 	}
 
 	// Pre-claim nothing per task: task operations use NAME-BASED ids
@@ -218,27 +243,49 @@ func Dag(ctx Context, name string, register func(d *DagBuilder), opts ...DagOpti
 		// then surface the typed *DagPredicateError to the caller — no
 		// DagResult is produced.
 		if !scopeTerminal {
-			if err := dagFinishChild(ec, scopeID, name, operationSubTypeDag, abortErr); err != nil {
+			if err := dagFinishChild(ec, scopeID, name, operationSubTypeDag, abortErr, nil); err != nil {
 				return nil, err
 			}
 		}
 		return nil, abortErr
 	}
 
-	// The graph drained: finish the DAG's own container CONTEXT op
-	// (CONTEXT/SUCCEED, ReplayChildren) unless it was already terminal on a
-	// prior invocation. The DAG never fails at the container level.
-	if !scopeTerminal {
-		if err := dagFinishChild(ec, scopeID, name, operationSubTypeDag, nil); err != nil {
-			return nil, err
+	// The graph drained (or early-completed). On the offloaded REPLAY path,
+	// the scheduler re-run above reconstructed each task's result from its
+	// child checkpoint; overlay the envelope's authoritative aggregate and
+	// return without re-checkpointing the container.
+	if scopeTerminal {
+		if offloadEnv != nil {
+			execs = dagApplyOffloadEnvelope(execs, offloadEnv, d.tasks)
+			res := newDagResult(execs, DagCompletionReason(offloadEnv.CompletionReason))
+			res.total = offloadEnv.TotalCount
+			if cfg.summaryGen != nil {
+				res.summary = cfg.summaryGen(res)
+			}
+			return res, nil
 		}
+		// Terminal container with no recoverable envelope: fall back to the
+		// plain reconstruction from the re-run.
+		res := newDagResult(execs, reason)
+		res.total = len(d.tasks)
+		if cfg.summaryGen != nil {
+			res.summary = cfg.summaryGen(res)
+		}
+		return res, nil
 	}
 
+	// First execution: assemble the result, then finish the DAG's own
+	// container CONTEXT op (CONTEXT/SUCCEED) carrying the canonical envelope,
+	// degrading under the checkpoint size limit. The DAG never fails at the
+	// container level.
 	res := newDagResult(execs, reason)
 	// total = number of REGISTERED tasks, not the settled count.
 	res.total = len(d.tasks)
 	if cfg.summaryGen != nil {
 		res.summary = cfg.summaryGen(res)
+	}
+	if err := dagFinishChild(ec, scopeID, name, operationSubTypeDag, nil, res); err != nil {
+		return nil, err
 	}
 	return res, nil
 }
@@ -272,18 +319,41 @@ func dagMaterializeChild(parent *execContext, id, name, subType string) (*execCo
 }
 
 // dagFinishChild checkpoints the terminal CONTEXT transition for a container
-// created by dagMaterializeChild: CONTEXT/FAIL carrying opErr when non-nil,
-// otherwise CONTEXT/SUCCEED with an empty payload and ReplayChildren=true
-// (the DAG re-runs each task body on replay, so the container's real result
-// lives in its nested child operations). parent is the enclosing context
-// (the scope's parent for the scope, the scope for a task).
-func dagFinishChild(parent *execContext, id, name, subType string, opErr error) error {
+// created by dagMaterializeChild.
+//
+//   - opErr non-nil (e.g. a predicate abort): CONTEXT/FAIL carrying opErr.
+//   - res non-nil (the DAG scope): CONTEXT/SUCCEED carrying the canonical DAG
+//     envelope built from res, degrading in the contract's order until it
+//     fits under the checkpoint size limit — matching the size-branch pattern
+//     in batch.go and child_context.go, which all gate on len(serialized) >
+//     checkpointSizeLimitBytes. When it fits, the full envelope WITH tasks is
+//     stored inline and ReplayChildren is NOT set; when too large, tasks (and
+//     as a last resort failedTaskNames) are dropped and ReplayChildren=true so
+//     the backend preserves the child operations that hold the per-task
+//     results.
+//   - res nil, opErr nil (a non-aggregate container such as a DAG callback
+//     task's Callback container): CONTEXT/SUCCEED with an empty payload and
+//     ReplayChildren=true, so the body re-runs on replay and the inner
+//     operation fast-paths from its own checkpoint.
+//
+// parent is the enclosing context (the scope's parent for the scope).
+func dagFinishChild(parent *execContext, id, name, subType string, opErr error, res *DagResult) error {
 	update := dagContextUpdate(parent, id, name, subType, types.OperationActionSucceed)
-	if opErr != nil {
+	switch {
+	case opErr != nil:
 		update.Action = types.OperationActionFail
 		update.Error = errorObject(opErr)
-	} else {
+	case res == nil:
 		update.ContextOptions = &types.ContextOptions{ReplayChildren: aws.Bool(true)}
+	default:
+		payload, replayChildren, err := dagEnvelopePayload(res)
+		if err != nil {
+			return fmt.Errorf("durable: dag %q: serialize container envelope: %w", name, err)
+		}
+		update.Payload = aws.String(payload)
+		if replayChildren {
+			update.ContextOptions = &types.ContextOptions{ReplayChildren: aws.Bool(true)}
+		}
 	}
 	return parent.checkpointer.checkpoint(parent, []types.OperationUpdate{update})
 }
