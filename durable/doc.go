@@ -26,28 +26,38 @@
 //
 // # Error Propagation
 //
-// Always return an error from a durable operation immediately, as ordinary
-// Go code does. Do not ignore it, inspect it for a specific cause, or
-// treat it as a business-level failure of a wait or invoke. A nil error
-// means the operation completed (either live or on replay). A non-nil error
-// means either the operation failed with an operational error (such as
-// [*StepError] or [*InvokeError]) or that the invocation is suspending and
-// the handler should unwind. In both cases the correct response is the
-// same: return the error to the caller.
+// Return an error from a durable operation immediately unless the handler
+// intentionally handles it as a business-level outcome. A nil error means
+// the operation completed, either live or on replay. A non-nil error is one
+// of two things: a documented terminal failure of that operation, or a
+// signal that the invocation is suspending and the handler should unwind.
 //
-// If code swallows the error and continues, the invocation still suspends
-// (it does not produce an incorrect result), but statements after the
-// swallowed error execute, and subsequent durable operations on the same
-// context refuse to proceed. This produces confusing behavior: the handler
-// appears to run past the blocking point yet later operations fail. Return
-// the error to avoid this.
+// The two are distinguishable. Every terminal failure is matchable with
+// [errors.As] against a public type such as [StepError] or [InvokeError],
+// and all of them also match [OperationError]. A suspension signal matches
+// none of them. An error that matches no public type therefore MUST be
+// returned unchanged.
 //
-//	// Correct: propagate the error immediately.
+//	// Correct: handle a documented terminal failure, propagate anything else.
 //	result, err := durable.Step(ctx, "charge", func(sc durable.StepContext) (Receipt, error) {
 //		return chargeCard(sc, order)
 //	})
-//	if err != nil {
+//	var stepErr *durable.StepError
+//	switch {
+//	case err == nil:
+//		// Use result.
+//	case errors.As(err, &stepErr):
+//		// A business-level decision belongs here.
+//	default:
 //		return OrderResult{}, err
 //	}
-//	// Use result only after confirming err == nil.
+//
+// [Wait] is stricter. Its error carries no business-level terminal result,
+// so return it immediately in every case.
+//
+// If code swallows a suspension signal and continues, the invocation still
+// suspends and does not produce an incorrect result, but statements after
+// the swallowed error execute and subsequent durable operations on the same
+// context refuse to proceed. The handler appears to run past the blocking
+// point while later operations fail.
 package durable
