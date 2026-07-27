@@ -1,12 +1,11 @@
 // Command step-with-retry demonstrates a step configured with a custom
-// retry strategy using at-most-once semantics. The step simulates a
-// transient failure (50% chance) and retries up to 3 times with linearly
-// increasing delays.
+// retry strategy using at-most-once semantics. The step fails its first two
+// attempts and succeeds on the third, retrying with linearly increasing
+// delays.
 package main
 
 import (
 	"errors"
-	"math/rand/v2"
 	"time"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
@@ -14,8 +13,10 @@ import (
 
 func handler(ctx durable.Context, _ any) (string, error) {
 	return durable.Step(ctx, "flaky-operation",
-		func(_ durable.StepContext) (string, error) {
-			if rand.Float64() < 0.5 { //nolint:gosec // intentional randomness for demo
+		func(sc durable.StepContext) (string, error) {
+			// Simulate two transient failures. Attempt is 1-based, so the
+			// third attempt is the first that succeeds.
+			if sc.Attempt() < 3 {
 				return "", errors.New("transient failure")
 			}
 			return "step succeeded", nil
