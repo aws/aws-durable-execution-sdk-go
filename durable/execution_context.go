@@ -58,6 +58,13 @@ type execContext struct {
 	// branch's whole child-context subtree; nil for every other context.
 	abandon *atomic.Bool
 
+	// branchTok is the active-branch token for the goroutine that owns this
+	// context. A pending callback's pre-result hook releases it so the
+	// calling branch is deregistered exactly once. It is shared by a
+	// context's child and branch contexts, mirroring abandon; nil until a
+	// branch is registered.
+	branchTok *branchToken
+
 	// serdes is the handler-level default serializer for operation
 	// results. Per-operation serdes options take precedence.
 	serdes Serdes
@@ -219,6 +226,7 @@ func (c *execContext) child(entityID string, owner goroutineOwner, mode executio
 		pluginDispatcher:     c.pluginDispatcher,
 		executionStartTime:   c.executionStartTime,
 		abandon:              c.abandon,
+		branchTok:            c.branchTok,
 	}
 	child.mode.Store(int32(mode))
 	return child
@@ -249,6 +257,7 @@ func (c *execContext) branch(owner goroutineOwner) *execContext {
 		pluginDispatcher:     c.pluginDispatcher,
 		executionStartTime:   c.executionStartTime,
 		abandon:              c.abandon,
+		branchTok:            c.branchTok,
 	}
 	b.mode.Store(c.mode.Load())
 	return b

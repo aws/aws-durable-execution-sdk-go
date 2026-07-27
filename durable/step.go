@@ -119,10 +119,11 @@ func StepAsync[O any](ctx Context, name string, fn func(StepContext) (O, error),
 	fut := newFuture[O]()
 	registerFuture(ec.suspend, fut)
 
-	ec.suspend.registerBranch()
+	tok := ec.suspend.registerBranchToken()
 	go func() {
-		defer ec.suspend.deregisterBranch()
+		defer tok.release()
 		branch := ec.branch(currentGoroutineOwner())
+		branch.branchTok = tok
 		result, runErr := runStep(branch, id, name, fn, options)
 		fut.settle(result, runErr)
 	}()

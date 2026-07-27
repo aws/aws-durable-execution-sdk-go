@@ -240,13 +240,14 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 
 	// Register the child goroutine as an active branch before launching.
 	// It deregisters (via defer) after settling the future on all paths.
-	ec.suspend.registerBranch()
+	tok := ec.suspend.registerBranchToken()
 
 	go func() {
-		defer ec.suspend.deregisterBranch()
+		defer tok.release()
 		// The child context is owned by this goroutine. Capture
 		// ownership here, not on the parent goroutine.
 		child := ec.child(id, currentGoroutineOwner(), mode)
+		child.branchTok = tok
 
 		var result O
 		var fnErr error

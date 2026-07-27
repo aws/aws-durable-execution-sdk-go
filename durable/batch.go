@@ -667,9 +667,16 @@ func executeBatchItems[I, O any](
 
 				startedIdx[pc.index] = struct{}{}
 				inFlight++
+				// Register the worker as an active branch before launching
+				// its goroutine, so the coordinator's view of the count
+				// never races the goroutine start. The token is released on
+				// worker unwind and by a pending callback's pre-result hook;
+				// its sync.Once makes that exactly one deregistration.
+				tok := ec.suspend.registerBranchToken()
 				wg.Add(1)
-				go func(pc preClaimedItem) {
+				go func(pc preClaimedItem, tok *branchToken) {
 					defer wg.Done()
+					defer tok.release()
 					var item BatchItem[O]
 					var runErr error
 					func() {
@@ -678,14 +685,14 @@ func executeBatchItems[I, O any](
 								runErr = fmt.Errorf("durable: batch item %d panicked: %v", pc.index, r)
 							}
 						}()
-						item, runErr = runPreClaimedBatchItem[O](ec, parentID, pc.childID, pc.name, pc.index, pc.op, pc.terminal, options, childSubType, runItem, abandon)
+						item, runErr = runPreClaimedBatchItem[O](ec, parentID, pc.childID, pc.name, pc.index, pc.op, pc.terminal, options, childSubType, runItem, abandon, tok)
 					}()
 					if runErr != nil {
 						outcomeCh <- itemOutcome{index: pc.index, err: runErr}
 						return
 					}
 					outcomeCh <- itemOutcome{index: pc.index, item: item}
-				}(pc)
+				}(pc, tok)
 			}
 		}
 
@@ -805,12 +812,14 @@ func runPreClaimedBatchItem[O any](
 	childSubType string,
 	runItem func(childCtx Context, index int) (O, error),
 	abandon *atomic.Bool,
+	tok *branchToken,
 ) (BatchItem[O], error) {
 	if options.nesting == NestingFlat {
 		// FLAT mode: run in a virtual child context.
 		mode := childReplayMode(ec, childID, op)
 		virtualChild := ec.child(childID, currentGoroutineOwner(), mode)
 		virtualChild.abandon = abandon
+		virtualChild.branchTok = tok
 		result, fnErr := runItem(virtualChild, index)
 		if fnErr != nil {
 			if errors.Is(fnErr, errSuspendExecution) {
@@ -848,6 +857,7 @@ func runPreClaimedBatchItem[O any](
 	mode := childReplayMode(ec, childID, op)
 	child := ec.child(childID, currentGoroutineOwner(), mode)
 	child.abandon = abandon
+	child.branchTok = tok
 
 	result, fnErr := runItem(child, index)
 	if fnErr != nil {

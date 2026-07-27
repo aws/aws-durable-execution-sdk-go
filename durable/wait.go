@@ -51,10 +51,11 @@ func WaitAsync(ctx Context, name string, d time.Duration) *Future[Void] {
 	fut := newFuture[Void]()
 	registerFuture(ec.suspend, fut)
 
-	ec.suspend.registerBranch()
+	tok := ec.suspend.registerBranchToken()
 	go func() {
-		defer ec.suspend.deregisterBranch()
+		defer tok.release()
 		branch := ec.branch(currentGoroutineOwner())
+		branch.branchTok = tok
 		err := runWait(branch, id, name, d)
 		fut.settle(Void{}, err)
 	}()

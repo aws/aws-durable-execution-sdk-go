@@ -270,6 +270,33 @@ func (s *suspendSignal) deregisterBranch() {
 	}
 }
 
+// branchToken is an idempotent handle to one active-branch registration.
+// The first release decrements the active count; later releases are no-ops,
+// so a branch is accounted exactly once even when several unwind paths can
+// each release it (a pending callback's pre-result hook and a deferred
+// cleanup share one token).
+type branchToken struct {
+	s    *suspendSignal
+	once sync.Once
+}
+
+// release deregisters the branch this token represents, at most once. Safe
+// on a nil token and from any goroutine.
+func (t *branchToken) release() {
+	if t == nil {
+		return
+	}
+	t.once.Do(t.s.deregisterBranch)
+}
+
+// registerBranchToken increments the active branch count and returns a token
+// that releases it exactly once. Call before launching a goroutine that can
+// independently make progress.
+func (s *suspendSignal) registerBranchToken() *branchToken {
+	s.registerBranch()
+	return &branchToken{s: s}
+}
+
 // registerFuture adds a future to the in-flight set. If the signal has
 // already fired, the future is settled immediately. This is called
 // synchronously on the owning goroutine before launching the async

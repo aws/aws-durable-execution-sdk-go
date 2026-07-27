@@ -101,10 +101,11 @@ func InvokeAsync[O, I any](ctx Context, name, functionID string, input I, opts .
 	fut := newFuture[O]()
 	registerFuture(ec.suspend, fut)
 
-	ec.suspend.registerBranch()
+	tok := ec.suspend.registerBranchToken()
 	go func() {
-		defer ec.suspend.deregisterBranch()
+		defer tok.release()
 		branch := ec.branch(currentGoroutineOwner())
+		branch.branchTok = tok
 		result, runErr := runInvoke[O, I](branch, id, name, functionID, input, options)
 		fut.settle(result, runErr)
 	}()

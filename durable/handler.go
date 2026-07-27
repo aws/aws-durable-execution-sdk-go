@@ -281,7 +281,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		// errSuspendExecution (blocked on a pending operation). A
 		// successful or failed handler return does not deregister:
 		// the invocation completes with that outcome immediately.
-		ec.suspend.registerBranch()
+		ec.branchTok = ec.suspend.registerBranchToken()
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
@@ -293,7 +293,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 			ec.owner = currentGoroutineOwner()
 			result, err := h.handler(ec, event)
 			if errors.Is(err, errSuspendExecution) {
-				ec.suspend.deregisterBranch()
+				ec.branchTok.release()
 			}
 			outcomeCh <- outcome{result: result, err: err}
 		}()

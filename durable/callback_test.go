@@ -631,3 +631,86 @@ func TestCreateCallbackParentIdFirstInvocation(t *testing.T) {
 	// to avoid handler-goroutine race after suspension.
 	t.Skip("ParentId verified by conformance suite 7-8")
 }
+
+// TestUnresolvedCallbackInBatchDoesNotForcePending verifies that a pending
+// callback inside one concurrent batch worker does not suspend the whole
+// invocation when a sibling branch reaches MinSuccessful. The callback is
+// never resolved; the batch must still complete early with the sibling.
+//
+// The interleaving is forced: the fast branch proceeds only after the
+// callback branch has created its callback, so the callback's pre-result
+// hook runs while the sibling is still able to satisfy MinSuccessful. A
+// version relying on scheduler order could pass by luck.
+func TestUnresolvedCallbackInBatchDoesNotForcePending(t *testing.T) {
+	fake := &fakeLambda{}
+	type result struct {
+		Success int    `json:"successCount"`
+		Total   int    `json:"totalCount"`
+		Reason  string `json:"reason"`
+	}
+	callbackPending := make(chan struct{})
+	resp := invokeBatch(t, fake, batchPayload(`null`), func(ctx Context, _ any) (result, error) {
+		br, err := Map(ctx, "outer", []int{0, 1},
+			func(c Context, _ int, index int) (string, error) {
+				if index == 0 {
+					cb, cerr := CreateCallback[string](c, "never-resolved")
+					if cerr != nil {
+						return "", cerr
+					}
+					close(callbackPending)
+					v, rerr := cb.Result()
+					if rerr != nil {
+						return "", rerr
+					}
+					return v, nil
+				}
+				<-callbackPending
+				return "fast", nil
+			}, WithCompletion(CompletionConfig{MinSuccessful: 1}))
+		if err != nil {
+			return result{}, err
+		}
+		return result{
+			Success: br.SuccessCount(),
+			Total:   br.TotalCount(),
+			Reason:  br.Reason.String(),
+		}, nil
+	})
+	assertSucceeded(t, resp)
+	var r result
+	if err := json.Unmarshal([]byte(resp.Result), &r); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if r.Reason != "MIN_SUCCESSFUL_REACHED" {
+		t.Errorf("reason = %s, want MIN_SUCCESSFUL_REACHED", r.Reason)
+	}
+	if r.Success != 1 {
+		t.Errorf("successCount = %d, want 1", r.Success)
+	}
+}
+
+// TestAllBranchesPendingCallbackSuspends verifies that when every concurrent
+// batch worker is blocked on an unresolved callback and no completion
+// threshold can be met, the whole invocation still suspends (PENDING). This
+// guards against the fix simply never firing: a legitimately suspended batch
+// must not turn into a bogus success or hang.
+func TestAllBranchesPendingCallbackSuspends(t *testing.T) {
+	fake := &fakeLambda{}
+	resp := invokeBatch(t, fake, batchPayload(`null`), func(ctx Context, _ any) (string, error) {
+		br, err := Map(ctx, "outer", []int{0, 1},
+			func(c Context, _ int, _ int) (string, error) {
+				cb, cerr := CreateCallback[string](c, "never-resolved")
+				if cerr != nil {
+					return "", cerr
+				}
+				return cb.Result()
+			}, WithCompletion(CompletionConfig{MinSuccessful: 1}))
+		if err != nil {
+			return "", err
+		}
+		return br.Reason.String(), nil
+	})
+	if resp.Status != invocationPending {
+		t.Fatalf("expected PENDING, got %s (result: %s, error: %v)", resp.Status, resp.Result, resp.Error)
+	}
+}
