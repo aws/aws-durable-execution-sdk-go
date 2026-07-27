@@ -67,20 +67,17 @@ func newFuture[O any]() *Future[O] {
 func newPendingCallbackFuture[O any](s *suspendSignal, ec *execContext) *Future[O] {
 	f := newFuture[O]()
 	registerFuture(s, f)
-	// On the first Result(), mark this context blocked, commit to PENDING,
-	// and release the calling branch's token. Inside an abandonable batch
-	// subtree the future is also settled so the worker unwinds and reports
-	// suspension to its coordinator, which drain-joins its workers; outside
-	// one the future settles only when the invocation-wide signal fires
-	// (once every branch has blocked).
+	// On the first Result(), mark this context blocked, commit the
+	// invocation to PENDING, release the calling branch's token, and settle
+	// the future with errSuspendExecution so the awaiting goroutine unwinds
+	// and reports suspension to its coordinator. The branch-token accounting
+	// keeps the commitment from globally suspending unrelated siblings.
 	f.preResult = func() {
 		ec.blocked.Store(true)
 		s.commitPending(ec.abandon)
 		ec.branchTok.release()
-		if ec.abandon != nil {
-			var zero O
-			f.settle(zero, errSuspendExecution)
-		}
+		var zero O
+		f.settle(zero, errSuspendExecution)
 	}
 	return f
 }

@@ -57,6 +57,56 @@ func TestActiveBranchAccountingSiblingContinues(t *testing.T) {
 	}
 }
 
+// TestPendingCallbackInGoChildSuspendsWithSiblingProgress verifies that a
+// pending callback inside one Go child suspends the invocation while an
+// independent sibling Go branch runs to completion and checkpoints. It is the
+// callback analogue of TestActiveBranchAccountingSiblingContinues: a blocking
+// callback unwinds its own branch the same way a pending invoke does, without
+// forcing the sibling to abandon its work, and the invocation still ends
+// PENDING.
+func TestPendingCallbackInGoChildSuspendsWithSiblingProgress(t *testing.T) {
+	fake := &fakeLambda{}
+	resp := invokeStep(t, fake, stepPayload(`"x"`), func(ctx Context, _ string) (string, error) {
+		cbBranch := Go(ctx, "cb-branch", func(childCtx Context) (string, error) {
+			cb, err := CreateCallback[string](childCtx, "pending-cb")
+			if err != nil {
+				return "", err
+			}
+			return cb.Result()
+		})
+		fastBranch := Go(ctx, "fast-branch", func(childCtx Context) (string, error) {
+			return Step(childCtx, "fast-step", func(_ StepContext) (string, error) {
+				return "fast-result", nil
+			})
+		})
+		// Await the fast branch first so its checkpoints are recorded
+		// deterministically before the callback branch suspends.
+		_, _ = fastBranch.Result()
+		_, _ = cbBranch.Result()
+		return "", nil
+	})
+
+	if want := `{"Status":"PENDING"}`; resp != want {
+		t.Fatalf("response = %s, want %s", resp, want)
+	}
+
+	updates := updateBatch(t, fake)
+	var stepStart, stepSucceed bool
+	for _, u := range updates {
+		if aws.ToString(u.Name) == "fast-step" {
+			switch u.Action {
+			case types.OperationActionStart:
+				stepStart = true
+			case types.OperationActionSucceed:
+				stepSucceed = true
+			}
+		}
+	}
+	if !stepStart || !stepSucceed {
+		t.Errorf("expected fast-step START+SUCCEED, got start=%v succeed=%v", stepStart, stepSucceed)
+	}
+}
+
 // TestActiveBranchAccountingNoHang verifies that all blocking paths
 // correctly deregister their branch, preventing a hang where the
 // invocation never suspends. The test uses a timeout: if the invocation
@@ -112,6 +162,20 @@ func TestActiveBranchAccountingNoHang(t *testing.T) {
 			handler: func(ctx Context, _ string) (string, error) {
 				fut := Go(ctx, "child", func(childCtx Context) (string, error) {
 					return "", Wait(childCtx, "inner-wait", time.Second)
+				})
+				_, err := fut.Result()
+				return "", err
+			},
+		},
+		{
+			name: "go-with-callback-blocking",
+			handler: func(ctx Context, _ string) (string, error) {
+				fut := Go(ctx, "child", func(childCtx Context) (string, error) {
+					cb, err := CreateCallback[string](childCtx, "inner-cb")
+					if err != nil {
+						return "", err
+					}
+					return cb.Result()
 				})
 				_, err := fut.Result()
 				return "", err
