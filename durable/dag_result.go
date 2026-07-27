@@ -115,6 +115,18 @@ type DagResult struct {
 	// independent of early completion or never-started tasks.
 	total   int
 	summary string // observability-only; never read on replay
+
+	// aggregateOnly marks a result restored from an OFFLOADED (tasks-absent)
+	// envelope: the per-task map is legitimately empty, but the counts below
+	// are authoritative and taken verbatim from the envelope. Without it, the
+	// count accessors would derive 0/0/0 from the empty task slice and
+	// fabricate a zeroed success even though the checkpoint says otherwise
+	// (nested-offload contract rule 1). completionReason and total are already
+	// preserved from the envelope; these carry the three status counts too.
+	aggregateOnly bool
+	aggSucceeded  int
+	aggFailed     int
+	aggSkipped    int
 }
 
 func newDagResult(execs []TaskExecution, reason DagCompletionReason) *DagResult {
@@ -242,19 +254,34 @@ func (r *DagResult) Results() map[string]TaskExecution {
 //
 // Experimental: This API is experimental and may be changed or removed in
 // future releases.
-func (r *DagResult) SucceededCount() int { return len(r.filter(StatusSucceeded)) }
+func (r *DagResult) SucceededCount() int {
+	if r.aggregateOnly {
+		return r.aggSucceeded
+	}
+	return len(r.filter(StatusSucceeded))
+}
 
 // FailureCount returns the number of failed tasks.
 //
 // Experimental: This API is experimental and may be changed or removed in
 // future releases.
-func (r *DagResult) FailureCount() int { return len(r.filter(StatusFailed)) }
+func (r *DagResult) FailureCount() int {
+	if r.aggregateOnly {
+		return r.aggFailed
+	}
+	return len(r.filter(StatusFailed))
+}
 
 // SkippedCount returns the number of skipped tasks.
 //
 // Experimental: This API is experimental and may be changed or removed in
 // future releases.
-func (r *DagResult) SkippedCount() int { return len(r.filter(StatusSkipped)) }
+func (r *DagResult) SkippedCount() int {
+	if r.aggregateOnly {
+		return r.aggSkipped
+	}
+	return len(r.filter(StatusSkipped))
+}
 
 // TotalCount returns the number of REGISTERED tasks in the DAG. This is
 // fixed and independent of early completion: never-started tasks are absent
@@ -614,6 +641,19 @@ func dagEnvelopeToResult(env *dagEnvelope) *DagResult {
 	}
 	r := newDagResult(execs, DagCompletionReason(env.CompletionReason))
 	r.total = env.TotalCount
+	if env.Tasks == nil {
+		// Offloaded envelope: the per-task detail was too large to checkpoint
+		// inline and now lives in the retained child operations, so `tasks`
+		// is absent and the per-task map is legitimately empty. The three
+		// counts ARE present in the envelope, so carry them verbatim rather
+		// than deriving 0/0/0 from the empty slice — otherwise a nested DAG
+		// that failed tasks would be restored as a zeroed success and
+		// ThrowIfError would wrongly report success (contract rule 1).
+		r.aggregateOnly = true
+		r.aggSucceeded = env.SuccessCount
+		r.aggFailed = env.FailureCount
+		r.aggSkipped = env.SkippedCount
+	}
 	return r
 }
 

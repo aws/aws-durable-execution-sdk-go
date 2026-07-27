@@ -66,6 +66,18 @@ type Summary struct {
 	// the key is emitted (true or false) only by the large-payload handler
 	// and omitted entirely by every other handler.
 	Match *bool `json:"match,omitempty"`
+	// InnerReason is the nested inner DAG's completion reason, emitted only by
+	// the nested-large-payload handler (10-17). Under the nested-offload bug
+	// it would still read ALL_COMPLETED from a fabricated inner result, which
+	// is why the digest — not the reason — is that scenario's decisive check.
+	InnerReason string `json:"innerReason,omitempty"`
+	// InnerCounts is the inner DAG's [total, failed, skipped, succeeded],
+	// emitted only by the nested-large-payload handler (10-17). Note the
+	// ordering deliberately differs from Counts ([succeeded, failed, skipped,
+	// total]): the 10-17 contract fixes innerCounts as
+	// [total, failed, skipped, succeeded]. A pointer so the key is emitted
+	// only by that handler.
+	InnerCounts *[4]int `json:"innerCounts,omitempty"`
 }
 
 // From builds a Summary from a drained DagResult.
