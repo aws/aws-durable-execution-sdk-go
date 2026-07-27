@@ -223,3 +223,33 @@ func (c *execContext) child(entityID string, owner goroutineOwner, mode executio
 	child.mode.Store(int32(mode))
 	return child
 }
+
+// branch creates a sibling context for an async operation's goroutine. The
+// operation's ID was already claimed from this context's ids before the
+// goroutine started, so the branch shares ids, state, checkpointer,
+// suspend, serdes and abandon with the caller: only blocked is fresh, which
+// isolates a pending state to this branch and leaves the caller free to
+// keep claiming operations. owner is the goroutine that runs the operation,
+// captured after that goroutine starts. Unlike child, ids is shared by
+// pointer so the parent-ID prefix is preserved and no nested operation-ID
+// namespace is minted.
+func (c *execContext) branch(owner goroutineOwner) *execContext {
+	b := &execContext{
+		Context:              c.Context,
+		executionArn:         c.executionArn,
+		lambdaCtx:            c.lambdaCtx,
+		logger:               c.logger,
+		ids:                  c.ids,
+		owner:                owner,
+		state:                c.state,
+		serdes:               c.serdes,
+		callbackDeserializer: c.callbackDeserializer,
+		suspend:              c.suspend,
+		checkpointer:         c.checkpointer,
+		pluginDispatcher:     c.pluginDispatcher,
+		executionStartTime:   c.executionStartTime,
+		abandon:              c.abandon,
+	}
+	b.mode.Store(c.mode.Load())
+	return b
+}

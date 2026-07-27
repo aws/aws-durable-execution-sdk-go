@@ -122,7 +122,8 @@ func StepAsync[O any](ctx Context, name string, fn func(StepContext) (O, error),
 	ec.suspend.registerBranch()
 	go func() {
 		defer ec.suspend.deregisterBranch()
-		result, runErr := runStep(ec, id, name, fn, options)
+		branch := ec.branch(currentGoroutineOwner())
+		result, runErr := runStep(branch, id, name, fn, options)
 		fut.settle(result, runErr)
 	}()
 
@@ -247,7 +248,7 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 			// Suspend; the backend re-invokes when the attempt is due.
 			// Operation hooks NOT fired for still-pending operations.
 			ec.blocked.Store(true)
-			ec.suspend.commitPending()
+			ec.suspend.commitPending(ec.abandon)
 			return zero, errSuspendExecution
 
 		case statusStarted:
@@ -477,7 +478,7 @@ func settleStepFailure[O any](ec *execContext, id, name string, options stepOpti
 	// The backend owns the retry timer: suspend and resume in a new
 	// invocation once the delay elapses.
 	ec.blocked.Store(true)
-	ec.suspend.commitPending()
+	ec.suspend.commitPending(ec.abandon)
 	return zero, errSuspendExecution
 }
 

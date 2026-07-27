@@ -638,6 +638,7 @@ func executeBatchItems[I, O any](
 		}
 
 		abandon := new(atomic.Bool)
+		ec.suspend.registerHandle(abandon, ec.abandon)
 		outcomeCh := make(chan itemOutcome, totalItems)
 		var wg sync.WaitGroup
 
@@ -736,6 +737,22 @@ func executeBatchItems[I, O any](
 		// Every dispatched worker has reported; ensure none is still
 		// unwinding before the parent context is checkpointed terminal.
 		wg.Wait()
+
+		// A branch abandoned after early completion may have already
+		// committed the invocation to PENDING (a wait, invoke, callback
+		// or retry that suspended before the completion decision fired).
+		// Now that every worker has drained, retire those commitments so
+		// abandoned work does not force the whole invocation to PENDING.
+		if reasonLocked {
+			ec.suspend.retireCommitment(abandon)
+		} else if !sawSuspend {
+			// The batch completed with no outstanding commitment under its
+			// handle. Drop the parentage entry so it does not accumulate
+			// across the many batches of a long-lived invocation. A batch
+			// that suspends across invocations keeps its entry so an
+			// enclosing batch can still cascade retirement to it.
+			ec.suspend.forgetHandle(abandon)
+		}
 
 		if admitErr != nil {
 			return BatchResult[O]{}, admitErr

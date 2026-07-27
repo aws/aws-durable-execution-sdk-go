@@ -1562,3 +1562,124 @@ func TestTruncateInnerErrMessage(t *testing.T) {
 		}
 	})
 }
+
+// TestConcurrentAbandonedWaitDoesNotForcePending verifies that a branch
+// abandoned after early completion does not force the whole invocation to
+// PENDING. One branch runs a long wait (which suspends immediately, without
+// a real timer) and the other succeeds at once under MinSuccessful=1. The
+// wait branch is abandoned; its pending commitment must be retired so the
+// invocation returns SUCCEEDED instead of PENDING, and it must not wait for
+// the timer.
+func TestConcurrentAbandonedWaitDoesNotForcePending(t *testing.T) {
+	fake := &fakeLambda{}
+	type result struct {
+		Success int    `json:"successCount"`
+		Started int    `json:"startedCount"`
+		Total   int    `json:"totalCount"`
+		Reason  string `json:"reason"`
+	}
+	resp := invokeBatch(t, fake, batchPayload(`null`), func(ctx Context, _ any) (result, error) {
+		br, err := Map(ctx, "abandon-wait", []int{0, 1},
+			func(c Context, _ int, index int) (string, error) {
+				if index == 0 {
+					// Long wait: suspends the branch immediately (the
+					// duration is only recorded, never slept on) and is
+					// abandonable.
+					if werr := Wait(c, "long", time.Hour); werr != nil {
+						return "", werr
+					}
+					return "waited", nil
+				}
+				return "fast", nil
+			}, WithCompletion(CompletionConfig{MinSuccessful: 1}))
+		if err != nil {
+			return result{}, err
+		}
+		return result{
+			Success: br.SuccessCount(),
+			Started: startedCount(br),
+			Total:   br.TotalCount(),
+			Reason:  br.Reason.String(),
+		}, nil
+	})
+	assertSucceeded(t, resp)
+	var r result
+	if err := json.Unmarshal([]byte(resp.Result), &r); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if r.Reason != "MIN_SUCCESSFUL_REACHED" {
+		t.Errorf("reason = %s, want MIN_SUCCESSFUL_REACHED", r.Reason)
+	}
+	if r.Success != 1 {
+		t.Errorf("successCount = %d, want 1", r.Success)
+	}
+	if r.Started != 1 {
+		t.Errorf("startedCount = %d, want 1 (the abandoned wait branch)", r.Started)
+	}
+	if r.Total != 2 {
+		t.Errorf("totalCount = %d, want 2", r.Total)
+	}
+}
+
+// TestNestedAbandonedWaitDoesNotForcePending verifies that a pending
+// commitment made inside a NESTED concurrent batch is retired when the outer
+// batch abandons the branch that contains it. The nested batch mints its own
+// abandon handle, so retirement must cascade from the outer handle to it.
+//
+// The interleaving is forced rather than left to the scheduler: the fast
+// branch does not succeed until the nested branch has committed, so the
+// outer completion decision always happens after the nested commitment
+// exists.
+func TestNestedAbandonedWaitDoesNotForcePending(t *testing.T) {
+	fake := &fakeLambda{}
+	type result struct {
+		Success int    `json:"successCount"`
+		Total   int    `json:"totalCount"`
+		Reason  string `json:"reason"`
+	}
+	nestedCommitted := make(chan struct{})
+	resp := invokeBatch(t, fake, batchPayload(`null`), func(ctx Context, _ any) (result, error) {
+		br, err := Map(ctx, "outer", []int{0, 1},
+			func(c Context, _ int, index int) (string, error) {
+				if index == 0 {
+					// Nested batch with two items so it takes the
+					// concurrent path and mints its own abandon handle.
+					_, nerr := Map(c, "inner", []int{0, 1},
+						func(ic Context, _ int, _ int) (string, error) {
+							if werr := Wait(ic, "long", time.Hour); werr != nil {
+								return "", werr
+							}
+							return "waited", nil
+						})
+					// The nested commitments now exist. Release the fast
+					// branch so the completion decision follows them.
+					close(nestedCommitted)
+					if nerr != nil {
+						return "", nerr
+					}
+					return "nested", nil
+				}
+				<-nestedCommitted
+				return "fast", nil
+			}, WithCompletion(CompletionConfig{MinSuccessful: 1}))
+		if err != nil {
+			return result{}, err
+		}
+		return result{
+			Success: br.SuccessCount(),
+			Total:   br.TotalCount(),
+			Reason:  br.Reason.String(),
+		}, nil
+	})
+	assertSucceeded(t, resp)
+	var r result
+	if err := json.Unmarshal([]byte(resp.Result), &r); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if r.Reason != "MIN_SUCCESSFUL_REACHED" {
+		t.Errorf("reason = %s, want MIN_SUCCESSFUL_REACHED", r.Reason)
+	}
+	if r.Success != 1 {
+		t.Errorf("successCount = %d, want 1", r.Success)
+	}
+}

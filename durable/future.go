@@ -74,7 +74,7 @@ func newPendingCallbackFuture[O any](s *suspendSignal, ec *execContext) *Future[
 	// this future.
 	f.preResult = func() {
 		ec.blocked.Store(true)
-		s.commitPending()
+		s.commitPending(ec.abandon)
 		s.deregisterBranch()
 	}
 	return f

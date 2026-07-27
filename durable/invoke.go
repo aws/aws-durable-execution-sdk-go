@@ -104,7 +104,8 @@ func InvokeAsync[O, I any](ctx Context, name, functionID string, input I, opts .
 	ec.suspend.registerBranch()
 	go func() {
 		defer ec.suspend.deregisterBranch()
-		result, runErr := runInvoke[O, I](ec, id, name, functionID, input, options)
+		branch := ec.branch(currentGoroutineOwner())
+		result, runErr := runInvoke[O, I](branch, id, name, functionID, input, options)
 		fut.settle(result, runErr)
 	}()
 
@@ -138,7 +139,7 @@ func runInvoke[O, I any](ec *execContext, id, name, functionID string, input I, 
 		case statusStarted, statusPending, statusReady, statusCancelled:
 			// The invoked execution has not settled: keep waiting.
 			ec.blocked.Store(true)
-			ec.suspend.commitPending()
+			ec.suspend.commitPending(ec.abandon)
 			return zero, errSuspendExecution
 		}
 	}
@@ -179,7 +180,7 @@ func runInvoke[O, I any](ec *execContext, id, name, functionID string, input I, 
 	// The invoked function runs as its own durable execution: suspend and
 	// resume when it settles.
 	ec.blocked.Store(true)
-	ec.suspend.commitPending()
+	ec.suspend.commitPending(ec.abandon)
 	return zero, errSuspendExecution
 }
 

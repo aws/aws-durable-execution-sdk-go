@@ -54,7 +54,8 @@ func WaitAsync(ctx Context, name string, d time.Duration) *Future[Void] {
 	ec.suspend.registerBranch()
 	go func() {
 		defer ec.suspend.deregisterBranch()
-		err := runWait(ec, id, name, d)
+		branch := ec.branch(currentGoroutineOwner())
+		err := runWait(branch, id, name, d)
 		fut.settle(Void{}, err)
 	}()
 
@@ -75,7 +76,7 @@ func runWait(ec *execContext, id, name string, d time.Duration) error {
 			return nil
 		case statusStarted:
 			ec.blocked.Store(true)
-			ec.suspend.commitPending()
+			ec.suspend.commitPending(ec.abandon)
 			return errSuspendExecution
 		case statusPending, statusReady, statusFailed, statusCancelled, statusTimedOut, statusStopped:
 			return fmt.Errorf("durable: wait %q: unexpected checkpointed status %s", name, op.status)
@@ -107,6 +108,6 @@ func runWait(ec *execContext, id, name string, d time.Duration) error {
 	}
 
 	ec.blocked.Store(true)
-	ec.suspend.commitPending()
+	ec.suspend.commitPending(ec.abandon)
 	return errSuspendExecution
 }

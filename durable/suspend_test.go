@@ -2,6 +2,7 @@ package durable
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -221,3 +222,106 @@ func TestActiveBranchDoubleDeregisterSafe(t *testing.T) {
 
 // The fakeLambda and invokeStep/stepPayload helpers are defined in
 // step_test.go and shared across test files in this package.
+
+// TestAsyncOperationDoesNotBlockCaller verifies that when an async
+// operation (WaitAsync, StepAsync, InvokeAsync) enters a pending state, the
+// pending flag lands on the operation's own branch, not the caller's
+// context: a subsequent operation on the caller's context still claims and
+// checkpoints. The seeded operation makes the async op pending on the first
+// invocation, so the test waits on the future (deterministic, no sleep) and
+// only then runs the follow-up operation on the caller.
+func TestAsyncOperationDoesNotBlockCaller(t *testing.T) {
+	// afterCheckpointed reports whether a live step named "after" recorded
+	// both its START and SUCCEED updates.
+	afterCheckpointed := func(t *testing.T, fake *fakeLambda) bool {
+		t.Helper()
+		var start, succeed bool
+		for _, u := range updateBatch(t, fake) {
+			if aws.ToString(u.Name) != "after" {
+				continue
+			}
+			switch u.Action {
+			case types.OperationActionStart:
+				start = true
+			case types.OperationActionSucceed:
+				succeed = true
+			}
+		}
+		return start && succeed
+	}
+
+	runAfterStep := func(ctx Context) error {
+		_, err := Step(ctx, "after", func(StepContext) (string, error) {
+			return "ok", nil
+		})
+		return err
+	}
+
+	t.Run("WaitAsync", func(t *testing.T) {
+		fake := &fakeLambda{}
+		resp := invokeStep(t, fake,
+			stepPayload(`""`, wireOperation{Id: hashID("1"), Status: "STARTED"}),
+			func(ctx Context, _ string) (string, error) {
+				fut := WaitAsync(ctx, "wa", time.Second)
+				if _, err := fut.Result(); !errors.Is(err, errSuspendExecution) {
+					return "", errors.New("async wait did not become pending")
+				}
+				if err := runAfterStep(ctx); err != nil {
+					return "", err
+				}
+				return "", errSuspendExecution
+			})
+		if want := `{"Status":"PENDING"}`; resp != want {
+			t.Fatalf("response = %s, want %s", resp, want)
+		}
+		if !afterCheckpointed(t, fake) {
+			t.Error("follow-up step did not checkpoint; caller context was blocked by the async wait")
+		}
+	})
+
+	t.Run("StepAsync", func(t *testing.T) {
+		fake := &fakeLambda{}
+		resp := invokeStep(t, fake,
+			stepPayload(`""`, wireOperation{Id: hashID("1"), Status: "PENDING"}),
+			func(ctx Context, _ string) (string, error) {
+				fut := StepAsync(ctx, "sa", func(StepContext) (string, error) {
+					return "unreached", nil
+				})
+				if _, err := fut.Result(); !errors.Is(err, errSuspendExecution) {
+					return "", errors.New("async step did not become pending")
+				}
+				if err := runAfterStep(ctx); err != nil {
+					return "", err
+				}
+				return "", errSuspendExecution
+			})
+		if want := `{"Status":"PENDING"}`; resp != want {
+			t.Fatalf("response = %s, want %s", resp, want)
+		}
+		if !afterCheckpointed(t, fake) {
+			t.Error("follow-up step did not checkpoint; caller context was blocked by the async step")
+		}
+	})
+
+	t.Run("InvokeAsync", func(t *testing.T) {
+		fake := &fakeLambda{}
+		resp := invokeStep(t, fake,
+			stepPayload(`""`, wireOperation{Id: hashID("1"), Status: "STARTED"}),
+			func(ctx Context, _ string) (string, error) {
+				fut := InvokeAsync[string](ctx, "ia", "arn:target", "x")
+				if _, err := fut.Result(); !errors.Is(err, errSuspendExecution) {
+					return "", errors.New("async invoke did not become pending")
+				}
+				if err := runAfterStep(ctx); err != nil {
+					return "", err
+				}
+				return "", errSuspendExecution
+			})
+		if want := `{"Status":"PENDING"}`; resp != want {
+			t.Fatalf("response = %s, want %s", resp, want)
+		}
+		if !afterCheckpointed(t, fake) {
+			t.Error("follow-up step did not checkpoint; caller context was blocked by the async invoke")
+		}
+	})
+}

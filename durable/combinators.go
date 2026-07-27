@@ -128,7 +128,7 @@ func Race[O any](ctx Context, name string, fs []*Future[O]) (O, error) {
 			ec, ok := childCtx.(*execContext)
 			if ok {
 				ec.blocked.Store(true)
-				ec.suspend.commitPending()
+				ec.suspend.commitPending(ec.abandon)
 			}
 			return zero, errSuspendExecution
 		}

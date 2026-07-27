@@ -94,7 +94,7 @@ func runWaitForCondition[S any](ec *execContext, id, name string, check func(Ste
 			// fired. Suspend; the backend re-invokes when the delay
 			// elapses.
 			ec.blocked.Store(true)
-			ec.suspend.commitPending()
+			ec.suspend.commitPending(ec.abandon)
 			return zero, errSuspendExecution
 
 		case statusStarted, statusReady:
@@ -275,7 +275,7 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 	}
 
 	ec.blocked.Store(true)
-	ec.suspend.commitPending()
+	ec.suspend.commitPending(ec.abandon)
 	return zero, errSuspendExecution
 }
 
