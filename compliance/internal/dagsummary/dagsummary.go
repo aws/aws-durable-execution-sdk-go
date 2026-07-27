@@ -41,6 +41,11 @@ type Summary struct {
 	Sum int `json:"sum,omitempty"`
 	// Join carries the parallel join result (paralleldag handler only).
 	Join string `json:"join,omitempty"`
+	// Audit carries the compensation task's dependency-read verdict
+	// ("absent" or "present") for a failed upstream (compensate handler,
+	// 10-18, only). It proves a compensation task observes a FAILED
+	// dependency's result as absent rather than a stale/fabricated value.
+	Audit string `json:"audit,omitempty"`
 	// Poll carries the final waitForCondition state (wfcdag handler only).
 	Poll int `json:"poll,omitempty"`
 	// Post carries a downstream step result. It is an int for the outerdag

@@ -98,6 +98,22 @@ Resources:
         ExecutionTimeout: 300
         RetentionPeriodInDays: 7
 
+  DagCompensate:
+    Type: AWS::Serverless::Function
+    TestingMetadata:
+      TestDescription: ["10-18"]
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: dag-compensate-DagAlphaGo
+      CodeUri: publish/dag_compensate/
+      Handler: bootstrap
+      Role: !Ref ExecutionRoleArn
+      Description: DAG compensation dependency read on a failed upstream is absent, not present (deps-nullability)
+      DurableConfig:
+        ExecutionTimeout: 300
+        RetentionPeriodInDays: 7
+
 Outputs:
   DagDiamondArn:
     Value: !GetAtt DagDiamond.Arn
@@ -109,3 +125,5 @@ Outputs:
     Value: !GetAtt DagWaitResume.Arn
   DagRetryArn:
     Value: !GetAtt DagRetry.Arn
+  DagCompensateArn:
+    Value: !GetAtt DagCompensate.Arn
