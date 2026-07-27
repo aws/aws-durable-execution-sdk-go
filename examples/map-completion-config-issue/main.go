@@ -1,6 +1,9 @@
 // Command map-completion-config-issue reproduces a scenario where map with
-// minSuccessful combined with toleratedFailurePercentage completes early
-// with correct accounting of started vs. not-started items.
+// minSuccessful combined with toleratedFailurePercentage completes early.
+// Once the MinSuccessful threshold is met the map stops awaiting the items
+// still in flight: those are abandoned (reported as started, not counted as
+// successes or failures), and items that never started are omitted. The
+// output distinguishes succeeded, failed, and started-but-abandoned items.
 package main
 
 import (
@@ -29,6 +32,7 @@ type Output struct {
 	TotalItems      int           `json:"totalItems"`
 	SuccessfulCount int           `json:"successfulCount"`
 	FailedCount     int           `json:"failedCount"`
+	StartedCount    int           `json:"startedCount"`
 	HasFailures     bool          `json:"hasFailures"`
 	BatchStatus     string        `json:"batchStatus"`
 	CompletionNote  string        `json:"completionReason"`
@@ -91,10 +95,18 @@ func handler(ctx durable.Context, _ any) (Output, error) {
 		})
 	}
 
+	startedCount := 0
+	for _, item := range results.Items {
+		if item.Status == durable.BatchItemStarted {
+			startedCount++
+		}
+	}
+
 	return Output{
 		TotalItems:      results.TotalCount(),
 		SuccessfulCount: results.SuccessCount(),
 		FailedCount:     results.FailureCount(),
+		StartedCount:    startedCount,
 		HasFailures:     results.HasFailure(),
 		BatchStatus:     results.Status(),
 		CompletionNote:  results.Reason.String(),

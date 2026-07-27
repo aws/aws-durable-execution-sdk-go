@@ -4,7 +4,6 @@
 package main
 
 import (
-	"sort"
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
@@ -22,8 +21,15 @@ func TestHandler(t *testing.T) {
 	if err != nil {
 		t.Fatalf("deserialize result: %v", err)
 	}
-	if output.SuccessCount != 2 {
-		t.Errorf("expected SuccessCount=2, got %d", output.SuccessCount)
+	// Two of the four branches fail immediately, so the failure percentage
+	// reaches (2*100)/4 = 50, which strictly exceeds the 25 tolerance and
+	// completes the batch with FAILURE_TOLERANCE_EXCEEDED. Both failures
+	// are always counted (they are what trip the threshold); the two
+	// succeeding branches may be counted or, if still in flight when the
+	// threshold is exceeded, abandoned. So only the guarantees that always
+	// hold are asserted.
+	if output.CompletionReason != "FAILURE_TOLERANCE_EXCEEDED" {
+		t.Errorf("expected CompletionReason=FAILURE_TOLERANCE_EXCEEDED, got %s", output.CompletionReason)
 	}
 	if output.FailureCount != 2 {
 		t.Errorf("expected FailureCount=2, got %d", output.FailureCount)
@@ -31,34 +37,33 @@ func TestHandler(t *testing.T) {
 	if output.TotalCount != 4 {
 		t.Errorf("expected TotalCount=4, got %d", output.TotalCount)
 	}
-	if output.CompletionReason != "FAILURE_TOLERANCE_EXCEEDED" {
-		t.Errorf("expected CompletionReason=FAILURE_TOLERANCE_EXCEEDED, got %s", output.CompletionReason)
-	}
 	if !output.HasFailure {
 		t.Error("expected HasFailure=true")
 	}
-
-	// Verify that branches which succeeded have their results preserved.
-	// Sort because parallel branch completion order is nondeterministic.
-	got := make([]string, len(output.SuccessResults))
-	copy(got, output.SuccessResults)
-	sort.Strings(got)
-	want := []string{"result-1", "result-3"}
-	if len(got) != len(want) {
-		t.Fatalf("expected %d success results, got %d: %v", len(want), len(got), got)
+	if output.SuccessCount < 0 || output.SuccessCount > 2 {
+		t.Errorf("expected 0 <= SuccessCount <= 2, got %d", output.SuccessCount)
 	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("success result[%d] = %q, want %q", i, got[i], want[i])
+	if output.SuccessCount+output.FailureCount > output.TotalCount {
+		t.Errorf("counted items %d exceed TotalCount %d", output.SuccessCount+output.FailureCount, output.TotalCount)
+	}
+
+	// Any preserved results must come from the two succeeding branches.
+	if len(output.SuccessResults) != output.SuccessCount {
+		t.Errorf("SuccessResults length %d != SuccessCount %d", len(output.SuccessResults), output.SuccessCount)
+	}
+	allowed := map[string]bool{"result-1": true, "result-3": true}
+	for _, r := range output.SuccessResults {
+		if !allowed[r] {
+			t.Errorf("unexpected success result %q", r)
 		}
 	}
 
-	// Assert that all expected operations are present using unordered
-	// subset matching — parallel branch ordering is nondeterministic.
+	// The two failing branches always run to completion (they trip the
+	// threshold), so their step failures are always checkpointed. The
+	// succeeding branches may be abandoned before their step is recorded,
+	// so they are not asserted here.
 	durabletest.AssertSignatureContains(t, result, []durabletest.OperationSignature{
-		{Type: "STEP", SubType: "Step", Name: "branch-1", Status: "SUCCEEDED"},
 		{Type: "STEP", SubType: "Step", Name: "branch-2", Status: "FAILED"},
-		{Type: "STEP", SubType: "Step", Name: "branch-3", Status: "SUCCEEDED"},
 		{Type: "STEP", SubType: "Step", Name: "branch-4", Status: "FAILED"},
 	})
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -664,6 +665,150 @@ func TestMapLiveEqualsReplayShapeEarlyCompletion(t *testing.T) {
 	// Verify the replay path issued NO checkpoint updates (pure replay).
 	if len(replayFake.gotUpdateBatches) != 0 {
 		t.Errorf("replay issued %d checkpoint batches, want 0 (pure replay)", len(replayFake.gotUpdateBatches))
+	}
+}
+
+// startedCount counts the abandoned (started-but-not-terminal) items in a
+// batch result.
+func startedCount[O any](br BatchResult[O]) int {
+	n := 0
+	for i := range br.Items {
+		if br.Items[i].Status == BatchItemStarted {
+			n++
+		}
+	}
+	return n
+}
+
+// TestConcurrentMinSuccessfulAbandonsInFlight verifies that a concurrent
+// batch completing early on MinSuccessful stops awaiting the branches still
+// in flight: they are reported STARTED and are NOT counted as successes,
+// even though (absent abandonment) their remaining steps would have
+// succeeded. This is the regression guard for the divergence where the Go
+// concurrent path awaited every branch to a terminal state before returning.
+func TestConcurrentMinSuccessfulAbandonsInFlight(t *testing.T) {
+	fake := &fakeLambda{}
+	type result struct {
+		Success int    `json:"successCount"`
+		Failure int    `json:"failureCount"`
+		Started int    `json:"startedCount"`
+		Total   int    `json:"totalCount"`
+		Reason  string `json:"reason"`
+	}
+	slowBranch := func(a, b string) Branch[string] {
+		return Branch[string]{Func: func(c Context) (string, error) {
+			// First step sleeps so the two fast branches reach the
+			// MinSuccessful threshold before this branch would run its
+			// second step.
+			if _, err := Step(c, a, func(StepContext) (string, error) {
+				time.Sleep(80 * time.Millisecond)
+				return a, nil
+			}); err != nil {
+				return "", err
+			}
+			// Reached only if the branch was not abandoned: claiming this
+			// operation unwinds once the batch has completed.
+			return Step(c, b, func(StepContext) (string, error) { return b, nil })
+		}}
+	}
+	fastBranch := func(v string) Branch[string] {
+		return Branch[string]{Func: func(c Context) (string, error) {
+			return Step(c, v, func(StepContext) (string, error) { return v, nil })
+		}}
+	}
+	resp := invokeBatch(t, fake, batchPayload(`null`), func(ctx Context, _ any) (result, error) {
+		// Unlimited concurrency: all four branches start immediately.
+		br, err := Parallel(ctx, "abandon", []Branch[string]{
+			fastBranch("f0"),
+			fastBranch("f1"),
+			slowBranch("s2a", "s2b"),
+			slowBranch("s3a", "s3b"),
+		}, WithCompletion(CompletionConfig{MinSuccessful: 2}))
+		if err != nil {
+			return result{}, err
+		}
+		return result{
+			Success: br.SuccessCount(),
+			Failure: br.FailureCount(),
+			Started: startedCount(br),
+			Total:   br.TotalCount(),
+			Reason:  br.Reason.String(),
+		}, nil
+	})
+	assertSucceeded(t, resp)
+	var r result
+	if err := json.Unmarshal([]byte(resp.Result), &r); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if r.Reason != "MIN_SUCCESSFUL_REACHED" {
+		t.Errorf("reason = %s, want MIN_SUCCESSFUL_REACHED", r.Reason)
+	}
+	// The two fast branches succeed; the two slow branches are abandoned
+	// in flight (reported STARTED), never reaching their second step.
+	if r.Success != 2 {
+		t.Errorf("successCount = %d, want 2 (in-flight branches must be abandoned, not awaited)", r.Success)
+	}
+	if r.Started != 2 {
+		t.Errorf("startedCount = %d, want 2 (abandoned branches)", r.Started)
+	}
+	if r.Failure != 0 {
+		t.Errorf("failureCount = %d, want 0", r.Failure)
+	}
+	if r.Total != 4 {
+		t.Errorf("totalCount = %d, want 4 (2 succeeded + 2 abandoned)", r.Total)
+	}
+}
+
+// TestConcurrentAbandonedBranchLateCheckpointDoesNotFail verifies that a
+// branch whose in-flight step completes and checkpoints AFTER the batch
+// completion decision fired does not turn into an execution failure: the
+// late checkpoint is absorbed and the execution succeeds.
+func TestConcurrentAbandonedBranchLateCheckpointDoesNotFail(t *testing.T) {
+	fake := &fakeLambda{}
+	type result struct {
+		Success int    `json:"successCount"`
+		Failure int    `json:"failureCount"`
+		Total   int    `json:"totalCount"`
+		Reason  string `json:"reason"`
+	}
+	resp := invokeBatch(t, fake, batchPayload(`null`), func(ctx Context, _ any) (result, error) {
+		br, err := Parallel(ctx, "late-checkpoint", []Branch[string]{
+			{Func: func(c Context) (string, error) {
+				return Step(c, "fast", func(StepContext) (string, error) { return "fast", nil })
+			}},
+			{Func: func(c Context) (string, error) {
+				// Completes and checkpoints after MinSuccessful=1 is met
+				// by the fast branch. The late child checkpoint must be
+				// harmless.
+				return Step(c, "late", func(StepContext) (string, error) {
+					time.Sleep(60 * time.Millisecond)
+					return "late", nil
+				})
+			}},
+		}, WithCompletion(CompletionConfig{MinSuccessful: 1}))
+		if err != nil {
+			return result{}, err
+		}
+		return result{
+			Success: br.SuccessCount(),
+			Failure: br.FailureCount(),
+			Total:   br.TotalCount(),
+			Reason:  br.Reason.String(),
+		}, nil
+	})
+	assertSucceeded(t, resp)
+	var r result
+	if err := json.Unmarshal([]byte(resp.Result), &r); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if r.Failure != 0 {
+		t.Errorf("failureCount = %d, want 0 (late checkpoint must not fail the execution)", r.Failure)
+	}
+	if r.Success < 1 {
+		t.Errorf("successCount = %d, want >= 1", r.Success)
+	}
+	if r.Reason != "MIN_SUCCESSFUL_REACHED" {
+		t.Errorf("reason = %s, want MIN_SUCCESSFUL_REACHED", r.Reason)
 	}
 }
 

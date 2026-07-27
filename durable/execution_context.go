@@ -51,6 +51,13 @@ type execContext struct {
 	// (different goroutines) are not affected.
 	blocked atomic.Bool
 
+	// abandon, when non-nil and set, marks a batch branch subtree that the
+	// parent Map or Parallel has stopped awaiting after early completion.
+	// A claim on an abandoned context returns errSuspendExecution so the
+	// branch stops starting new work and unwinds. It is shared by a batch
+	// branch's whole child-context subtree; nil for every other context.
+	abandon *atomic.Bool
+
 	// serdes is the handler-level default serializer for operation
 	// results. Per-operation serdes options take precedence.
 	serdes Serdes
@@ -154,6 +161,9 @@ func (c *execContext) claimOperation() (string, error) {
 	if c.blocked.Load() {
 		return "", errSuspendExecution
 	}
+	if c.abandon != nil && c.abandon.Load() {
+		return "", errSuspendExecution
+	}
 	if err := c.owner.check(); err != nil {
 		return "", err
 	}
@@ -208,6 +218,7 @@ func (c *execContext) child(entityID string, owner goroutineOwner, mode executio
 		checkpointer:         c.checkpointer,
 		pluginDispatcher:     c.pluginDispatcher,
 		executionStartTime:   c.executionStartTime,
+		abandon:              c.abandon,
 	}
 	child.mode.Store(int32(mode))
 	return child

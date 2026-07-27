@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"unicode/utf8"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -187,18 +188,22 @@ type Branch[O any] struct {
 // operation.
 type BatchItemStatus int
 
-// Batch item statuses.
+// Batch item statuses. Values are persisted in checkpoints, so they are
+// pinned explicitly rather than derived from iota ordering.
 const (
 	// BatchItemSucceeded indicates the item completed and produced a
 	// result.
-	BatchItemSucceeded BatchItemStatus = iota + 1
+	BatchItemSucceeded BatchItemStatus = 1
 
 	// BatchItemFailed indicates the item failed.
-	BatchItemFailed
+	BatchItemFailed BatchItemStatus = 2
 
-	// BatchItemNotStarted indicates the batch completed early before the
-	// item started.
-	BatchItemNotStarted
+	// BatchItemStarted indicates the item started but the batch completed
+	// early before it reached a terminal state, so its work was abandoned:
+	// the parent stopped awaiting it and does not count it as a success or
+	// a failure. It is still reported (and counted by TotalCount) because
+	// the work was begun. Items that never started are omitted entirely.
+	BatchItemStarted BatchItemStatus = 4
 )
 
 // BatchItem is the outcome of one item or branch in a batch operation.
@@ -224,9 +229,9 @@ type BatchItem[O any] struct {
 
 // BatchResult is the collected outcome of a [Map] or [Parallel] operation.
 type BatchResult[O any] struct {
-	// Items holds the per-item outcomes in input order. Only items that
-	// were started are included; items that never started due to early
-	// completion are omitted.
+	// Items holds the per-item outcomes in input order. Items that started
+	// but were abandoned when the batch completed early are included with
+	// status [BatchItemStarted]; items that never started are omitted.
 	Items []BatchItem[O]
 
 	// Reason records why the batch completed.
@@ -324,8 +329,9 @@ func (r BatchResult[O]) FailureCount() int {
 	return n
 }
 
-// TotalCount returns the total number of items that were started (excludes
-// never-started items from early completion).
+// TotalCount returns the number of items that were started: successes,
+// failures, and started-but-abandoned items. Items that never started
+// (because the batch completed early) are excluded.
 func (r BatchResult[O]) TotalCount() int {
 	return len(r.Items)
 }
@@ -590,17 +596,25 @@ func executeBatchItems[I, O any](
 			}
 		}
 	} else {
-		// Concurrent path: claim all child IDs synchronously on the
-		// owning goroutine (deterministic ordering), then dispatch work
-		// to bounded goroutines. Each goroutine captures its own child
-		// context ownership.
-		type itemResult struct {
+		// Concurrent path: a coordinator loop on the calling goroutine
+		// owns all completion state, so no lock is needed. Worker
+		// goroutines only run an item body and report its outcome on a
+		// channel. Child operation ids are claimed up front in index
+		// order so ids mint deterministically across invocations, but a
+		// branch is checkpointed STARTED and dispatched only when the
+		// coordinator admits it. Once the completion decision fires the
+		// coordinator stops admitting and abandons the branches still in
+		// flight: it stops awaiting them, marks them started, and does not
+		// count them. It still drains every dispatched worker before
+		// returning, so no branch outlives the invocation and the parent
+		// SUCCEEDED checkpoint is written only after every child
+		// checkpoint has landed.
+		type itemOutcome struct {
 			index int
 			item  BatchItem[O]
 			err   error
 		}
 
-		// Pre-claim child IDs and check terminal states synchronously.
 		type preClaimedItem struct {
 			index    int
 			name     string
@@ -612,124 +626,144 @@ func executeBatchItems[I, O any](
 		preClaimed := make([]preClaimedItem, 0, totalItems)
 		for i := 0; i < totalItems; i++ {
 			itemName := itemNameForIndex(options, itemAtIndex(options, i), i)
+			childID, claimErr := ec.claimOperation()
+			if claimErr != nil {
+				return BatchResult[O]{}, claimErr
+			}
+			op := ec.state.get(childID)
+			preClaimed = append(preClaimed, preClaimedItem{
+				index: i, name: itemName, childID: childID, op: op,
+				terminal: op != nil && op.status.terminal(),
+			})
+		}
 
-			if options.nesting == NestingFlat {
-				// FLAT mode: claim the virtual child ID.
-				childID, claimErr := ec.claimOperation()
-				if claimErr != nil {
-					return BatchResult[O]{}, claimErr
-				}
-				op := ec.state.get(childID)
-				preClaimed = append(preClaimed, preClaimedItem{
-					index: i, name: itemName, childID: childID, op: op,
-					terminal: op != nil && op.status.terminal(),
-				})
-			} else {
-				// NORMAL mode: claim the child context ID.
-				childID, claimErr := ec.claimOperation()
-				if claimErr != nil {
-					return BatchResult[O]{}, claimErr
-				}
-				op := ec.state.get(childID)
-				isTerminal := op != nil && op.status.terminal()
-				// Checkpoint START if needed (synchronously, before dispatching).
-				if !isTerminal && op == nil {
-					update := batchChildUpdate(ec, childID, itemName, childSubType, parentID, types.OperationActionStart)
+		abandon := new(atomic.Bool)
+		outcomeCh := make(chan itemOutcome, totalItems)
+		var wg sync.WaitGroup
+
+		accepted := make(map[int]BatchItem[O], totalItems)
+		startedIdx := make(map[int]struct{}, totalItems)
+		nextToAdmit := 0
+		inFlight := 0
+		var admitErr error
+
+		admit := func() {
+			for nextToAdmit < len(preClaimed) && inFlight < concurrency && !reasonLocked && admitErr == nil {
+				pc := preClaimed[nextToAdmit]
+				nextToAdmit++
+
+				// Checkpoint the child START for a fresh NORMAL branch on
+				// this goroutine before dispatch, so start events mint in
+				// index order. A branch that is never admitted (early
+				// completion) leaves no checkpoint and is omitted.
+				if options.nesting != NestingFlat && !pc.terminal && pc.op == nil {
+					update := batchChildUpdate(ec, pc.childID, pc.name, childSubType, parentID, types.OperationActionStart)
 					if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
-						return BatchResult[O]{}, err
+						admitErr = err
+						return
 					}
 				}
-				preClaimed = append(preClaimed, preClaimedItem{
-					index: i, name: itemName, childID: childID, op: op,
-					terminal: isTerminal,
-				})
+
+				startedIdx[pc.index] = struct{}{}
+				inFlight++
+				wg.Add(1)
+				go func(pc preClaimedItem) {
+					defer wg.Done()
+					var item BatchItem[O]
+					var runErr error
+					func() {
+						defer func() {
+							if r := recover(); r != nil {
+								runErr = fmt.Errorf("durable: batch item %d panicked: %v", pc.index, r)
+							}
+						}()
+						item, runErr = runPreClaimedBatchItem[O](ec, parentID, pc.childID, pc.name, pc.index, pc.op, pc.terminal, options, childSubType, runItem, abandon)
+					}()
+					if runErr != nil {
+						outcomeCh <- itemOutcome{index: pc.index, err: runErr}
+						return
+					}
+					outcomeCh <- itemOutcome{index: pc.index, item: item}
+				}(pc)
 			}
 		}
 
-		resultCh := make(chan itemResult, totalItems)
-		sem := make(chan struct{}, concurrency)
+		admit()
 
-		var wg sync.WaitGroup
-		var mu sync.Mutex
-		stopped := false
-
-		for _, pc := range preClaimed {
-			mu.Lock()
-			if stopped {
-				mu.Unlock()
-				break
-			}
-			mu.Unlock()
-
-			localPC := pc
-
-			// Acquire the semaphore slot.
-			sem <- struct{}{}
-
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				defer func() { <-sem }()
-
-				var result BatchItem[O]
-				var runErr error
-				func() {
-					defer func() {
-						if r := recover(); r != nil {
-							runErr = fmt.Errorf("durable: batch item %d panicked: %v", localPC.index, r)
-						}
-					}()
-					result, runErr = runPreClaimedBatchItem[O](ec, parentID, localPC.childID, localPC.name, localPC.index, localPC.op, localPC.terminal, options, childSubType, runItem)
-				}()
-
-				if runErr != nil {
-					resultCh <- itemResult{index: localPC.index, err: runErr}
-					return
+		var fatalErr error
+		sawSuspend := false
+		for inFlight > 0 {
+			out := <-outcomeCh
+			inFlight--
+			switch {
+			case out.err != nil:
+				if errors.Is(out.err, errSuspendExecution) {
+					// Suspended (or abandoned via the abandon signal,
+					// which reuses errSuspendExecution). Not terminal.
+					sawSuspend = true
+				} else if fatalErr == nil {
+					fatalErr = out.err
 				}
-				resultCh <- itemResult{index: localPC.index, item: result}
-
-				// Check completion after this result.
-				mu.Lock()
-				defer mu.Unlock()
-				switch result.Status {
+			case reasonLocked:
+				// A terminal outcome that raced the completion decision:
+				// the branch is abandoned (reported started, not counted).
+			default:
+				accepted[out.index] = out.item
+				switch out.item.Status {
 				case BatchItemSucceeded:
 					successCount++
 				case BatchItemFailed:
 					failureCount++
 				}
-				if !reasonLocked {
-					if shouldStopMin(options.completion, successCount) {
-						reason = CompletionMinSuccessfulReached
-						reasonLocked = true
-						stopped = true
-					} else if shouldStopFailure(options.completion, failureCount, totalItems) {
-						reason = CompletionFailureToleranceExceeded
-						reasonLocked = true
-						stopped = true
-					}
+				if shouldStopMin(options.completion, successCount) {
+					reason = CompletionMinSuccessfulReached
+					reasonLocked = true
+				} else if shouldStopFailure(options.completion, failureCount, totalItems) {
+					reason = CompletionFailureToleranceExceeded
+					reasonLocked = true
 				}
-			}()
-		}
-
-		wg.Wait()
-		close(resultCh)
-
-		// Collect results indexed by position.
-		indexed := make(map[int]BatchItem[O])
-		for res := range resultCh {
-			if res.err != nil {
-				if errors.Is(res.err, errSuspendExecution) {
-					return BatchResult[O]{}, res.err
+				if reasonLocked {
+					// Stop awaiting the branches still in flight: they
+					// unwind at their next operation without starting new
+					// work.
+					abandon.Store(true)
 				}
-				return BatchResult[O]{}, res.err
 			}
-			indexed[res.index] = res.item
+			if fatalErr == nil {
+				admit()
+			}
+		}
+		// Every dispatched worker has reported; ensure none is still
+		// unwinding before the parent context is checkpointed terminal.
+		wg.Wait()
+
+		if admitErr != nil {
+			return BatchResult[O]{}, admitErr
+		}
+		if fatalErr != nil {
+			return BatchResult[O]{}, fatalErr
+		}
+		// Completion was not reached but a branch suspended: the batch
+		// spans invocations. Suspend and resume later; nothing is
+		// abandoned yet.
+		if !reasonLocked && sawSuspend {
+			return BatchResult[O]{}, errSuspendExecution
 		}
 
-		// Assemble in input order.
+		// Assemble in input order: terminal outcomes are counted;
+		// started-but-abandoned branches are reported STARTED; branches
+		// that never started are omitted.
 		for i := 0; i < totalItems; i++ {
-			if item, ok := indexed[i]; ok {
+			if item, ok := accepted[i]; ok {
 				results = append(results, item)
+				continue
+			}
+			if _, ok := startedIdx[i]; ok {
+				results = append(results, BatchItem[O]{
+					Index:  i,
+					Name:   itemNameForIndex(options, itemAtIndex(options, i), i),
+					Status: BatchItemStarted,
+				})
 			}
 		}
 	}
@@ -753,11 +787,13 @@ func runPreClaimedBatchItem[O any](
 	options batchOptions,
 	childSubType string,
 	runItem func(childCtx Context, index int) (O, error),
+	abandon *atomic.Bool,
 ) (BatchItem[O], error) {
 	if options.nesting == NestingFlat {
 		// FLAT mode: run in a virtual child context.
 		mode := childReplayMode(ec, childID, op)
 		virtualChild := ec.child(childID, currentGoroutineOwner(), mode)
+		virtualChild.abandon = abandon
 		result, fnErr := runItem(virtualChild, index)
 		if fnErr != nil {
 			if errors.Is(fnErr, errSuspendExecution) {
@@ -794,6 +830,7 @@ func runPreClaimedBatchItem[O any](
 	// The child context runs on this goroutine; capture ownership here.
 	mode := childReplayMode(ec, childID, op)
 	child := ec.child(childID, currentGoroutineOwner(), mode)
+	child.abandon = abandon
 
 	result, fnErr := runItem(child, index)
 	if fnErr != nil {

@@ -1,7 +1,9 @@
 // Command parallel-tolerated-failure-percentage demonstrates that a
 // Parallel operation fails early when the percentage of branch failures
-// strictly exceeds the ToleratedFailurePercentage threshold, and that
-// branches which succeeded still have their results preserved.
+// strictly exceeds the ToleratedFailurePercentage threshold. Branches that
+// had already succeeded when the threshold was exceeded keep their results;
+// branches still in flight at that point are abandoned (reported started,
+// not counted).
 package main
 
 import (

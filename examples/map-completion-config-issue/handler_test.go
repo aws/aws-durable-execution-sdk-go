@@ -23,30 +23,33 @@ func TestHandler(t *testing.T) {
 	}
 
 	// With MinSuccessful=2 and MaxConcurrency=3 over 5 items (2 of which
-	// always fail after MaxAttempts=2), the batch completes with reason
-	// MIN_SUCCESSFUL_REACHED. The failing items (indices 1,3) always
-	// exhaust their retries, so HasFailures is always true.
-	//
-	// The number of items dispatched before the completion signal is not
-	// deterministic, so only the structural invariant is asserted:
-	// TotalItems == SuccessfulCount + FailedCount.
-	if output.TotalItems != output.SuccessfulCount+output.FailedCount {
-		t.Errorf("expected TotalItems == SuccessfulCount + FailedCount, got %d != %d + %d",
-			output.TotalItems, output.SuccessfulCount, output.FailedCount)
+	// always fail after MaxAttempts=2), the batch completes early with
+	// reason MIN_SUCCESSFUL_REACHED as soon as 2 items succeed. The items
+	// still in flight at that point are abandoned (reported STARTED, not
+	// counted), and items that never started are omitted. Which items land
+	// as failed versus abandoned is not deterministic, so only the
+	// guarantees that always hold are asserted:
+	//   - the min-successful guarantee (>= 2 successes),
+	//   - the completion reason,
+	//   - the accounting identity Total == Success + Failed + Started,
+	//   - Total never exceeds the 5 input items.
+	if output.CompletionNote != "MIN_SUCCESSFUL_REACHED" {
+		t.Errorf("expected CompletionNote == MIN_SUCCESSFUL_REACHED, got %s", output.CompletionNote)
 	}
 	if output.SuccessfulCount < 2 {
 		t.Errorf("expected SuccessfulCount >= 2 (MinSuccessful guarantee), got %d", output.SuccessfulCount)
 	}
-	if output.FailedCount != 2 {
-		t.Errorf("expected FailedCount == 2 (items 1,3 always exhaust MaxAttempts=2), got %d", output.FailedCount)
+	if output.TotalItems != output.SuccessfulCount+output.FailedCount+output.StartedCount {
+		t.Errorf("expected TotalItems == SuccessfulCount + FailedCount + StartedCount, got %d != %d + %d + %d",
+			output.TotalItems, output.SuccessfulCount, output.FailedCount, output.StartedCount)
 	}
-	if !output.HasFailures {
-		t.Error("expected HasFailures == true (items 1,3 fail)")
+	if output.TotalItems > 5 || output.TotalItems < output.SuccessfulCount {
+		t.Errorf("expected SuccessfulCount <= TotalItems <= 5, got Total=%d Success=%d", output.TotalItems, output.SuccessfulCount)
 	}
-	if output.BatchStatus != "FAILED" {
-		t.Errorf("expected BatchStatus == FAILED (HasFailures is true), got %s", output.BatchStatus)
-	}
-	if output.CompletionNote != "MIN_SUCCESSFUL_REACHED" {
-		t.Errorf("expected CompletionNote == MIN_SUCCESSFUL_REACHED, got %s", output.CompletionNote)
+	// BatchStatus reflects whether any counted item failed; under early
+	// completion a failing item may be abandoned before it fails, so
+	// HasFailures is consistent with the counted failures either way.
+	if output.HasFailures != (output.FailedCount > 0) {
+		t.Errorf("HasFailures=%v inconsistent with FailedCount=%d", output.HasFailures, output.FailedCount)
 	}
 }
