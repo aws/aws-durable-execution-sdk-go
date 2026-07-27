@@ -139,8 +139,35 @@ func newDagResult(execs []TaskExecution, reason DagCompletionReason) *DagResult 
 
 // unmarshalResult decodes a JSON-encoded task result into T. Used on the
 // replay/deserialization path by [Result].
+//
+// A nested DAG's result needs a dedicated path: it is stored as the inner
+// envelope, and DagResult's fields are all unexported, so a plain
+// json.Unmarshal would silently yield an EMPTY DagResult rather than failing.
+// Decode the envelope and rebuild the result from it instead.
 func unmarshalResult[T any](raw []byte) (T, error) {
 	var v T
+	if _, isDag := any(v).(DagResult); isDag {
+		var env dagEnvelope
+		if err := json.Unmarshal(raw, &env); err != nil {
+			return v, err
+		}
+		restored, ok := any(*dagEnvelopeToResult(&env)).(T)
+		if !ok {
+			return v, ErrDepTypeMismatch
+		}
+		return restored, nil
+	}
+	if _, isDagPtr := any(v).(*DagResult); isDagPtr {
+		var env dagEnvelope
+		if err := json.Unmarshal(raw, &env); err != nil {
+			return v, err
+		}
+		restored, ok := any(dagEnvelopeToResult(&env)).(T)
+		if !ok {
+			return v, ErrDepTypeMismatch
+		}
+		return restored, nil
+	}
 	if err := json.Unmarshal(raw, &v); err != nil {
 		return v, err
 	}
@@ -444,6 +471,20 @@ func dagTaskResultRaw(te *TaskExecution) (json.RawMessage, error) {
 	}
 	if te.result == nil {
 		return nil, nil
+	}
+	// A nested DAG's result is a *DagResult whose fields are all unexported, so
+	// encoding/json would marshal it to "{}" and silently drop every inner task.
+	// Embed the inner envelope recursively instead, WITH its tasks, so the outer
+	// payload carries the inner per-task detail exactly as JS, Python and Java do.
+	// This also makes the outer's size accounting honest: an inner aggregate over
+	// the limit now pushes the outer over it too, which is what triggers the
+	// outer's own offload.
+	if nested, ok := te.result.(*DagResult); ok && nested != nil {
+		inner, err := nested.buildEnvelope(true, true)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(inner)
 	}
 	b, err := json.Marshal(te.result)
 	if err != nil {

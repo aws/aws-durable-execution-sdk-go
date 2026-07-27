@@ -3,7 +3,11 @@
 
 package durable
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
 
 // TestDagEnvelopeToResult_TasklessPreservesAggregate is the nested-offload
 // contract rule-1 guard for Go: restoring a *DagResult from an OFFLOADED
@@ -83,5 +87,65 @@ func TestDagEnvelopeToResult_InlineUnaffected(t *testing.T) {
 	}
 	if len(r.Results()) != 2 {
 		t.Fatalf("expected 2 per-task executions inline, got %d", len(r.Results()))
+	}
+}
+
+// A nested DAG's result is a *DagResult whose fields are all unexported, so
+// encoding/json marshals it to "{}" and silently drops every inner task. Cloud
+// validation of 10-17 caught this: Go's outer envelope embedded "result":{}, the
+// outer stayed inline because it looked tiny, and the inner detail was gone after
+// replay. The embed must carry the inner envelope, and the decode must rebuild
+// from it rather than unmarshalling into unexported fields.
+func TestDagNestedResult_EmbedsAndDecodesRecursively(t *testing.T) {
+	inner := newDagResult(
+		[]TaskExecution{
+			{Name: "p1", Status: StatusSucceeded, result: "aaa", kind: dagKindPlain},
+			{Name: "p2", Status: StatusSucceeded, result: "bbb", kind: dagKindPlain},
+		},
+		AllCompleted,
+	)
+	outer := newDagResult(
+		[]TaskExecution{
+			{Name: "inner", Status: StatusSucceeded, result: inner, kind: dagKindDag},
+		},
+		AllCompleted,
+	)
+
+	payload, replayChildren, err := dagEnvelopePayload(outer)
+	if err != nil {
+		t.Fatalf("dagEnvelopePayload: %v", err)
+	}
+	if replayChildren {
+		t.Fatalf("a small nested DAG should stay inline, got ReplayChildren")
+	}
+	// The inner tasks must appear in the outer payload; "{}" means they were lost.
+	for _, want := range []string{`"p1"`, `"p2"`, `"aaa"`, `"bbb"`, `"resultKind":"dag"`} {
+		if !strings.Contains(payload, want) {
+			t.Fatalf("outer payload missing %s\npayload: %s", want, payload)
+		}
+	}
+
+	// Round-trip: the decoded nested result must carry the inner task detail.
+	var env dagEnvelope
+	if err := json.Unmarshal([]byte(payload), &env); err != nil {
+		t.Fatalf("unmarshal outer: %v", err)
+	}
+	restoredOuter := dagEnvelopeToResult(&env)
+	restoredInner, err := ResultByName[DagResult](restoredOuter, "inner")
+	if err != nil {
+		t.Fatalf("ResultByName(inner): %v", err)
+	}
+	if got := restoredInner.CompletionReason(); got != AllCompleted {
+		t.Fatalf("inner reason = %q, want %q", got, AllCompleted)
+	}
+	if got := restoredInner.SucceededCount(); got != 2 {
+		t.Fatalf("inner succeeded = %d, want 2", got)
+	}
+	v, err := ResultByName[string](&restoredInner, "p1")
+	if err != nil {
+		t.Fatalf("inner p1: %v", err)
+	}
+	if v != "aaa" {
+		t.Fatalf("inner p1 = %q, want \"aaa\"", v)
 	}
 }
