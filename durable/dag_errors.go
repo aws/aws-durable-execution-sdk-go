@@ -20,6 +20,7 @@ var (
 	_ error = (*DagError)(nil)
 	_ error = (*DagTaskFailedError)(nil)
 	_ error = (*DagPredicateError)(nil)
+	_ error = (*DagRegistrationError)(nil)
 )
 
 // DagError indicates that a DAG scope-level operation failed. It is the DAG
@@ -115,6 +116,42 @@ func (e *DagPredicateError) Error() string {
 // Experimental: This API is experimental and may be changed or removed in
 // future releases.
 func (e *DagPredicateError) Unwrap() error { return e.Err }
+
+// DagRegistrationError indicates that the register callback passed to
+// [Dag] panicked while building the task graph. Registration runs
+// synchronously, before any task is scheduled, and is expected to be pure
+// graph-construction code (calling DagStep, DagInvoke, etc. on the
+// [DagBuilder]); a panic there is a defect in that construction code, not a
+// business outcome, so it ABORTS the DAG the same way a panicking runIf
+// does ([DagPredicateError]) rather than being reinterpreted as a task
+// failure — there is no task graph yet for a failure to attach to, and no
+// tasks have started, so nothing needs draining. [Dag] returns this error
+// directly; the DAG container checkpoints a failure instead of the panic
+// reaching the Lambda runtime and crashing the invocation.
+//
+// The recovered panic value is wrapped as the cause (with the stack
+// preserved); when the panic value was itself an error it is wrapped with
+// %w, so [errors.Is] / [errors.As] reach the original.
+//
+// Experimental: This API is experimental and may be changed or removed in
+// future releases.
+type DagRegistrationError struct {
+	// Name is the DAG's name.
+	Name string
+	// Err is the recovered panic value formatted as an error, with the
+	// stack trace preserved.
+	Err error
+}
+
+func (e *DagRegistrationError) Error() string {
+	return fmt.Sprintf("durable: dag %q register callback panicked: %v", e.Name, e.Err)
+}
+
+// Unwrap exposes the wrapped panic cause for errors.Is/errors.As traversal.
+//
+// Experimental: This API is experimental and may be changed or removed in
+// future releases.
+func (e *DagRegistrationError) Unwrap() error { return e.Err }
 
 // DagValidationError aggregates all registration/validation problems
 // detected before any task is scheduled.

@@ -113,8 +113,7 @@ type DagResult struct {
 	reason DagCompletionReason
 	// total is the number of REGISTERED tasks in the DAG: fixed,
 	// independent of early completion or never-started tasks.
-	total   int
-	summary string // observability-only; never read on replay
+	total int
 
 	// aggregateOnly marks a result restored from an OFFLOADED (tasks-absent)
 	// envelope: the per-task map is legitimately empty, but the counts below

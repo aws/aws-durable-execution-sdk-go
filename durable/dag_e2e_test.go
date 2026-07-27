@@ -548,3 +548,67 @@ func TestDagE2E_PanicInRunIfAbortsDag(t *testing.T) {
 		t.Fatalf("abort error should describe the runIf panic, got %q", o.ErrMsg)
 	}
 }
+
+// TestDagE2E_PanicInRegisterAbortsDag is the end-to-end guard for the
+// registration-panic recovery gap identified in the language review:
+// register(d) ran with zero panic protection, so a panic while building the
+// task graph (customer code calling DagStep/DagInvoke/... on the
+// DagBuilder) reached the Lambda runtime and crashed the invocation instead
+// of failing cleanly. Mirrors TestDagE2E_PanicInRunIfAbortsDag: the panic
+// must be recovered (process survives) and converted into a typed
+// *DagRegistrationError that ABORTS the DAG, since there is no task graph
+// yet for the panic to attach to as a task failure and no tasks have
+// started to drain.
+func TestDagE2E_PanicInRegisterAbortsDag(t *testing.T) {
+	type out struct {
+		HadErr   bool
+		IsRegErr bool
+		RegName  string
+		ResNil   bool
+		ErrMsg   string
+	}
+	handler := func(dc durable.Context, _ struct{}) (out, error) {
+		res, err := durable.Dag(dc, "wf", func(d *durable.DagBuilder) {
+			durable.DagStep(d, "boom", nil,
+				func(_ durable.Deps, _ durable.StepContext) (int, error) { return 0, nil })
+			panic("register exploded")
+		})
+		var re *durable.DagRegistrationError
+		o := out{
+			HadErr:   err != nil,
+			IsRegErr: errors.As(err, &re),
+			ResNil:   res == nil,
+		}
+		if err != nil {
+			o.ErrMsg = err.Error()
+		}
+		if re != nil {
+			o.RegName = re.Name
+		}
+		return o, nil
+	}
+	runner := durabletest.NewLocalRunner(handler)
+	result := runner.RunUntilComplete(t, struct{}{})
+	if result.Status != durabletest.Succeeded {
+		t.Fatalf("handler should return normally after catching the abort (process alive, panic recovered), got %s (%+v)", result.Status, result.Error)
+	}
+	o, err := durabletest.ResultAs[out](result)
+	if err != nil {
+		t.Fatalf("ResultAs: %v", err)
+	}
+	if !o.HadErr {
+		t.Fatal("Dag must return a non-nil error when the register callback panics")
+	}
+	if !o.IsRegErr {
+		t.Fatalf("Dag error should be a *DagRegistrationError, got %q", o.ErrMsg)
+	}
+	if o.RegName != "wf" {
+		t.Fatalf("registration error should name the DAG, got %q", o.RegName)
+	}
+	if !o.ResNil {
+		t.Fatal("Dag must not return a DagResult on a registration abort")
+	}
+	if !strings.Contains(o.ErrMsg, "register") || !strings.Contains(o.ErrMsg, "panicked") {
+		t.Fatalf("abort error should describe the register callback panic, got %q", o.ErrMsg)
+	}
+}

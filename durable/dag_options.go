@@ -70,7 +70,6 @@ type dagConfig struct {
 	defaultTrigger TriggerRule
 	dagSerdes      Serdes
 	completion     *DagCompletionConfig
-	summaryGen     func(*DagResult) string
 
 	// applied records, in application order, which option builders set this
 	// config, so registration can reject options that do not apply to the
@@ -93,7 +92,6 @@ const (
 	optDefaultTrigger
 	optDagSerdes
 	optCompletion
-	optSummaryGen
 )
 
 func optionName(id dagOptionID) string {
@@ -120,8 +118,6 @@ func optionName(id dagOptionID) string {
 		return "WithDagSerdes"
 	case optCompletion:
 		return "WithDagCompletion"
-	case optSummaryGen:
-		return "WithSummaryGenerator"
 	default:
 		return "unknown"
 	}
@@ -240,15 +236,6 @@ func WithDagSerdes(s Serdes) DagOption {
 // future releases.
 func WithDagCompletion(cc DagCompletionConfig) DagOption {
 	return func(c *dagConfig) { c.completion = &cc; c.applied = append(c.applied, optCompletion) }
-}
-
-// WithSummaryGenerator sets an observability-only summary generator whose
-// output rides along on the result and is never read on replay.
-//
-// Experimental: This API is experimental and may be changed or removed in
-// future releases.
-func WithSummaryGenerator(f func(*DagResult) string) DagOption {
-	return func(c *dagConfig) { c.summaryGen = f; c.applied = append(c.applied, optSummaryGen) }
 }
 
 func buildDagConfig(opts []DagOption) dagConfig {

@@ -3,6 +3,7 @@ package durable
 import (
 	"errors"
 	"fmt"
+	"runtime/debug"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
@@ -121,6 +122,33 @@ const DefaultDagMaxConcurrency = 40
 //
 // Experimental: This API is experimental and may be changed or removed in
 // future releases.
+// runDagRegister invokes the caller's register callback with panic
+// recovery. Registration runs synchronously, before any task starts, and is
+// expected to be pure graph-construction code, so a panic there is treated
+// the same way a panicking runIf is (see [evalRunIf]/[DagPredicateError]):
+// recovered and converted into a typed [*DagRegistrationError] that aborts
+// the DAG, rather than reaching the Lambda runtime and crashing the
+// invocation. There is no task graph yet for the panic to be reinterpreted
+// as a task failure, and no tasks have started, so there is nothing to
+// drain.
+func runDagRegister(name string, register func(d *DagBuilder), d *DagBuilder) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			var cause error
+			if e, ok := r.(error); ok {
+				// Wrap with %w so errors.Is/errors.As reach the original,
+				// and keep the stack as the other recover sites format it.
+				cause = fmt.Errorf("durable: dag %q register callback panicked: %w\n%s", name, e, debug.Stack())
+			} else {
+				cause = fmt.Errorf("durable: dag %q register callback panicked: %v\n%s", name, r, debug.Stack())
+			}
+			err = &DagRegistrationError{Name: name, Err: cause}
+		}
+	}()
+	register(d)
+	return nil
+}
+
 func Dag(ctx Context, name string, register func(d *DagBuilder), opts ...DagOption) (*DagResult, error) {
 	ec, ok := ctx.(*execContext)
 	if !ok {
@@ -131,7 +159,9 @@ func Dag(ctx Context, name string, register func(d *DagBuilder), opts ...DagOpti
 	d := newDagBuilder()
 	d.defaultSerdes = cfg.dagSerdes
 	if register != nil {
-		register(d)
+		if err := runDagRegister(name, register, d); err != nil {
+			return nil, err
+		}
 	}
 	if err := validateDag(d, cfg); err != nil {
 		return nil, err
@@ -258,18 +288,12 @@ func Dag(ctx Context, name string, register func(d *DagBuilder), opts ...DagOpti
 			execs = dagApplyOffloadEnvelope(execs, offloadEnv, d.tasks)
 			res := newDagResult(execs, DagCompletionReason(offloadEnv.CompletionReason))
 			res.total = offloadEnv.TotalCount
-			if cfg.summaryGen != nil {
-				res.summary = cfg.summaryGen(res)
-			}
 			return res, nil
 		}
 		// Terminal container with no recoverable envelope: fall back to the
 		// plain reconstruction from the re-run.
 		res := newDagResult(execs, reason)
 		res.total = len(d.tasks)
-		if cfg.summaryGen != nil {
-			res.summary = cfg.summaryGen(res)
-		}
 		return res, nil
 	}
 
@@ -280,9 +304,6 @@ func Dag(ctx Context, name string, register func(d *DagBuilder), opts ...DagOpti
 	res := newDagResult(execs, reason)
 	// total = number of REGISTERED tasks, not the settled count.
 	res.total = len(d.tasks)
-	if cfg.summaryGen != nil {
-		res.summary = cfg.summaryGen(res)
-	}
 	if err := dagFinishChild(ec, scopeID, name, operationSubTypeDag, nil, res); err != nil {
 		return nil, err
 	}
