@@ -1164,6 +1164,22 @@ func replayTerminalBatch[I, O any](
 		if op.childCtx == nil {
 			return BatchResult[O]{}, fmt.Errorf("durable: batch %q: checkpointed SUCCEEDED with no context details", name)
 		}
+		// ReplayChildren mode: the full aggregate was too large to store,
+		// so reconstruct from the children. With a decision record and
+		// NORMAL nesting, replay exactly the recorded admitted set so the
+		// result matches the live shape (including abandoned branches).
+		// Otherwise (FLAT, or an older checkpoint without a record) fall
+		// back to sequential re-execution.
+		if op.childCtx.replayChildren {
+			if options.nesting != NestingFlat {
+				if record, ok := parseBatchReplayRecord(op.childCtx.result); ok {
+					return replayBatchChildrenFromRecord[I, O](ec, record, items, fn, options, childSubType)
+				}
+			}
+			mode := modeReplaySucceededContext
+			child := ec.child(id, ec.owner, mode)
+			return replayBatchChildren[I, O](child, id, name, items, fn, options, parentSubType, childSubType)
+		}
 		// If an operation-level serdes is configured, use it to
 		// deserialize the whole batch result.
 		if options.resultSerdes != nil {
@@ -1172,14 +1188,6 @@ func replayTerminalBatch[I, O any](
 				return BatchResult[O]{}, fmt.Errorf("durable: batch %q: deserialize batch result: %w", name, err)
 			}
 			return result, nil
-		}
-		// ReplayChildren mode: re-execute the batch to reconstruct.
-		if op.childCtx.replayChildren {
-			mode := modeReplaySucceededContext
-			child := ec.child(id, ec.owner, mode)
-			// Re-execute: the child context replays all children.
-			// We need to re-run the batch loop in the child context.
-			return replayBatchChildren[I, O](child, id, name, items, fn, options, parentSubType, childSubType)
 		}
 		// Normal replay: deserialize the stored aggregate result.
 		// The parent checkpoint stores a JSON-serialized batch summary
@@ -1308,6 +1316,20 @@ func checkpointBatchSuccess[O any](
 	update := batchParentUpdate(ec, id, name, subType, types.OperationActionSucceed)
 	if len(serialized) > checkpointSizeLimitBytes {
 		update.ContextOptions = &types.ContextOptions{ReplayChildren: aws.Bool(true)}
+		// The full aggregate is too large to store, so record a
+		// size-independent decision record alongside ReplayChildren. It
+		// carries the completion reason and which admitted branches were
+		// abandoned (STARTED) versus terminal, so replay reconstructs the
+		// exact live shape instead of re-deriving it. Only NORMAL children
+		// have per-child checkpoints to reconstruct from; FLAT batches fall
+		// back to sequential re-execution on replay.
+		if options.nesting != NestingFlat {
+			recordBytes, recordErr := json.Marshal(newBatchReplayRecord(result))
+			if recordErr != nil {
+				return BatchResult[O]{}, fmt.Errorf("durable: batch %q: serialize replay record: %w", name, recordErr)
+			}
+			update.Payload = aws.String(string(recordBytes))
+		}
 	} else {
 		update.Payload = aws.String(string(serialized))
 	}
@@ -1515,6 +1537,159 @@ func fromBatchResult[O any](result BatchResult[O], itemSerdes Serdes, sctx Serde
 		}
 	}
 	return batchCheckpointPayload{Results: cpItems, Reason: result.Reason}, nil
+}
+
+// Index-set discriminators for batchReplayRecord.
+const (
+	replayIndexSetStarted   = "started"
+	replayIndexSetCompleted = "completed"
+)
+
+// batchReplayRecord is the size-independent decision record stored on a
+// batch parent context whose full aggregate exceeded the checkpoint size
+// limit and was replaced by ReplayChildren. It captures the completion
+// reason and, in index order, which admitted branches were abandoned
+// (reported STARTED) versus reached a terminal status, so replay
+// reconstructs the exact live result shape rather than re-deriving it.
+//
+// The admitted branches are the prefix [0, StartedTotal). Indexes holds
+// whichever of the started (abandoned) or completed index sets is smaller,
+// selected by IndexSet, so the record stays bounded by branch count and
+// never by item payload size.
+type batchReplayRecord struct {
+	Reason       CompletionReason `json:"completionReason"`
+	StartedTotal int              `json:"totalCount"`
+	IndexSet     string           `json:"indexSet"`
+	Indexes      []int            `json:"indexes"`
+}
+
+// newBatchReplayRecord builds the decision record from a live batch result.
+// Never-started branches are already excluded from result.Items, so the
+// item count is the started total.
+func newBatchReplayRecord[O any](result BatchResult[O]) batchReplayRecord {
+	var started, completed []int
+	for i := range result.Items {
+		if result.Items[i].Status == BatchItemStarted {
+			started = append(started, result.Items[i].Index)
+		} else {
+			completed = append(completed, result.Items[i].Index)
+		}
+	}
+	record := batchReplayRecord{
+		Reason:       result.Reason,
+		StartedTotal: len(result.Items),
+	}
+	if len(started) <= len(completed) {
+		record.IndexSet = replayIndexSetStarted
+		record.Indexes = started
+	} else {
+		record.IndexSet = replayIndexSetCompleted
+		record.Indexes = completed
+	}
+	if record.Indexes == nil {
+		record.Indexes = []int{}
+	}
+	return record
+}
+
+// parseBatchReplayRecord parses a decision record from a parent context's
+// stored payload. The second result is false for absent, malformed, or
+// out-of-range payloads (including checkpoints written before the record
+// existed), so the caller can fall back to sequential re-execution.
+func parseBatchReplayRecord(payload string) (batchReplayRecord, bool) {
+	if payload == "" {
+		return batchReplayRecord{}, false
+	}
+	var record batchReplayRecord
+	if err := json.Unmarshal([]byte(payload), &record); err != nil {
+		return batchReplayRecord{}, false
+	}
+	if record.StartedTotal < 0 {
+		return batchReplayRecord{}, false
+	}
+	if record.IndexSet != replayIndexSetStarted && record.IndexSet != replayIndexSetCompleted {
+		return batchReplayRecord{}, false
+	}
+	for _, idx := range record.Indexes {
+		if idx < 0 || idx >= record.StartedTotal {
+			return batchReplayRecord{}, false
+		}
+	}
+	return record, true
+}
+
+// abandonedSet returns the set of admitted branch indexes that were
+// reported STARTED (abandoned before reaching a terminal status).
+func (r batchReplayRecord) abandonedSet() map[int]bool {
+	set := make(map[int]bool, len(r.Indexes))
+	if r.IndexSet == replayIndexSetStarted {
+		for _, idx := range r.Indexes {
+			set[idx] = true
+		}
+		return set
+	}
+	completed := make(map[int]bool, len(r.Indexes))
+	for _, idx := range r.Indexes {
+		completed[idx] = true
+	}
+	for i := 0; i < r.StartedTotal; i++ {
+		if !completed[i] {
+			set[i] = true
+		}
+	}
+	return set
+}
+
+// replayBatchChildrenFromRecord reconstructs a batch result from the decision
+// record: it replays exactly the recorded admitted set in index order rather
+// than re-deriving completion from a threshold. Terminal branches are
+// resolved from their own child checkpoints; abandoned branches are reported
+// STARTED without re-running their bodies.
+//
+// Batch children mint their operation ids as siblings in the enclosing
+// context, claimed in index order. This mirrors that id sequence with a
+// detached minter so the enclosing counter is untouched; the caller advances
+// it once for the whole batch.
+func replayBatchChildrenFromRecord[I, O any](
+	ec *execContext,
+	record batchReplayRecord,
+	items []I,
+	fn func(Context, I, int) (O, error),
+	options batchOptions,
+	childSubType string,
+) (BatchResult[O], error) {
+	abandoned := record.abandonedSet()
+	sib := &opIDs{prefix: ec.ids.prefix, counter: ec.ids.counter}
+	runItem := func(childCtx Context, index int) (O, error) {
+		if fn != nil && items != nil {
+			return fn(childCtx, items[index], index)
+		}
+		var zero O
+		return zero, fmt.Errorf("durable: cannot replay parallel branches without branch functions")
+	}
+	results := make([]BatchItem[O], 0, record.StartedTotal)
+	for i := 0; i < record.StartedTotal; i++ {
+		childID := sib.next()
+		itemName := itemNameForIndex(options, itemAtIndex(options, i), i)
+		if abandoned[i] {
+			results = append(results, BatchItem[O]{
+				Index:  i,
+				Name:   itemName,
+				Status: BatchItemStarted,
+			})
+			continue
+		}
+		op := ec.state.get(childID)
+		if op == nil || !op.status.terminal() {
+			return BatchResult[O]{}, fmt.Errorf("durable: batch item %d: replay record marks it terminal but no terminal checkpoint was found", i)
+		}
+		item, err := replayTerminalChildItem[O](ec, op, childID, itemName, i, options, childSubType, runItem)
+		if err != nil {
+			return BatchResult[O]{}, err
+		}
+		results = append(results, item)
+	}
+	return BatchResult[O]{Items: results, Reason: record.Reason}, nil
 }
 
 // batchParentUpdate builds an operation update for the parent batch context.
