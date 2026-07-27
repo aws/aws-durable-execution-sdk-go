@@ -6,7 +6,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	"math/rand/v2"
 	"time"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
@@ -40,10 +39,12 @@ func handler(ctx durable.Context, event Input) (*Record, error) {
 		name := fmt.Sprintf("poll-%d", poll)
 
 		result, err := durable.Step(ctx, name,
-			func(_ durable.StepContext) (*Record, error) {
-				// Simulate transient failure 50% of the time.
-				if rand.Float64() < 0.5 { //nolint:gosec // demo randomness
-					return nil, errors.New("random failure")
+			func(sc durable.StepContext) (*Record, error) {
+				// Simulate two transient failures before each poll
+				// succeeds. Attempt is 1-based, so the third attempt is
+				// the first that gets past this check.
+				if sc.Attempt() < 3 {
+					return nil, errors.New("transient failure")
 				}
 				// Simulate "not found" for first 3 polls; found on 4th+.
 				if poll < 4 {
