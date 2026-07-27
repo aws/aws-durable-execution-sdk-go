@@ -186,6 +186,46 @@ func TestDagE2E_ExplicitConcurrencyAboveDefaultWins(t *testing.T) {
 	}
 }
 
+// TestDagE2E_ExplicitZeroConcurrencyIsUnbounded asserts the explicit
+// unbounded sentinel: WithDagMaxConcurrency(0) removes the default-40 cap
+// entirely, matching Map/Parallel's own unbounded-by-omission default. This
+// is the fix for the Go-idiom gap identified in the language review --
+// previously there was no way to opt back into unbounded top-level
+// concurrency short of passing an arbitrarily large bound.
+func TestDagE2E_ExplicitZeroConcurrencyIsUnbounded(t *testing.T) {
+	const nTasks = 100
+	var tr peakTracker
+
+	handler := func(dc durable.Context, _ struct{}) (int64, error) {
+		res, err := durable.Dag(dc, "unboundeddag", func(d *durable.DagBuilder) {
+			registerWideGraph(d, nTasks, 40*time.Millisecond, &tr)
+		}, durable.WithDagMaxConcurrency(0))
+		if err != nil {
+			return 0, err
+		}
+		if e := res.ThrowIfError(); e != nil {
+			return 0, e
+		}
+		return tr.max(), nil
+	}
+
+	runner := durabletest.NewLocalRunner(handler)
+	result := runner.RunUntilComplete(t, struct{}{})
+	if result.Status != durabletest.Succeeded {
+		t.Fatalf("expected SUCCEEDED, got %s (%+v)", result.Status, result.Error)
+	}
+	peak, err := durabletest.ResultAs[int64](result)
+	if err != nil {
+		t.Fatalf("ResultAs: %v", err)
+	}
+	// The point of this test: an explicit 0 lifts the cap entirely, so all
+	// 100 independent tasks run concurrently -- well above the default of 40.
+	if peak <= durable.DefaultDagMaxConcurrency {
+		t.Fatalf("observed peak=%d did not exceed the default %d; WithDagMaxConcurrency(0) did not remove the cap",
+			peak, durable.DefaultDagMaxConcurrency)
+	}
+}
+
 // TestDagE2E_NestedDagIndependentDefault asserts a nested SubDag gets its
 // OWN independent default of 40: the parent DAG sets no bound (and holds only
 // one top-level task, the SubDag), and the nested DAG's wide inner graph is

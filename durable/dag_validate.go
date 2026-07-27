@@ -35,8 +35,8 @@ func validateDag(d *DagBuilder, cfg dagConfig) error {
 	var errs []error
 
 	// Config guards (return immediately as they are DAG-wide).
-	if cfg.maxConcurrency != nil && *cfg.maxConcurrency <= 0 {
-		return &DagInvalidConfigError{Reason: "maxConcurrency must be positive"}
+	if cfg.maxConcurrency != nil && *cfg.maxConcurrency < 0 {
+		return &DagInvalidConfigError{Reason: "maxConcurrency must be >= 0 (0 means unbounded)"}
 	}
 	if cfg.completion != nil && cfg.completion.isCustom() && cfg.completion.isThreshold() {
 		return &DagInvalidConfigError{Reason: "completion config: custom ShouldComplete and threshold fields are mutually exclusive"}

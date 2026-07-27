@@ -73,15 +73,11 @@ const dagTaskIDPrefix = "DAG_NODE_T_"
 // fan-out: a Map/Parallel task keeps its own default (unbounded unless set
 // via [WithBatchMaxConcurrency]), and a nested [SubDag] gets its own
 // independent default of 40 (because SubDag runs through [Dag], which
-// resolves this default afresh per DAG). An explicit [WithDagMaxConcurrency]
-// always wins, including a value above 40.
+// resolves this default afresh per DAG) unless it sets its own bound. An
+// explicit [WithDagMaxConcurrency] always wins, including a value above 40.
 //
-// Note: because [WithDagMaxConcurrency] rejects a value <= 0 as a
-// configuration error, and an unset option now resolves to this default
-// rather than unbounded, the public API can no longer express a genuinely
-// unbounded DAG scheduler. A caller who wants effectively-unbounded top-level
-// concurrency passes an explicit bound at least as large as the task count
-// (e.g. math.MaxInt32).
+// A caller who wants unbounded top-level concurrency instead of this default
+// passes an explicit 0 to [WithDagMaxConcurrency].
 //
 // Experimental: This API is experimental and may be changed or removed in
 // future releases.
@@ -114,11 +110,13 @@ const DefaultDagMaxConcurrency = 40
 //
 // The DAG runs at most [DefaultDagMaxConcurrency] (40) top-level tasks
 // concurrently unless [WithDagMaxConcurrency] sets an explicit bound, which
-// always wins (including values above 40). The bound governs only this DAG's
-// top-level tasks: a Map/Parallel task's inner fan-out is bounded separately
-// by [WithBatchMaxConcurrency], and a nested [SubDag] gets its own
-// independent default of 40. See [DefaultDagMaxConcurrency] for why an unset
-// bound is no longer unbounded.
+// always wins (including values above 40, and 0 for unbounded). The bound
+// governs only this DAG's top-level tasks: a Map/Parallel task's inner
+// fan-out is bounded separately by [WithBatchMaxConcurrency], and a nested
+// [SubDag] gets its own independent default of 40 unless it sets its own
+// bound. See [DefaultDagMaxConcurrency] for why an unset bound defaults to
+// 40 rather than unbounded, and [WithDagMaxConcurrency] for how to opt back
+// into unbounded top-level concurrency.
 //
 // Experimental: This API is experimental and may be changed or removed in
 // future releases.
@@ -170,10 +168,10 @@ func Dag(ctx Context, name string, register func(d *DagBuilder), opts ...DagOpti
 	// Resolve the DAG's effective top-level concurrency bound. An unset
 	// WithDagMaxConcurrency defaults to DefaultDagMaxConcurrency (40) rather
 	// than unbounded. An explicit value always wins, including a value above
-	// 40; validation (validateDag) has already rejected <= 0, so the
-	// explicit path is always positive. Because SubDag runs its nested DAG
+	// 40 or the explicit unbounded sentinel 0; validation (validateDag) has
+	// already rejected negative values. Because SubDag runs its nested DAG
 	// back through this same Dag() entry point, each nested DAG independently
-	// resolves its own default of 40 here.
+	// resolves its own default of 40 here unless it sets its own bound.
 	maxConc := DefaultDagMaxConcurrency
 	if cfg.maxConcurrency != nil {
 		maxConc = *cfg.maxConcurrency

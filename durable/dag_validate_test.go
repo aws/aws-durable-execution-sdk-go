@@ -108,10 +108,15 @@ func TestDagValidate_MissingDep(t *testing.T) {
 func TestDagValidate_ConfigGuards(t *testing.T) {
 	d := newDagBuilder()
 	DagStep(d, "a", nil, func(_ Deps, _ StepContext) (int, error) { return 0, nil })
-	n := 0
+	n := -1
 	var ce *DagInvalidConfigError
 	if err := validateDag(d, dagConfig{maxConcurrency: &n}); !errors.As(err, &ce) {
-		t.Fatalf("expected config error for maxConcurrency<=0, got %v", err)
+		t.Fatalf("expected config error for negative maxConcurrency, got %v", err)
+	}
+	// 0 is the explicit unbounded sentinel, not an error.
+	zero := 0
+	if err := validateDag(d, dagConfig{maxConcurrency: &zero}); err != nil {
+		t.Fatalf("maxConcurrency=0 (unbounded sentinel) should be valid, got %v", err)
 	}
 	minv := 1
 	tol := 0
