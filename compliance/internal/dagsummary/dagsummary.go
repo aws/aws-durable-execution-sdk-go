@@ -46,6 +46,12 @@ type Summary struct {
 	// 10-18, only). It proves a compensation task observes a FAILED
 	// dependency's result as absent rather than a stale/fabricated value.
 	Audit string `json:"audit,omitempty"`
+	// R1 and R2 carry the first two tasks' verdict results (rules-engine
+	// handler, 10-19, only). r3's absence (never started) is proven by
+	// Counts' total=3/succeeded=2 rather than a field here, matching the
+	// catalog rule that a never-started task is omitted entirely.
+	R1 map[string]string `json:"r1,omitempty"`
+	R2 map[string]string `json:"r2,omitempty"`
 	// Poll carries the final waitForCondition state (wfcdag handler only).
 	Poll int `json:"poll,omitempty"`
 	// Post carries a downstream step result. It is an int for the outerdag
