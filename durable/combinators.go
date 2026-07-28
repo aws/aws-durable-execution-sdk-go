@@ -4,9 +4,21 @@ import (
 	"errors"
 )
 
+// combinatorObserve, when non-nil, is called by the Any and Race receive
+// loops after each future outcome is observed. Tests use it to release a
+// sibling future only after a specific outcome has been seen, making
+// interleavings deterministic. It is nil in production.
+var combinatorObserve func(err error)
+
 // All records a combinator operation and waits for every future to succeed,
-// returning the values in input order. If any future fails, All fails
-// immediately with a [*ChildContextError] wrapping the first failure.
+// returning the values in input order. A non-suspension error observed
+// before any suspension fails All immediately with that error, without
+// awaiting the remaining futures (matching Promise.all's fail-fast
+// rejection). Once a suspension is observed, All awaits all remaining
+// futures so their branches reach blocking points and checkpoint progress,
+// then propagates the suspension; suspension takes precedence over terminal
+// outcomes observed after it because the suspended branch completes only on
+// a later invocation.
 //
 // All uses [RunInChildContext] internally, so the aggregate result is
 // checkpointed: on replay, the stored result is returned without
@@ -16,15 +28,25 @@ import (
 func All[O any](ctx Context, name string, fs []*Future[O]) ([]O, error) {
 	return RunInChildContext(ctx, name, func(_ Context) ([]O, error) {
 		results := make([]O, len(fs))
+		var sawSuspend bool
 		for i, f := range fs {
 			val, err := f.Result()
-			if err != nil {
-				if errors.Is(err, errSuspendExecution) {
-					return nil, err
-				}
+			switch {
+			case err == nil:
+				results[i] = val
+			case errors.Is(err, errSuspendExecution):
+				sawSuspend = true
+			case !sawSuspend:
 				return nil, err
 			}
-			results[i] = val
+			// A non-suspension error observed after a suspension is
+			// discarded: the loop keeps draining so every branch reaches
+			// a blocking point, and the suspension propagates below. On
+			// the resume invocation the futures replay and the error is
+			// returned then.
+		}
+		if sawSuspend {
+			return nil, errSuspendExecution
 		}
 		return results, nil
 	})
@@ -32,7 +54,10 @@ func All[O any](ctx Context, name string, fs []*Future[O]) ([]O, error) {
 
 // AllSettled records a combinator operation and waits for every future to
 // settle, returning each outcome in input order regardless of success or
-// failure.
+// failure. If any future suspends, AllSettled awaits all remaining futures
+// and then propagates the suspension; suspension takes precedence over
+// terminal outcomes because the suspended branch completes only on a later
+// invocation.
 //
 // AllSettled uses [RunInChildContext] internally, so the aggregate result is
 // checkpointed. On replay, the stored outcomes are returned without
@@ -42,23 +67,33 @@ func All[O any](ctx Context, name string, fs []*Future[O]) ([]O, error) {
 func AllSettled[O any](ctx Context, name string, fs []*Future[O]) ([]Settled[O], error) {
 	return RunInChildContext(ctx, name, func(_ Context) ([]Settled[O], error) {
 		results := make([]Settled[O], len(fs))
+		var sawSuspend bool
 		for i, f := range fs {
 			val, err := f.Result()
-			if err != nil {
-				if errors.Is(err, errSuspendExecution) {
-					return nil, err
-				}
-				results[i] = Settled[O]{Err: err}
-			} else {
+			switch {
+			case err == nil:
 				results[i] = Settled[O]{Value: val}
+			case errors.Is(err, errSuspendExecution):
+				sawSuspend = true
+			default:
+				results[i] = Settled[O]{Err: err}
 			}
+		}
+		if sawSuspend {
+			return nil, errSuspendExecution
 		}
 		return results, nil
 	})
 }
 
 // Any records a combinator operation and returns the value of the first
-// future to succeed. If all futures fail, Any returns a [*CombinatorError]
+// future to succeed. A success observed before any suspension returns
+// immediately, without awaiting the remaining futures. Once a suspension is
+// observed, Any awaits all remaining futures so their branches reach
+// blocking points, then propagates the suspension; suspension takes
+// precedence over terminal outcomes observed after it because the
+// suspended branch completes only on a later invocation. If every future
+// fails with a non-suspension error, Any returns a [*CombinatorError]
 // wrapping all individual errors (analogous to JavaScript's AggregateError
 // from Promise.any).
 //
@@ -93,17 +128,30 @@ func Any[O any](ctx Context, name string, fs []*Future[O]) (O, error) {
 		}
 
 		errs := make([]error, len(fs))
-		errCount := 0
+		var sawSuspend bool
 		for range fs {
 			r := <-ch
-			if r.err == nil {
-				return r.val, nil
+			if combinatorObserve != nil {
+				combinatorObserve(r.err)
 			}
-			if errors.Is(r.err, errSuspendExecution) {
-				return zero, r.err
+			switch {
+			case r.err == nil:
+				if !sawSuspend {
+					return r.val, nil
+				}
+				// A success after a suspension is discarded: the loop
+				// keeps draining so every branch reaches a blocking
+				// point, and the suspension propagates below. On the
+				// resume invocation the futures replay and the success
+				// is returned then.
+			case errors.Is(r.err, errSuspendExecution):
+				sawSuspend = true
+			default:
+				errs[r.idx] = r.err
 			}
-			errs[r.idx] = r.err
-			errCount++
+		}
+		if sawSuspend {
+			return zero, errSuspendExecution
 		}
 		// All failed.
 		return zero, &CombinatorError{Name: name, Errors: errs}
@@ -111,7 +159,13 @@ func Any[O any](ctx Context, name string, fs []*Future[O]) (O, error) {
 }
 
 // Race records a combinator operation and returns the outcome of the first
-// future to settle, whether it succeeded or failed.
+// future to settle with a terminal result (success or non-suspension
+// error). A terminal outcome observed before any suspension returns
+// immediately, without awaiting the remaining futures. Once a suspension is
+// observed, Race awaits all remaining futures so their branches reach
+// blocking points, then propagates the suspension; suspension takes
+// precedence over terminal outcomes observed after it because the
+// suspended branch completes only on a later invocation.
 //
 // Race uses [RunInChildContext] internally, so the winner is checkpointed:
 // on replay, the same outcome is returned deterministically regardless of
@@ -146,13 +200,25 @@ func Race[O any](ctx Context, name string, fs []*Future[O]) (O, error) {
 			}(f)
 		}
 
-		r := <-ch
-		if r.err != nil {
-			if errors.Is(r.err, errSuspendExecution) {
-				return zero, r.err
+		var sawSuspend bool
+		for range fs {
+			r := <-ch
+			if combinatorObserve != nil {
+				combinatorObserve(r.err)
 			}
-			return zero, r.err
+			if r.err != nil && errors.Is(r.err, errSuspendExecution) {
+				sawSuspend = true
+				continue
+			}
+			if !sawSuspend {
+				return r.val, r.err
+			}
+			// A terminal outcome after a suspension is discarded: the
+			// loop keeps draining so every branch reaches a blocking
+			// point, and the suspension propagates below. On the resume
+			// invocation the futures replay and the terminal outcome is
+			// returned then.
 		}
-		return r.val, nil
+		return zero, errSuspendExecution
 	})
 }
