@@ -102,7 +102,9 @@ that operation and all subsequent ones.
 The `suspendSignal` coordinates suspension across the invocation. It has two
 independent mechanisms: a pending commitment, which decides the invocation
 result, and active-branch accounting, which decides when in-flight futures
-are settled.
+are settled. A third piece, checkpointer termination, takes over when the
+invocation responds: it bounds what an orphaned branch can record once the
+result is decided.
 
 ### Pending commitment
 
@@ -143,6 +145,117 @@ further claims on that context without affecting its siblings.
 The invocation responds with `PENDING`. The backend will re-invoke the
 function when the blocking condition resolves.
 
+### Checkpointer termination
+
+The two mechanisms above decide the result and settle futures, but neither
+constrains a branch that is still running user code when the invocation
+responds. The handler never joins outstanding branches: when it observes a
+standing commitment (either the handler goroutine returned while
+`committed()` is true, or the suspend signal fired), it terminates the
+checkpointer and responds with `PENDING` immediately. Because no goroutine
+is joined, the `PENDING` response cannot stall behind a slow or blocked
+branch.
+
+Termination is a single atomic flag store on the checkpointer, so it never
+blocks behind an in-flight checkpoint API call holding the checkpointer's
+mutex. The checkpoint method consults the flag at three points:
+
+1. Before acquiring the mutex, as a lock-free fast-path refusal.
+2. After acquiring the mutex and again between retry attempts, in case
+   termination arrived while the caller was waiting or backing off.
+3. After a successful API call returns, so a checkpoint that was in flight
+   when termination was signaled is refused before rotating the token.
+
+Point 3 means a checkpoint whose API call was already in flight at the
+moment of termination can succeed at the backend (the bytes land remotely)
+but the checkpointer refuses to commit the result locally. From the
+handler's perspective the branch was refused; from the backend's perspective
+the state was written. This is safe because the next invocation replays from
+the full backend state, so remotely written data is picked up on resume
+rather than lost. The guarantee is therefore that no subsequent checkpoint
+attempt succeeds locally after termination, not that no in-flight bytes can
+reach the backend.
+
+#### Translation of the terminated error
+
+Operations translate the internal `errCheckpointTerminated` into
+`errSuspendExecution` at the call site where a checkpoint failure is
+observed. `Step`, `Wait`, `Invoke`, callbacks, and `RunInChildContext` all
+perform this translation explicitly: when the checkpointer refuses, the
+operation returns `errSuspendExecution`, settling the branch's future and
+releasing its branch token without recording further state.
+
+`Map`, `Parallel`, and `WaitForCondition` have a different structure: their
+internal checkpoint calls return errors up through helper functions that do
+not translate `errCheckpointTerminated`. A checkpoint failure in a batch
+item or condition attempt propagates as a non-suspension error through the
+batch coordinator or condition loop. In the concurrent batch path, such an
+error becomes a fatal error that stops the batch after its in-flight workers
+drain. A `durable.Go` child context that hosts one of these operations can
+therefore observe `errCheckpointTerminated` as its function's return error
+rather than `errSuspendExecution`. This does not escape to user code as a
+failure: when the child function returns, the child context wrapper checks
+for both `errSuspendExecution` and `errCheckpointTerminated` before any
+error wrapping and settles the child's future with `errSuspendExecution`,
+so the parent awaiting the future observes a suspension, never a
+`ChildContextError`. `ChildContextError` wraps only errors that are neither
+suspension nor termination. However, inside the child function itself, a
+caller that inspects the raw error from `Map` or `WaitForCondition` sees
+the internal error rather than `errSuspendExecution`.
+
+In all cases the terminated branch cannot record further state. On the next
+invocation the branch re-executes from its last committed checkpoint. The
+behavioral effect is identical to a suspension: progress is deferred, not
+lost.
+
+## Combinator Suspension-Drain Semantics
+
+`All`, `AllSettled`, `Any`, and `Race` join a slice of futures into one
+checkpointed aggregate result. Each runs inside a child context (via
+`RunInChildContext`), so on replay the stored aggregate is returned without
+re-awaiting the futures.
+
+Within one invocation a future can settle three ways: success, a terminal
+error, or suspension (`errSuspendExecution`, meaning that branch is blocked
+until a later invocation). A suspension is not an outcome; it means the
+branch has no outcome yet. The combinators therefore treat it differently
+from terminal settlements, in two phases.
+
+### Before any suspension is observed
+
+Each combinator keeps its usual first-settlement semantics:
+
+- **All** fails fast on the first terminal error without awaiting the
+  remaining futures, matching `Promise.all` fail-fast rejection.
+- **Any** returns the first success without awaiting the remaining futures,
+  matching `Promise.any`.
+- **Race** returns the first terminal outcome (success or error) without
+  awaiting the remaining futures, matching `Promise.race`.
+- **AllSettled** has no early exit; it awaits every future by definition.
+
+### Once a suspension is observed
+
+Every combinator switches to draining: it awaits all remaining futures so
+each sibling branch reaches its own blocking point and checkpoints its
+progress, then propagates the suspension. Suspension takes precedence over
+terminal outcomes observed after it, because the suspended branch completes
+only on a later invocation and the aggregate cannot be final until then.
+Terminal outcomes seen during the drain are not lost: on the resume
+invocation the futures replay and those outcomes are returned then.
+
+Without the drain, a combinator returning at the first suspension would cut
+off sibling branches before they reached their blocking points, so their
+progress would never be checkpointed and would be re-executed from scratch
+on the next invocation.
+
+### Edge cases
+
+Edge cases mirror the JavaScript promise combinators:
+
+- `All` and `AllSettled` on empty input return an empty slice immediately.
+- `Any` on empty input fails immediately with a `*CombinatorError`.
+- `Race` on empty input suspends, since no future will ever settle.
+
 ## Goroutine Ownership
 
 Each `Context` has an owning goroutine. When built with the `durablecheck`
@@ -180,8 +293,9 @@ has three key properties:
 
 ## Cross-Goroutine Coordination
 
-The `Go` function (aliased from `RunInChildContextAsync`) is the
-replay-safe substitute for Go's `go` statement:
+The `durable.Go` function (an alias for `RunInChildContextAsync`) runs a
+subflow in its own child context on a new goroutine. It is the replay-safe
+substitute for the language-level `go` statement inside durable functions:
 
 ```go
 fut := durable.Go(ctx, "work", func(child durable.Context) (T, error) {
@@ -203,8 +317,31 @@ The sequence is:
    operation ID), so operations inside the child are isolated from the
    parent's ID sequence.
 
-This design means multiple `Go` calls from one goroutine produce
+This design means multiple `durable.Go` calls from one goroutine produce
 deterministic IDs regardless of goroutine scheduling order.
+
+### Orphaned child contexts after termination
+
+When the handler unwinds and the checkpointer is terminated, a
+`durable.Go` child context that is still mid-flight becomes an orphaned
+branch. At its next checkpoint attempt the checkpointer refuses with
+`errCheckpointTerminated`. Operations that translate the error (`Step`,
+`Wait`, `Invoke`, callbacks, `RunInChildContext`) convert it to
+`errSuspendExecution`, which settles the child's future and releases its
+branch token. Operations that do not translate (`Map`, `Parallel`,
+`WaitForCondition`) propagate the internal error up through the child
+function, but the child context wrapper that hosts the branch recognizes
+`errCheckpointTerminated` alongside `errSuspendExecution` and settles the
+future with `errSuspendExecution` rather than wrapping it in a
+`ChildContextError`. The net effect is the same on either path: the
+orphaned branch stops, its future settles as a suspension, and its branch
+token is released.
+
+Progress the orphan recorded before termination (checkpoints whose API
+calls completed and whose tokens rotated before the flag was set) is
+preserved in the backend state. Progress it would have recorded after
+termination is deferred: the branch re-executes from its last committed
+checkpoint on the next invocation.
 
 ## Determinism Contract
 
