@@ -389,3 +389,114 @@ func TestAsyncOperationDoesNotBlockCaller(t *testing.T) {
 		}
 	})
 }
+
+// TestAbandonedGoChildCheckpointRefused verifies that when the invocation
+// answers PENDING, an abandoned durable.Go child that is still running
+// non-durable work has its subsequent checkpoint refused. The test forces
+// the interleaving:
+//
+//  1. childA holds a pending callback → commits to PENDING
+//  2. childB is blocked in non-durable work (channel receive)
+//  3. handler unwinds → invocation answers PENDING immediately
+//  4. childB unblocks → attempts to checkpoint its step result
+//  5. checkpoint is refused (errCheckpointTerminated)
+//  6. childB settles its future with errSuspendExecution and signals done
+//
+// The test cannot pass by scheduler luck: childB's completion channel is
+// the synchronization proof that childB received the termination error.
+// The PENDING response is returned without waiting for childB, proving the
+// handler does not join orphaned children.
+func TestAbandonedGoChildCheckpointRefused(t *testing.T) {
+	fake := &fakeLambda{}
+
+	// childBDone: closed by childB after it observes checkpoint refusal.
+	childBDone := make(chan struct{})
+	// childBGate: released by the test after PENDING is confirmed.
+	childBGate := make(chan struct{})
+	// childBErr: the error childB's step returned.
+	var childBErr error
+
+	h := Wrap[string, string](func(ctx Context, _ string) (string, error) {
+		// childA: pending callback → drives suspension.
+		childA := Go(ctx, "child-a", func(childCtx Context) (string, error) {
+			cb, err := CreateCallback[string](childCtx, "pending-cb")
+			if err != nil {
+				return "", err
+			}
+			return cb.Result()
+		})
+
+		// childB: blocked in non-durable work; will attempt a step
+		// checkpoint after being released.
+		_ = Go(ctx, "child-b", func(childCtx Context) (string, error) {
+			defer close(childBDone)
+			// Block until the test releases us (after PENDING).
+			<-childBGate
+			// Attempt a step — the START checkpoint should be refused.
+			_, err := Step(childCtx, "orphan-step", func(_ StepContext) (string, error) {
+				return "orphan-result", nil
+			})
+			childBErr = err
+			return "", err
+		})
+
+		// Await childA — its pending callback suspends the invocation.
+		_, _ = childA.Result()
+		return "", errSuspendExecution
+	}, withLambdaAPI(fake))
+
+	// Run the handler with a deadline.
+	type invokeResult struct {
+		resp []byte
+		err  error
+	}
+	done := make(chan invokeResult, 1)
+	go func() {
+		resp, err := h.Invoke(context.Background(), stepPayload(`""`))
+		done <- invokeResult{resp: resp, err: err}
+	}()
+
+	select {
+	case r := <-done:
+		if r.err != nil {
+			t.Fatalf("Invoke error: %v", r.err)
+		}
+		if want := `{"Status":"PENDING"}`; string(r.resp) != want {
+			t.Fatalf("response = %s, want %s", string(r.resp), want)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("invocation hung — PENDING blocked on abandoned child")
+	}
+
+	// At this point PENDING has been returned; childB is still blocked.
+	// Release it and wait for it to observe checkpoint refusal.
+	close(childBGate)
+
+	select {
+	case <-childBDone:
+		// childB completed — verify it received errSuspendExecution.
+	case <-time.After(5 * time.Second):
+		t.Fatal("childB did not complete after checkpoint refusal")
+	}
+
+	// childB's step must have received errSuspendExecution (translated
+	// from errCheckpointTerminated at the START checkpoint).
+	if !errors.Is(childBErr, errSuspendExecution) {
+		t.Errorf("childB step error = %v, want errSuspendExecution", childBErr)
+	}
+
+	// Verify no checkpoint was recorded for the orphan step: snapshot
+	// fakeLambda state under its mutex.
+	fake.mu.Lock()
+	batches := make([][]types.OperationUpdate, len(fake.gotUpdateBatches))
+	copy(batches, fake.gotUpdateBatches)
+	fake.mu.Unlock()
+
+	for _, batch := range batches {
+		for _, u := range batch {
+			if aws.ToString(u.Name) == "orphan-step" {
+				t.Errorf("orphan-step checkpoint was recorded (action=%s); expected refusal", u.Action)
+			}
+		}
+	}
+}

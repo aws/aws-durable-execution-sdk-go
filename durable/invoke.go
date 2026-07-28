@@ -1,6 +1,7 @@
 package durable
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -175,6 +176,9 @@ func runInvoke[O, I any](ec *execContext, id, name, functionID string, input I, 
 		update.ParentId = aws.String(hashID(parent))
 	}
 	if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+		if errors.Is(err, errCheckpointTerminated) {
+			return zero, errSuspendExecution
+		}
 		return zero, err
 	}
 

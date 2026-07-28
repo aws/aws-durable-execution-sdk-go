@@ -103,6 +103,9 @@ func CreateCallback[O any](ctx Context, name string, opts ...CallbackOption) (*C
 	}
 	update.CallbackOptions = cbOpts
 	if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+		if errors.Is(err, errCheckpointTerminated) {
+			return nil, errSuspendExecution
+		}
 		return nil, err
 	}
 
@@ -185,6 +188,9 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 	if op == nil {
 		update := wfcbContextUpdate(ec, id, name, types.OperationActionStart)
 		if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+			if errors.Is(err, errCheckpointTerminated) {
+				return zero, errSuspendExecution
+			}
 			return zero, err
 		}
 	}
@@ -202,6 +208,9 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 		update := wfcbContextUpdate(ec, id, name, types.OperationActionFail)
 		update.Error = errorObject(fnErr)
 		if cerr := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); cerr != nil {
+			if errors.Is(cerr, errCheckpointTerminated) {
+				return zero, errSuspendExecution
+			}
 			return zero, cerr
 		}
 		return zero, fnErr
@@ -215,6 +224,9 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 	update := wfcbContextUpdate(ec, id, name, types.OperationActionSucceed)
 	update.Payload = aws.String(string(serialized))
 	if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+		if errors.Is(err, errCheckpointTerminated) {
+			return zero, errSuspendExecution
+		}
 		return zero, err
 	}
 

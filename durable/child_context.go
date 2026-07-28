@@ -99,6 +99,9 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 	if op == nil {
 		update := childUpdate(ec, id, name, types.OperationActionStart)
 		if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+			if errors.Is(err, errCheckpointTerminated) {
+				return zero, errSuspendExecution
+			}
 			return zero, err
 		}
 	}
@@ -148,12 +151,15 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 		// Suspension is not a child failure: it propagates so the
 		// invocation ends PENDING and the child resumes in a later
 		// invocation.
-		if errors.Is(fnErr, errSuspendExecution) {
-			return zero, fnErr
+		if errors.Is(fnErr, errSuspendExecution) || errors.Is(fnErr, errCheckpointTerminated) {
+			return zero, errSuspendExecution
 		}
 		update := childUpdate(ec, id, name, types.OperationActionFail)
 		update.Error = errorObject(fnErr)
 		if cerr := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); cerr != nil {
+			if errors.Is(cerr, errCheckpointTerminated) {
+				return zero, errSuspendExecution
+			}
 			return zero, cerr
 		}
 		return zero, &ChildContextError{Name: name, Err: fnErr}
@@ -172,6 +178,9 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 		update.Payload = aws.String(string(serialized))
 	}
 	if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+		if errors.Is(err, errCheckpointTerminated) {
+			return zero, errSuspendExecution
+		}
 		return zero, err
 	}
 
@@ -224,6 +233,9 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 	if op == nil {
 		update := childUpdate(ec, id, name, types.OperationActionStart)
 		if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+			if errors.Is(err, errCheckpointTerminated) {
+				return newFailedFuture[O](errSuspendExecution)
+			}
 			return newFailedFuture[O](err)
 		}
 	}
@@ -266,8 +278,9 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 		if fnErr != nil {
 			// Suspension propagates: settle with suspension error
 			// so the parent sees suspension, not a child failure.
-			if errors.Is(fnErr, errSuspendExecution) {
-				fut.settle(result, errSuspendExecution)
+			if errors.Is(fnErr, errSuspendExecution) || errors.Is(fnErr, errCheckpointTerminated) {
+				var zero O
+				fut.settle(zero, errSuspendExecution)
 				return
 			}
 			// Checkpoint the failure. If checkpointing fails, the
@@ -275,6 +288,13 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 			update := childUpdate(ec, id, name, types.OperationActionFail)
 			update.Error = errorObject(fnErr)
 			if cerr := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); cerr != nil {
+				// Terminated checkpointer means the invocation is
+				// answering PENDING; treat as suspension.
+				if errors.Is(cerr, errCheckpointTerminated) {
+					var zero O
+					fut.settle(zero, errSuspendExecution)
+					return
+				}
 				fut.settle(result, cerr)
 				return
 			}
@@ -295,6 +315,13 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 			update.Payload = aws.String(string(serialized))
 		}
 		if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+			// Terminated checkpointer means the invocation is answering
+			// PENDING; treat as suspension.
+			if errors.Is(err, errCheckpointTerminated) {
+				var zero O
+				fut.settle(zero, errSuspendExecution)
+				return
+			}
 			fut.settle(result, err)
 			return
 		}

@@ -1,6 +1,7 @@
 package durable
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -105,6 +106,9 @@ func runWait(ec *execContext, id, name string, d time.Duration) error {
 		update.ParentId = aws.String(hashID(parent))
 	}
 	if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+		if errors.Is(err, errCheckpointTerminated) {
+			return errSuspendExecution
+		}
 		return err
 	}
 

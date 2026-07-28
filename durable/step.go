@@ -339,6 +339,9 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 	if op == nil || op.status != statusStarted {
 		update := stepUpdate(ec, id, name, types.OperationActionStart)
 		if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+			if errors.Is(err, errCheckpointTerminated) {
+				return zero, errSuspendExecution
+			}
 			return zero, err
 		}
 	}
@@ -423,6 +426,9 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 	update := stepUpdate(ec, id, name, types.OperationActionSucceed)
 	update.Payload = aws.String(string(serialized))
 	if cerr := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); cerr != nil {
+		if errors.Is(cerr, errCheckpointTerminated) {
+			return zero, errSuspendExecution
+		}
 		return zero, cerr
 	}
 
@@ -458,6 +464,9 @@ func settleStepFailure[O any](ec *execContext, id, name string, options stepOpti
 		update := stepUpdate(ec, id, name, types.OperationActionFail)
 		update.Error = errorObject(cause)
 		if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+			if errors.Is(err, errCheckpointTerminated) {
+				return zero, errSuspendExecution
+			}
 			return zero, err
 		}
 		return zero, &StepError{Name: name, Attempts: attempt, Err: cause}
@@ -473,6 +482,9 @@ func settleStepFailure[O any](ec *execContext, id, name string, options stepOpti
 		NextAttemptDelaySeconds: aws.Int32(delaySec),
 	}
 	if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+		if errors.Is(err, errCheckpointTerminated) {
+			return zero, errSuspendExecution
+		}
 		return zero, err
 	}
 

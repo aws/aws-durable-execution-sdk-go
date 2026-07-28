@@ -301,6 +301,14 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		select {
 		case out := <-outcomeCh:
 			if ec.suspend.fired() || ec.suspend.committed() {
+				// The handler returned while a pending commitment
+				// stands. Terminate the checkpointer so orphaned
+				// branches (durable.Go children still mid-flight)
+				// cannot record further state; they will settle their
+				// futures with errSuspendExecution and release their
+				// branch tokens. This does not wait for the branches
+				// to finish, so the PENDING response is immediate.
+				cp.terminate()
 				return nil, errSuspendExecution
 			}
 			if out.err != nil {
@@ -308,6 +316,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 			}
 			return out.result, nil
 		case <-ec.suspend.done():
+			cp.terminate()
 			return nil, errSuspendExecution
 		}
 	}

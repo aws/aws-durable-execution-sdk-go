@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -36,6 +37,14 @@ type ExecutionClient interface {
 	CheckpointDurableExecution(ctx context.Context, in *lambda.CheckpointDurableExecutionInput, opts ...func(*lambda.Options)) (*lambda.CheckpointDurableExecutionOutput, error)
 }
 
+// errCheckpointTerminated is returned by the checkpointer after the
+// invocation has committed to a PENDING response. Orphaned branches
+// (durable.Go children still mid-flight when the handler unwinds) receive
+// this error at their next checkpoint attempt and treat it as suspension:
+// they settle their future with errSuspendExecution and release their
+// branch token without recording any further state.
+var errCheckpointTerminated = errors.New("durable: checkpoint refused: invocation terminated")
+
 // checkpointer persists operation updates for one durable execution and
 // tracks the rotating checkpoint token. It is safe for concurrent use:
 // operation bodies running on multiple goroutines checkpoint through one
@@ -46,6 +55,12 @@ type checkpointer struct {
 
 	mu    sync.Mutex
 	token string
+
+	// terminated is atomically set when the invocation commits to PENDING.
+	// Checked without holding mu so that terminate() never blocks behind an
+	// in-flight checkpoint API call. An in-flight checkpoint discovers
+	// termination after its API call returns and refuses to rotate the token.
+	terminated atomic.Bool
 
 	// state is the shared execution state. When non-nil, the checkpointer
 	// merges backend-returned operations into it so that subsequent reads
@@ -105,6 +120,14 @@ func (cp *checkpointer) loadStateFrom(ctx context.Context, marker string) ([]*op
 	return ops, nil
 }
 
+// terminate marks the checkpointer as terminated. All subsequent checkpoint
+// calls return errCheckpointTerminated, and an in-flight checkpoint refuses
+// to commit its result. Uses an atomic store so it never blocks behind a
+// checkpoint holding mu.
+func (cp *checkpointer) terminate() {
+	cp.terminated.Store(true)
+}
+
 // checkpoint applies updates atomically and rotates the checkpoint token.
 // The returned operations are the updated state from the backend response,
 // which may include backend-assigned fields (e.g. CallbackId).
@@ -114,11 +137,22 @@ func (cp *checkpointer) loadStateFrom(ctx context.Context, marker string) ([]*op
 // backoff. Non-retryable failures (client faults other than throttling)
 // fail immediately. On any failure the token remains unchanged.
 func (cp *checkpointer) checkpoint(ctx context.Context, updates []types.OperationUpdate) error {
+	// Fast-path refusal: no lock required.
+	if cp.terminated.Load() {
+		return errCheckpointTerminated
+	}
+
 	cp.mu.Lock()
 	defer cp.mu.Unlock()
 
 	var lastErr error
 	for attempt := range checkpointMaxAttempts {
+		// Re-check after acquiring the lock or between retries: terminate()
+		// may have been called while we were waiting or sleeping.
+		if cp.terminated.Load() {
+			return errCheckpointTerminated
+		}
+
 		out, err := cp.client.CheckpointDurableExecution(ctx, &lambda.CheckpointDurableExecutionInput{
 			DurableExecutionArn: aws.String(cp.executionArn),
 			CheckpointToken:     aws.String(cp.token),
@@ -140,6 +174,14 @@ func (cp *checkpointer) checkpoint(ctx context.Context, updates []types.Operatio
 			}
 			continue
 		}
+
+		// The API call succeeded, but if termination was signaled while it
+		// was in-flight, refuse to commit the result. The orphaned branch's
+		// progress will be replayed on the next invocation.
+		if cp.terminated.Load() {
+			return errCheckpointTerminated
+		}
+
 		if out.CheckpointToken == nil {
 			return errors.New("durable: checkpoint: backend returned no checkpoint token")
 		}
