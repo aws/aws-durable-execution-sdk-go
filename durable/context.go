@@ -105,7 +105,7 @@ type Deserializer interface {
 
 // ExecutionStartTime returns the start timestamp of the durable execution.
 // This is the checkpointed start time of the root EXECUTION operation,
-// recorded by the backend when the execution was created. It is the same
+// recorded when the execution was created. It is the same
 // value on every invocation of one execution (including replays), making it
 // safe to use between durable operations without introducing
 // non-determinism.

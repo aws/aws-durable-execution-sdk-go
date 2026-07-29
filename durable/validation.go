@@ -5,9 +5,9 @@ package durable
 // during replay (op non-nil) and only on genuine mismatch — a nil op means
 // no checkpoint exists (first execution) and skips validation.
 //
-// The JS SDK validates all three fields (Type, SubType, Name). SubType is
+// All three fields (Type, SubType, Name) are validated. SubType is
 // checked strictly: a mismatch is always an error. Name is also checked
-// strictly, matching the JS reference SDK's validateReplayConsistency.
+// strictly.
 //
 // Returns nil when:
 //   - op is nil (first execution, no checkpoint to validate)

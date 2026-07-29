@@ -58,6 +58,9 @@ func Map[I, O any](ctx Context, name string, items []I, fn func(ctx Context, ite
 	if err := validateReplayConsistency(op, string(types.OperationTypeContext), operationSubTypeMap, name); err != nil {
 		return BatchResult[O]{}, err
 	}
+	if ec.unfinishedInSucceededContext(op) {
+		return BatchResult[O]{}, ec.parkUnfinishedReplay()
+	}
 	if op != nil && op.status.terminal() {
 		result, err := replayTerminalBatch[I, O](ec, op, id, name, items, fn, options, operationSubTypeMap, operationSubTypeMapIteration)
 		if err != nil {
@@ -134,8 +137,14 @@ func Parallel[O any](ctx Context, name string, branches []Branch[O], opts ...Bat
 	if err := validateReplayConsistency(op, string(types.OperationTypeContext), operationSubTypeParallel, name); err != nil {
 		return BatchResult[O]{}, err
 	}
+	if ec.unfinishedInSucceededContext(op) {
+		return BatchResult[O]{}, ec.parkUnfinishedReplay()
+	}
 	if op != nil && op.status.terminal() {
-		result, err := replayTerminalBatch[struct{}, O](ec, op, id, name, nil, nil, options, operationSubTypeParallel, operationSubTypeParallelBranch)
+		placeholders := make([]struct{}, len(branches))
+		result, err := replayTerminalBatch[struct{}, O](ec, op, id, name, placeholders, func(ctx Context, _ struct{}, index int) (O, error) {
+			return branches[index].Func(ctx)
+		}, options, operationSubTypeParallel, operationSubTypeParallelBranch)
 		if err != nil {
 			return BatchResult[O]{}, err
 		}
@@ -452,9 +461,7 @@ func WithNesting(m NestingMode) BatchOption {
 
 // CompletionConfig is a batch early-completion policy. Zero values leave
 // the corresponding threshold unset. Thresholds may be combined — when
-// multiple are set, the first threshold to fire wins. This matches the JS
-// SDK semantics; the Java SDK disallows combining MinSuccessful with failure
-// tolerances at the API level.
+// multiple are set, the first threshold to fire wins.
 type CompletionConfig struct {
 	// MinSuccessful completes the batch early once this many items
 	// succeed.
@@ -814,6 +821,9 @@ func runPreClaimedBatchItem[O any](
 	abandon *atomic.Bool,
 	tok *branchToken,
 ) (BatchItem[O], error) {
+	if err := validateReplayConsistency(op, string(types.OperationTypeContext), childSubType, itemName); err != nil {
+		return BatchItem[O]{}, err
+	}
 	if options.nesting == NestingFlat {
 		// FLAT mode: run in a virtual child context.
 		mode := childReplayMode(ec, childID, op)
@@ -971,7 +981,16 @@ func runFlatBatchItemShared[O any](
 	options batchOptions,
 	runItem func(childCtx Context, index int) (O, error),
 ) (BatchItem[O], error) {
-	result, fnErr := runItem(flatCtx, index)
+	var result O
+	var fnErr error
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fnErr = fmt.Errorf("durable: batch item %d panicked: %v", index, r)
+			}
+		}()
+		result, fnErr = runItem(flatCtx, index)
+	}()
 	if fnErr != nil {
 		if errors.Is(fnErr, errSuspendExecution) {
 			return BatchItem[O]{}, fnErr
@@ -1019,6 +1038,9 @@ func runNestedBatchItem[O any](
 	}
 
 	op := ec.state.get(childID)
+	if err := validateReplayConsistency(op, string(types.OperationTypeContext), childSubType, itemName); err != nil {
+		return BatchItem[O]{}, err
+	}
 	if op != nil && op.status.terminal() {
 		return replayTerminalChildItem[O](ec, op, childID, itemName, index, options, childSubType, runItem)
 	}

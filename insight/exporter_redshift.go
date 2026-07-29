@@ -24,8 +24,9 @@ type RedshiftDataAPI interface {
 //   - Serverless: set WorkgroupName.
 //   - Provisioned cluster: set ClusterIdentifier.
 //
-// SQL is always parameterized via SqlParameters — never string
-// interpolation.
+// Record values are always bound via SqlParameters. The table name is the
+// one value embedded in the statement text (identifiers cannot be bound as
+// parameters) and is validated as a plain SQL identifier before use.
 //
 // Fire-and-forget: does NOT poll for statement completion.
 type RedshiftExporter struct {
@@ -72,6 +73,9 @@ func (e *RedshiftExporter) Export(ctx context.Context, record Record) error {
 	table := e.TableName
 	if table == "" {
 		table = "workflow_insight"
+	}
+	if err := validateTableName(table); err != nil {
+		return fmt.Errorf("insight.RedshiftExporter: %w", err)
 	}
 
 	emittedAt := record.EmittedAt.Format(dynamoDBTimeFormat)

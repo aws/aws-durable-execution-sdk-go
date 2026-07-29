@@ -17,8 +17,7 @@ import (
 )
 
 // DefaultMaxInvocations is the maximum number of re-invocations that
-// [LocalRunner.RunUntilComplete] performs before returning. This matches
-// the Java SDK's local test runner.
+// [LocalRunner.RunUntilComplete] performs before returning.
 const DefaultMaxInvocations = 100
 
 // RunnerOption configures a [LocalRunner].
@@ -167,8 +166,7 @@ func (r *LocalRunner[I, O]) RunUntilComplete(t *testing.T, event I, opts ...Runn
 //
 // The duration parameter is accepted for API-forward-compatibility but is
 // currently ignored: all eligible operations advance regardless of their
-// configured duration. This matches the Java SDK's advanceTime() which
-// also ignores magnitude.
+// configured duration.
 //
 // Returns true if any operation was advanced.
 func (r *LocalRunner[I, O]) AdvanceTime(_ time.Duration) bool {

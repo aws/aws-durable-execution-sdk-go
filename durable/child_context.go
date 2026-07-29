@@ -63,6 +63,9 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 	if err := validateReplayConsistency(op, string(types.OperationTypeContext), operationSubTypeRunInChildContext, name); err != nil {
 		return zero, err
 	}
+	if ec.unfinishedInSucceededContext(op) {
+		return zero, ec.parkUnfinishedReplay()
+	}
 	if op != nil {
 		switch op.status {
 		case statusSucceeded:
@@ -224,6 +227,9 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 	op := ec.state.get(id)
 	if err := validateReplayConsistency(op, string(types.OperationTypeContext), operationSubTypeRunInChildContext, name); err != nil {
 		return newFailedFuture[O](err)
+	}
+	if ec.unfinishedInSucceededContext(op) {
+		return newUnfinishedReplayFuture[O](ec.suspend)
 	}
 	if op != nil && op.status.terminal() {
 		return resolveTerminalChild[O](ec, op, id, name, options, fn)

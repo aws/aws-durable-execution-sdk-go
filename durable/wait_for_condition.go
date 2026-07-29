@@ -25,7 +25,7 @@ const operationSubTypeWaitForCondition = "WaitForCondition"
 // internal retry. The error is checkpointed and returned as a [*StepError].
 //
 // If the wait strategy's Continue field is true, its Delay determines how
-// long the backend suspends before re-invoking. When Continue is false, the
+// long the execution suspends before re-invoking. When Continue is false, the
 // final state is checkpointed and returned.
 func WaitForCondition[S any](ctx Context, name string, check func(StepContext, S) (S, error), cfg ConditionConfig[S]) (S, error) {
 	var zero S
@@ -54,6 +54,9 @@ func runWaitForCondition[S any](ec *execContext, id, name string, check func(Ste
 	op := ec.state.get(id)
 	if err := validateReplayConsistency(op, string(types.OperationTypeStep), operationSubTypeWaitForCondition, name); err != nil {
 		return zero, err
+	}
+	if ec.unfinishedInSucceededContext(op) {
+		return zero, ec.parkUnfinishedReplay()
 	}
 
 	// Determine the current attempt number. The checkpointed Attempt
@@ -130,9 +133,8 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 	var currentState S
 	if op != nil && op.step != nil && op.step.result != "" {
 		if err := serdes.Unmarshal(ec.serdesCtx(id), []byte(op.step.result), &currentState); err != nil {
-			// Deserialization failure: use initial state as fallback.
-			// This matches the JS behavior where serdes failure falls
-			// back to initialState.
+			// Deserialization failure: use initial state as fallback
+			// rather than failing the condition wait.
 			currentState = cfg.InitialState
 		}
 	} else {

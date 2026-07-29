@@ -8,10 +8,9 @@ import (
 	"os"
 )
 
-// LambdaLogExporter writes records as a single JSON line to stdout,
-// matching the JS SDK's LambdaLogExporter: since Lambda captures stdout
-// to the function's CloudWatch log group automatically, this requires
-// zero IAM permissions and zero setup.
+// LambdaLogExporter writes records as a single JSON line to stdout.
+// Since Lambda captures stdout to the function's CloudWatch log group
+// automatically, this requires zero IAM permissions and zero setup.
 type LambdaLogExporter struct {
 	// Writer overrides the default destination (os.Stdout). Primarily
 	// for tests.

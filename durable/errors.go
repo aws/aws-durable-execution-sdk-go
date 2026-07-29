@@ -23,8 +23,7 @@ var (
 )
 
 // Sentinel errors for matching with [errors.Is]. These indicate terminal
-// operation statuses that the backend assigns (TIMED_OUT, STOPPED,
-// CANCELLED).
+// operation statuses assigned externally (TIMED_OUT, STOPPED, CANCELLED).
 
 // ErrCallbackTimedOut indicates that a callback's timeout elapsed before an
 // external system submitted a result.
@@ -434,7 +433,7 @@ func (e *NonDeterministicReplayError) As(target interface{}) bool {
 
 // resultSizeLimitBytes is the checkpoint batch payload limit (750KB).
 // A single operation result exceeding this cannot fit in any checkpoint
-// batch and would be rejected by the backend. This check applies only to
+// batch and is rejected. This check applies only to
 // paths where the SDK serializes a user-produced value directly into a
 // checkpoint payload (Step results, WaitForCondition results). It does NOT
 // apply to child-context results (which use ReplayChildren offload) or

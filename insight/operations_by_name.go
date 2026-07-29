@@ -30,8 +30,7 @@ type OperationSummary struct {
 }
 
 // GroupOperationsByName aggregates operations into a by-name view.
-// Operations with an empty Name are excluded. The aggregation rules
-// match the JS SDK's documented behavior:
+// Operations with an empty Name are excluded. The aggregation rules are:
 //   - Count, FailedCount, MaxAttempt, and duration metrics are aggregated
 //     across all occurrences sharing a name.
 //   - Type, SubType, and Status reflect the last occurrence encountered.

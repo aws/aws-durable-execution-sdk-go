@@ -13,7 +13,7 @@ import (
 const operationSubTypeWait = "Wait"
 
 // Wait suspends the execution for duration d without consuming compute
-// resources: the invocation ends and the backend resumes the execution in a
+// resources: the invocation ends and the execution resumes in a
 // new invocation when the duration elapses. On replay a completed wait
 // returns immediately. name identifies the wait for tracking and debugging;
 // pass "" for an unnamed wait.
@@ -48,6 +48,9 @@ func WaitAsync(ctx Context, name string, d time.Duration) *Future[Void] {
 	if err != nil {
 		return newFailedFuture[Void](err)
 	}
+	if ec.unfinishedInSucceededContext(ec.state.get(id)) {
+		return newUnfinishedReplayFuture[Void](ec.suspend)
+	}
 
 	fut := newFuture[Void]()
 	registerFuture(ec.suspend, fut)
@@ -71,6 +74,9 @@ func runWait(ec *execContext, id, name string, d time.Duration) error {
 	op := ec.state.get(id)
 	if err := validateReplayConsistency(op, string(types.OperationTypeWait), operationSubTypeWait, name); err != nil {
 		return err
+	}
+	if ec.unfinishedInSucceededContext(op) {
+		return ec.parkUnfinishedReplay()
 	}
 	if op != nil {
 		switch op.status {

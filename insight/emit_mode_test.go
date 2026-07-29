@@ -203,6 +203,37 @@ func TestPlugin_EmitAlways_EmitsForSucceededExecution(t *testing.T) {
 	}
 }
 
+// TestPlugin_EmitAlways_EmitsForPendingInvocation verifies that EmitAlways
+// emits a running snapshot when an invocation suspends: the record keeps
+// the running status with no end timestamp, since the execution continues.
+func TestPlugin_EmitAlways_EmitsForPendingInvocation(t *testing.T) {
+	exp := &capturingExporter{}
+	ip := New(Config{EmitMode: EmitAlways, Exporters: []Exporter{exp}})
+
+	ctx := context.Background()
+	arn := "arn:aws:lambda:us-east-1:123456789012:function:fn:1"
+
+	ip.onInvocationStart(ctx, durable.InvocationHookInfo{
+		ExecutionArn:            arn,
+		ExecutionStartTimestamp: time.Now(),
+	})
+	ip.onInvocationEnd(ctx, durable.InvocationEndHookInfo{
+		ExecutionArn: arn,
+		Status:       durable.PluginInvocationPending,
+	})
+
+	records := exp.snapshot()
+	if len(records) != 1 {
+		t.Fatalf("expected 1 record for pending invocation under EmitAlways, got %d", len(records))
+	}
+	if records[0].Status != StatusRunning {
+		t.Errorf("record status = %q, want %q", records[0].Status, StatusRunning)
+	}
+	if records[0].EndTimestamp != nil {
+		t.Errorf("record end timestamp = %v, want nil for a still-running execution", records[0].EndTimestamp)
+	}
+}
+
 func TestNew_UnrecognizedEmitMode_DefaultsToOnComplete(t *testing.T) {
 	ip := New(Config{EmitMode: "not-a-real-mode"})
 	if ip.emitMode != EmitOnComplete {

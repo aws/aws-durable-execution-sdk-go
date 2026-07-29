@@ -27,8 +27,8 @@ type fakeCloudAPI struct {
 	// getExecutionFunc, if set, overrides GetDurableExecution.
 	getExecutionFunc func(ctx context.Context, params *lambda.GetDurableExecutionInput) (*lambda.GetDurableExecutionOutput, error)
 
-	// getStateFunc, if set, overrides GetDurableExecutionState.
-	getStateFunc func(ctx context.Context, params *lambda.GetDurableExecutionStateInput) (*lambda.GetDurableExecutionStateOutput, error)
+	// getHistoryFunc, if set, overrides GetDurableExecutionHistory.
+	getHistoryFunc func(ctx context.Context, params *lambda.GetDurableExecutionHistoryInput) (*lambda.GetDurableExecutionHistoryOutput, error)
 
 	// callbackSuccessFunc, if set, overrides SendDurableExecutionCallbackSuccess.
 	callbackSuccessFunc func(ctx context.Context, params *lambda.SendDurableExecutionCallbackSuccessInput) (*lambda.SendDurableExecutionCallbackSuccessOutput, error)
@@ -59,12 +59,12 @@ func (f *fakeCloudAPI) GetDurableExecution(ctx context.Context, params *lambda.G
 	}, nil
 }
 
-func (f *fakeCloudAPI) GetDurableExecutionState(ctx context.Context, params *lambda.GetDurableExecutionStateInput, _ ...func(*lambda.Options)) (*lambda.GetDurableExecutionStateOutput, error) {
-	if f.getStateFunc != nil {
-		return f.getStateFunc(ctx, params)
+func (f *fakeCloudAPI) GetDurableExecutionHistory(ctx context.Context, params *lambda.GetDurableExecutionHistoryInput, _ ...func(*lambda.Options)) (*lambda.GetDurableExecutionHistoryOutput, error) {
+	if f.getHistoryFunc != nil {
+		return f.getHistoryFunc(ctx, params)
 	}
-	return &lambda.GetDurableExecutionStateOutput{
-		Operations: []types.Operation{},
+	return &lambda.GetDurableExecutionHistoryOutput{
+		Events: []types.Event{},
 	}, nil
 }
 
@@ -99,18 +99,24 @@ func TestCloudRunnerSucceeded(t *testing.T) {
 				Result: aws.String(`"order-confirmed"`),
 			}, nil
 		},
-		getStateFunc: func(_ context.Context, _ *lambda.GetDurableExecutionStateInput) (*lambda.GetDurableExecutionStateOutput, error) {
-			return &lambda.GetDurableExecutionStateOutput{
-				Operations: []types.Operation{
+		getHistoryFunc: func(_ context.Context, _ *lambda.GetDurableExecutionHistoryInput) (*lambda.GetDurableExecutionHistoryOutput, error) {
+			return &lambda.GetDurableExecutionHistoryOutput{
+				Events: []types.Event{
 					{
-						Id:      aws.String("op-1"),
-						Name:    aws.String("validate"),
-						Status:  types.OperationStatusSucceeded,
-						Type:    types.OperationTypeStep,
-						SubType: aws.String("Step"),
-						StepDetails: &types.StepDetails{
-							Attempt: 1,
-							Result:  aws.String(`"validated"`),
+						Id:                 aws.String("op-1"),
+						Name:               aws.String("validate"),
+						SubType:            aws.String("Step"),
+						EventType:          types.EventTypeStepStarted,
+						StepStartedDetails: &types.StepStartedDetails{},
+					},
+					{
+						Id:        aws.String("op-1"),
+						Name:      aws.String("validate"),
+						SubType:   aws.String("Step"),
+						EventType: types.EventTypeStepSucceeded,
+						StepSucceededDetails: &types.StepSucceededDetails{
+							Result:       &types.EventResult{Payload: aws.String(`"validated"`)},
+							RetryDetails: &types.RetryDetails{CurrentAttempt: 1},
 						},
 					},
 				},
@@ -157,21 +163,20 @@ func TestCloudRunnerFailed(t *testing.T) {
 				},
 			}, nil
 		},
-		getStateFunc: func(_ context.Context, _ *lambda.GetDurableExecutionStateInput) (*lambda.GetDurableExecutionStateOutput, error) {
-			return &lambda.GetDurableExecutionStateOutput{
-				Operations: []types.Operation{
+		getHistoryFunc: func(_ context.Context, _ *lambda.GetDurableExecutionHistoryInput) (*lambda.GetDurableExecutionHistoryOutput, error) {
+			return &lambda.GetDurableExecutionHistoryOutput{
+				Events: []types.Event{
 					{
-						Id:      aws.String("op-1"),
-						Name:    aws.String("process"),
-						Status:  types.OperationStatusFailed,
-						Type:    types.OperationTypeStep,
-						SubType: aws.String("Step"),
-						StepDetails: &types.StepDetails{
-							Attempt: 3,
-							Error: &types.ErrorObject{
+						Id:        aws.String("op-1"),
+						Name:      aws.String("process"),
+						SubType:   aws.String("Step"),
+						EventType: types.EventTypeStepFailed,
+						StepFailedDetails: &types.StepFailedDetails{
+							Error: &types.EventError{Payload: &types.ErrorObject{
 								ErrorType:    aws.String("ProcessingError"),
 								ErrorMessage: aws.String("invalid data"),
-							},
+							}},
+							RetryDetails: &types.RetryDetails{CurrentAttempt: 3},
 						},
 					},
 				},
@@ -226,15 +231,17 @@ func TestCloudRunnerPollUntilTerminal(t *testing.T) {
 				Result: aws.String(`42`),
 			}, nil
 		},
-		getStateFunc: func(_ context.Context, _ *lambda.GetDurableExecutionStateInput) (*lambda.GetDurableExecutionStateOutput, error) {
-			return &lambda.GetDurableExecutionStateOutput{
-				Operations: []types.Operation{
+		getHistoryFunc: func(_ context.Context, _ *lambda.GetDurableExecutionHistoryInput) (*lambda.GetDurableExecutionHistoryOutput, error) {
+			return &lambda.GetDurableExecutionHistoryOutput{
+				Events: []types.Event{
 					{
-						Id:      aws.String("step-1"),
-						Name:    aws.String("compute"),
-						Status:  types.OperationStatusSucceeded,
-						Type:    types.OperationTypeStep,
-						SubType: aws.String("Step"),
+						Id:        aws.String("step-1"),
+						Name:      aws.String("compute"),
+						SubType:   aws.String("Step"),
+						EventType: types.EventTypeStepSucceeded,
+						StepSucceededDetails: &types.StepSucceededDetails{
+							Result: &types.EventResult{Payload: aws.String(`42`)},
+						},
 					},
 				},
 			}, nil
@@ -385,7 +392,7 @@ func TestCloudRunnerCallbackAPIError(t *testing.T) {
 	}
 }
 
-func TestCloudRunnerPaginatedState(t *testing.T) {
+func TestCloudRunnerPaginatedHistory(t *testing.T) {
 	var callCount atomic.Int32
 
 	api := &fakeCloudAPI{
@@ -395,19 +402,26 @@ func TestCloudRunnerPaginatedState(t *testing.T) {
 				Result: aws.String(`"ok"`),
 			}, nil
 		},
-		getStateFunc: func(_ context.Context, params *lambda.GetDurableExecutionStateInput) (*lambda.GetDurableExecutionStateOutput, error) {
+		getHistoryFunc: func(_ context.Context, params *lambda.GetDurableExecutionHistoryInput) (*lambda.GetDurableExecutionHistoryOutput, error) {
 			n := callCount.Add(1)
 			if n == 1 {
-				return &lambda.GetDurableExecutionStateOutput{
-					Operations: []types.Operation{
-						{Id: aws.String("op-1"), Name: aws.String("step1"), Status: types.OperationStatusSucceeded, Type: types.OperationTypeStep},
+				if params.Marker != nil {
+					t.Errorf("first page marker = %q, want nil", *params.Marker)
+				}
+				return &lambda.GetDurableExecutionHistoryOutput{
+					Events: []types.Event{
+						{Id: aws.String("op-1"), Name: aws.String("step1"), EventType: types.EventTypeStepStarted},
+						{Id: aws.String("op-1"), Name: aws.String("step1"), EventType: types.EventTypeStepSucceeded},
 					},
 					NextMarker: aws.String("page2"),
 				}, nil
 			}
-			return &lambda.GetDurableExecutionStateOutput{
-				Operations: []types.Operation{
-					{Id: aws.String("op-2"), Name: aws.String("step2"), Status: types.OperationStatusSucceeded, Type: types.OperationTypeStep},
+			if aws.ToString(params.Marker) != "page2" {
+				t.Errorf("second page marker = %q, want %q", aws.ToString(params.Marker), "page2")
+			}
+			return &lambda.GetDurableExecutionHistoryOutput{
+				Events: []types.Event{
+					{Id: aws.String("op-2"), Name: aws.String("step2"), EventType: types.EventTypeStepSucceeded},
 				},
 			}, nil
 		},
@@ -441,8 +455,8 @@ func TestCloudRunnerTimedOutStatus(t *testing.T) {
 				},
 			}, nil
 		},
-		getStateFunc: func(_ context.Context, _ *lambda.GetDurableExecutionStateInput) (*lambda.GetDurableExecutionStateOutput, error) {
-			return &lambda.GetDurableExecutionStateOutput{Operations: []types.Operation{}}, nil
+		getHistoryFunc: func(_ context.Context, _ *lambda.GetDurableExecutionHistoryInput) (*lambda.GetDurableExecutionHistoryOutput, error) {
+			return &lambda.GetDurableExecutionHistoryOutput{Events: []types.Event{}}, nil
 		},
 	}
 

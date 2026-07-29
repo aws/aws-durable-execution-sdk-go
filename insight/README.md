@@ -370,7 +370,7 @@ Each emitted `Record` contains:
 | `StartTimestamp` | *time.Time | When the execution started. |
 | `EndTimestamp` | *time.Time | When the execution ended (terminal records only). |
 | `DurationMs` | *int64 | End minus start in milliseconds. |
-| `InvocationCount` | int | Number of Lambda invocations for this execution. |
+| `InvocationCount` | int | Number of invocations of this execution observed by this function instance. |
 | `EmittedAt` | time.Time | When this record was emitted. |
 | `Operations` | []OperationRecord | Operation snapshots (filtered by OperationDetail). |
 | `Error` | *ErrorRecord | Execution-level error (failed executions only). |

@@ -28,8 +28,7 @@ const (
 
 // EmitMode controls when the insight plugin emits records.
 //
-// Note: B's reference defines EmitModeOnFailure (emit only on failure).
-// This is intentionally deferred — use EmitOnComplete for terminal-only
+// There is no failure-only mode: use EmitOnComplete for terminal-only
 // emission and filter downstream if needed.
 type EmitMode string
 
@@ -102,8 +101,8 @@ type Record struct {
 
 	InvocationCount int `json:"invocationCount,omitempty"`
 
-	// EmittedAt is the time this record was created. Fixed at record
-	// creation time (fixes B's bug where this was never set).
+	// EmittedAt is the time this record was created, refreshed to the
+	// emission time when a snapshot is sent.
 	EmittedAt time.Time `json:"emittedAt"`
 
 	Operations []OperationRecord `json:"operations"`
@@ -123,9 +122,8 @@ type Record struct {
 }
 
 // NewRecord creates a Record with standard metadata pre-populated.
-// EmittedAt is set to time.Now() (fixing B's bug where it was never set).
-// ExecutionName is extracted from the ARN's last path segment (fixing B's
-// bug where it was never populated).
+// EmittedAt is set to time.Now() and ExecutionName is extracted from the
+// ARN.
 func NewRecord(executionArn string) *Record {
 	return &Record{
 		RecordType:    RecordType,

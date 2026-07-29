@@ -3,8 +3,7 @@
 // example) with an incremented attempt counter. The target succeeds once
 // the attempt number reaches the configured threshold.
 //
-// This is the Go equivalent of the JS withRetry(ctx, name, (ctx,attempt)=>ctx.invoke(...))
-// pattern. In Go, the retry loop is explicit and idiomatic.
+// In Go, the retry loop is explicit and idiomatic.
 package main
 
 import (

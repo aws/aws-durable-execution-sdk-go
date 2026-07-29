@@ -24,8 +24,9 @@ type DurableExecutionAPI interface {
 	// and result.
 	GetDurableExecution(ctx context.Context, params *lambda.GetDurableExecutionInput, optFns ...func(*lambda.Options)) (*lambda.GetDurableExecutionOutput, error)
 
-	// GetDurableExecutionState retrieves the checkpointed operation log.
-	GetDurableExecutionState(ctx context.Context, params *lambda.GetDurableExecutionStateInput, optFns ...func(*lambda.Options)) (*lambda.GetDurableExecutionStateOutput, error)
+	// GetDurableExecutionHistory retrieves the execution's event
+	// history.
+	GetDurableExecutionHistory(ctx context.Context, params *lambda.GetDurableExecutionHistoryInput, optFns ...func(*lambda.Options)) (*lambda.GetDurableExecutionHistoryOutput, error)
 
 	// Invoke starts or resumes a durable function invocation.
 	Invoke(ctx context.Context, params *lambda.InvokeInput, optFns ...func(*lambda.Options)) (*lambda.InvokeOutput, error)
@@ -272,32 +273,34 @@ func (r *CloudRunner) buildResult(ctx context.Context, arn string, execOut *lamb
 	return tr, nil
 }
 
-// fetchAllOperations retrieves the full paginated operation log.
+// fetchAllOperations retrieves the execution's full event history and
+// folds it into one record per operation.
 func (r *CloudRunner) fetchAllOperations(ctx context.Context, arn string) ([]types.Operation, error) {
-	// The GetDurableExecutionState API requires a checkpoint token.
-	// For external polling (not part of a handler invocation), we use a
-	// placeholder token that passes format validation.
-	const externalPollerToken = "AA=="
-
-	var all []types.Operation
+	// GetDurableExecutionHistory pages through the execution's events;
+	// each event carries the ID of the operation it belongs to.
+	var events []types.Event
 	var marker *string
 
 	for {
-		out, err := r.api.GetDurableExecutionState(ctx, &lambda.GetDurableExecutionStateInput{
-			DurableExecutionArn: aws.String(arn),
-			CheckpointToken:     aws.String(externalPollerToken),
-			Marker:              marker,
+		out, err := r.api.GetDurableExecutionHistory(ctx, &lambda.GetDurableExecutionHistoryInput{
+			DurableExecutionArn:  aws.String(arn),
+			IncludeExecutionData: aws.Bool(true),
+			MaxItems:             maxHistoryItemsPerPage,
+			Marker:               marker,
 		})
 		if err != nil {
 			return nil, err
 		}
-		all = append(all, out.Operations...)
+		events = append(events, out.Events...)
 		if out.NextMarker == nil || *out.NextMarker == "" {
-			return all, nil
+			return operationsFromEvents(events), nil
 		}
 		marker = out.NextMarker
 	}
 }
+
+// maxHistoryItemsPerPage is the largest page size the history API allows.
+const maxHistoryItemsPerPage = 1000
 
 func isTerminalExecutionStatus(s types.ExecutionStatus) bool {
 	switch s {

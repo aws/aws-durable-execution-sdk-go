@@ -7,9 +7,8 @@
 // Without it, the check is a no-op and this handler succeeds instead of
 // failing.
 //
-// Go adaptation note: The JS SDK validates context scope at the call site.
-// In Go, the enforcement is goroutine ownership: using a parent context
-// from a child goroutine triggers [durable.ErrWrongGoroutine].
+// In Go, context scope is enforced through goroutine ownership: using a
+// parent context from a child goroutine triggers [durable.ErrWrongGoroutine].
 //
 // Expected terminal state: FAILED.
 package main

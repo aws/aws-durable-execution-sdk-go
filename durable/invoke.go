@@ -98,6 +98,9 @@ func InvokeAsync[O, I any](ctx Context, name, functionID string, input I, opts .
 	if err != nil {
 		return newFailedFuture[O](err)
 	}
+	if ec.unfinishedInSucceededContext(ec.state.get(id)) {
+		return newUnfinishedReplayFuture[O](ec.suspend)
+	}
 
 	fut := newFuture[O]()
 	registerFuture(ec.suspend, fut)
@@ -123,6 +126,9 @@ func runInvoke[O, I any](ec *execContext, id, name, functionID string, input I, 
 	if err := validateReplayConsistency(op, string(types.OperationTypeChainedInvoke), operationSubTypeChainedInvoke, name); err != nil {
 		return zero, err
 	}
+	if ec.unfinishedInSucceededContext(op) {
+		return zero, ec.parkUnfinishedReplay()
+	}
 	if op != nil {
 		switch op.status {
 		case statusSucceeded:
@@ -135,10 +141,10 @@ func runInvoke[O, I any](ec *execContext, id, name, functionID string, input I, 
 			}
 			return out, nil
 
-		case statusFailed, statusTimedOut, statusStopped:
+		case statusFailed, statusTimedOut, statusStopped, statusCancelled:
 			return zero, invokeErrorFromCheckpoint(name, functionID, op)
 
-		case statusStarted, statusPending, statusReady, statusCancelled:
+		case statusStarted, statusPending, statusReady:
 			// The invoked execution has not settled: keep waiting.
 			ec.blocked.Store(true)
 			ec.suspend.commitPending(ec.abandon)

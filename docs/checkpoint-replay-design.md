@@ -28,7 +28,7 @@ Each Lambda invocation follows this sequence:
 
 2. **Assemble state.** The embedded page is parsed into an in-memory
    operation map. If a pagination marker is present, additional pages are
-   fetched from the backend until the full operation log is loaded.
+   fetched until the full operation log is loaded.
 
 3. **Determine mode.** If more than one operation exists in the state (the
    root EXECUTION operation plus at least one user operation), the context
@@ -142,8 +142,8 @@ futures have been settled uses `fired()`. A context also carries its own
 `blocked` flag, set when an operation on that context commits, which stops
 further claims on that context without affecting its siblings.
 
-The invocation responds with `PENDING`. The backend will re-invoke the
-function when the blocking condition resolves.
+The invocation responds with `PENDING`. The function is re-invoked when
+the blocking condition resolves.
 
 ### Checkpointer termination
 
@@ -166,15 +166,15 @@ mutex. The checkpoint method consults the flag at three points:
 3. After a successful API call returns, so a checkpoint that was in flight
    when termination was signaled is refused before rotating the token.
 
-Point 3 means a checkpoint whose API call was already in flight at the
-moment of termination can succeed at the backend (the bytes land remotely)
-but the checkpointer refuses to commit the result locally. From the
-handler's perspective the branch was refused; from the backend's perspective
-the state was written. This is safe because the next invocation replays from
-the full backend state, so remotely written data is picked up on resume
-rather than lost. The guarantee is therefore that no subsequent checkpoint
-attempt succeeds locally after termination, not that no in-flight bytes can
-reach the backend.
+Point 3 means a checkpoint call that was already in flight at the moment of
+termination may still be recorded durably, even though the checkpointer
+refuses to commit its result locally. From the handler's perspective the
+branch was refused; the recorded execution state may nonetheless include
+the update. This is safe because the next invocation replays from the full
+recorded state, so an update recorded during termination is picked up on
+resume rather than lost. The guarantee is therefore that no subsequent
+checkpoint attempt succeeds locally after termination, not that an
+in-flight call cannot be recorded.
 
 #### Translation of the terminated error
 
@@ -247,6 +247,20 @@ Without the drain, a combinator returning at the first suspension would cut
 off sibling branches before they reached their blocking points, so their
 progress would never be checkpointed and would be re-executed from scratch
 on the next invocation.
+
+### Pending callbacks cannot win
+
+A pending callback future settles only when the invocation suspends, and
+its first `Result` call is what records the pending commitment (deferred
+suspension, below). `Any` and `Race` therefore set such futures aside and
+join only the futures that can settle terminally in the current
+invocation. If a terminal winner emerges, the pending callbacks are never
+awaited, so a losing callback cannot force the invocation to `PENDING`
+while the winner is returned. Only when suspension is the decided outcome
+— a joined branch suspended, or every remaining future is a pending
+callback — are the deferred futures awaited, recording the commitment.
+`All` and `AllSettled` await every future by definition, so a pending
+callback in their input always suspends the aggregate.
 
 ### Edge cases
 
@@ -339,9 +353,9 @@ token is released.
 
 Progress the orphan recorded before termination (checkpoints whose API
 calls completed and whose tokens rotated before the flag was set) is
-preserved in the backend state. Progress it would have recorded after
-termination is deferred: the branch re-executes from its last committed
-checkpoint on the next invocation.
+preserved in the recorded execution state. Progress it would have recorded
+after termination is deferred: the branch re-executes from its last
+committed checkpoint on the next invocation.
 
 ## Determinism Contract
 

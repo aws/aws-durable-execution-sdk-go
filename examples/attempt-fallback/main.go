@@ -2,10 +2,8 @@
 // workflow tries each supplier in preference order until one can fulfill the
 // order. Each supplier check is a separate step; the first to succeed wins.
 //
-// The JS SDK version uses stepCtx.attempt inside retry to index into
-// suppliers. The Go SDK does not expose attempt in the step body, so this
-// example uses sequential steps — one per supplier — which is the natural Go
-// idiom: explicit control flow, no hidden counters.
+// This example uses sequential steps — one per supplier — which is the
+// natural Go idiom: explicit control flow, no hidden counters.
 package main
 
 import (

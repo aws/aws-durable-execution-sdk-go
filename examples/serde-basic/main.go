@@ -3,9 +3,8 @@
 // serialized data with a marker, proving that the SDK uses the configured
 // serializer for checkpoint storage and the matching deserializer on replay.
 //
-// Go adaptation note: unlike the JS SDK's createClassSerdes (which preserves
-// prototype chains), Go's type system preserves struct methods inherently —
-// JSON deserialization into a typed pointer restores full method access. This
+// Go's type system preserves struct methods inherently — JSON
+// deserialization into a typed pointer restores full method access. This
 // example therefore demonstrates the custom-serdes hook itself rather than
 // class method preservation.
 package main

@@ -25,6 +25,14 @@ type Future[O any] struct {
 	// submitter step) to run first.
 	preResultOnce sync.Once
 	preResult     func()
+
+	// deferredSuspension marks a future whose first Result call commits
+	// the invocation to PENDING as a side effect (a pending callback).
+	// Such a future cannot settle with a terminal outcome in the current
+	// invocation, so [Any] and [Race] award terminal winners before
+	// awaiting it: a losing pending callback must not force the
+	// invocation to PENDING while a winner is returned.
+	deferredSuspension bool
 }
 
 // Done returns a channel that is closed when the operation settles. It
@@ -66,6 +74,7 @@ func newFuture[O any]() *Future[O] {
 // in the same invocation.
 func newPendingCallbackFuture[O any](s *suspendSignal, ec *execContext) *Future[O] {
 	f := newFuture[O]()
+	f.deferredSuspension = true
 	registerFuture(s, f)
 	// On the first Result(), mark this context blocked, commit the
 	// invocation to PENDING, release the calling branch's token, and settle
@@ -79,6 +88,18 @@ func newPendingCallbackFuture[O any](s *suspendSignal, ec *execContext) *Future[
 		var zero O
 		f.settle(zero, errSuspendExecution)
 	}
+	return f
+}
+
+// newUnfinishedReplayFuture returns the future for an asynchronous
+// operation that must not run because the enclosing child context's result
+// is already recorded while the operation has no terminal checkpoint. The
+// operation neither executes nor commits the invocation to PENDING; the
+// future settles only if the invocation suspends, so awaiting goroutines
+// unwind on suspension instead of hanging.
+func newUnfinishedReplayFuture[O any](s *suspendSignal) *Future[O] {
+	f := newFuture[O]()
+	registerFuture(s, f)
 	return f
 }
 
@@ -115,7 +136,8 @@ type settledJSON[O any] struct {
 }
 
 // MarshalJSON serializes a Settled value. Errors are stored as their
-// message string, matching the JS SDK's error-aware serdes.
+// message string, so serialized outcomes carry no Go-specific error
+// structure.
 func (s Settled[O]) MarshalJSON() ([]byte, error) {
 	j := settledJSON[O]{Status: "fulfilled", Value: s.Value}
 	if s.Err != nil {

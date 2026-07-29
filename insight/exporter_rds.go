@@ -24,9 +24,11 @@ type RDSDataAPI interface {
 // RDSExporter writes records to an Aurora/RDS cluster via the RDS Data
 // API's ExecuteStatement (HTTP-based — no VPC required).
 //
-// SQL is always parameterized via SqlParameters — never string
-// interpolation. Uses INSERT INTO with named parameters for the four
-// columns: execution_arn, emitted_at, status, record_json.
+// Record values are always bound via SqlParameters. The table name is the
+// one value embedded in the statement text (identifiers cannot be bound as
+// parameters) and is validated as a plain SQL identifier before use. Uses
+// INSERT INTO with named parameters for the four columns: execution_arn,
+// emitted_at, status, record_json.
 type RDSExporter struct {
 	// API is the underlying RDS Data API client. Required.
 	API RDSDataAPI
@@ -69,6 +71,9 @@ func (e *RDSExporter) Export(ctx context.Context, record Record) error {
 	table := e.TableName
 	if table == "" {
 		table = "workflow_insight"
+	}
+	if err := validateTableName(table); err != nil {
+		return fmt.Errorf("insight.RDSExporter: %w", err)
 	}
 
 	emittedAt := record.EmittedAt.Format(dynamoDBTimeFormat)

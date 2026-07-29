@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -219,6 +220,232 @@ func checkpointedChild(positionalID, status string, details *wireContextDetails)
 		Id:             hashID(positionalID),
 		Status:         status,
 		ContextDetails: details,
+	}
+}
+
+func TestReplayChildrenUnfinishedStepDoesNotExecute(t *testing.T) {
+	// A step that was still in flight (STARTED) when its context's result
+	// was recorded must not re-execute during ReplayChildren replay, and
+	// must not checkpoint anything.
+	fake := &fakeLambda{}
+	executed := false
+	payload := childPayload(`"x"`,
+		checkpointedChild("1", "SUCCEEDED", &wireContextDetails{ReplayChildren: true}),
+		wireOperation{
+			Id:          hashID("1-1"),
+			Status:      "SUCCEEDED",
+			StepDetails: &wireStepDetails{Result: `"kept"`},
+		},
+		wireOperation{Id: hashID("1-2"), Status: "STARTED"},
+	)
+	resp := invokeStep(t, fake, payload, func(ctx Context, _ string) (string, error) {
+		return RunInChildContext(ctx, "big", func(childCtx Context) (string, error) {
+			out, err := Step(childCtx, "s1", func(StepContext) (string, error) {
+				t.Error("terminal step body must not execute on replay")
+				return "", nil
+			})
+			// Fire-and-forget: the context's result never depended on
+			// this step, so it can be unfinished in the checkpoint log.
+			StepAsync(childCtx, "s2", func(StepContext) (string, error) {
+				executed = true
+				return "side-effect", nil
+			})
+			return out, err
+		})
+	})
+
+	if executed {
+		t.Error("unfinished step body executed during ReplayChildren replay")
+	}
+	if want := `{"Status":"SUCCEEDED","Result":"\"kept\""}`; resp != want {
+		t.Errorf("response = %s, want %s", resp, want)
+	}
+	if n := len(updateBatch(t, fake)); n != 0 {
+		t.Errorf("replay sent %d updates, want 0", n)
+	}
+}
+
+func TestReplayChildrenMissingStepDoesNotExecute(t *testing.T) {
+	// A step with no checkpoint at all inside a succeeded context must not
+	// execute during ReplayChildren replay: it never started before the
+	// context's result was recorded.
+	fake := &fakeLambda{}
+	executed := false
+	payload := childPayload(`"x"`,
+		checkpointedChild("1", "SUCCEEDED", &wireContextDetails{ReplayChildren: true}),
+		wireOperation{
+			Id:          hashID("1-1"),
+			Status:      "SUCCEEDED",
+			StepDetails: &wireStepDetails{Result: `"kept"`},
+		},
+	)
+	resp := invokeStep(t, fake, payload, func(ctx Context, _ string) (string, error) {
+		return RunInChildContext(ctx, "big", func(childCtx Context) (string, error) {
+			out, err := Step(childCtx, "s1", func(StepContext) (string, error) {
+				return "", nil
+			})
+			StepAsync(childCtx, "s2", func(StepContext) (string, error) {
+				executed = true
+				return "side-effect", nil
+			})
+			return out, err
+		})
+	})
+
+	if executed {
+		t.Error("missing step body executed during ReplayChildren replay")
+	}
+	if want := `{"Status":"SUCCEEDED","Result":"\"kept\""}`; resp != want {
+		t.Errorf("response = %s, want %s", resp, want)
+	}
+	if n := len(updateBatch(t, fake)); n != 0 {
+		t.Errorf("replay sent %d updates, want 0", n)
+	}
+}
+
+func TestReplayChildrenPendingStepDoesNotForcePending(t *testing.T) {
+	// A step with a scheduled retry (PENDING) inside a succeeded context
+	// must not commit the invocation to PENDING during ReplayChildren
+	// replay: the context's result is already recorded.
+	fake := &fakeLambda{}
+	payload := childPayload(`"x"`,
+		checkpointedChild("1", "SUCCEEDED", &wireContextDetails{ReplayChildren: true}),
+		wireOperation{
+			Id:          hashID("1-1"),
+			Status:      "SUCCEEDED",
+			StepDetails: &wireStepDetails{Result: `"kept"`},
+		},
+		wireOperation{
+			Id:          hashID("1-2"),
+			Status:      "PENDING",
+			StepDetails: &wireStepDetails{Attempt: 1},
+		},
+	)
+	resp := invokeStep(t, fake, payload, func(ctx Context, _ string) (string, error) {
+		return RunInChildContext(ctx, "big", func(childCtx Context) (string, error) {
+			out, err := Step(childCtx, "s1", func(StepContext) (string, error) {
+				return "", nil
+			})
+			StepAsync(childCtx, "s2", func(StepContext) (string, error) {
+				return "", errors.New("still failing")
+			})
+			return out, err
+		})
+	})
+
+	if want := `{"Status":"SUCCEEDED","Result":"\"kept\""}`; resp != want {
+		t.Errorf("response = %s, want %s", resp, want)
+	}
+}
+
+func TestReplayChildrenUnfinishedInvokeDoesNotForcePending(t *testing.T) {
+	// An unresolved chained invoke inside a succeeded context must not
+	// suspend the invocation during ReplayChildren replay.
+	fake := &fakeLambda{}
+	payload := childPayload(`"x"`,
+		checkpointedChild("1", "SUCCEEDED", &wireContextDetails{ReplayChildren: true}),
+		wireOperation{
+			Id:          hashID("1-1"),
+			Status:      "SUCCEEDED",
+			StepDetails: &wireStepDetails{Result: `"kept"`},
+		},
+		wireOperation{Id: hashID("1-2"), Status: "STARTED"},
+	)
+	resp := invokeStep(t, fake, payload, func(ctx Context, _ string) (string, error) {
+		return RunInChildContext(ctx, "big", func(childCtx Context) (string, error) {
+			out, err := Step(childCtx, "s1", func(StepContext) (string, error) {
+				return "", nil
+			})
+			InvokeAsync[string](childCtx, "inv", "target-fn", "payload")
+			return out, err
+		})
+	})
+
+	if want := `{"Status":"SUCCEEDED","Result":"\"kept\""}`; resp != want {
+		t.Errorf("response = %s, want %s", resp, want)
+	}
+	if n := len(updateBatch(t, fake)); n != 0 {
+		t.Errorf("replay sent %d updates, want 0", n)
+	}
+}
+
+func TestReplayChildrenUnresolvedCallbackDoesNotForcePending(t *testing.T) {
+	// An unresolved callback inside a succeeded context must not commit
+	// the invocation to PENDING during ReplayChildren replay, even when
+	// its result is awaited through a combinator drain.
+	fake := &fakeLambda{}
+	payload := childPayload(`"x"`,
+		checkpointedChild("1", "SUCCEEDED", &wireContextDetails{ReplayChildren: true}),
+		wireOperation{
+			Id:              hashID("1-1"),
+			Status:          "STARTED",
+			CallbackDetails: &wireCallbackDetails{CallbackId: "cb-1"},
+		},
+		wireOperation{
+			Id:          hashID("1-2"),
+			Status:      "SUCCEEDED",
+			StepDetails: &wireStepDetails{Result: `"kept"`},
+		},
+	)
+	resp := invokeStep(t, fake, payload, func(ctx Context, _ string) (string, error) {
+		return RunInChildContext(ctx, "big", func(childCtx Context) (string, error) {
+			cb, err := CreateCallback[string](childCtx, "cb")
+			if err != nil {
+				return "", err
+			}
+			if got := cb.ID(); got != "cb-1" {
+				t.Errorf("callback ID = %q, want cb-1", got)
+			}
+			return Step(childCtx, "s", func(StepContext) (string, error) {
+				return "", nil
+			})
+		})
+	})
+
+	if want := `{"Status":"SUCCEEDED","Result":"\"kept\""}`; resp != want {
+		t.Errorf("response = %s, want %s", resp, want)
+	}
+	if n := len(updateBatch(t, fake)); n != 0 {
+		t.Errorf("replay sent %d updates, want 0", n)
+	}
+}
+
+func TestReplayChildrenUnfinishedOpThenLiveSuspension(t *testing.T) {
+	// After reconstructing a context that contains an unfinished
+	// operation, the execution continues live; a subsequent wait must
+	// still be able to suspend the invocation.
+	fake := &fakeLambda{}
+	payload := childPayload(`"x"`,
+		checkpointedChild("1", "SUCCEEDED", &wireContextDetails{ReplayChildren: true}),
+		wireOperation{
+			Id:          hashID("1-1"),
+			Status:      "SUCCEEDED",
+			StepDetails: &wireStepDetails{Result: `"kept"`},
+		},
+		wireOperation{Id: hashID("1-2"), Status: "STARTED"},
+	)
+	resp := invokeStep(t, fake, payload, func(ctx Context, _ string) (string, error) {
+		out, err := RunInChildContext(ctx, "big", func(childCtx Context) (string, error) {
+			inner, ierr := Step(childCtx, "s1", func(StepContext) (string, error) {
+				return "", nil
+			})
+			StepAsync(childCtx, "s2", func(StepContext) (string, error) {
+				t.Error("unfinished step body must not execute")
+				return "", nil
+			})
+			return inner, ierr
+		})
+		if err != nil {
+			return "", err
+		}
+		if err := Wait(ctx, "settle", time.Hour); err != nil {
+			return "", err
+		}
+		return out, nil
+	})
+
+	if want := `{"Status":"PENDING"}`; resp != want {
+		t.Errorf("response = %s, want %s", resp, want)
 	}
 }
 
@@ -774,7 +1001,7 @@ func TestRunInChildContextReplayChildrenTrigger(t *testing.T) {
 	// When the child result exceeds checkpointSizeLimitBytes, the SUCCEED
 	// checkpoint carries ContextOptions.ReplayChildren=true and no Payload.
 	fake := &fakeLambda{}
-	largeResult := string(make([]byte, checkpointSizeLimitBytes+1))
+	largeResult := strings.Repeat("x", checkpointSizeLimitBytes+1)
 	resp := invokeStep(t, fake, childPayload(`"x"`), func(ctx Context, _ string) (string, error) {
 		return RunInChildContext(ctx, "big", func(childCtx Context) (string, error) {
 			return Step(childCtx, "s", func(StepContext) (string, error) {
@@ -904,7 +1131,7 @@ func TestRunInChildContextAsyncReplayChildrenReExecution(t *testing.T) {
 func TestRunInChildContextAsyncReplayChildrenLargePayload(t *testing.T) {
 	// Async variant: large payload triggers ContextOptions.ReplayChildren.
 	fake := &fakeLambda{}
-	largeResult := string(make([]byte, checkpointSizeLimitBytes+1))
+	largeResult := strings.Repeat("x", checkpointSizeLimitBytes+1)
 	invokeStep(t, fake, childPayload(`"x"`), func(ctx Context, _ string) (string, error) {
 		fut := RunInChildContextAsync(ctx, "big-async", func(childCtx Context) (string, error) {
 			return Step(childCtx, "s", func(StepContext) (string, error) {

@@ -1,7 +1,6 @@
 // Package attempts tracks step attempt counts across invocations in a
 // DynamoDB table, letting conformance handlers fail deterministically on
-// specific attempts. Mirrors the DynamoDB counter used by the Python and
-// JS handler trees.
+// specific attempts.
 package attempts
 
 import (

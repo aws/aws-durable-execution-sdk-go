@@ -15,8 +15,8 @@ type Result struct {
 }
 
 func handler(ctx durable.Context, _ any) (Result, error) {
-	// Two sequential waits — each suspends for 2 seconds (shortened
-	// from the JS original's 5s for faster smoke runs).
+	// Two sequential waits — each suspends for 2 seconds (kept short
+	// for faster smoke runs).
 	if err := durable.Wait(ctx, "wait-1", 2*time.Second); err != nil {
 		return Result{}, err
 	}

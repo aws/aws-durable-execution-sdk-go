@@ -229,7 +229,7 @@ executes durable handlers without network access or AWS credentials. The test
 below runs the complete example above end to end. `RunUntilComplete` invokes
 the handler repeatedly, advancing waits and retries automatically, and returns
 when the execution finishes or blocks on external action. The test resolves
-the chained invoke and the warehouse callback the way the real backend would.
+the chained invoke and the warehouse callback the way the service would.
 
 ```go
 func TestOrderWorkflow(t *testing.T) {

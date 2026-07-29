@@ -114,6 +114,44 @@ func TestRDSExporter_CustomTableName(t *testing.T) {
 	}
 }
 
+// TestRDSExporter_InvalidTableName_Rejected verifies that a table name
+// that is not a plain identifier is rejected before any statement is sent.
+func TestRDSExporter_InvalidTableName_Rejected(t *testing.T) {
+	for _, table := range []string{
+		"t; DROP TABLE x",
+		"t (execution_arn) VALUES ('x'); --",
+		`t"`,
+		"t name",
+		"1t",
+		"a.b.c",
+	} {
+		fake := &fakeRDSDataAPI{}
+		exp := &RDSExporter{API: fake, ResourceArn: "r", SecretArn: "s", Database: "d", TableName: table}
+
+		if err := exp.Export(context.Background(), Record{ExecutionArn: "arn:test"}); err == nil {
+			t.Errorf("Export with table name %q: expected error, got nil", table)
+		}
+		if len(fake.calls) != 0 {
+			t.Errorf("Export with table name %q: statement was sent", table)
+		}
+	}
+}
+
+// TestRDSExporter_SchemaQualifiedTableName_Accepted verifies that a
+// schema-qualified identifier passes validation.
+func TestRDSExporter_SchemaQualifiedTableName_Accepted(t *testing.T) {
+	fake := &fakeRDSDataAPI{}
+	exp := &RDSExporter{API: fake, ResourceArn: "r", SecretArn: "s", Database: "d", TableName: "analytics.workflow_insight"}
+
+	if err := exp.Export(context.Background(), Record{ExecutionArn: "arn:test"}); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	sql := aws.ToString(fake.calls[0].Sql)
+	if !strings.Contains(sql, "analytics.workflow_insight") {
+		t.Errorf("expected qualified table name in SQL, got: %s", sql)
+	}
+}
+
 func TestRDSExporter_MissingRequiredFields_ReturnsError(t *testing.T) {
 	tests := []struct {
 		name string

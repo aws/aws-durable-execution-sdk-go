@@ -65,6 +65,17 @@ func CreateCallback[O any](ctx Context, name string, opts ...CallbackOption) (*C
 	if err := validateReplayConsistency(op, string(types.OperationTypeCallback), operationSubTypeCallback, name); err != nil {
 		return nil, err
 	}
+	if ec.unfinishedInSucceededContext(op) {
+		// The callback was still unresolved when the enclosing context's
+		// result was recorded. Do not checkpoint and do not commit the
+		// invocation to PENDING: return a callback whose future settles
+		// only if the invocation suspends.
+		callbackID := ""
+		if op != nil && op.callback != nil {
+			callbackID = op.callback.callbackID
+		}
+		return &Callback[O]{id: callbackID, future: newUnfinishedReplayFuture[O](ec.suspend)}, nil
+	}
 	if op != nil {
 		serdes := callbackDeserializerForOptions(ec, options)
 		switch op.status {
@@ -159,6 +170,9 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 	op := ec.state.get(id)
 	if err := validateReplayConsistency(op, string(types.OperationTypeContext), operationSubTypeWaitForCallback, name); err != nil {
 		return zero, err
+	}
+	if ec.unfinishedInSucceededContext(op) {
+		return zero, ec.parkUnfinishedReplay()
 	}
 
 	// Terminal states: the whole WaitForCallback context is settled.

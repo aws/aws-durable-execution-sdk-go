@@ -115,6 +115,9 @@ func StepAsync[O any](ctx Context, name string, fn func(StepContext) (O, error),
 	if err != nil {
 		return newFailedFuture[O](err)
 	}
+	if ec.unfinishedInSucceededContext(ec.state.get(id)) {
+		return newUnfinishedReplayFuture[O](ec.suspend)
+	}
 
 	fut := newFuture[O]()
 	registerFuture(ec.suspend, fut)
@@ -140,6 +143,9 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 
 	if err := validateReplayConsistency(op, string(types.OperationTypeStep), operationSubTypeStep, name); err != nil {
 		return zero, err
+	}
+	if ec.unfinishedInSucceededContext(op) {
+		return zero, ec.parkUnfinishedReplay()
 	}
 
 	attempt := 1
@@ -423,6 +429,20 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 		return settleStepFailure[O](ec, id, name, options, fmt.Errorf("durable: step %q: serialize result: %w", name, err), attempt)
 	}
 
+	if sizeErr := checkResultSize(serialized, name); sizeErr != nil {
+		dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
+			if p.OnOperationAttemptEnd != nil {
+				p.OnOperationAttemptEnd(ec, AttemptEndHookInfo{
+					OperationHookInfo: attemptInfo.OperationHookInfo,
+					Attempt:           attempt,
+					Outcome:           PluginAttemptFailed,
+					Error:             sizeErr,
+				})
+			}
+		})
+		return settleStepFailure[O](ec, id, name, options, sizeErr, attempt)
+	}
+
 	update := stepUpdate(ec, id, name, types.OperationActionSucceed)
 	update.Payload = aws.String(string(serialized))
 	if cerr := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); cerr != nil {
@@ -548,9 +568,9 @@ func errorObject(err error) *types.ErrorObject {
 }
 
 // errorTypeName derives the wire ErrorType from an error's concrete type
-// name, matching the reference SDKs' use of error class names. Unnamed
-// error types (such as those from [errors.New] and [fmt.Errorf]) map to
-// "Error".
+// name, so retry strategies keyed on error identity see a stable name.
+// Unnamed error types (such as those from [errors.New] and [fmt.Errorf])
+// map to "Error".
 func errorTypeName(err error) string {
 	t := reflect.TypeOf(err)
 	for t != nil && t.Kind() == reflect.Pointer {

@@ -92,7 +92,7 @@ func TestInvokeReplaySucceeded(t *testing.T) {
 }
 
 func TestInvokeReplayFailedStatuses(t *testing.T) {
-	for _, status := range []string{"FAILED", "TIMED_OUT", "STOPPED"} {
+	for _, status := range []string{"FAILED", "TIMED_OUT", "STOPPED", "CANCELLED"} {
 		t.Run(status, func(t *testing.T) {
 			fake := &fakeLambda{}
 			var gotErr error
@@ -150,6 +150,35 @@ func TestInvokeTimedOutUsesCorrectSentinel(t *testing.T) {
 	}
 	if errors.Is(gotErr, ErrCallbackTimedOut) {
 		t.Error("errors.Is(err, ErrCallbackTimedOut) = true, want false for invoke timeout")
+	}
+}
+
+func TestInvokeCancelledUsesCorrectSentinel(t *testing.T) {
+	fake := &fakeLambda{}
+	var gotErr error
+	invokeStep(t, fake,
+		stepPayload(`""`, wireOperation{
+			Id:     hashID("1"),
+			Status: "CANCELLED",
+			ChainedInvokeDetails: &wireChainedInvokeDetails{
+				Error: &wireFullError{ErrorType: "Error", ErrorMessage: "invoked execution cancelled"},
+			},
+		}),
+		func(ctx Context, _ string) (string, error) {
+			out, err := Invoke[string](ctx, "inv", "fn", "x")
+			gotErr = err
+			return out, err
+		})
+
+	if !errors.Is(gotErr, ErrExecutionCancelled) {
+		t.Errorf("errors.Is(err, ErrExecutionCancelled) = false, want true; err = %v", gotErr)
+	}
+	var invokeErr *InvokeError
+	if !errors.As(gotErr, &invokeErr) {
+		t.Fatalf("error = %v, want *InvokeError", gotErr)
+	}
+	if invokeErr.Status != OperationStatusCancelled {
+		t.Errorf("Status = %v, want CANCELLED", invokeErr.Status)
 	}
 }
 

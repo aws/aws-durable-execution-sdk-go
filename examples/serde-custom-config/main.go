@@ -1,13 +1,11 @@
 // Command serde-custom-config demonstrates handler-level serdes using
 // [durable.WithSerdes]. This sets a default serializer applied to all
-// operations without per-operation overrides — the Go equivalent of the JS
-// SDK's context.configureSerdes({ defaultSerdes: ... }).
+// operations without per-operation overrides.
 //
-// Go adaptation note: JS configureSerdes can be called mid-execution to
-// change the default. In Go, the serdes is set at construction time via
-// [durable.WithSerdes] and cannot be changed after. This is by design:
-// construction-time configuration makes serialization behavior deterministic
-// and avoids replay-sensitive mutation.
+// The serdes is set at construction time via [durable.WithSerdes] and
+// cannot be changed after. This is by design: construction-time
+// configuration makes serialization behavior deterministic and avoids
+// replay-sensitive mutation.
 package main
 
 import (

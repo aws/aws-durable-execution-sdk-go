@@ -1,8 +1,7 @@
 // Command child-context-virtual demonstrates [durable.Go] — the
 // concurrent child context pattern. Unlike RunInChildContext (synchronous),
 // Go spawns the child on its own goroutine and returns a [*durable.Future]
-// that the caller awaits. This is the Go equivalent of the JS
-// virtualContext pattern.
+// that the caller awaits.
 package main
 
 import "github.com/aws/aws-durable-execution-sdk-go/durable"

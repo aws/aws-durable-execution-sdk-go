@@ -8,10 +8,9 @@
 // Without it, the check is a no-op and this handler succeeds instead of
 // failing.
 //
-// Go adaptation note: The JS SDK validates context scope (parent vs child)
-// immediately at runtime. In Go, the analogous enforcement is goroutine
-// ownership. Using durable.Go creates a new goroutine with its own context;
-// attempting to use the parent context from that goroutine fails.
+// In Go, context scope is enforced through goroutine ownership. Using
+// durable.Go creates a new goroutine with its own context; attempting to
+// use the parent context from that goroutine fails.
 //
 // Expected terminal state: FAILED (ErrWrongGoroutine propagates as handler error).
 package main

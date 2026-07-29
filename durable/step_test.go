@@ -557,8 +557,7 @@ func TestErrorTypeName(t *testing.T) {
 
 func TestStepCustomErrorTypeInCheckpoint(t *testing.T) {
 	// A custom error type's name is recorded as the wire ErrorType, so
-	// retry strategies keyed on error identity behave consistently with
-	// the other SDKs (conformance 1-15/1-16 pattern).
+	// retry strategies keyed on error identity see a stable name.
 	fake := &fakeLambda{}
 	invokeStep(t, fake, stepPayload(`""`), func(ctx Context, _ string) (string, error) {
 		return Step(ctx, "s", func(StepContext) (string, error) {

@@ -1,10 +1,9 @@
 // Command child-ops-invalid-depth demonstrates that unhandled errors in
 // a child context propagate as the execution's final error, causing it
-// to reach FAILED terminal state. This is the Go adaptation of the JS
-// childOperationsDepth:-1 example — since the Go SDK handles
-// ReplayChildren automatically, we instead demonstrate that a
-// programming error (panic in child) correctly fails the execution
-// rather than being silently swallowed.
+// to reach FAILED terminal state. Since the SDK handles ReplayChildren
+// automatically, this demonstrates that a programming error (panic in
+// child) correctly fails the execution rather than being silently
+// swallowed.
 package main
 
 import (

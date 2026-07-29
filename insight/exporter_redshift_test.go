@@ -114,6 +114,30 @@ func TestRedshiftExporter_CustomTableName(t *testing.T) {
 	}
 }
 
+// TestRedshiftExporter_InvalidTableName_Rejected verifies that a table
+// name that is not a plain identifier is rejected before any statement is
+// sent.
+func TestRedshiftExporter_InvalidTableName_Rejected(t *testing.T) {
+	for _, table := range []string{
+		"t; DROP TABLE x",
+		"t (execution_arn) VALUES ('x'); --",
+		`t"`,
+		"t name",
+		"1t",
+		"a.b.c",
+	} {
+		fake := &fakeRedshiftDataAPI{}
+		exp := &RedshiftExporter{API: fake, WorkgroupName: "wg", Database: "d", TableName: table}
+
+		if err := exp.Export(context.Background(), Record{ExecutionArn: "arn:test"}); err == nil {
+			t.Errorf("Export with table name %q: expected error, got nil", table)
+		}
+		if len(fake.calls) != 0 {
+			t.Errorf("Export with table name %q: statement was sent", table)
+		}
+	}
+}
+
 func TestRedshiftExporter_MutuallyExclusiveWorkgroupAndCluster_ReturnsError(t *testing.T) {
 	exp := &RedshiftExporter{API: &fakeRedshiftDataAPI{}, WorkgroupName: "wg", ClusterIdentifier: "cluster", Database: "d"}
 	if err := exp.Export(context.Background(), Record{}); err == nil {

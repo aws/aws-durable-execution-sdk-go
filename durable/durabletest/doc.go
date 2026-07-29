@@ -5,11 +5,10 @@
 // handler functions. It enables fast, deterministic unit tests without
 // requiring AWS credentials or network access.
 //
-// The package is built on the Java SDK's testing model: a real durable
-// executor is run against a thin in-memory [durable.ExecutionClient]
-// implementation, so handler code executes exactly as it would in
-// production — including checkpoint replay, operation ordering, and
-// suspension semantics.
+// The package runs a real durable executor against a thin in-memory
+// [durable.ExecutionClient] implementation, so handler code executes
+// exactly as it would in production — including checkpoint replay,
+// operation ordering, and suspension semantics.
 //
 // # Quick Start
 //

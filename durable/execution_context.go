@@ -203,6 +203,38 @@ func (c *execContext) refreshReplayMode() {
 	}
 }
 
+// unfinishedInSucceededContext reports whether the checkpointed operation
+// must not run because this context replays inside a child context whose
+// overall result is already recorded (modeReplaySucceededContext) while the
+// operation itself has no terminal checkpoint. Such an operation was still
+// in flight when the context's result was recorded: re-executing it would
+// repeat its side effects, and it cannot produce a result in this
+// invocation.
+func (c *execContext) unfinishedInSucceededContext(op *operation) bool {
+	if executionMode(c.mode.Load()) != modeReplaySucceededContext {
+		return false
+	}
+	return op == nil || !op.status.terminal()
+}
+
+// parkUnfinishedReplay handles a synchronous await of an unfinished
+// operation inside an already-succeeded child context. The operation must
+// not execute and cannot settle in this invocation, so the caller blocks
+// until the invocation suspends or the Lambda context ends, then unwinds
+// with errSuspendExecution. No pending commitment is made: an unfinished
+// operation inside a succeeded context must not force the invocation to
+// PENDING. The calling branch's token is released first so suspension can
+// fire while this goroutine is parked.
+func (c *execContext) parkUnfinishedReplay() error {
+	c.blocked.Store(true)
+	c.branchTok.release()
+	select {
+	case <-c.suspend.done():
+	case <-c.Done():
+	}
+	return errSuspendExecution
+}
+
 // child creates the context for a child operation with the given entity ID.
 //
 // The caller is responsible for computing mode: a child whose own operation

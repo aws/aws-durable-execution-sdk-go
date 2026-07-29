@@ -69,6 +69,13 @@ type InsightPlugin struct {
 	// ExecutionArn hash.
 	sampledIn bool
 
+	// countArn and invocationCount track how many invocations of the
+	// current execution this plugin instance has observed. countArn is
+	// the execution identity (see executionIdentity); the counter
+	// resets when a different execution's invocation arrives.
+	countArn        string
+	invocationCount int
+
 	// onChangeDispatching/onChangeDirty implement EmitOnChange's
 	// coalescing behavior: at most one dispatch goroutine runs at a
 	// time per Plugin instance.
@@ -143,8 +150,8 @@ func (p *InsightPlugin) Plugin() durable.Plugin {
 }
 
 // arnPattern extracts region, account ID, function name, and qualifier
-// from a Lambda function ARN.
-var arnPattern = regexp.MustCompile(`^arn:aws:lambda:([^:]*):([^:]*):function:([^:]+)(?::([^:/]+))?`)
+// from a Lambda function ARN in any partition.
+var arnPattern = regexp.MustCompile(`^arn:[^:]+:lambda:([^:]*):([^:]*):function:([^:]+)(?::([^:/]+))?`)
 
 // parseFunctionARN extracts region/account/function name/qualifier from
 // a Lambda function ARN. Returns zero values for unmatched components.
@@ -154,6 +161,23 @@ func parseFunctionARN(arn string) (region, accountID, functionName, qualifier st
 		return "", "", "", ""
 	}
 	return m[1], m[2], m[3], m[4]
+}
+
+// executionIdentity returns the portion of a durable execution ARN that
+// identifies the execution, excluding any trailing per-invocation segment.
+// For an ARN without the durable-execution marker, the whole ARN is the
+// identity.
+func executionIdentity(arn string) string {
+	const marker = "/durable-execution/"
+	idx := strings.Index(arn, marker)
+	if idx < 0 {
+		return arn
+	}
+	rest := arn[idx+len(marker):]
+	if slash := strings.Index(rest, "/"); slash >= 0 {
+		return arn[:idx+len(marker)+slash]
+	}
+	return arn
 }
 
 // sampledIn reports whether executionArn's deterministic sampling
@@ -187,6 +211,19 @@ func (p *InsightPlugin) onInvocationStart(_ context.Context, info durable.Invoca
 	p.record = NewRecord(info.ExecutionArn)
 	p.record.FunctionName = functionName
 	p.record.Status = StatusRunning
+
+	// Count the invocations of this execution observed by this plugin
+	// instance. The comparison uses the execution identity, since the
+	// ARN can carry a per-invocation trailing segment. A
+	// first-invocation signal restarts the count even when the same
+	// execution identity is seen again.
+	identity := executionIdentity(info.ExecutionArn)
+	if identity != p.countArn || info.IsFirstInvocation {
+		p.countArn = identity
+		p.invocationCount = 0
+	}
+	p.invocationCount++
+	p.record.InvocationCount = p.invocationCount
 	if !info.ExecutionStartTimestamp.IsZero() {
 		t := info.ExecutionStartTimestamp
 		p.record.StartTimestamp = &t
@@ -208,9 +245,35 @@ func (p *InsightPlugin) onInvocationStart(_ context.Context, info durable.Invoca
 }
 
 // onInvocationEnd finalizes the record with the terminal outcome and
-// emits to exporters if the emit mode and sampling gates allow.
+// emits to exporters if the emit mode and sampling gates allow. A pending
+// outcome leaves the record running; EmitAlways still emits a snapshot
+// for it, since that mode reports every invocation regardless of outcome.
 func (p *InsightPlugin) onInvocationEnd(ctx context.Context, info durable.InvocationEndHookInfo) {
 	if info.Status == durable.PluginInvocationPending {
+		if p.emitMode == EmitOnChange {
+			// Drain any in-flight on-change dispatch so records are not
+			// orphaned or contaminate the next invocation.
+			p.onChangeWG.Wait()
+		}
+		if p.emitMode != EmitAlways && p.emitMode != EmitOnChange {
+			return
+		}
+		p.mu.Lock()
+		if p.record == nil {
+			p.mu.Unlock()
+			return
+		}
+		// The execution continues after this invocation: keep the
+		// running status and leave the end timestamp unset.
+		record := p.snapshotRecordLocked()
+		record.EmittedAt = time.Now()
+		sampledIn := p.sampledIn
+		p.mu.Unlock()
+
+		if !sampledIn {
+			return
+		}
+		p.dispatch(ctx, record)
 		return
 	}
 
@@ -244,19 +307,8 @@ func (p *InsightPlugin) onInvocationEnd(ctx context.Context, info durable.Invoca
 	}
 
 	// Take a snapshot for emission.
-	record := *p.record
+	record := p.snapshotRecordLocked()
 	sampledIn := p.sampledIn
-
-	if p.operationDetail != OperationDetailFullTree {
-		record.Operations = filterTopLevel(record.Operations)
-	} else {
-		// Copy the Operations slice so ApplyToRecord's filter-in-place
-		// cannot corrupt p.record's backing array.
-		ops := make([]OperationRecord, len(record.Operations))
-		copy(ops, record.Operations)
-		record.Operations = ops
-	}
-	p.content.ApplyToRecord(&record)
 	p.mu.Unlock()
 
 	if !sampledIn || !p.shouldEmit(record.Status) {
@@ -312,6 +364,24 @@ func (p *InsightPlugin) enrichLogContext(_ context.Context) map[string]any {
 		m["invocation_count"] = p.record.InvocationCount
 	}
 	return m
+}
+
+// snapshotRecordLocked returns an emission-ready copy of the current
+// record: operations are filtered per the configured detail level (or
+// copied so in-place content filtering cannot corrupt the live record)
+// and content redaction is applied. Called with p.mu held; p.record must
+// be non-nil.
+func (p *InsightPlugin) snapshotRecordLocked() Record {
+	record := *p.record
+	if p.operationDetail != OperationDetailFullTree {
+		record.Operations = filterTopLevel(record.Operations)
+	} else {
+		ops := make([]OperationRecord, len(record.Operations))
+		copy(ops, record.Operations)
+		record.Operations = ops
+	}
+	p.content.ApplyToRecord(&record)
+	return record
 }
 
 // upsertOperationLocked inserts or updates in place the OperationRecord
@@ -453,19 +523,9 @@ func (p *InsightPlugin) scheduleOnChangeDispatch(ctx context.Context) {
 			var record Record
 			hasRecord := p.record != nil
 			if hasRecord {
-				record = *p.record
+				record = p.snapshotRecordLocked()
 				// Refresh EmittedAt for this snapshot.
 				record.EmittedAt = time.Now()
-				if p.operationDetail != OperationDetailFullTree {
-					record.Operations = filterTopLevel(record.Operations)
-				} else {
-					// Copy the Operations slice so ApplyToRecord's
-					// filter-in-place cannot corrupt p.record's backing array.
-					ops := make([]OperationRecord, len(record.Operations))
-					copy(ops, record.Operations)
-					record.Operations = ops
-				}
-				p.content.ApplyToRecord(&record)
 			}
 			p.mu.Unlock()
 

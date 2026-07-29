@@ -1,6 +1,6 @@
 // Command wait-callback-anonymous demonstrates WaitForCallback with an
 // anonymous (inline) submitter. The callback completes via self-send in
-// the submitter, mirroring the JS anonymous submitter pattern.
+// the submitter.
 package main
 
 import (

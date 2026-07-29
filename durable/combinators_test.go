@@ -1183,3 +1183,137 @@ func TestRaceSuspendThenTerminalPropagatesSuspension(t *testing.T) {
 	// returned.
 	assertStepCheckpointed(t, fake, "t-step")
 }
+
+// TestAnyPendingCallbackLoserDoesNotForcePending verifies that a pending
+// callback passed to Any alongside a branch that succeeds does not commit
+// the invocation to PENDING: Any returns the winner, the invocation
+// completes SUCCEEDED, and the callback future is never awaited. The
+// winner settles only after Any is already joining its futures (its branch
+// runs a step on its own goroutine), so the losing callback had every
+// opportunity to be awaited first if Any joined it eagerly.
+func TestAnyPendingCallbackLoserDoesNotForcePending(t *testing.T) {
+	fake := &fakeLambda{}
+	cbAwaited := make(chan bool, 1)
+	resp := invokeStep(t, fake, stepPayload(`"x"`), func(ctx Context, _ string) (string, error) {
+		cb, err := CreateCallback[string](ctx, "never-resolved")
+		if err != nil {
+			return "", err
+		}
+		winner := Go(ctx, "winner", func(childCtx Context) (string, error) {
+			return Step(childCtx, "win-step", func(_ StepContext) (string, error) {
+				return "won", nil
+			})
+		})
+
+		val, err := Any(ctx, "any-cb-loser", []*Future[string]{cb.future, winner})
+		// The losing callback future must remain unsettled: settling
+		// requires its pre-result hook (which commits PENDING) or a
+		// fired suspend signal, and neither may happen here.
+		select {
+		case <-cb.future.Done():
+			cbAwaited <- true
+		default:
+			cbAwaited <- false
+		}
+		return val, err
+	})
+
+	if want := `{"Status":"SUCCEEDED","Result":"\"won\""}`; resp != want {
+		t.Fatalf("response = %s, want %s", resp, want)
+	}
+	if <-cbAwaited {
+		t.Error("losing pending callback future was settled; it must not be awaited when a winner exists")
+	}
+	assertStepCheckpointed(t, fake, "win-step")
+}
+
+// TestAnyOnlyPendingCallbackSuspends verifies that Any whose futures
+// cannot produce a winner in this invocation suspends: a pending callback
+// plus a failed future must yield PENDING, not a combinator error, because
+// the callback may still succeed on a later invocation. This guards
+// against the winner arbitration simply never awaiting pending callbacks.
+func TestAnyOnlyPendingCallbackSuspends(t *testing.T) {
+	fake := &fakeLambda{}
+	errCh := make(chan error, 1)
+	resp := invokeStep(t, fake, stepPayload(`"x"`), func(ctx Context, _ string) (string, error) {
+		cb, err := CreateCallback[string](ctx, "never-resolved")
+		if err != nil {
+			return "", err
+		}
+		f2 := newFailedFuture[string](errors.New("hard-failure"))
+
+		_, err = Any(ctx, "any-cb-only", []*Future[string]{cb.future, f2})
+		errCh <- err
+		return "", err
+	})
+
+	if want := `{"Status":"PENDING"}`; resp != want {
+		t.Fatalf("response = %s, want %s", resp, want)
+	}
+	if err := <-errCh; !errors.Is(err, errSuspendExecution) {
+		t.Errorf("Any error = %v, want errSuspendExecution", err)
+	}
+}
+
+// TestRacePendingCallbackLoserDoesNotForcePending verifies that a pending
+// callback passed to Race alongside a branch that settles terminally does
+// not commit the invocation to PENDING: Race returns the terminal outcome,
+// the invocation completes SUCCEEDED, and the callback future is never
+// awaited.
+func TestRacePendingCallbackLoserDoesNotForcePending(t *testing.T) {
+	fake := &fakeLambda{}
+	cbAwaited := make(chan bool, 1)
+	resp := invokeStep(t, fake, stepPayload(`"x"`), func(ctx Context, _ string) (string, error) {
+		cb, err := CreateCallback[string](ctx, "never-resolved")
+		if err != nil {
+			return "", err
+		}
+		winner := Go(ctx, "winner", func(childCtx Context) (string, error) {
+			return Step(childCtx, "race-win-step", func(_ StepContext) (string, error) {
+				return "won", nil
+			})
+		})
+
+		val, err := Race(ctx, "race-cb-loser", []*Future[string]{cb.future, winner})
+		select {
+		case <-cb.future.Done():
+			cbAwaited <- true
+		default:
+			cbAwaited <- false
+		}
+		return val, err
+	})
+
+	if want := `{"Status":"SUCCEEDED","Result":"\"won\""}`; resp != want {
+		t.Fatalf("response = %s, want %s", resp, want)
+	}
+	if <-cbAwaited {
+		t.Error("losing pending callback future was settled; it must not be awaited when a winner exists")
+	}
+	assertStepCheckpointed(t, fake, "race-win-step")
+}
+
+// TestRaceOnlyPendingCallbackSuspends verifies that Race over only pending
+// callbacks suspends: no future can settle terminally in this invocation,
+// so the invocation must record the pending commitment and yield PENDING.
+func TestRaceOnlyPendingCallbackSuspends(t *testing.T) {
+	fake := &fakeLambda{}
+	errCh := make(chan error, 1)
+	resp := invokeStep(t, fake, stepPayload(`"x"`), func(ctx Context, _ string) (string, error) {
+		cb, err := CreateCallback[string](ctx, "never-resolved")
+		if err != nil {
+			return "", err
+		}
+
+		_, err = Race(ctx, "race-cb-only", []*Future[string]{cb.future})
+		errCh <- err
+		return "", err
+	})
+
+	if want := `{"Status":"PENDING"}`; resp != want {
+		t.Fatalf("response = %s, want %s", resp, want)
+	}
+	if err := <-errCh; !errors.Is(err, errSuspendExecution) {
+		t.Errorf("Race error = %v, want errSuspendExecution", err)
+	}
+}
