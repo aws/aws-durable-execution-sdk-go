@@ -12,3 +12,4 @@ coverage.html
 .vscode/
 *.swp
 .DS_Store
+.kiro/

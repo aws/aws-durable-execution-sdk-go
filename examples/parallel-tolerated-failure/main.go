@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
+	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
 type Output struct {
@@ -49,7 +50,7 @@ func handler(ctx durable.Context, _ any) (Output, error) {
 				return "Branch 5 success", nil
 			})
 		}},
-	}, durable.WithCompletion(durable.WithToleratedFailureCount(2)))
+	}, durable.WithCompletion(durable.CompletionConfig{ToleratedFailureCount: aws.Int(2)}))
 	if err != nil {
 		return Output{}, err
 	}

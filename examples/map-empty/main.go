@@ -36,7 +36,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 		SuccessCount:   results.SuccessCount(),
 		FailureCount:   results.FailureCount(),
 		TotalCount:     results.TotalCount(),
-		Status:         results.Status(),
+		Status:         results.Status().String(),
 		CompletionNote: results.Reason.String(),
 	}, nil
 }

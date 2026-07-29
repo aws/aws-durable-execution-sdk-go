@@ -108,7 +108,7 @@ func handler(ctx durable.Context, _ any) (Output, error) {
 		FailedCount:     results.FailureCount(),
 		StartedCount:    startedCount,
 		HasFailures:     results.HasFailure(),
-		BatchStatus:     results.Status(),
+		BatchStatus:     results.Status().String(),
 		CompletionNote:  results.Reason.String(),
 		SuccessItems:    successItems,
 		FailItems:       failItems,

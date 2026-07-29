@@ -153,13 +153,13 @@ func TestMapFailFast(t *testing.T) {
 				return "", errors.New("item failed")
 			}
 			return item, nil
-		}, WithMaxConcurrency(1), WithCompletion(WithToleratedFailureCount(0)))
+		}, WithMaxConcurrency(1), WithCompletion(CompletionConfig{ToleratedFailureCount: aws.Int(0)}))
 		if err != nil {
 			return result{}, err
 		}
 		return result{
 			Reason:  br.Reason.String(),
-			Status:  br.Status(),
+			Status:  br.Status().String(),
 			Success: br.SuccessCount(),
 			Failure: br.FailureCount(),
 			Total:   br.TotalCount(),
@@ -245,7 +245,7 @@ func TestMapConcurrentPreservesOrder(t *testing.T) {
 	}
 }
 
-func TestMapThrowIfError(t *testing.T) {
+func TestMapErr(t *testing.T) {
 	fake := &fakeLambda{}
 	resp := invokeBatch(t, fake, batchPayload(`null`), func(ctx Context, _ any) (string, error) {
 		items := []string{"fail", "never"}
@@ -254,11 +254,11 @@ func TestMapThrowIfError(t *testing.T) {
 				return "", errors.New("item failed")
 			}
 			return item, nil
-		}, WithMaxConcurrency(1), WithCompletion(WithToleratedFailureCount(0)))
+		}, WithMaxConcurrency(1), WithCompletion(CompletionConfig{ToleratedFailureCount: aws.Int(0)}))
 		if err != nil {
 			return "", err
 		}
-		if throwErr := br.ThrowIfError(); throwErr != nil {
+		if throwErr := br.Err(); throwErr != nil {
 			return "", throwErr
 		}
 		return "should not reach", nil
@@ -299,7 +299,7 @@ func TestMapItemNamer(t *testing.T) {
 	resp := invokeBatch(t, fake, batchPayload(`[1,2]`), func(ctx Context, items []int) ([]int, error) {
 		br, err := Map(ctx, "named-items", items, func(_ Context, item int, _ int) (int, error) {
 			return item * 10, nil
-		}, WithMaxConcurrency(1), WithItemNamer(func(_ int, i int) string {
+		}, WithMaxConcurrency(1), WithItemNamer(func(i int) string {
 			return fmt.Sprintf("item-%d", items[i])
 		}))
 		if err != nil {
@@ -310,6 +310,39 @@ func TestMapItemNamer(t *testing.T) {
 	assertSucceeded(t, resp)
 	if !strings.Contains(resp.Result, "10") || !strings.Contains(resp.Result, "20") {
 		t.Fatalf("expected namer results in %s", resp.Result)
+	}
+}
+
+// TestMapItemNamerIndexPosition verifies the index the namer receives
+// corresponds to the named item's position in the input slice: each
+// reported item's Name embeds both its Index and the input value at that
+// index.
+func TestMapItemNamerIndexPosition(t *testing.T) {
+	fake := &fakeLambda{}
+	resp := invokeBatch(t, fake, batchPayload(`[10,20,30]`), func(ctx Context, items []int) ([]string, error) {
+		br, err := Map(ctx, "indexed-names", items, func(_ Context, item int, _ int) (int, error) {
+			return item, nil
+		}, WithMaxConcurrency(1), WithItemNamer(func(i int) string {
+			return fmt.Sprintf("name-%d-%d", i, items[i])
+		}))
+		if err != nil {
+			return nil, err
+		}
+		names := make([]string, 0, len(br.Items))
+		for _, it := range br.Items {
+			want := fmt.Sprintf("name-%d-%d", it.Index, items[it.Index])
+			if it.Name != want {
+				return nil, fmt.Errorf("item at index %d named %q, want %q", it.Index, it.Name, want)
+			}
+			names = append(names, it.Name)
+		}
+		return names, nil
+	})
+	assertSucceeded(t, resp)
+	for _, want := range []string{"name-0-10", "name-1-20", "name-2-30"} {
+		if !strings.Contains(resp.Result, want) {
+			t.Fatalf("expected %s in %s", want, resp.Result)
+		}
 	}
 }
 
@@ -417,13 +450,13 @@ func TestParallelFailFast(t *testing.T) {
 			{Func: func(_ Context) (string, error) { return "ok", nil }},
 			{Func: func(_ Context) (string, error) { return "", errors.New("fail") }},
 			{Func: func(_ Context) (string, error) { return "never", nil }},
-		}, WithMaxConcurrency(1), WithCompletion(WithToleratedFailureCount(0)))
+		}, WithMaxConcurrency(1), WithCompletion(CompletionConfig{ToleratedFailureCount: aws.Int(0)}))
 		if err != nil {
 			return result{}, err
 		}
 		return result{
 			Reason:  br.Reason.String(),
-			Status:  br.Status(),
+			Status:  br.Status().String(),
 			Success: br.SuccessCount(),
 			Failure: br.FailureCount(),
 			Total:   br.TotalCount(),
@@ -499,22 +532,153 @@ func TestParallelInvalidMaxConcurrency(t *testing.T) {
 	assertFailed(t, resp)
 }
 
-func TestParallelThrowIfError(t *testing.T) {
+func TestParallelErr(t *testing.T) {
 	fake := &fakeLambda{}
 	resp := invokeBatch(t, fake, batchPayload(`null`), func(ctx Context, _ any) (string, error) {
 		br, err := Parallel(ctx, "throwing", []Branch[string]{
 			{Func: func(_ Context) (string, error) { return "", errors.New("branch failed") }},
 			{Func: func(_ Context) (string, error) { return "never", nil }},
-		}, WithMaxConcurrency(1), WithCompletion(WithToleratedFailureCount(0)))
+		}, WithMaxConcurrency(1), WithCompletion(CompletionConfig{ToleratedFailureCount: aws.Int(0)}))
 		if err != nil {
 			return "", err
 		}
-		if throwErr := br.ThrowIfError(); throwErr != nil {
+		if throwErr := br.Err(); throwErr != nil {
 			return "", throwErr
 		}
 		return "should not reach", nil
 	})
 	assertFailed(t, resp)
+}
+
+// --- Err() three-branch coverage tests ---
+
+// TestErrBranch1_FirstFailedItem verifies Err() returns the first failed
+// item's error when at least one item has failed.
+func TestErrBranch1_FirstFailedItem(t *testing.T) {
+	err1 := errors.New("first failure")
+	err2 := errors.New("second failure")
+	result := BatchResult[string]{
+		Items: []BatchItem[string]{
+			{Index: 0, Status: BatchItemSucceeded, Result: "ok"},
+			{Index: 1, Status: BatchItemFailed, Err: err1},
+			{Index: 2, Status: BatchItemFailed, Err: err2},
+		},
+		Reason:      CompletionFailureToleranceExceeded,
+		batchStatus: batchStatusFor[string](nil, CompletionFailureToleranceExceeded),
+	}
+	// Fix batchStatus using items.
+	result.batchStatus = batchStatusFor(result.Items, result.Reason)
+
+	got := result.Err()
+	if got != err1 {
+		t.Fatalf("Err() = %v, want first failure %v", got, err1)
+	}
+}
+
+// TestErrBranch2_BatchLevelFailure verifies Err() returns a batch-level
+// error when no individual item failed but the batch status is failed
+// (a completion policy that marks the batch failed without any item error).
+func TestErrBranch2_BatchLevelFailure(t *testing.T) {
+	result := BatchResult[string]{
+		Items: []BatchItem[string]{
+			{Index: 0, Status: BatchItemSucceeded, Result: "ok"},
+			{Index: 1, Status: BatchItemStarted},
+		},
+		Reason:      CompletionFailureToleranceExceeded,
+		batchStatus: BatchItemFailed,
+	}
+
+	got := result.Err()
+	if got == nil {
+		t.Fatal("Err() = nil, want batch-level error")
+	}
+	if !strings.Contains(got.Error(), "batch failed") {
+		t.Fatalf("Err() = %q, want message containing 'batch failed'", got.Error())
+	}
+	if !strings.Contains(got.Error(), "FAILURE_TOLERANCE_EXCEEDED") {
+		t.Fatalf("Err() = %q, want reason in message", got.Error())
+	}
+}
+
+// TestErrBranch3_Success verifies Err() returns nil for a fully succeeded
+// batch.
+func TestErrBranch3_Success(t *testing.T) {
+	result := BatchResult[string]{
+		Items: []BatchItem[string]{
+			{Index: 0, Status: BatchItemSucceeded, Result: "a"},
+			{Index: 1, Status: BatchItemSucceeded, Result: "b"},
+		},
+		Reason:      CompletionAllCompleted,
+		batchStatus: BatchItemSucceeded,
+	}
+
+	got := result.Err()
+	if got != nil {
+		t.Fatalf("Err() = %v, want nil for success", got)
+	}
+}
+
+// TestStatusReflectsCompletionReason verifies that Status() returns
+// BatchItemFailed when the completion reason indicates failure, even
+// without failed items (for forward-compatible batch-level failure).
+func TestStatusReflectsCompletionReason(t *testing.T) {
+	// A batch with only succeeded/started items but a failure reason.
+	result := BatchResult[string]{
+		Items: []BatchItem[string]{
+			{Index: 0, Status: BatchItemSucceeded, Result: "ok"},
+		},
+		Reason:      CompletionFailureToleranceExceeded,
+		batchStatus: batchStatusFor[string](nil, CompletionFailureToleranceExceeded),
+	}
+	// batchStatusFor considers the reason.
+	result.batchStatus = batchStatusFor(result.Items, result.Reason)
+
+	if result.Status() != BatchItemFailed {
+		t.Errorf("Status() = %v, want BatchItemFailed for failure reason", result.Status())
+	}
+}
+
+// TestParallelBranchNamePropagates verifies that Branch.Name flows into
+// the checkpoint as the branch's display name without requiring
+// WithItemNamer.
+func TestParallelBranchNamePropagates(t *testing.T) {
+	fake := &fakeLambda{}
+	resp := invokeBatch(t, fake, batchPayload(`null`), func(ctx Context, _ any) ([]string, error) {
+		br, err := Parallel(ctx, "named", []Branch[string]{
+			{Name: "alpha", Func: func(_ Context) (string, error) { return "a", nil }},
+			{Name: "beta", Func: func(_ Context) (string, error) { return "b", nil }},
+		}, WithMaxConcurrency(1))
+		if err != nil {
+			return nil, err
+		}
+		// Verify item names in the result match Branch.Name.
+		for _, item := range br.Items {
+			switch item.Index {
+			case 0:
+				if item.Name != "alpha" {
+					return nil, fmt.Errorf("item 0 name = %q, want %q", item.Name, "alpha")
+				}
+			case 1:
+				if item.Name != "beta" {
+					return nil, fmt.Errorf("item 1 name = %q, want %q", item.Name, "beta")
+				}
+			}
+		}
+		return br.Results(), nil
+	})
+	assertSucceeded(t, resp)
+
+	// Verify checkpoint updates carry the branch names.
+	updates := updateBatch(t, fake)
+	names := map[string]bool{}
+	for _, u := range updates {
+		if aws.ToString(u.SubType) == "ParallelBranch" && u.Name != nil {
+			names[aws.ToString(u.Name)] = true
+		}
+	}
+	if !names["alpha"] || !names["beta"] {
+		t.Errorf("expected branch names alpha,beta in checkpoints, got %v", names)
+	}
 }
 
 func TestParallelAccessors(t *testing.T) {
@@ -531,8 +695,7 @@ func TestParallelAccessors(t *testing.T) {
 			{Func: func(_ Context) (string, error) { return "", errors.New("branch failed") }},
 			{Func: func(_ Context) (string, error) { return "ok2", nil }},
 		}, WithMaxConcurrency(1), WithCompletion(CompletionConfig{
-			ToleratedFailureCount:    1,
-			toleratedFailureCountSet: true,
+			ToleratedFailureCount: aws.Int(1),
 		}))
 		if err != nil {
 			return result{}, err
@@ -827,8 +990,7 @@ func TestMapPanicInItemDoesNotHangCoordinator(t *testing.T) {
 			}
 			return item, nil
 		}, WithMaxConcurrency(1), WithCompletion(CompletionConfig{
-			ToleratedFailureCount:    1,
-			toleratedFailureCountSet: true,
+			ToleratedFailureCount: aws.Int(1),
 		}))
 		if err != nil {
 			return result{}, err
@@ -986,15 +1148,14 @@ func TestMapToleratedWithinAllComplete(t *testing.T) {
 			}
 			return item, nil
 		}, WithMaxConcurrency(1), WithCompletion(CompletionConfig{
-			ToleratedFailureCount:    1,
-			toleratedFailureCountSet: true,
+			ToleratedFailureCount: aws.Int(1),
 		}))
 		if err != nil {
 			return result{}, err
 		}
 		return result{
 			Reason:  br.Reason.String(),
-			Status:  br.Status(),
+			Status:  br.Status().String(),
 			Success: br.SuccessCount(),
 			Failure: br.FailureCount(),
 			Total:   br.TotalCount(),

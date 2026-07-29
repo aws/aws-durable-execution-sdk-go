@@ -25,9 +25,9 @@ const (
 // behavior are configured with [BatchOption] values.
 //
 // Each item runs in a MapIteration child context. Items are identified by
-// their zero-based index; use [WithItemNamer] for custom naming.
-// MaxConcurrency bounds in-flight items; completion config may stop
-// scheduling early.
+// their zero-based index; use [WithItemNamer] to assign display names from
+// item values. MaxConcurrency bounds in-flight items; completion config may
+// stop scheduling early.
 func Map[I, O any](ctx Context, name string, items []I, fn func(ctx Context, item I, index int) (O, error), opts ...BatchOption) (BatchResult[O], error) {
 	ec, ok := ctx.(*execContext)
 	if !ok {
@@ -35,14 +35,6 @@ func Map[I, O any](ctx Context, name string, items []I, fn func(ctx Context, ite
 	}
 
 	options := resolveBatchOptions(ec, opts)
-
-	// Set the item accessor so itemNameForIndex can pass items to the namer.
-	options.itemAt = func(index int) any {
-		if index >= 0 && index < len(items) {
-			return items[index]
-		}
-		return nil
-	}
 
 	if options.maxConcurrencySet && options.maxConcurrency <= 0 {
 		return BatchResult[O]{}, fmt.Errorf("durable: Map %q: max concurrency must be positive, got %d", name, options.maxConcurrency)
@@ -94,8 +86,9 @@ func Map[I, O any](ctx Context, name string, items []I, fn func(ctx Context, ite
 	if totalItems == 0 {
 		// Empty collection: checkpoint success immediately.
 		result := BatchResult[O]{
-			Items:  nil,
-			Reason: CompletionAllCompleted,
+			Items:       nil,
+			Reason:      CompletionAllCompleted,
+			batchStatus: BatchItemSucceeded,
 		}
 		return checkpointBatchSuccess(ec, id, name, operationSubTypeMap, result, options)
 	}
@@ -111,10 +104,9 @@ func Map[I, O any](ctx Context, name string, items []I, fn func(ctx Context, ite
 // type; for heterogeneous fan-out, use [Go] with futures of different
 // types.
 //
-// Each branch runs in a ParallelBranch child context. Branches are
-// identified by their zero-based index; use [Branch.Name] for display
-// names. MaxConcurrency bounds in-flight branches; completion config may
-// stop scheduling early.
+// Each branch runs in a ParallelBranch child context named by [Branch].Name.
+// MaxConcurrency bounds in-flight branches; completion config may stop
+// scheduling early.
 func Parallel[O any](ctx Context, name string, branches []Branch[O], opts ...BatchOption) (BatchResult[O], error) {
 	ec, ok := ctx.(*execContext)
 	if !ok {
@@ -122,6 +114,16 @@ func Parallel[O any](ctx Context, name string, branches []Branch[O], opts ...Bat
 	}
 
 	options := resolveBatchOptions(ec, opts)
+
+	// Default branch naming from Branch.Name when no explicit itemNamer.
+	if options.itemNamer == nil {
+		options.itemNamer = func(index int) string {
+			if index < len(branches) {
+				return branches[index].Name
+			}
+			return ""
+		}
+	}
 
 	if options.maxConcurrencySet && options.maxConcurrency <= 0 {
 		return BatchResult[O]{}, fmt.Errorf("durable: Parallel %q: max concurrency must be positive, got %d", name, options.maxConcurrency)
@@ -173,8 +175,9 @@ func Parallel[O any](ctx Context, name string, branches []Branch[O], opts ...Bat
 	totalItems := len(branches)
 	if totalItems == 0 {
 		result := BatchResult[O]{
-			Items:  nil,
-			Reason: CompletionAllCompleted,
+			Items:       nil,
+			Reason:      CompletionAllCompleted,
+			batchStatus: BatchItemSucceeded,
 		}
 		return checkpointBatchSuccess(ec, id, name, operationSubTypeParallel, result, options)
 	}
@@ -215,6 +218,20 @@ const (
 	BatchItemStarted BatchItemStatus = 4
 )
 
+// String returns the wire representation of the status.
+func (s BatchItemStatus) String() string {
+	switch s {
+	case BatchItemSucceeded:
+		return "SUCCEEDED"
+	case BatchItemFailed:
+		return "FAILED"
+	case BatchItemStarted:
+		return "STARTED"
+	default:
+		return "UNKNOWN"
+	}
+}
+
 // BatchItem is the outcome of one item or branch in a batch operation.
 type BatchItem[O any] struct {
 	// Index is the zero-based position of this item in the original input
@@ -245,6 +262,12 @@ type BatchResult[O any] struct {
 
 	// Reason records why the batch completed.
 	Reason CompletionReason
+
+	// batchStatus is the overall typed batch outcome. It is set during
+	// construction and returned by Status(). It reflects the completion
+	// decision: failed when any item failed or when the batch-level
+	// completion policy indicates failure, succeeded otherwise.
+	batchStatus BatchItemStatus
 }
 
 // Results returns the successful results in input order. Failed or
@@ -305,13 +328,20 @@ func (r BatchResult[O]) HasFailure() bool {
 	return false
 }
 
-// ThrowIfError returns the first item failure as an error if any item
-// failed, allowing the caller to propagate it and fail the execution.
-func (r BatchResult[O]) ThrowIfError() error {
+// Err returns the error that should fail the batch, or nil if the batch
+// succeeded. When any item failed, it returns the first failed item's
+// error. When no individual item failed but the batch status is
+// [BatchItemFailed], it returns a batch-level completion error carrying
+// the completion reason. Callers propagate the returned error to fail the
+// execution.
+func (r BatchResult[O]) Err() error {
 	for i := range r.Items {
 		if r.Items[i].Status == BatchItemFailed {
 			return r.Items[i].Err
 		}
+	}
+	if r.Status() == BatchItemFailed {
+		return fmt.Errorf("durable: batch failed: %s", r.Reason)
 	}
 	return nil
 }
@@ -345,12 +375,25 @@ func (r BatchResult[O]) TotalCount() int {
 	return len(r.Items)
 }
 
-// Status returns "SUCCEEDED" if no item failed, "FAILED" otherwise.
-func (r BatchResult[O]) Status() string {
-	if r.HasFailure() {
-		return "FAILED"
+// Status returns the overall batch status: [BatchItemFailed] if any item
+// failed or the batch-level completion indicates failure,
+// [BatchItemSucceeded] otherwise.
+func (r BatchResult[O]) Status() BatchItemStatus {
+	return r.batchStatus
+}
+
+// batchStatusFor computes the overall batch status from the item outcomes
+// and the completion reason.
+func batchStatusFor[O any](items []BatchItem[O], reason CompletionReason) BatchItemStatus {
+	for i := range items {
+		if items[i].Status == BatchItemFailed {
+			return BatchItemFailed
+		}
 	}
-	return "SUCCEEDED"
+	if reason == CompletionFailureToleranceExceeded {
+		return BatchItemFailed
+	}
+	return BatchItemSucceeded
 }
 
 // CompletionReason records why a batch operation completed.
@@ -420,23 +463,18 @@ func WithCompletion(c CompletionConfig) BatchOption {
 	return batchOptionFunc(func(o *batchOptions) { o.completion = c })
 }
 
-// WithItemNamer sets display names for a [Map] operation's items. The type
-// parameter I matches the Map's item type, so no type assertion is needed
-// in the namer function:
+// WithItemNamer sets display names for the items of a [Map] operation.
+// The namer receives the item's zero-based index; close over the input
+// slice to derive a name from the item value:
 //
 //	durable.Map(ctx, "process", orders, processOrder,
-//	    durable.WithItemNamer(func(item Order, i int) string {
-//	        return item.ID
-//	    }))
+//	    durable.WithItemNamer(func(i int) string { return orders[i].ID }))
 //
-// namer must be a deterministic function of its arguments.
-func WithItemNamer[I any](namer func(item I, index int) string) BatchOption {
-	return batchOptionFunc(func(o *batchOptions) {
-		o.itemNamer = func(item any, index int) string {
-			typedItem, _ := item.(I)
-			return namer(typedItem, index)
-		}
-	})
+// namer must be a deterministic function of its argument.
+//
+// For [Parallel] branches, set [Branch].Name directly instead.
+func WithItemNamer(namer func(index int) string) BatchOption {
+	return batchOptionFunc(func(o *batchOptions) { o.itemNamer = namer })
 }
 
 // WithBatchSerdes overrides the serializer for each item's result within
@@ -468,40 +506,23 @@ type CompletionConfig struct {
 	MinSuccessful int
 
 	// ToleratedFailureCount fails the batch once more than this many
-	// items fail. A zero value means fail on the first failure.
-	ToleratedFailureCount int
+	// items fail. Nil disables count-based tolerance; an explicit zero
+	// fails the batch on the first failure.
+	ToleratedFailureCount *int
 
 	// ToleratedFailurePercentage fails the batch once the failure
 	// percentage strictly exceeds this threshold.
 	ToleratedFailurePercentage int
-
-	// toleratedFailureCountSet distinguishes an explicit 0 from an unset
-	// value. Without this, we cannot differentiate "fail-fast" (0) from
-	// "unset" (no failure tolerance at all).
-	toleratedFailureCountSet bool
-}
-
-// WithToleratedFailureCount returns a CompletionConfig with the tolerated
-// failure count set explicitly. This distinguishes an intentional 0 (fail-
-// fast) from an unset value.
-func WithToleratedFailureCount(n int) CompletionConfig {
-	return CompletionConfig{
-		ToleratedFailureCount:    n,
-		toleratedFailureCountSet: true,
-	}
 }
 
 type batchOptions struct {
 	maxConcurrency    int
 	maxConcurrencySet bool // true when user explicitly set via WithMaxConcurrency
 	completion        CompletionConfig
-	itemNamer         func(item any, index int) string
+	itemNamer         func(index int) string
 	itemSerdes        Serdes
 	resultSerdes      Serdes
 	nesting           NestingMode
-	// itemAt retrieves the item at the given index for passing to
-	// itemNamer. Set by Map; nil for Parallel (which has no items).
-	itemAt func(index int) any
 }
 
 type batchOptionFunc func(*batchOptions)
@@ -569,7 +590,7 @@ func executeBatchItems[I, O any](
 				break
 			}
 
-			itemName := itemNameForIndex(options, itemAtIndex(options, i), i)
+			itemName := itemNameForIndex(options, i)
 			var result BatchItem[O]
 			var err error
 			if options.nesting == NestingFlat {
@@ -632,7 +653,7 @@ func executeBatchItems[I, O any](
 
 		preClaimed := make([]preClaimedItem, 0, totalItems)
 		for i := 0; i < totalItems; i++ {
-			itemName := itemNameForIndex(options, itemAtIndex(options, i), i)
+			itemName := itemNameForIndex(options, i)
 			childID, claimErr := ec.claimOperation()
 			if claimErr != nil {
 				return BatchResult[O]{}, claimErr
@@ -803,7 +824,7 @@ func executeBatchItems[I, O any](
 			if _, ok := startedIdx[i]; ok {
 				results = append(results, BatchItem[O]{
 					Index:  i,
-					Name:   itemNameForIndex(options, itemAtIndex(options, i), i),
+					Name:   itemNameForIndex(options, i),
 					Status: BatchItemStarted,
 				})
 			}
@@ -811,8 +832,9 @@ func executeBatchItems[I, O any](
 	}
 
 	batchResult := BatchResult[O]{
-		Items:  results,
-		Reason: reason,
+		Items:       results,
+		Reason:      reason,
+		batchStatus: batchStatusFor(results, reason),
 	}
 
 	return checkpointBatchSuccess(ec, parentID, parentName, parentSubType, batchResult, options)
@@ -1230,6 +1252,7 @@ func replayTerminalBatch[I, O any](
 			if err := options.resultSerdes.Unmarshal(ec.serdesCtx(id), []byte(op.childCtx.result), &result); err != nil {
 				return BatchResult[O]{}, fmt.Errorf("durable: batch %q: deserialize batch result: %w", name, err)
 			}
+			result.batchStatus = batchStatusFor(result.Items, result.Reason)
 			return result, nil
 		}
 		// Normal replay: deserialize the stored aggregate result.
@@ -1275,7 +1298,7 @@ func replayBatchChildren[I, O any](
 	// Determine total items based on whether we have items (Map) or not (Parallel).
 	totalItems := len(items)
 	if totalItems == 0 {
-		return BatchResult[O]{Items: nil, Reason: CompletionAllCompleted}, nil
+		return BatchResult[O]{Items: nil, Reason: CompletionAllCompleted, batchStatus: BatchItemSucceeded}, nil
 	}
 
 	results := make([]BatchItem[O], 0, totalItems)
@@ -1283,7 +1306,7 @@ func replayBatchChildren[I, O any](
 	reason := CompletionAllCompleted
 
 	for i := 0; i < totalItems; i++ {
-		itemName := itemNameForIndex(options, itemAtIndex(options, i), i)
+		itemName := itemNameForIndex(options, i)
 		var result BatchItem[O]
 		var err error
 
@@ -1327,7 +1350,7 @@ func replayBatchChildren[I, O any](
 		}
 	}
 
-	return BatchResult[O]{Items: results, Reason: reason}, nil
+	return BatchResult[O]{Items: results, Reason: reason, batchStatus: batchStatusFor(results, reason)}, nil
 }
 
 // checkpointBatchSuccess checkpoints the parent batch context as SUCCEEDED
@@ -1437,7 +1460,7 @@ func toBatchResult[O any](payload batchCheckpointPayload, itemSerdes Serdes, sct
 			}
 		}
 	}
-	return BatchResult[O]{Items: items, Reason: payload.Reason}, nil
+	return BatchResult[O]{Items: items, Reason: payload.Reason, batchStatus: batchStatusFor(items, payload.Reason)}, nil
 }
 
 // maxInnerErrMessageBytes is the ceiling for the persisted inner error
@@ -1713,7 +1736,7 @@ func replayBatchChildrenFromRecord[I, O any](
 	results := make([]BatchItem[O], 0, record.StartedTotal)
 	for i := 0; i < record.StartedTotal; i++ {
 		childID := sib.next()
-		itemName := itemNameForIndex(options, itemAtIndex(options, i), i)
+		itemName := itemNameForIndex(options, i)
 		if abandoned[i] {
 			results = append(results, BatchItem[O]{
 				Index:  i,
@@ -1732,7 +1755,7 @@ func replayBatchChildrenFromRecord[I, O any](
 		}
 		results = append(results, item)
 	}
-	return BatchResult[O]{Items: results, Reason: record.Reason}, nil
+	return BatchResult[O]{Items: results, Reason: record.Reason, batchStatus: batchStatusFor(results, record.Reason)}, nil
 }
 
 // batchParentUpdate builds an operation update for the parent batch context.
@@ -1769,21 +1792,11 @@ func batchChildUpdate(ec *execContext, childID, childName, childSubType, parentI
 }
 
 // itemNameForIndex returns the name for a batch item at the given index.
-// item may be nil when called from Parallel (no item value available).
-func itemNameForIndex(options batchOptions, item any, index int) string {
+func itemNameForIndex(options batchOptions, index int) string {
 	if options.itemNamer != nil {
-		return options.itemNamer(item, index)
+		return options.itemNamer(index)
 	}
 	return ""
-}
-
-// itemAtIndex retrieves the item value for the given index using the
-// options' itemAt accessor, or returns nil if no accessor is set.
-func itemAtIndex(options batchOptions, index int) any {
-	if options.itemAt != nil {
-		return options.itemAt(index)
-	}
-	return nil
 }
 
 // shouldStopMin checks if the min-successful threshold has been met.
@@ -1797,10 +1810,8 @@ func shouldStopMin(cfg CompletionConfig, successCount int) bool {
 // shouldStopFailure checks if the failure tolerance has been exceeded.
 func shouldStopFailure(cfg CompletionConfig, failureCount, totalItems int) bool {
 	// Check count-based tolerance.
-	if cfg.toleratedFailureCountSet {
-		if failureCount > cfg.ToleratedFailureCount {
-			return true
-		}
+	if cfg.ToleratedFailureCount != nil && failureCount > *cfg.ToleratedFailureCount {
+		return true
 	}
 	// Check percentage-based tolerance.
 	if cfg.ToleratedFailurePercentage > 0 && totalItems > 0 {

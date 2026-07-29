@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
+	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
 func handler(ctx durable.Context, _ any) (map[string]any, error) {
@@ -17,7 +18,7 @@ func handler(ctx durable.Context, _ any) (map[string]any, error) {
 			return "", errors.New("item failed")
 		}
 		return item, nil
-	}, durable.WithMaxConcurrency(1), durable.WithCompletion(durable.WithToleratedFailureCount(1)))
+	}, durable.WithMaxConcurrency(1), durable.WithCompletion(durable.CompletionConfig{ToleratedFailureCount: aws.Int(1)}))
 	if err != nil {
 		return nil, err
 	}
@@ -26,7 +27,7 @@ func handler(ctx durable.Context, _ any) (map[string]any, error) {
 	}
 	return map[string]any{
 		"completionReason": result.Reason.String(),
-		"status":           result.Status(),
+		"status":           result.Status().String(),
 		"successCount":     result.SuccessCount(),
 		"failureCount":     result.FailureCount(),
 		"totalCount":       result.TotalCount(),

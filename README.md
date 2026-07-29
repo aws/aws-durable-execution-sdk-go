@@ -139,7 +139,7 @@ func handler(ctx durable.Context, event OrderEvent) (OrderResult, error) {
 	if err != nil {
 		return OrderResult{}, err
 	}
-	if err := checks.ThrowIfError(); err != nil {
+	if err := checks.Err(); err != nil {
 		return OrderResult{}, err
 	}
 
@@ -152,7 +152,7 @@ func handler(ctx durable.Context, event OrderEvent) (OrderResult, error) {
 	if err != nil {
 		return OrderResult{}, err
 	}
-	if err := reservations.ThrowIfError(); err != nil {
+	if err := reservations.Err(); err != nil {
 		return OrderResult{}, err
 	}
 

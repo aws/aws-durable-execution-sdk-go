@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
+	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
 func handler(ctx durable.Context, _ any) (map[string]any, error) {
@@ -12,7 +13,7 @@ func handler(ctx durable.Context, _ any) (map[string]any, error) {
 		{Func: func(_ durable.Context) (string, error) { return "ok0", nil }},
 		{Func: func(_ durable.Context) (string, error) { return "", errors.New("branch failed") }},
 		{Func: func(_ durable.Context) (string, error) { return "ok2", nil }},
-	}, durable.WithMaxConcurrency(1), durable.WithCompletion(durable.WithToleratedFailureCount(1)))
+	}, durable.WithMaxConcurrency(1), durable.WithCompletion(durable.CompletionConfig{ToleratedFailureCount: aws.Int(1)}))
 	if err != nil {
 		return nil, err
 	}

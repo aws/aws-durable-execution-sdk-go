@@ -18,7 +18,7 @@ func handler(ctx durable.Context, _ any) (map[string]any, error) {
 	}
 	return map[string]any{
 		"completionReason": result.Reason.String(),
-		"status":           result.Status(),
+		"status":           result.Status().String(),
 		"successCount":     result.SuccessCount(),
 		"failureCount":     result.FailureCount(),
 		"totalCount":       result.TotalCount(),

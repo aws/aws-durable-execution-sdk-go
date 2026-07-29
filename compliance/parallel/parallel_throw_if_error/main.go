@@ -5,17 +5,18 @@ import (
 	"errors"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
+	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
 func handler(ctx durable.Context, _ any) ([]string, error) {
 	result, err := durable.Parallel(ctx, "throwing", []durable.Branch[string]{
 		{Func: func(_ durable.Context) (string, error) { return "", errors.New("branch failed") }},
 		{Func: func(_ durable.Context) (string, error) { return "never", nil }},
-	}, durable.WithMaxConcurrency(1), durable.WithCompletion(durable.WithToleratedFailureCount(0)))
+	}, durable.WithMaxConcurrency(1), durable.WithCompletion(durable.CompletionConfig{ToleratedFailureCount: aws.Int(0)}))
 	if err != nil {
 		return nil, err
 	}
-	if throwErr := result.ThrowIfError(); throwErr != nil {
+	if throwErr := result.Err(); throwErr != nil {
 		return nil, throwErr
 	}
 	return result.Results(), nil

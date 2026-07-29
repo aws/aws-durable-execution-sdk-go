@@ -8,11 +8,13 @@
   {
     "type": "CONTEXT",
     "subType": "ParallelBranch",
+    "name": "long-running",
     "status": "SUCCEEDED"
   },
   {
     "type": "CONTEXT",
     "subType": "ParallelBranch",
+    "name": "waits",
     "status": "SUCCEEDED"
   },
   {

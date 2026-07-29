@@ -29,7 +29,7 @@ func handler(ctx durable.Context, _ any) (Output, error) {
 				})
 		},
 		durable.WithCompletion(durable.CompletionConfig{MinSuccessful: 2}),
-		durable.WithItemNamer(func(_ int, i int) string { return fmt.Sprintf("process-%d", i) }),
+		durable.WithItemNamer(func(i int) string { return fmt.Sprintf("process-%d", i) }),
 	)
 	if err != nil {
 		return Output{}, err

@@ -8,6 +8,7 @@
   {
     "type": "CONTEXT",
     "subType": "ParallelBranch",
+    "name": "branch-a",
     "status": "SUCCEEDED"
   },
   {
@@ -19,6 +20,7 @@
   {
     "type": "CONTEXT",
     "subType": "ParallelBranch",
+    "name": "branch-b",
     "status": "SUCCEEDED"
   },
   {

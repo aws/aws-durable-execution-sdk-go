@@ -98,7 +98,7 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [map-large-scale](map-large-scale/main.go) | Map (100 items) | SUCCEEDED |
 | [map-error-preservation](map-error-preservation/main.go) | Map, error ordering | SUCCEEDED |
 | [map-min-successful](map-min-successful/main.go) | Map, WithCompletion (min successful) | SUCCEEDED |
-| [map-tolerated-failure-count](map-tolerated-failure-count/main.go) | Map, WithToleratedFailureCount | SUCCEEDED |
+| [map-tolerated-failure-count](map-tolerated-failure-count/main.go) | Map, ToleratedFailureCount | SUCCEEDED |
 | [map-failure-threshold](map-failure-threshold/main.go) | Map, fail-fast threshold | SUCCEEDED |
 | [map-failure-threshold-percentage](map-failure-threshold-percentage/main.go) | Map, ToleratedFailurePercentage (failure propagated) | FAILED |
 | [map-high-concurrency-invoke](map-high-concurrency-invoke/main.go) | Map, Invoke, WithMaxConcurrency | SUCCEEDED |
@@ -112,7 +112,7 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [parallel-error-preservation](parallel-error-preservation/main.go) | Parallel, error ordering | SUCCEEDED |
 | [parallel-min-successful](parallel-min-successful/main.go) | Parallel, WithCompletion (min successful) | SUCCEEDED |
 | [parallel-min-successful-callback](parallel-min-successful-callback/main.go) | Parallel, MinSuccessful, WaitForCallback | SUCCEEDED |
-| [parallel-tolerated-failure](parallel-tolerated-failure/main.go) | Parallel, WithToleratedFailureCount | SUCCEEDED |
+| [parallel-tolerated-failure](parallel-tolerated-failure/main.go) | Parallel, ToleratedFailureCount | SUCCEEDED |
 | [parallel-tolerated-failure-percentage](parallel-tolerated-failure-percentage/main.go) | Parallel, WithToleratedFailurePercentage | SUCCEEDED |
 | [parallel-failure-threshold-count](parallel-failure-threshold-count/main.go) | Parallel, fail-fast ToleratedFailureCount=0 (failure propagated) | FAILED |
 | [parallel-failure-threshold-percentage](parallel-failure-threshold-percentage/main.go) | Parallel, ToleratedFailurePercentage (failure propagated) | FAILED |

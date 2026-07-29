@@ -5,11 +5,14 @@ import (
 	"errors"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
+	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
 func handler(ctx durable.Context, _ any) (map[string]any, error) {
-	cfg := durable.WithToleratedFailureCount(1)
-	cfg.MinSuccessful = 3
+	cfg := durable.CompletionConfig{
+		MinSuccessful:         3,
+		ToleratedFailureCount: aws.Int(1),
+	}
 	result, err := durable.Parallel(ctx, "combined", []durable.Branch[string]{
 		{Func: func(_ durable.Context) (string, error) { return "", errors.New("fail0") }},
 		{Func: func(_ durable.Context) (string, error) { return "", errors.New("fail1") }},

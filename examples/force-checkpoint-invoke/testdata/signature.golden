@@ -8,17 +8,25 @@
   {
     "type": "CONTEXT",
     "subType": "ParallelBranch",
+    "name": "long-running",
     "status": "SUCCEEDED"
   },
   {
     "type": "CONTEXT",
     "subType": "ParallelBranch",
+    "name": "invokes",
     "status": "SUCCEEDED"
   },
   {
     "type": "CHAINED_INVOKE",
     "subType": "ChainedInvoke",
     "name": "invoke-1",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "long-running-step",
     "status": "SUCCEEDED"
   },
   {
@@ -31,12 +39,6 @@
     "type": "CHAINED_INVOKE",
     "subType": "ChainedInvoke",
     "name": "invoke-3",
-    "status": "SUCCEEDED"
-  },
-  {
-    "type": "STEP",
-    "subType": "Step",
-    "name": "long-running-step",
     "status": "SUCCEEDED"
   }
 ]
