@@ -3,7 +3,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -31,7 +30,7 @@ type Result struct {
 func handler(ctx durable.Context, _ any) (Result, error) {
 	// Step before callback.
 	stepResult, err := durable.Step[UserData](ctx, "fetch-data",
-		func(_ durable.StepContext) (UserData, error) {
+		func(sctx durable.StepContext) (UserData, error) {
 			return UserData{UserID: 123, Name: "John Doe"}, nil
 		})
 	if err != nil {
@@ -52,15 +51,15 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 
 	// Complete callback in a Step.
 	callbackID := cb.ID()
-	_, err = durable.Step[Void](ctx, "send-callback", func(_ durable.StepContext) (Void, error) {
-		cfg, err := config.LoadDefaultConfig(context.Background())
+	_, err = durable.Step[Void](ctx, "send-callback", func(sctx durable.StepContext) (Void, error) {
+		cfg, err := config.LoadDefaultConfig(sctx)
 		if err != nil {
 			return Void{}, fmt.Errorf("load config: %w", err)
 		}
 		client := lambdasvc.NewFromConfig(cfg)
 		result, _ := json.Marshal("processed")
 		_, err = client.SendDurableExecutionCallbackSuccess(
-			context.Background(),
+			sctx,
 			&lambdasvc.SendDurableExecutionCallbackSuccessInput{
 				CallbackId: &callbackID,
 				Result:     result,

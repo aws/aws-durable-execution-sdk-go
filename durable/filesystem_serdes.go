@@ -1,6 +1,7 @@
 package durable
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -67,7 +68,7 @@ type fsEnvelope struct {
 	File string  `json:"file,omitempty"`
 }
 
-func (s *fileSystemSerdes) Marshal(ctx SerdesContext, v any) ([]byte, error) {
+func (s *fileSystemSerdes) Marshal(_ context.Context, meta SerdesContext, v any) ([]byte, error) {
 	if v == nil {
 		return json.Marshal(nil)
 	}
@@ -94,7 +95,7 @@ func (s *fileSystemSerdes) Marshal(ctx SerdesContext, v any) ([]byte, error) {
 		// Always write to file.
 	}
 
-	filePath, err := s.writeFile(ctx, valueJSON)
+	filePath, err := s.writeFile(meta, valueJSON)
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +103,7 @@ func (s *fileSystemSerdes) Marshal(ctx SerdesContext, v any) ([]byte, error) {
 	return json.Marshal(env)
 }
 
-func (s *fileSystemSerdes) Unmarshal(_ SerdesContext, data []byte, v any) error {
+func (s *fileSystemSerdes) Unmarshal(_ context.Context, _ SerdesContext, data []byte, v any) error {
 	// Handle null/nil envelope — treat empty data the same as JSON null.
 	if len(data) == 0 || string(data) == "null" {
 		return json.Unmarshal([]byte("null"), v)
@@ -135,15 +136,15 @@ func (s *fileSystemSerdes) Unmarshal(_ SerdesContext, data []byte, v any) error 
 // Otherwise, a content-addressable scheme is used: the file path is derived
 // from a hash of the value bytes, making it safe for concurrent writes of
 // the same value.
-func (s *fileSystemSerdes) writeFile(ctx SerdesContext, valueJSON []byte) (string, error) {
+func (s *fileSystemSerdes) writeFile(meta SerdesContext, valueJSON []byte) (string, error) {
 	// Use the execution ARN and operation ID for directory structure when
 	// available, falling back to content-addressable hashing.
 	var dir, fileName string
-	if ctx.DurableExecutionArn != "" && ctx.OperationID != "" {
+	if meta.DurableExecutionArn != "" && meta.OperationID != "" {
 		// Organize by ARN hash and operation ID for deterministic paths.
-		arnHash := sha256.Sum256([]byte(ctx.DurableExecutionArn))
+		arnHash := sha256.Sum256([]byte(meta.DurableExecutionArn))
 		dir = filepath.Join(s.basePath, hex.EncodeToString(arnHash[:16]))
-		fileName = ctx.OperationID + ".json"
+		fileName = meta.OperationID + ".json"
 	} else {
 		// Content-addressable fallback.
 		hash := sha256.Sum256(valueJSON)

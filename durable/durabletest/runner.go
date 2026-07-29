@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
@@ -141,10 +140,11 @@ func (r *LocalRunner[I, O]) RunUntilComplete(t *testing.T, event I, opts ...Runn
 			return result
 		}
 
-		// Auto-advance what the backend would advance (retry timers,
-		// wait expirations). If nothing advanced, the execution is
+		// Complete what would complete on its own with the passage
+		// of time (retry timers, wait expirations). If nothing
+		// completed, the execution is
 		// blocked on external resolution — return immediately.
-		if !r.client.advanceTime() {
+		if !r.client.completePendingTimers() {
 			return result
 		}
 
@@ -158,19 +158,23 @@ func (r *LocalRunner[I, O]) RunUntilComplete(t *testing.T, event I, opts ...Runn
 	return result
 }
 
-// AdvanceTime transitions all time-eligible operations to their next state,
-// simulating the passage of time without tracking a real clock:
+// CompletePendingTimers completes every operation that is blocked on a
+// timer, regardless of its configured duration. Exactly two kinds of
+// operations are affected:
 //
-//   - STEP in PENDING → READY (retry timer elapsed, ready for re-execution)
-//   - WAIT in STARTED → SUCCEEDED (wait duration elapsed)
+//   - A step awaiting a retry timer (PENDING) becomes ready for
+//     re-execution (READY). This includes the delays between
+//     [durable.WaitForCondition] checks.
+//   - A wait whose duration has not yet elapsed (STARTED) completes
+//     (SUCCEEDED).
 //
-// The duration parameter is accepted for API-forward-compatibility but is
-// currently ignored: all eligible operations advance regardless of their
-// configured duration.
+// No other operations are touched: callbacks and chained invokes remain
+// blocked until resolved explicitly. There is no virtual clock — timers do
+// not fire selectively by duration.
 //
-// Returns true if any operation was advanced.
-func (r *LocalRunner[I, O]) AdvanceTime(_ time.Duration) bool {
-	return r.client.advanceTime()
+// Returns true if any operation was completed.
+func (r *LocalRunner[I, O]) CompletePendingTimers() bool {
+	return r.client.completePendingTimers()
 }
 
 // SendCallbackSuccess completes a pending callback operation with a

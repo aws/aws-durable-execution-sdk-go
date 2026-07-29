@@ -446,12 +446,12 @@ func TestStepStartedAtMostOnceInterrupted(t *testing.T) {
 // upperSerdes uppercases serialized output; deserialization is standard.
 type upperSerdes struct{}
 
-func (upperSerdes) Marshal(_ SerdesContext, v any) ([]byte, error) {
+func (upperSerdes) Marshal(_ context.Context, _ SerdesContext, v any) ([]byte, error) {
 	b, err := json.Marshal(v)
 	return []byte(strings.ToUpper(string(b))), err
 }
 
-func (upperSerdes) Unmarshal(_ SerdesContext, data []byte, v any) error {
+func (upperSerdes) Unmarshal(_ context.Context, _ SerdesContext, data []byte, v any) error {
 	return json.Unmarshal(data, v)
 }
 

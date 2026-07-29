@@ -136,7 +136,7 @@ func runInvoke[O, I any](ec *execContext, id, name, functionID string, input I, 
 				return zero, fmt.Errorf("durable: invoke %q: checkpointed %s operation has no invoke details", name, op.status)
 			}
 			var out O
-			if err := options.resultSerdes.Unmarshal(ec.serdesCtx(id), []byte(op.invoke.result), &out); err != nil {
+			if err := options.resultSerdes.Unmarshal(ec.Context, ec.serdesCtx(id), []byte(op.invoke.result), &out); err != nil {
 				return zero, fmt.Errorf("durable: invoke %q: deserialize result: %w", name, err)
 			}
 			return out, nil
@@ -152,7 +152,7 @@ func runInvoke[O, I any](ec *execContext, id, name, functionID string, input I, 
 		}
 	}
 
-	payload, err := options.payloadSerdes.Marshal(ec.serdesCtx(id), input)
+	payload, err := options.payloadSerdes.Marshal(ec.Context, ec.serdesCtx(id), input)
 	if err != nil {
 		return zero, fmt.Errorf("durable: invoke %q: serialize payload: %w", name, err)
 	}

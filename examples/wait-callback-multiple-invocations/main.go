@@ -31,15 +31,15 @@ type Result struct {
 	Invocations    string       `json:"invocationCount"`
 }
 
-func selfComplete(callbackID string, data CallbackData) error {
-	cfg, err := config.LoadDefaultConfig(context.Background())
+func selfComplete(ctx context.Context, callbackID string, data CallbackData) error {
+	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		return err
 	}
 	client := lambdasvc.NewFromConfig(cfg)
 	result, _ := json.Marshal(data)
 	_, err = client.SendDurableExecutionCallbackSuccess(
-		context.Background(),
+		ctx,
 		&lambdasvc.SendDurableExecutionCallbackSuccessInput{
 			CallbackId: &callbackID,
 			Result:     result,
@@ -55,8 +55,8 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 
 	// First callback.
 	cb1Result, err := durable.WaitForCallback[CallbackData](ctx, "first-callback",
-		func(_ durable.StepContext, callbackID string) error {
-			return selfComplete(callbackID, CallbackData{Step: 1})
+		func(sctx durable.StepContext, callbackID string) error {
+			return selfComplete(sctx, callbackID, CallbackData{Step: 1})
 		},
 		durable.WithCallbackTimeout(30*time.Second),
 	)
@@ -66,7 +66,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 
 	// Step between callbacks.
 	stepResult, err := durable.Step[StepData](ctx, "process-callback-data",
-		func(_ durable.StepContext) (StepData, error) {
+		func(sctx durable.StepContext) (StepData, error) {
 			return StepData{Processed: true, Step: 1}, nil
 		})
 	if err != nil {
@@ -80,8 +80,8 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 
 	// Second callback.
 	cb2Result, err := durable.WaitForCallback[CallbackData](ctx, "second-callback",
-		func(_ durable.StepContext, callbackID string) error {
-			return selfComplete(callbackID, CallbackData{Step: 2})
+		func(sctx durable.StepContext, callbackID string) error {
+			return selfComplete(sctx, callbackID, CallbackData{Step: 2})
 		},
 		durable.WithCallbackTimeout(30*time.Second),
 	)

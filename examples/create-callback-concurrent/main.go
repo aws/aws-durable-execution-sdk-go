@@ -5,7 +5,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -48,13 +47,13 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 		stepName := fmt.Sprintf("send-callback-%d", i+1)
 		payload, _ := json.Marshal(fmt.Sprintf("result-%d", i+1))
 
-		_, err = durable.Step[Void](ctx, stepName, func(_ durable.StepContext) (Void, error) {
-			cfg, err := config.LoadDefaultConfig(context.Background())
+		_, err = durable.Step[Void](ctx, stepName, func(sctx durable.StepContext) (Void, error) {
+			cfg, err := config.LoadDefaultConfig(sctx)
 			if err != nil {
 				return Void{}, err
 			}
 			client := lambdasvc.NewFromConfig(cfg)
-			_, err = client.SendDurableExecutionCallbackSuccess(context.Background(),
+			_, err = client.SendDurableExecutionCallbackSuccess(sctx,
 				&lambdasvc.SendDurableExecutionCallbackSuccessInput{
 					CallbackId: &callbackID,
 					Result:     payload,

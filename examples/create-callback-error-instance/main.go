@@ -3,7 +3,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -47,8 +46,8 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 
 	// Send failure in a durable Step.
 	callbackID := cb2.ID()
-	_, err = durable.Step[Void](ctx, "send-failure", func(_ durable.StepContext) (Void, error) {
-		cfg, err := config.LoadDefaultConfig(context.Background())
+	_, err = durable.Step[Void](ctx, "send-failure", func(sctx durable.StepContext) (Void, error) {
+		cfg, err := config.LoadDefaultConfig(sctx)
 		if err != nil {
 			return Void{}, fmt.Errorf("load config: %w", err)
 		}
@@ -56,7 +55,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 		errMsg := "test failure"
 		errType := "CallbackError"
 		_, err = client.SendDurableExecutionCallbackFailure(
-			context.Background(),
+			sctx,
 			&lambdasvc.SendDurableExecutionCallbackFailureInput{
 				CallbackId: &callbackID,
 				Error: &types.ErrorObject{
@@ -78,7 +77,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 
 	// Verify error types in a step.
 	result, err := durable.Step[Result](ctx, "check-error-types",
-		func(_ durable.StepContext) (Result, error) {
+		func(sctx durable.StepContext) (Result, error) {
 			var cbErr1 *durable.CallbackError
 			isCb1 := errors.As(err1, &cbErr1)
 			isTimeout := isCb1 && errors.Is(cbErr1.Err, durable.ErrCallbackTimedOut)

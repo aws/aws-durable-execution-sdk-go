@@ -4,7 +4,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -26,7 +25,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 		func(sctx durable.StepContext, callbackID string) error {
 			sctx.Logger().Info("Submitter sending failure", "callbackId", callbackID)
 
-			cfg, err := config.LoadDefaultConfig(context.Background())
+			cfg, err := config.LoadDefaultConfig(sctx)
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
@@ -35,7 +34,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 			errMsg := "external system failed"
 			errType := "CallbackError"
 			_, err = client.SendDurableExecutionCallbackFailure(
-				context.Background(),
+				sctx,
 				&lambdasvc.SendDurableExecutionCallbackFailureInput{
 					CallbackId: &callbackID,
 					Error: &types.ErrorObject{

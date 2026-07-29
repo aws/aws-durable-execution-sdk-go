@@ -4,7 +4,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -25,8 +24,8 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 	var cbErr error
 
 	_, err := durable.WaitForCallback[string](ctx, "failure-test",
-		func(_ durable.StepContext, callbackID string) error {
-			cfg, err := config.LoadDefaultConfig(context.Background())
+		func(sctx durable.StepContext, callbackID string) error {
+			cfg, err := config.LoadDefaultConfig(sctx)
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
@@ -34,7 +33,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 			errMsg := "external failure"
 			errType := "CallbackError"
 			_, err = client.SendDurableExecutionCallbackFailure(
-				context.Background(),
+				sctx,
 				&lambdasvc.SendDurableExecutionCallbackFailureInput{
 					CallbackId: &callbackID,
 					Error: &types.ErrorObject{
@@ -57,7 +56,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 
 	// Verify error type persists through replay.
 	result, err := durable.Step[Result](ctx, "check-error-type",
-		func(_ durable.StepContext) (Result, error) {
+		func(sctx durable.StepContext) (Result, error) {
 			var callbackErr *durable.CallbackError
 			isCbErr := errors.As(cbErr, &callbackErr)
 			msg := ""

@@ -4,7 +4,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"time"
 
@@ -32,15 +31,15 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 
 	// Send failure in a durable Step for idempotent replay.
 	callbackID := cb.ID()
-	_, err = durable.Step[Void](ctx, "send-failure", func(_ durable.StepContext) (Void, error) {
-		cfg, err := config.LoadDefaultConfig(context.Background())
+	_, err = durable.Step[Void](ctx, "send-failure", func(sctx durable.StepContext) (Void, error) {
+		cfg, err := config.LoadDefaultConfig(sctx)
 		if err != nil {
 			return Void{}, err
 		}
 		client := lambdasvc.NewFromConfig(cfg)
 		errMsg := "external system failed"
 		errType := "CallbackError"
-		_, err = client.SendDurableExecutionCallbackFailure(context.Background(),
+		_, err = client.SendDurableExecutionCallbackFailure(sctx,
 			&lambdasvc.SendDurableExecutionCallbackFailureInput{
 				CallbackId: &callbackID,
 				Error: &types.ErrorObject{

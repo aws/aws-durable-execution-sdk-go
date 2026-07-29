@@ -4,7 +4,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -33,7 +32,7 @@ type Result struct {
 func handler(ctx durable.Context, _ any) (Result, error) {
 	result, err := durable.WaitForCallback[CustomData](ctx, "custom-serdes-callback",
 		func(sctx durable.StepContext, callbackID string) error {
-			cfg, err := config.LoadDefaultConfig(context.Background())
+			cfg, err := config.LoadDefaultConfig(sctx)
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
@@ -49,7 +48,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 			payload, _ := json.Marshal(data)
 
 			_, err = client.SendDurableExecutionCallbackSuccess(
-				context.Background(),
+				sctx,
 				&lambdasvc.SendDurableExecutionCallbackSuccessInput{
 					CallbackId: &callbackID,
 					Result:     payload,

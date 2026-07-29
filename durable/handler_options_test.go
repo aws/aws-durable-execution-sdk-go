@@ -1,6 +1,7 @@
 package durable
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -35,7 +36,7 @@ func TestWithCallbackDeserializerWiring(t *testing.T) {
 	ec := &execContext{serdes: jsonSerdes{}, callbackDeserializer: deser}
 	serdes := callbackDeserializerForOptions(ec, callbackOptions{})
 	var result string
-	if err := serdes.Unmarshal(SerdesContext{}, []byte(`"hello"`), &result); err != nil {
+	if err := serdes.Unmarshal(context.Background(), SerdesContext{}, []byte(`"hello"`), &result); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
 	if result != "HELLO" {
@@ -61,7 +62,7 @@ func TestCallbackDeserializerPrecedence(t *testing.T) {
 	opts := callbackOptions{serdes: perOpSerdes}
 	serdes := callbackDeserializerForOptions(ec, opts)
 	var result string
-	if err := serdes.Unmarshal(SerdesContext{}, []byte(`"test"`), &result); err != nil {
+	if err := serdes.Unmarshal(context.Background(), SerdesContext{}, []byte(`"test"`), &result); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
 	if result != "test-perop" {
@@ -123,8 +124,10 @@ type testSerdes struct {
 	suffix string
 }
 
-func (s *testSerdes) Marshal(_ SerdesContext, v any) ([]byte, error) { return json.Marshal(v) }
-func (s *testSerdes) Unmarshal(_ SerdesContext, data []byte, v any) error {
+func (s *testSerdes) Marshal(_ context.Context, _ SerdesContext, v any) ([]byte, error) {
+	return json.Marshal(v)
+}
+func (s *testSerdes) Unmarshal(_ context.Context, _ SerdesContext, data []byte, v any) error {
 	var raw string
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err

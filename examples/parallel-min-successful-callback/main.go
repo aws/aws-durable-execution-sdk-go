@@ -29,31 +29,31 @@ type Output struct {
 func handler(ctx durable.Context, _ any) (Output, error) {
 	results, err := durable.Parallel(ctx, "min-successful-callback-branches", []durable.Branch[string]{
 		{Name: "step-1", Func: func(ctx durable.Context) (string, error) {
-			return durable.Step(ctx, "step-1", func(_ durable.StepContext) (string, error) {
+			return durable.Step(ctx, "step-1", func(sctx durable.StepContext) (string, error) {
 				return "step-1 done", nil
 			})
 		}},
 		{Name: "callback-1", Func: func(ctx durable.Context) (string, error) {
 			return durable.WaitForCallback[string](ctx, "callback-1",
-				func(_ durable.StepContext, callbackID string) error {
-					return sendCallback(callbackID, "callback-1 result")
+				func(sctx durable.StepContext, callbackID string) error {
+					return sendCallback(sctx, callbackID, "callback-1 result")
 				},
 				durable.WithCallbackTimeout(30*time.Second))
 		}},
 		{Name: "step-2", Func: func(ctx durable.Context) (string, error) {
-			return durable.Step(ctx, "step-2", func(_ durable.StepContext) (string, error) {
+			return durable.Step(ctx, "step-2", func(sctx durable.StepContext) (string, error) {
 				return "step-2 done", nil
 			})
 		}},
 		{Name: "callback-2", Func: func(ctx durable.Context) (string, error) {
 			return durable.WaitForCallback[string](ctx, "callback-2",
-				func(_ durable.StepContext, callbackID string) error {
-					return sendCallback(callbackID, "callback-2 result")
+				func(sctx durable.StepContext, callbackID string) error {
+					return sendCallback(sctx, callbackID, "callback-2 result")
 				},
 				durable.WithCallbackTimeout(30*time.Second))
 		}},
 		{Name: "step-3", Func: func(ctx durable.Context) (string, error) {
-			return durable.Step(ctx, "step-3", func(_ durable.StepContext) (string, error) {
+			return durable.Step(ctx, "step-3", func(sctx durable.StepContext) (string, error) {
 				return "step-3 done", nil
 			})
 		}},
@@ -79,8 +79,8 @@ func handler(ctx durable.Context, _ any) (Output, error) {
 // An Event invocation returns once accepted, so a retried submitter simply
 // asks the sender to resolve an already-resolved callback, which the sender
 // absorbs.
-func sendCallback(callbackID, value string) error {
-	cfg, err := config.LoadDefaultConfig(context.Background())
+func sendCallback(ctx context.Context, callbackID, value string) error {
+	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
@@ -93,7 +93,7 @@ func sendCallback(callbackID, value string) error {
 		"result":     json.RawMessage(mustMarshal(value)),
 	})
 
-	_, err = client.Invoke(context.Background(), &lambda.InvokeInput{
+	_, err = client.Invoke(ctx, &lambda.InvokeInput{
 		FunctionName:   &senderName,
 		InvocationType: types.InvocationTypeEvent,
 		Payload:        payload,

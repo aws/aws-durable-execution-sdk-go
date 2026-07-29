@@ -4,7 +4,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -23,14 +22,14 @@ type Result struct {
 func handler(ctx durable.Context, _ any) (Result, error) {
 	value, err := durable.WaitForCallback[string](ctx, "retry-submitter-callback",
 		func(sctx durable.StepContext, callbackID string) error {
-			cfg, err := config.LoadDefaultConfig(context.Background())
+			cfg, err := config.LoadDefaultConfig(sctx)
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
 			client := lambdasvc.NewFromConfig(cfg)
 			result, _ := json.Marshal("retry-success")
 			_, err = client.SendDurableExecutionCallbackSuccess(
-				context.Background(),
+				sctx,
 				&lambdasvc.SendDurableExecutionCallbackSuccessInput{
 					CallbackId: &callbackID,
 					Result:     result,

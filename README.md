@@ -65,7 +65,7 @@ func main() {
 
 ## Setup
 
-Requires Go 1.25.12 or later.
+Requires Go 1.24 or later.
 
 Build a static binary for deployment to AWS Lambda (`provided.al2023` runtime):
 
@@ -283,9 +283,9 @@ Run it with the standard toolchain:
 go test ./...
 ```
 
-Other runner utilities: `AdvanceTime` advances pending wait and step-retry
-timers, `SendCallbackFailure` resolves a callback with an error, and
-`SendCallbackHeartbeat` extends a callback timeout.
+Other runner utilities: `CompletePendingTimers` completes pending wait and
+step-retry timers, `SendCallbackFailure` resolves a callback with an error,
+and `SendCallbackHeartbeat` extends a callback timeout.
 
 For testing against a deployed function, use `NewCloudRunner`:
 

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -12,7 +13,7 @@ import (
 // wrapSerdes wraps on serialize, unwraps on deserialize (real, non-identity).
 type wrapSerdes struct{}
 
-func (wrapSerdes) Marshal(_ durable.SerdesContext, v any) ([]byte, error) {
+func (wrapSerdes) Marshal(_ context.Context, _ durable.SerdesContext, v any) ([]byte, error) {
 	s, ok := v.(string)
 	if !ok {
 		return nil, fmt.Errorf("unexpected type %T, want string", v)
@@ -20,7 +21,7 @@ func (wrapSerdes) Marshal(_ durable.SerdesContext, v any) ([]byte, error) {
 	return []byte("wrapped:" + s), nil
 }
 
-func (wrapSerdes) Unmarshal(_ durable.SerdesContext, data []byte, v any) error {
+func (wrapSerdes) Unmarshal(_ context.Context, _ durable.SerdesContext, data []byte, v any) error {
 	s := string(data)
 	unwrapped := strings.TrimPrefix(s, "wrapped:")
 	ptr, ok := v.(*string)

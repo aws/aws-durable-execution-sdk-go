@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 
@@ -14,7 +15,7 @@ import (
 // standard JSON.
 type uppercaseSerdes struct{}
 
-func (uppercaseSerdes) Marshal(_ durable.SerdesContext, v any) ([]byte, error) {
+func (uppercaseSerdes) Marshal(_ context.Context, _ durable.SerdesContext, v any) ([]byte, error) {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return nil, err
@@ -22,7 +23,7 @@ func (uppercaseSerdes) Marshal(_ durable.SerdesContext, v any) ([]byte, error) {
 	return []byte(strings.ToUpper(string(b))), nil
 }
 
-func (uppercaseSerdes) Unmarshal(_ durable.SerdesContext, data []byte, v any) error {
+func (uppercaseSerdes) Unmarshal(_ context.Context, _ durable.SerdesContext, data []byte, v any) error {
 	return json.Unmarshal(data, v)
 }
 

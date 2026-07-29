@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"strings"
@@ -15,14 +16,14 @@ import (
 // deserialization is standard JSON.
 type uppercasePayloadSerdes struct{}
 
-func (uppercasePayloadSerdes) Marshal(_ durable.SerdesContext, v any) ([]byte, error) {
+func (uppercasePayloadSerdes) Marshal(_ context.Context, _ durable.SerdesContext, v any) ([]byte, error) {
 	if s, ok := v.(string); ok {
 		return json.Marshal(strings.ToUpper(s))
 	}
 	return json.Marshal(v)
 }
 
-func (uppercasePayloadSerdes) Unmarshal(_ durable.SerdesContext, data []byte, v any) error {
+func (uppercasePayloadSerdes) Unmarshal(_ context.Context, _ durable.SerdesContext, data []byte, v any) error {
 	return json.Unmarshal(data, v)
 }
 

@@ -1046,7 +1046,7 @@ func TestParallelNestedParallel(t *testing.T) {
 // wrapSerdes is a test custom serializer that wraps values with "wrapped:" prefix.
 type wrapSerdes struct{}
 
-func (wrapSerdes) Marshal(_ SerdesContext, v any) ([]byte, error) {
+func (wrapSerdes) Marshal(_ context.Context, _ SerdesContext, v any) ([]byte, error) {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return nil, err
@@ -1059,7 +1059,7 @@ func (wrapSerdes) Marshal(_ SerdesContext, v any) ([]byte, error) {
 	return []byte("wrapped:" + s), nil
 }
 
-func (wrapSerdes) Unmarshal(_ SerdesContext, data []byte, v any) error {
+func (wrapSerdes) Unmarshal(_ context.Context, _ SerdesContext, data []byte, v any) error {
 	s := string(data)
 	unwrapped := strings.TrimPrefix(s, "wrapped:")
 	ptr, ok := v.(*string)
@@ -1100,7 +1100,7 @@ func TestMapOperationLevelSerdes(t *testing.T) {
 // opSerdes is the operation-level serdes for testing: "OPSERDE:X,Y" format.
 type opSerdes struct{}
 
-func (opSerdes) Marshal(_ SerdesContext, v any) ([]byte, error) {
+func (opSerdes) Marshal(_ context.Context, _ SerdesContext, v any) ([]byte, error) {
 	br, ok := v.(BatchResult[string])
 	if !ok {
 		return nil, fmt.Errorf("opSerdes.Marshal: unexpected type %T", v)
@@ -1109,7 +1109,7 @@ func (opSerdes) Marshal(_ SerdesContext, v any) ([]byte, error) {
 	return []byte("OPSERDE:" + strings.Join(results, ",")), nil
 }
 
-func (opSerdes) Unmarshal(_ SerdesContext, data []byte, v any) error {
+func (opSerdes) Unmarshal(_ context.Context, _ SerdesContext, data []byte, v any) error {
 	s := string(data)
 	if !strings.HasPrefix(s, "OPSERDE:") {
 		return fmt.Errorf("opSerdes.Unmarshal: unexpected format %q", s)
@@ -1251,7 +1251,7 @@ func TestBatchCheckpointPayloadRoundTrip(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// fromBatchResult → marshal
-			payload, err := fromBatchResult(tt.result, serdes, SerdesContext{})
+			payload, err := fromBatchResult(context.Background(), tt.result, serdes, SerdesContext{})
 			if err != nil {
 				t.Fatalf("fromBatchResult: %v", err)
 			}
@@ -1265,7 +1265,7 @@ func TestBatchCheckpointPayloadRoundTrip(t *testing.T) {
 			if err := json.Unmarshal(raw, &decoded); err != nil {
 				t.Fatalf("unmarshal payload: %v", err)
 			}
-			got, err := toBatchResult[string](decoded, serdes, SerdesContext{})
+			got, err := toBatchResult[string](context.Background(), decoded, serdes, SerdesContext{})
 			if err != nil {
 				t.Fatalf("toBatchResult: %v", err)
 			}
@@ -1350,7 +1350,7 @@ func TestBatchCheckpointPreservesInnerErrorType(t *testing.T) {
 	}
 
 	// Round-trip through checkpoint serialization.
-	payload, err := fromBatchResult(liveResult, serdes, SerdesContext{})
+	payload, err := fromBatchResult(context.Background(), liveResult, serdes, SerdesContext{})
 	if err != nil {
 		t.Fatalf("fromBatchResult: %v", err)
 	}
@@ -1362,7 +1362,7 @@ func TestBatchCheckpointPreservesInnerErrorType(t *testing.T) {
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		t.Fatalf("unmarshal payload: %v", err)
 	}
-	got, err := toBatchResult[string](decoded, serdes, SerdesContext{})
+	got, err := toBatchResult[string](context.Background(), decoded, serdes, SerdesContext{})
 	if err != nil {
 		t.Fatalf("toBatchResult: %v", err)
 	}
@@ -1425,7 +1425,7 @@ func TestBatchCheckpointBackwardCompat(t *testing.T) {
 	if err := json.Unmarshal([]byte(oldPayload), &decoded); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	got, err := toBatchResult[string](decoded, jsonSerdes{}, SerdesContext{})
+	got, err := toBatchResult[string](context.Background(), decoded, jsonSerdes{}, SerdesContext{})
 	if err != nil {
 		t.Fatalf("toBatchResult: %v", err)
 	}
@@ -1464,7 +1464,7 @@ func TestBatchCheckpointBackwardCompatStepError(t *testing.T) {
 	if err := json.Unmarshal([]byte(oldPayload), &decoded); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	got, err := toBatchResult[string](decoded, jsonSerdes{}, SerdesContext{})
+	got, err := toBatchResult[string](context.Background(), decoded, jsonSerdes{}, SerdesContext{})
 	if err != nil {
 		t.Fatalf("toBatchResult: %v", err)
 	}
@@ -1669,7 +1669,7 @@ func TestTruncateInnerErrMessage(t *testing.T) {
 			},
 			Reason: CompletionAllCompleted,
 		}
-		payload, err := fromBatchResult(batchResult, jsonSerdes{}, SerdesContext{})
+		payload, err := fromBatchResult(context.Background(), batchResult, jsonSerdes{}, SerdesContext{})
 		if err != nil {
 			t.Fatalf("fromBatchResult: %v", err)
 		}

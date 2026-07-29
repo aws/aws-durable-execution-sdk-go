@@ -4,7 +4,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -23,7 +22,7 @@ type Result struct {
 func handler(ctx durable.Context, _ any) (Result, error) {
 	value, err := durable.WaitForCallback[string](ctx, "heartbeat-callback",
 		func(sctx durable.StepContext, callbackID string) error {
-			cfg, err := config.LoadDefaultConfig(context.Background())
+			cfg, err := config.LoadDefaultConfig(sctx)
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
@@ -31,7 +30,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 
 			// Send a heartbeat to reset the timeout.
 			_, err = client.SendDurableExecutionCallbackHeartbeat(
-				context.Background(),
+				sctx,
 				&lambdasvc.SendDurableExecutionCallbackHeartbeatInput{
 					CallbackId: &callbackID,
 				})
@@ -44,7 +43,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 			// Complete the callback.
 			result, _ := json.Marshal("heartbeat-success")
 			_, err = client.SendDurableExecutionCallbackSuccess(
-				context.Background(),
+				sctx,
 				&lambdasvc.SendDurableExecutionCallbackSuccessInput{
 					CallbackId: &callbackID,
 					Result:     result,

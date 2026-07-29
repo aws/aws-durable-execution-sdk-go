@@ -21,7 +21,7 @@ type Result struct {
 }
 
 func handler(ctx durable.Context, _ any) (Result, error) {
-	before, err := durable.Step(ctx, "before", func(_ durable.StepContext) (int64, error) {
+	before, err := durable.Step(ctx, "before", func(sctx durable.StepContext) (int64, error) {
 		return time.Now().UnixMilli(), nil
 	})
 	if err != nil {
@@ -31,8 +31,8 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 	// Wrap WaitForCallback in a Go child context so it becomes a Future[Void].
 	cbFuture := durable.Go(ctx, "cb-wrap", func(childCtx durable.Context) (durable.Void, error) {
 		_, err := durable.WaitForCallback[string](childCtx, "callback",
-			func(_ durable.StepContext, callbackID string) error {
-				return completeCallback(callbackID, "callback-done")
+			func(sctx durable.StepContext, callbackID string) error {
+				return completeCallback(sctx, callbackID, "callback-done")
 			},
 			durable.WithCallbackTimeout(30*time.Second),
 		)
@@ -47,7 +47,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 		return Result{}, err
 	}
 
-	after, err := durable.Step(ctx, "after", func(_ durable.StepContext) (int64, error) {
+	after, err := durable.Step(ctx, "after", func(sctx durable.StepContext) (int64, error) {
 		return time.Now().UnixMilli(), nil
 	})
 	if err != nil {
@@ -57,14 +57,14 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 	return Result{ElapsedMs: after - before}, nil
 }
 
-func completeCallback(callbackID, value string) error {
-	cfg, err := config.LoadDefaultConfig(context.Background())
+func completeCallback(ctx context.Context, callbackID, value string) error {
+	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 	client := lambdasvc.NewFromConfig(cfg)
 	result, _ := json.Marshal(value)
-	_, err = client.SendDurableExecutionCallbackSuccess(context.Background(),
+	_, err = client.SendDurableExecutionCallbackSuccess(ctx,
 		&lambdasvc.SendDurableExecutionCallbackSuccessInput{
 			CallbackId: &callbackID,
 			Result:     result,

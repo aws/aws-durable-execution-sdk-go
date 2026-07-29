@@ -181,7 +181,7 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 				}
 			})
 			var out O
-			if err := options.serdes.Unmarshal(ec.serdesCtx(id), []byte(op.step.result), &out); err != nil {
+			if err := options.serdes.Unmarshal(ec.Context, ec.serdesCtx(id), []byte(op.step.result), &out); err != nil {
 				return zero, fmt.Errorf("durable: step %q: deserialize checkpointed result: %w", name, err)
 			}
 			dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
@@ -414,7 +414,7 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 		return settleStepFailure[O](ec, id, name, options, stepErr, attempt)
 	}
 
-	serialized, err := options.serdes.Marshal(ec.serdesCtx(id), result)
+	serialized, err := options.serdes.Marshal(ec.Context, ec.serdesCtx(id), result)
 	if err != nil {
 		dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
 			if p.OnOperationAttemptEnd != nil {
@@ -467,7 +467,7 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 	// the checkpointed payload, so first execution and replay observe an
 	// identical result.
 	var out O
-	if err := options.serdes.Unmarshal(ec.serdesCtx(id), serialized, &out); err != nil {
+	if err := options.serdes.Unmarshal(ec.Context, ec.serdesCtx(id), serialized, &out); err != nil {
 		return zero, fmt.Errorf("durable: step %q: deserialize result: %w", name, err)
 	}
 	return out, nil

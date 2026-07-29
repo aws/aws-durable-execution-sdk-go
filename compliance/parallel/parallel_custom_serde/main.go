@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -13,14 +14,14 @@ type wrapped struct {
 	Wrapped string `json:"wrapped"`
 }
 
-func (wrappedSerdes) Marshal(_ durable.SerdesContext, v any) ([]byte, error) {
+func (wrappedSerdes) Marshal(_ context.Context, _ durable.SerdesContext, v any) ([]byte, error) {
 	s, ok := v.(string)
 	if !ok {
 		return nil, fmt.Errorf("unexpected type %T, want string", v)
 	}
 	return json.Marshal(wrapped{Wrapped: s})
 }
-func (wrappedSerdes) Unmarshal(_ durable.SerdesContext, data []byte, v any) error {
+func (wrappedSerdes) Unmarshal(_ context.Context, _ durable.SerdesContext, data []byte, v any) error {
 	var w wrapped
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err

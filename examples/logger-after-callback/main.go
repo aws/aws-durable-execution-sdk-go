@@ -34,7 +34,7 @@ func handler(ctx durable.Context, _ any) (result, error) {
 		func(sctx durable.StepContext, callbackID string) error {
 			sctx.Logger().Info("Submitter sending callback success",
 				"callbackId", callbackID)
-			return completeCallback(callbackID, "callback-resolved")
+			return completeCallback(sctx, callbackID, "callback-resolved")
 		},
 		durable.WithCallbackTimeout(30*time.Second),
 	)
@@ -61,14 +61,14 @@ func handler(ctx durable.Context, _ any) (result, error) {
 	}, nil
 }
 
-func completeCallback(callbackID, value string) error {
-	cfg, err := config.LoadDefaultConfig(context.Background())
+func completeCallback(ctx context.Context, callbackID, value string) error {
+	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 	client := lambdasvc.NewFromConfig(cfg)
 	resultPayload, _ := json.Marshal(value)
-	_, err = client.SendDurableExecutionCallbackSuccess(context.Background(),
+	_, err = client.SendDurableExecutionCallbackSuccess(ctx,
 		&lambdasvc.SendDurableExecutionCallbackSuccessInput{
 			CallbackId: &callbackID,
 			Result:     resultPayload,

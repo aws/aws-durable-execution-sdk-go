@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"strings"
@@ -16,11 +17,11 @@ import (
 // serialization is standard JSON.
 type uppercaseResultSerdes struct{}
 
-func (uppercaseResultSerdes) Marshal(_ durable.SerdesContext, v any) ([]byte, error) {
+func (uppercaseResultSerdes) Marshal(_ context.Context, _ durable.SerdesContext, v any) ([]byte, error) {
 	return json.Marshal(v)
 }
 
-func (uppercaseResultSerdes) Unmarshal(_ durable.SerdesContext, data []byte, v any) error {
+func (uppercaseResultSerdes) Unmarshal(_ context.Context, _ durable.SerdesContext, data []byte, v any) error {
 	s, ok := v.(*string)
 	if !ok {
 		return json.Unmarshal(data, v)

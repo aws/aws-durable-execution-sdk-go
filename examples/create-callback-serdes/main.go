@@ -3,7 +3,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -36,8 +35,8 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 
 	// Send structured data in a durable Step.
 	callbackID := cb.ID()
-	_, err = durable.Step[Void](ctx, "send-custom-data", func(_ durable.StepContext) (Void, error) {
-		cfg, err := config.LoadDefaultConfig(context.Background())
+	_, err = durable.Step[Void](ctx, "send-custom-data", func(sctx durable.StepContext) (Void, error) {
+		cfg, err := config.LoadDefaultConfig(sctx)
 		if err != nil {
 			return Void{}, fmt.Errorf("load config: %w", err)
 		}
@@ -50,7 +49,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 		}
 		payload, _ := json.Marshal(data)
 		_, err = client.SendDurableExecutionCallbackSuccess(
-			context.Background(),
+			sctx,
 			&lambdasvc.SendDurableExecutionCallbackSuccessInput{
 				CallbackId: &callbackID,
 				Result:     payload,

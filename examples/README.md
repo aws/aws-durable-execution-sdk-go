@@ -4,7 +4,7 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 
 ## Prerequisites
 
-- Go 1.25+
+- Go 1.24+
 - AWS SAM CLI
 - AWS credentials configured for a target account and region
 

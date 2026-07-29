@@ -110,7 +110,7 @@ func (e *StepError) Error() string {
 func (e *StepError) Unwrap() error { return e.Err }
 
 // As supports [errors.As] matching against [*OperationError].
-func (e *StepError) As(target interface{}) bool {
+func (e *StepError) As(target any) bool {
 	if t, ok := target.(**OperationError); ok {
 		*t = &OperationError{Name: e.Name, Err: e.Err}
 		return true
@@ -132,7 +132,7 @@ func (e *StepInterruptedError) Error() string {
 }
 
 // As supports [errors.As] matching against [*OperationError].
-func (e *StepInterruptedError) As(target interface{}) bool {
+func (e *StepInterruptedError) As(target any) bool {
 	if t, ok := target.(**OperationError); ok {
 		*t = &OperationError{Name: e.Name}
 		return true
@@ -165,7 +165,7 @@ func (e *InvokeError) Error() string {
 func (e *InvokeError) Unwrap() error { return e.Err }
 
 // As supports [errors.As] matching against [*OperationError].
-func (e *InvokeError) As(target interface{}) bool {
+func (e *InvokeError) As(target any) bool {
 	if t, ok := target.(**OperationError); ok {
 		*t = &OperationError{Name: e.Name, Err: e.Err}
 		return true
@@ -197,7 +197,7 @@ func (e *CallbackError) Error() string {
 func (e *CallbackError) Unwrap() error { return e.Err }
 
 // As supports [errors.As] matching against [*OperationError].
-func (e *CallbackError) As(target interface{}) bool {
+func (e *CallbackError) As(target any) bool {
 	if t, ok := target.(**OperationError); ok {
 		*t = &OperationError{Name: e.Name, Err: e.Err}
 		return true
@@ -221,7 +221,7 @@ func (e *ChildContextError) Error() string {
 func (e *ChildContextError) Unwrap() error { return e.Err }
 
 // As supports [errors.As] matching against [*OperationError].
-func (e *ChildContextError) As(target interface{}) bool {
+func (e *ChildContextError) As(target any) bool {
 	if t, ok := target.(**OperationError); ok {
 		*t = &OperationError{Name: e.Name, Err: e.Err}
 		return true
@@ -251,7 +251,7 @@ func (e *WaitForConditionError) Error() string {
 func (e *WaitForConditionError) Unwrap() error { return e.Err }
 
 // As supports [errors.As] matching against [*OperationError].
-func (e *WaitForConditionError) As(target interface{}) bool {
+func (e *WaitForConditionError) As(target any) bool {
 	if t, ok := target.(**OperationError); ok {
 		*t = &OperationError{Name: e.Name, Err: e.Err}
 		return true
@@ -278,7 +278,7 @@ func (e *CombinatorError) Error() string {
 func (e *CombinatorError) Unwrap() []error { return e.Errors }
 
 // As supports [errors.As] matching against [*OperationError].
-func (e *CombinatorError) As(target interface{}) bool {
+func (e *CombinatorError) As(target any) bool {
 	if t, ok := target.(**OperationError); ok {
 		*t = &OperationError{Name: e.Name}
 		return true
@@ -356,7 +356,7 @@ func (e *NonDeterministicReplayError) Error() string {
 }
 
 // As supports [errors.As] matching against [*OperationError].
-func (e *NonDeterministicReplayError) As(target interface{}) bool {
+func (e *NonDeterministicReplayError) As(target any) bool {
 	if t, ok := target.(**OperationError); ok {
 		*t = &OperationError{Name: e.Name}
 		return true
@@ -397,7 +397,7 @@ func (e *ResultTooLargeError) Error() string {
 }
 
 // As supports [errors.As] matching against [*OperationError].
-func (e *ResultTooLargeError) As(target interface{}) bool {
+func (e *ResultTooLargeError) As(target any) bool {
 	if t, ok := target.(**OperationError); ok {
 		*t = &OperationError{Name: e.Name}
 		return true

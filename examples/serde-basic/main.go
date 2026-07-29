@@ -10,6 +10,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -40,7 +41,7 @@ type prefixSerdes struct {
 	prefix []byte
 }
 
-func (s *prefixSerdes) Marshal(_ durable.SerdesContext, v any) ([]byte, error) {
+func (s *prefixSerdes) Marshal(_ context.Context, _ durable.SerdesContext, v any) ([]byte, error) {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return nil, err
@@ -48,7 +49,7 @@ func (s *prefixSerdes) Marshal(_ durable.SerdesContext, v any) ([]byte, error) {
 	return append(s.prefix, b...), nil
 }
 
-func (s *prefixSerdes) Unmarshal(_ durable.SerdesContext, data []byte, v any) error {
+func (s *prefixSerdes) Unmarshal(_ context.Context, _ durable.SerdesContext, data []byte, v any) error {
 	if len(data) < len(s.prefix) {
 		return fmt.Errorf("serde-basic: missing prefix in checkpoint data")
 	}

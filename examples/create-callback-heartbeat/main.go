@@ -4,7 +4,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -31,8 +30,8 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 
 	// Send heartbeat + success in a durable Step.
 	callbackID := cb.ID()
-	_, err = durable.Step[Void](ctx, "send-heartbeat-and-complete", func(_ durable.StepContext) (Void, error) {
-		cfg, err := config.LoadDefaultConfig(context.Background())
+	_, err = durable.Step[Void](ctx, "send-heartbeat-and-complete", func(sctx durable.StepContext) (Void, error) {
+		cfg, err := config.LoadDefaultConfig(sctx)
 		if err != nil {
 			return Void{}, fmt.Errorf("load config: %w", err)
 		}
@@ -40,7 +39,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 
 		// Send heartbeat.
 		_, err = client.SendDurableExecutionCallbackHeartbeat(
-			context.Background(),
+			sctx,
 			&lambdasvc.SendDurableExecutionCallbackHeartbeatInput{
 				CallbackId: &callbackID,
 			})
@@ -51,7 +50,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 		// Complete the callback.
 		result, _ := json.Marshal("long-task-done")
 		_, err = client.SendDurableExecutionCallbackSuccess(
-			context.Background(),
+			sctx,
 			&lambdasvc.SendDurableExecutionCallbackSuccessInput{
 				CallbackId: &callbackID,
 				Result:     result,

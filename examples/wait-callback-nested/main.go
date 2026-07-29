@@ -30,15 +30,15 @@ type Result struct {
 	NestedResults NestedResult `json:"nestedResults"`
 }
 
-func selfComplete(callbackID, value string) error {
-	cfg, err := config.LoadDefaultConfig(context.Background())
+func selfComplete(ctx context.Context, callbackID, value string) error {
+	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		return err
 	}
 	client := lambdasvc.NewFromConfig(cfg)
 	result, _ := json.Marshal(value)
 	_, err = client.SendDurableExecutionCallbackSuccess(
-		context.Background(),
+		ctx,
 		&lambdasvc.SendDurableExecutionCallbackSuccessInput{
 			CallbackId: &callbackID,
 			Result:     result,
@@ -49,8 +49,8 @@ func selfComplete(callbackID, value string) error {
 func handler(ctx durable.Context, _ any) (Result, error) {
 	// Outer callback.
 	outerResult, err := durable.WaitForCallback[string](ctx, "outer-callback-op",
-		func(_ durable.StepContext, callbackID string) error {
-			return selfComplete(callbackID, "outer-value")
+		func(sctx durable.StepContext, callbackID string) error {
+			return selfComplete(sctx, callbackID, "outer-value")
 		},
 		durable.WithCallbackTimeout(30*time.Second),
 	)
@@ -62,8 +62,8 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 	nestedResult, err := durable.RunInChildContext[NestedResult](ctx, "outer-child-context",
 		func(childCtx durable.Context) (NestedResult, error) {
 			innerResult, err := durable.WaitForCallback[string](childCtx, "inner-callback-op",
-				func(_ durable.StepContext, callbackID string) error {
-					return selfComplete(callbackID, "inner-value")
+				func(sctx durable.StepContext, callbackID string) error {
+					return selfComplete(sctx, callbackID, "inner-value")
 				},
 				durable.WithCallbackTimeout(30*time.Second),
 			)
@@ -78,8 +78,8 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 						return InnerResult{}, err
 					}
 					deepCb, err := durable.WaitForCallback[string](deepCtx, "nested-callback-op",
-						func(_ durable.StepContext, callbackID string) error {
-							return selfComplete(callbackID, "deep-value")
+						func(sctx durable.StepContext, callbackID string) error {
+							return selfComplete(sctx, callbackID, "deep-value")
 						},
 						durable.WithCallbackTimeout(30*time.Second),
 					)

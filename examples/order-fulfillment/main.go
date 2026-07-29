@@ -100,14 +100,43 @@ func handler(ctx durable.Context, order Order) (FulfillmentResult, error) {
 		return FulfillmentResult{}, fmt.Errorf("shipment prep failed: %w", err)
 	}
 
+	// Check for branch failures before accessing results. Parallel
+	// exposes branch failures through BatchResult.Err().
+	if err := shipment.Err(); err != nil {
+		return FulfillmentResult{}, fmt.Errorf("shipment prep branch failed: %w", err)
+	}
+
+	// Look up branch results by name rather than by index: completion
+	// configs can omit items that never started, so positional access is
+	// not reliable.
+	labelURL, ok := branchResult(shipment, "generate-label")
+	if !ok {
+		return FulfillmentResult{}, errors.New("generate-label branch did not produce a result")
+	}
+	trackingNumber, ok := branchResult(shipment, "generate-tracking")
+	if !ok {
+		return FulfillmentResult{}, errors.New("generate-tracking branch did not produce a result")
+	}
+
 	return FulfillmentResult{
 		OrderID:        order.OrderID,
 		Status:         "FULFILLED",
 		Total:          total,
 		PaymentID:      paymentID,
-		LabelURL:       shipment.Items[0].Result,
-		TrackingNumber: shipment.Items[1].Result,
+		LabelURL:       labelURL,
+		TrackingNumber: trackingNumber,
 	}, nil
+}
+
+// branchResult returns the successful result of the named branch and true,
+// or the zero value and false if the branch is absent or did not succeed.
+func branchResult(r durable.BatchResult[string], name string) (string, bool) {
+	for _, item := range r.Items {
+		if item.Name == name && item.Status == durable.BatchItemSucceeded {
+			return item.Result, true
+		}
+	}
+	return "", false
 }
 
 // validateOrder checks inventory and calculates total in grouped steps.

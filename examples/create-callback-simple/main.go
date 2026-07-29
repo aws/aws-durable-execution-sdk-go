@@ -5,7 +5,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -32,14 +31,14 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 
 	// Send the callback success in a durable Step so it runs exactly once.
 	callbackID := cb.ID()
-	_, err = durable.Step[Void](ctx, "send-callback", func(_ durable.StepContext) (Void, error) {
-		cfg, err := config.LoadDefaultConfig(context.Background())
+	_, err = durable.Step[Void](ctx, "send-callback", func(sctx durable.StepContext) (Void, error) {
+		cfg, err := config.LoadDefaultConfig(sctx)
 		if err != nil {
 			return Void{}, fmt.Errorf("load config: %w", err)
 		}
 		client := lambdasvc.NewFromConfig(cfg)
 		payload, _ := json.Marshal("hello from external")
-		_, err = client.SendDurableExecutionCallbackSuccess(context.Background(),
+		_, err = client.SendDurableExecutionCallbackSuccess(sctx,
 			&lambdasvc.SendDurableExecutionCallbackSuccessInput{
 				CallbackId: &callbackID,
 				Result:     payload,

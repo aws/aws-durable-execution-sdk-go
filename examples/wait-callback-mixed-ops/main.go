@@ -3,7 +3,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -39,7 +38,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 
 	// Step to fetch data.
 	stepResult, err := durable.Step[UserData](ctx, "fetch-user-data",
-		func(_ durable.StepContext) (UserData, error) {
+		func(sctx durable.StepContext) (UserData, error) {
 			return UserData{UserID: 123, Name: "John Doe"}, nil
 		})
 	if err != nil {
@@ -49,14 +48,14 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 	// WaitForCallback with self-completing submitter.
 	callbackResult, err := durable.WaitForCallback[string](ctx, "wait-for-callback",
 		func(sctx durable.StepContext, callbackID string) error {
-			cfg, err := config.LoadDefaultConfig(context.Background())
+			cfg, err := config.LoadDefaultConfig(sctx)
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
 			client := lambdasvc.NewFromConfig(cfg)
 			result, _ := json.Marshal("callback-data")
 			_, err = client.SendDurableExecutionCallbackSuccess(
-				context.Background(),
+				sctx,
 				&lambdasvc.SendDurableExecutionCallbackSuccessInput{
 					CallbackId: &callbackID,
 					Result:     result,
@@ -76,7 +75,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 
 	// Final step.
 	finalStep, err := durable.Step[FinalStep](ctx, "finalize-processing",
-		func(_ durable.StepContext) (FinalStep, error) {
+		func(sctx durable.StepContext) (FinalStep, error) {
 			return FinalStep{Status: "completed", Timestamp: 1234567890}, nil
 		})
 	if err != nil {

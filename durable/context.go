@@ -88,12 +88,14 @@ type SerdesContext struct {
 // Serdes serializes and deserializes operation inputs and results for
 // checkpoint storage. The default Serdes uses encoding/json.
 //
-// Implementations receive a [SerdesContext] with the operation's identity
+// Implementations receive the invocation's [context.Context] for
+// cancellation and deadline propagation (e.g., when offloading payloads to
+// external storage), and a [SerdesContext] with the operation's identity
 // and the execution ARN, enabling context-aware serialization strategies
 // such as filesystem offloading keyed by operation.
 type Serdes interface {
-	Marshal(ctx SerdesContext, v any) ([]byte, error)
-	Unmarshal(ctx SerdesContext, data []byte, v any) error
+	Marshal(ctx context.Context, meta SerdesContext, v any) ([]byte, error)
+	Unmarshal(ctx context.Context, meta SerdesContext, data []byte, v any) error
 }
 
 // Deserializer deserializes callback payloads submitted by external
@@ -112,6 +114,12 @@ type Deserializer interface {
 //
 // For a wall-clock timestamp that varies across invocations, compute it
 // inside a [Step] so it is checkpointed once and reused verbatim on replay.
+//
+// ExecutionStartTime is a package-level function rather than a [Context]
+// method because Context is sealed and kept minimal: it exposes only
+// [Context.ExecutionArn] (required by the SDK for operation identity on every
+// checkpoint call) while derived conveniences that read from the checkpoint
+// state—like start time—live as package functions layered on top.
 func ExecutionStartTime(ctx Context) time.Time {
 	ec, ok := ctx.(*execContext)
 	if !ok {

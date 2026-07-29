@@ -25,6 +25,11 @@ type WaitDecision struct {
 }
 
 // ConditionConfig configures a [WaitForCondition] operation.
+//
+// Unlike other operations, which take variadic Option arguments,
+// WaitForCondition takes this struct positionally: two of its fields
+// (InitialState and WaitStrategy) depend on the state type S, and Go's
+// non-generic option interfaces cannot carry a type parameter.
 type ConditionConfig[S any] struct {
 	// InitialState is the state passed to the first check.
 	InitialState S

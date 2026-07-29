@@ -215,17 +215,13 @@ func buildStepDetails(u types.OperationUpdate, existing *types.Operation) *types
 }
 
 // buildWaitDetails constructs WaitDetails for a wait checkpoint update.
+// The local runner does not track wait durations; all pending waits complete
+// unconditionally when [LocalRunner.CompletePendingTimers] is called.
 func buildWaitDetails(u types.OperationUpdate) *types.WaitDetails {
 	if u.Action != types.OperationActionStart {
 		return nil
 	}
-	wd := &types.WaitDetails{}
-	if u.WaitOptions != nil && u.WaitOptions.WaitSeconds != nil {
-		// Store the wait duration; the local runner does not implement
-		// real timers but records the requested duration.
-		_ = *u.WaitOptions.WaitSeconds // value consumed by AdvanceTime (R2)
-	}
-	return wd
+	return &types.WaitDetails{}
 }
 
 // buildCallbackDetails constructs CallbackDetails, generating a callback ID
@@ -307,12 +303,12 @@ type OpenCallback struct {
 	Name string
 }
 
-// advanceTime transitions time-eligible operations:
+// completePendingTimers transitions timer-blocked operations:
 //   - STEP in PENDING → READY (retry timer elapsed)
 //   - WAIT in STARTED → SUCCEEDED (wait duration elapsed)
 //
 // Returns true if any operation was advanced.
-func (m *memoryClient) advanceTime() bool {
+func (m *memoryClient) completePendingTimers() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

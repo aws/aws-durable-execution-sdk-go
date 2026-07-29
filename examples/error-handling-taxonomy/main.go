@@ -5,7 +5,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -43,7 +42,7 @@ func handler(ctx durable.Context, _ any) (Output, error) {
 
 	// 1. Provoke a StepError: a step that always fails with no retry.
 	_, err := durable.Step(ctx, "failing-step",
-		func(_ durable.StepContext) (any, error) {
+		func(sctx durable.StepContext) (any, error) {
 			return nil, fmt.Errorf("deliberate step failure")
 		},
 		durable.WithRetry(durable.NoRetry()),
@@ -114,8 +113,8 @@ func handler(ctx durable.Context, _ any) (Output, error) {
 	// in local testing the step fails (no endpoint) and the test resolves
 	// the callback externally via runner.SendCallbackFailure.
 	callbackID := cb.ID()
-	_, err = durable.Step[Void](ctx, "send-callback-failure", func(_ durable.StepContext) (Void, error) {
-		cfg, err := config.LoadDefaultConfig(context.Background())
+	_, err = durable.Step[Void](ctx, "send-callback-failure", func(sctx durable.StepContext) (Void, error) {
+		cfg, err := config.LoadDefaultConfig(sctx)
 		if err != nil {
 			return Void{}, fmt.Errorf("load config: %w", err)
 		}
@@ -123,7 +122,7 @@ func handler(ctx durable.Context, _ any) (Output, error) {
 		errMsg := "deliberate callback failure"
 		errType := "CallbackError"
 		_, err = client.SendDurableExecutionCallbackFailure(
-			context.Background(),
+			sctx,
 			&lambdasvc.SendDurableExecutionCallbackFailureInput{
 				CallbackId: &callbackID,
 				Error: &types.ErrorObject{

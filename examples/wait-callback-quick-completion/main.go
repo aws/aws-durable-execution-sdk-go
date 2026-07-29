@@ -6,7 +6,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 
@@ -25,7 +24,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 	value, err := durable.WaitForCallback[string](ctx, "quick-callback",
 		func(sctx durable.StepContext, callbackID string) error {
 			// Immediately complete the callback — no delay.
-			cfg, err := config.LoadDefaultConfig(context.Background())
+			cfg, err := config.LoadDefaultConfig(sctx)
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
@@ -33,7 +32,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 
 			result, _ := json.Marshal("instant")
 			_, err = client.SendDurableExecutionCallbackSuccess(
-				context.Background(),
+				sctx,
 				&lambdasvc.SendDurableExecutionCallbackSuccessInput{
 					CallbackId: &callbackID,
 					Result:     result,

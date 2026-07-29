@@ -33,15 +33,15 @@ type Result struct {
 	ChildCtxResult ChildResult `json:"childContextResult"`
 }
 
-func selfComplete[T any](callbackID string, data T) error {
-	cfg, err := config.LoadDefaultConfig(context.Background())
+func selfComplete[T any](ctx context.Context, callbackID string, data T) error {
+	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		return err
 	}
 	client := lambdasvc.NewFromConfig(cfg)
 	result, _ := json.Marshal(data)
 	_, err = client.SendDurableExecutionCallbackSuccess(
-		context.Background(),
+		ctx,
 		&lambdasvc.SendDurableExecutionCallbackSuccessInput{
 			CallbackId: &callbackID,
 			Result:     result,
@@ -52,8 +52,8 @@ func selfComplete[T any](callbackID string, data T) error {
 func handler(ctx durable.Context, _ any) (Result, error) {
 	// Parent-level callback.
 	parentResult, err := durable.WaitForCallback[ParentData](ctx, "parent-callback-op",
-		func(_ durable.StepContext, callbackID string) error {
-			return selfComplete(callbackID, ParentData{ParentData: "parent-value"})
+		func(sctx durable.StepContext, callbackID string) error {
+			return selfComplete(sctx, callbackID, ParentData{ParentData: "parent-value"})
 		},
 		durable.WithCallbackTimeout(30*time.Second),
 	)
@@ -69,8 +69,8 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 			}
 
 			childCb, err := durable.WaitForCallback[ChildData](childCtx, "child-callback-op",
-				func(_ durable.StepContext, callbackID string) error {
-					return selfComplete(callbackID, ChildData{ChildData: 42})
+				func(sctx durable.StepContext, callbackID string) error {
+					return selfComplete(sctx, callbackID, ChildData{ChildData: 42})
 				},
 				durable.WithCallbackTimeout(30*time.Second),
 			)

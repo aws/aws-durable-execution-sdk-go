@@ -9,6 +9,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -37,7 +38,7 @@ type envelope struct {
 	Data json.RawMessage `json:"data"`
 }
 
-func (s *envelopeSerdes) Marshal(_ durable.SerdesContext, v any) ([]byte, error) {
+func (s *envelopeSerdes) Marshal(_ context.Context, _ durable.SerdesContext, v any) ([]byte, error) {
 	data, err := json.Marshal(v)
 	if err != nil {
 		return nil, err
@@ -45,7 +46,7 @@ func (s *envelopeSerdes) Marshal(_ durable.SerdesContext, v any) ([]byte, error)
 	return json.Marshal(envelope{Type: "order-serdes", Data: data})
 }
 
-func (s *envelopeSerdes) Unmarshal(_ durable.SerdesContext, data []byte, v any) error {
+func (s *envelopeSerdes) Unmarshal(_ context.Context, _ durable.SerdesContext, data []byte, v any) error {
 	var env envelope
 	if err := json.Unmarshal(data, &env); err != nil {
 		return err

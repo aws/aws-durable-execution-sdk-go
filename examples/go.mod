@@ -1,6 +1,6 @@
 module github.com/aws/aws-durable-execution-sdk-go/examples
 
-go 1.25.12
+go 1.24
 
 require (
 	github.com/aws/aws-durable-execution-sdk-go v0.0.0

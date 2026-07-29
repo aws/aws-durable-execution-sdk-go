@@ -299,7 +299,7 @@ func TestEmptyResult(t *testing.T) {
 	_ = output // void result
 }
 
-// --- R2 Tests: RunUntilComplete, AdvanceTime, Callbacks, ChainedInvoke, Accessors ---
+// --- R2 Tests: RunUntilComplete, CompletePendingTimers, Callbacks, ChainedInvoke, Accessors ---
 
 func TestRunUntilCompleteStepWithRetry(t *testing.T) {
 	// A step that fails twice then succeeds. RunUntilComplete should
@@ -629,14 +629,14 @@ func TestInvocationCapReached(t *testing.T) {
 	}
 	// The status should still be PENDING (RETRY → PENDING → advance → READY → re-invoke).
 	// Actually: the step fails, checkpoints RETRY (status=PENDING), suspends.
-	// advanceTime flips PENDING→READY, runner re-invokes. Step re-executes, fails, RETRY again.
+	// completePendingTimers flips PENDING→READY, runner re-invokes. Step re-executes, fails, RETRY again.
 	// After 3 iterations, returns.
 	if result.Status != durabletest.Pending && result.Status != durabletest.Failed {
 		t.Errorf("expected PENDING or FAILED, got %s", result.Status)
 	}
 }
 
-func TestAdvanceTimeManual(t *testing.T) {
+func TestCompletePendingTimersManual(t *testing.T) {
 	handler := func(ctx durable.Context, event string) (string, error) {
 		if err := durable.Wait(ctx, "timer", 30*time.Second); err != nil {
 			return "", err
@@ -652,16 +652,16 @@ func TestAdvanceTimeManual(t *testing.T) {
 		t.Fatalf("expected PENDING, got %s", result.Status)
 	}
 
-	// Manual advance.
-	advanced := runner.AdvanceTime(30 * time.Second)
+	// Manually complete the pending wait timer.
+	advanced := runner.CompletePendingTimers()
 	if !advanced {
-		t.Error("expected AdvanceTime to return true")
+		t.Error("expected CompletePendingTimers to return true")
 	}
 
-	// Second advance should return false (nothing more to advance).
-	advanced = runner.AdvanceTime(0)
+	// Second call should return false (nothing left to complete).
+	advanced = runner.CompletePendingTimers()
 	if advanced {
-		t.Error("expected AdvanceTime to return false")
+		t.Error("expected CompletePendingTimers to return false")
 	}
 
 	// Re-invoke: wait is SUCCEEDED, handler completes.
