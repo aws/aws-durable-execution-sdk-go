@@ -1,6 +1,10 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: Durable Execution Conformance Test Examples - Go (Map)
+Parameters:
+  ExecutionRoleArn:
+    Type: String
+    Description: IAM role the deployed functions assume
 Globals:
   Function:
     Runtime: provided.al2023
@@ -8,29 +12,6 @@ Globals:
     MemorySize: 128
 
 Resources:
-  DurableFunctionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-        - Effect: Allow
-          Principal:
-            Service: lambda.amazonaws.com
-          Action: sts:AssumeRole
-      ManagedPolicyArns:
-      - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-      Policies:
-      - PolicyName: DurableExecutionPolicy
-        PolicyDocument:
-          Version: '2012-10-17'
-          Statement:
-          - Effect: Allow
-            Action:
-            - lambda:CheckpointDurableExecution
-            - lambda:GetDurableExecutionState
-            Resource: '*'
-
   MapBasic:
     Type: AWS::Serverless::Function
     TestingMetadata:
@@ -41,10 +22,7 @@ Resources:
       CodeUri: publish/map_basic/
       Handler: bootstrap
       Description: Map basic (one step per item, all succeed)
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -59,10 +37,7 @@ Resources:
       CodeUri: publish/map_items_only/
       Handler: bootstrap
       Description: Map items-only form (no operation name)
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -77,10 +52,7 @@ Resources:
       CodeUri: publish/map_item_index/
       Handler: bootstrap
       Description: Map function receives item and index
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -95,10 +67,7 @@ Resources:
       CodeUri: publish/map_empty/
       Handler: bootstrap
       Description: Map with an empty items list
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -113,10 +82,7 @@ Resources:
       CodeUri: publish/map_fail_fast/
       Handler: bootstrap
       Description: Map fail-fast (tolerated-failure-count=0) stops after first failure
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -131,10 +97,7 @@ Resources:
       CodeUri: publish/map_throw_if_error/
       Handler: bootstrap
       Description: Map throw-if-error propagates an item failure to the execution
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -149,10 +112,7 @@ Resources:
       CodeUri: publish/map_min_successful/
       Handler: bootstrap
       Description: Map min-successful early completion
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -167,10 +127,7 @@ Resources:
       CodeUri: publish/map_tolerated_within/
       Handler: bootstrap
       Description: Map tolerated-failure-count within tolerance (all items complete)
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -185,10 +142,7 @@ Resources:
       CodeUri: publish/map_tolerated_exceeded/
       Handler: bootstrap
       Description: Map tolerated-failure-count exceeded (stops early)
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -203,10 +157,7 @@ Resources:
       CodeUri: publish/map_tolerated_pct/
       Handler: bootstrap
       Description: Map tolerated-failure-percentage exceeded (stops early)
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -221,10 +172,7 @@ Resources:
       CodeUri: publish/map_concurrent/
       Handler: bootstrap
       Description: Map real concurrency preserves index-ordered results
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -239,10 +187,7 @@ Resources:
       CodeUri: publish/map_flat/
       Handler: bootstrap
       Description: Map with FLAT nesting (virtual iteration contexts)
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -257,10 +202,7 @@ Resources:
       CodeUri: publish/map_item_namer/
       Handler: bootstrap
       Description: Map with a custom item namer
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -275,10 +217,7 @@ Resources:
       CodeUri: publish/map_custom_serde/
       Handler: bootstrap
       Description: Map with a custom per-item serdes
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -293,10 +232,7 @@ Resources:
       CodeUri: publish/map_suspend_iteration/
       Handler: bootstrap
       Description: Map suspends inside an iteration; replay skips the completed iteration
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -311,10 +247,7 @@ Resources:
       CodeUri: publish/map_large_result/
       Handler: bootstrap
       Description: Map with a large aggregate result (exceeds checkpoint size threshold)
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -329,10 +262,7 @@ Resources:
       CodeUri: publish/map_then_wait/
       Handler: bootstrap
       Description: Suspension after a successful map (replay skips the completed map)
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -347,10 +277,7 @@ Resources:
       CodeUri: publish/map_fail_then_wait/
       Handler: bootstrap
       Description: Suspension after a map that completed with a failure
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -365,10 +292,7 @@ Resources:
       CodeUri: publish/map_op_serde/
       Handler: bootstrap
       Description: Map operation-level serdes - serialize on a fresh operation
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -383,10 +307,7 @@ Resources:
       CodeUri: publish/map_op_serde_replay/
       Handler: bootstrap
       Description: Map operation-level serdes - deserialize on replay
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300

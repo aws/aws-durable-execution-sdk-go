@@ -6,6 +6,14 @@ name: Conformance Tests
 # as its own parallel matrix job with the pinned language-agnostic runner.
 
 on:
+  push:
+    branches: [alpha]
+    paths:
+      - "durable/**"
+      - "compliance/**"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/conformance-tests.yml"
   pull_request:
     branches: [alpha]
     paths:
@@ -108,6 +116,8 @@ jobs:
         run: pip install aws-durable-execution-conformance-tests==0.1.0
 
       - name: Run conformance suite
+        env:
+          EXECUTION_ROLE_ARN: ${{ secrets.TEST_LAMBDA_EXECUTION_ROLE_ARN }}
         run: |
           python -m aws_durable_execution_conformance_tests.app \
             --template template_${{ matrix.suite }}.yaml \
@@ -115,6 +125,7 @@ jobs:
             --suite ${{ matrix.suite }} \
             --name conf-go-${{ matrix.suite }}-${{ github.run_id }} \
             --region ${{ env.AWS_REGION }} \
+            --parameter-overrides ExecutionRoleArn="$EXECUTION_ROLE_ARN" \
             --history-dir history-${{ matrix.suite }} \
             --report junit \
             --report-file report-${{ matrix.suite }}

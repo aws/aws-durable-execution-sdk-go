@@ -1,6 +1,10 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: Durable Execution Conformance Test Examples - Go (Step)
+Parameters:
+  ExecutionRoleArn:
+    Type: String
+    Description: IAM role the deployed functions assume
 Globals:
   Function:
     Runtime: provided.al2023
@@ -8,42 +12,6 @@ Globals:
     MemorySize: 128
 
 Resources:
-  DurableFunctionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-        - Effect: Allow
-          Principal:
-            Service: lambda.amazonaws.com
-          Action: sts:AssumeRole
-      ManagedPolicyArns:
-      - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-      Policies:
-      - PolicyName: DurableExecutionPolicy
-        PolicyDocument:
-          Version: '2012-10-17'
-          Statement:
-          - Effect: Allow
-            Action:
-            - lambda:CheckpointDurableExecution
-            - lambda:GetDurableExecutionState
-            Resource: '*'
-      - PolicyName: DynamoDBPolicy
-        PolicyDocument:
-          Version: '2012-10-17'
-          Statement:
-          - Effect: Allow
-            Action:
-            - dynamodb:GetItem
-            - dynamodb:PutItem
-            - dynamodb:UpdateItem
-            Resource:
-              Fn::GetAtt:
-              - AttemptsTable
-              - Arn
-
   AttemptsTable:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -65,10 +33,7 @@ Resources:
       CodeUri: publish/step_basic/
       Handler: bootstrap
       Description: Step basic (succeeds on first attempt)
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -83,10 +48,7 @@ Resources:
       CodeUri: publish/step_with_name/
       Handler: bootstrap
       Description: Step with name
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -101,10 +63,7 @@ Resources:
       CodeUri: publish/step_nested/
       Handler: bootstrap
       Description: Sequential steps where second depends on first
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -119,10 +78,7 @@ Resources:
       CodeUri: publish/step_complex_object/
       Handler: bootstrap
       Description: Returning complex object
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -137,10 +93,7 @@ Resources:
       CodeUri: publish/step_null_result/
       Handler: bootstrap
       Description: Undefined/null result
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -155,10 +108,7 @@ Resources:
       CodeUri: publish/step_custom_serdes/
       Handler: bootstrap
       Description: Custom serdes (per-step)
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -173,10 +123,7 @@ Resources:
       CodeUri: publish/step_logging/
       Handler: bootstrap
       Description: Step with context logger
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -191,10 +138,7 @@ Resources:
       CodeUri: publish/step_and_wait_replay/
       Handler: bootstrap
       Description: Step and wait with replay
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -209,10 +153,7 @@ Resources:
       CodeUri: publish/step_replay_skips_succeeded/
       Handler: bootstrap
       Description: Replay skips succeeded step
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -227,10 +168,7 @@ Resources:
       CodeUri: publish/step_replay_rethrows_failed/
       Handler: bootstrap
       Description: Replay re-throws failed step
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -245,10 +183,7 @@ Resources:
       CodeUri: publish/step_with_retry/
       Handler: bootstrap
       Description: Step with retry (fails then succeeds)
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -267,10 +202,7 @@ Resources:
       CodeUri: publish/step_retry_exhaustion/
       Handler: bootstrap
       Description: Retry exhaustion (max attempts)
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -285,10 +217,7 @@ Resources:
       CodeUri: publish/step_default_retry/
       Handler: bootstrap
       Description: Default retry strategy
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -307,10 +236,7 @@ Resources:
       CodeUri: publish/step_retry_custom_config/
       Handler: bootstrap
       Description: Retry with custom config (fixed interval and backoff)
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -329,10 +255,7 @@ Resources:
       CodeUri: publish/step_retry_specific_exception/
       Handler: bootstrap
       Description: Retry specific exception
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -351,10 +274,7 @@ Resources:
       CodeUri: publish/step_retry_non_retryable/
       Handler: bootstrap
       Description: Retry specific exception (non-retryable fails)
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -369,10 +289,7 @@ Resources:
       CodeUri: publish/step_at_most_once_no_retry/
       Handler: bootstrap
       Description: Step with AtMostOncePerRetry semantics (interrupted, no retry)
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -387,10 +304,7 @@ Resources:
       CodeUri: publish/step_at_most_once_with_retry/
       Handler: bootstrap
       Description: Step with AtMostOncePerRetry semantics (with retry, succeeds on second attempt)
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -409,10 +323,7 @@ Resources:
       CodeUri: publish/step_with_error/
       Handler: bootstrap
       Description: Step with error (fails permanently)
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
@@ -427,10 +338,7 @@ Resources:
       CodeUri: publish/step_error_caught/
       Handler: bootstrap
       Description: Error caught and handled (try/catch)
-      Role:
-        Fn::GetAtt:
-        - DurableFunctionRole
-        - Arn
+      Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300

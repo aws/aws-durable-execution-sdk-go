@@ -8,8 +8,16 @@ operations and resuming exactly where it left off. This gives you durable steps,
 waits, callbacks, and parallel fan-out without managing state machines or
 external orchestrators.
 
-> **Pre-release.** APIs are not stable and may change without notice. Do not
-> depend on this module for production workloads yet.
+> **Pre-release.**
+>
+> Do not use this code for production purposes. Do not rely on this code for
+> anything whatsoever.
+>
+> This code is experimental and liable to change without notice. Any aspect of
+> this code that works today can stop working at any time.
+>
+> This code is a preview of what a Go SDK might look like. There is no
+> guarantee that it will necessarily become a final product.
 
 ## Quick Start
 

@@ -5,6 +5,8 @@ name: Cloud tests
 # state documented in examples/README.md (harness: examples/cloud).
 
 on:
+  push:
+    branches: [alpha]
   pull_request:
     branches: [alpha]
   workflow_dispatch:
@@ -70,6 +72,8 @@ jobs:
 
       - name: Deploy examples with SAM
         working-directory: examples
+        env:
+          EXECUTION_ROLE_ARN: ${{ secrets.TEST_LAMBDA_EXECUTION_ROLE_ARN }}
         run: |
           sam build --template-file template.yaml
           sam deploy \
@@ -78,9 +82,10 @@ jobs:
             --resolve-s3 \
             --no-confirm-changeset \
             --no-fail-on-empty-changeset \
-            --capabilities CAPABILITY_IAM \
             --region "$AWS_REGION" \
-            --parameter-overrides FunctionNamePrefix="$FUNCTION_NAME_PREFIX"
+            --parameter-overrides \
+              FunctionNamePrefix="$FUNCTION_NAME_PREFIX" \
+              ExecutionRoleArn="$EXECUTION_ROLE_ARN"
 
       - name: Run cloud tests
         working-directory: examples

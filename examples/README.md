@@ -202,6 +202,7 @@ Subsequent deploys reuse the saved `samconfig.toml`:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
+| `ExecutionRoleArn` | (required) | IAM role the deployed functions assume. The template does not create a role, so pass an existing one. |
 | `FunctionNamePrefix` | (empty) | Optional prefix for Lambda function names |
 
 ## Invoke
