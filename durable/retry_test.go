@@ -2,6 +2,7 @@ package durable
 
 import (
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -97,6 +98,9 @@ func TestNewRetryStrategyInvalidConfig(t *testing.T) {
 		{"sub-second max delay", RetryConfig{MaxDelay: time.Millisecond}, []string{"MaxDelay"}},
 		{"negative max delay", RetryConfig{MaxDelay: -time.Minute}, []string{"MaxDelay"}},
 		{"negative backoff rate", RetryConfig{BackoffRate: -1}, []string{"BackoffRate"}},
+		{"NaN backoff rate", RetryConfig{BackoffRate: math.NaN()}, []string{"BackoffRate"}},
+		{"positive infinite backoff rate", RetryConfig{BackoffRate: math.Inf(1)}, []string{"BackoffRate"}},
+		{"negative infinite backoff rate", RetryConfig{BackoffRate: math.Inf(-1)}, []string{"BackoffRate"}},
 		{"undefined jitter", RetryConfig{Jitter: "BOGUS"}, []string{"Jitter"}},
 		{
 			"multiple invalid fields",
@@ -129,6 +133,19 @@ func TestMustNewRetryStrategyPanicsOnInvalidConfig(t *testing.T) {
 		}
 	}()
 	MustNewRetryStrategy(RetryConfig{MaxAttempts: -1})
+}
+
+// TestMustNewRetryStrategyPanicsOnNaNBackoffRate pins that a non-finite
+// BackoffRate is a construction-time error: it must never reach the delay
+// computation, where NaN would violate the whole-second, at-least-one
+// delay guarantee.
+func TestMustNewRetryStrategyPanicsOnNaNBackoffRate(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("MustNewRetryStrategy did not panic on NaN BackoffRate")
+		}
+	}()
+	MustNewRetryStrategy(RetryConfig{BackoffRate: math.NaN()})
 }
 
 func TestMustNewRetryStrategyValidConfig(t *testing.T) {

@@ -69,7 +69,7 @@ type RetryConfig struct {
 	MaxDelay time.Duration
 
 	// BackoffRate multiplies the delay after each attempt. The default
-	// is 2. It must not be negative.
+	// is 2. It must be a finite value and must not be negative.
 	BackoffRate float64
 
 	// Jitter is the jitter strategy applied to computed delays. The
@@ -118,7 +118,9 @@ func validateRetryConfig(cfg RetryConfig) error {
 	if cfg.MaxDelay != 0 && cfg.MaxDelay < time.Second {
 		errs = append(errs, errors.New("durable: RetryConfig.MaxDelay must be at least 1 second when set"))
 	}
-	if cfg.BackoffRate < 0 {
+	if math.IsNaN(cfg.BackoffRate) || math.IsInf(cfg.BackoffRate, 0) {
+		errs = append(errs, errors.New("durable: RetryConfig.BackoffRate must be a finite number"))
+	} else if cfg.BackoffRate < 0 {
 		errs = append(errs, errors.New("durable: RetryConfig.BackoffRate must not be negative"))
 	}
 	switch cfg.Jitter {

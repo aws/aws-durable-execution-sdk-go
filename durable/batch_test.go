@@ -553,7 +553,8 @@ func TestParallelErr(t *testing.T) {
 // --- Err() three-branch coverage tests ---
 
 // TestErrBranch1_FirstFailedItem verifies Err() returns the first failed
-// item's error when at least one item has failed.
+// item's error when at least one item has failed. The result is built
+// through public fields only, as an external consumer would.
 func TestErrBranch1_FirstFailedItem(t *testing.T) {
 	err1 := errors.New("first failure")
 	err2 := errors.New("second failure")
@@ -563,11 +564,8 @@ func TestErrBranch1_FirstFailedItem(t *testing.T) {
 			{Index: 1, Status: BatchItemFailed, Err: err1},
 			{Index: 2, Status: BatchItemFailed, Err: err2},
 		},
-		Reason:      CompletionFailureToleranceExceeded,
-		batchStatus: batchStatusFor[string](nil, CompletionFailureToleranceExceeded),
+		Reason: CompletionFailureToleranceExceeded,
 	}
-	// Fix batchStatus using items.
-	result.batchStatus = batchStatusFor(result.Items, result.Reason)
 
 	got := result.Err()
 	if got != err1 {
@@ -584,8 +582,7 @@ func TestErrBranch2_BatchLevelFailure(t *testing.T) {
 			{Index: 0, Status: BatchItemSucceeded, Result: "ok"},
 			{Index: 1, Status: BatchItemStarted},
 		},
-		Reason:      CompletionFailureToleranceExceeded,
-		batchStatus: BatchItemFailed,
+		Reason: CompletionFailureToleranceExceeded,
 	}
 
 	got := result.Err()
@@ -608,8 +605,7 @@ func TestErrBranch3_Success(t *testing.T) {
 			{Index: 0, Status: BatchItemSucceeded, Result: "a"},
 			{Index: 1, Status: BatchItemSucceeded, Result: "b"},
 		},
-		Reason:      CompletionAllCompleted,
-		batchStatus: BatchItemSucceeded,
+		Reason: CompletionAllCompleted,
 	}
 
 	got := result.Err()
@@ -627,14 +623,164 @@ func TestStatusReflectsCompletionReason(t *testing.T) {
 		Items: []BatchItem[string]{
 			{Index: 0, Status: BatchItemSucceeded, Result: "ok"},
 		},
-		Reason:      CompletionFailureToleranceExceeded,
-		batchStatus: batchStatusFor[string](nil, CompletionFailureToleranceExceeded),
+		Reason: CompletionFailureToleranceExceeded,
 	}
-	// batchStatusFor considers the reason.
-	result.batchStatus = batchStatusFor(result.Items, result.Reason)
 
 	if result.Status() != BatchItemFailed {
 		t.Errorf("Status() = %v, want BatchItemFailed for failure reason", result.Status())
+	}
+}
+
+// TestStatusDerivedAfterPublicJSONRoundTrip verifies that Status() and
+// Err() stay authoritative for a BatchResult reconstructed purely from its
+// exported fields — the shape an ordinary JSON/Serdes round trip or an
+// external construction produces. Item Err values do not survive
+// serialization, so Err() must fall back to the batch-level error.
+func TestStatusDerivedAfterPublicJSONRoundTrip(t *testing.T) {
+	raw := `{"Items":[{"Index":0,"Status":1,"Result":"ok"},{"Index":1,"Name":"boom","Status":2}],"Reason":1}`
+	var rt BatchResult[string]
+	if err := json.Unmarshal([]byte(raw), &rt); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if rt.Status() != BatchItemFailed {
+		t.Errorf("Status() = %v, want BatchItemFailed (derived from Items)", rt.Status())
+	}
+	got := rt.Err()
+	if got == nil {
+		t.Fatal("Err() = nil, want non-nil for public state that indicates failure")
+	}
+	if !strings.Contains(got.Error(), "batch failed") {
+		t.Errorf("Err() = %q, want batch-level error message", got.Error())
+	}
+
+	// Mutating the public Items after construction must be reflected too.
+	rt.Items = rt.Items[:1]
+	rt.Reason = CompletionAllCompleted
+	if rt.Status() != BatchItemSucceeded {
+		t.Errorf("Status() after mutation = %v, want BatchItemSucceeded", rt.Status())
+	}
+	if rt.Err() != nil {
+		t.Errorf("Err() after mutation = %v, want nil", rt.Err())
+	}
+}
+
+// jsonProjectionSerdes is an operation-level result serdes that serializes
+// only the public, JSON-safe projection of a BatchResult — as a user serdes
+// plausibly would. Item errors are dropped; status must survive.
+type jsonProjectionSerdes struct{}
+
+type jsonProjectionItem struct {
+	Index  int             `json:"index"`
+	Name   string          `json:"name,omitempty"`
+	Status BatchItemStatus `json:"status"`
+	Result string          `json:"result,omitempty"`
+}
+
+type jsonProjectionPayload struct {
+	Items  []jsonProjectionItem `json:"items"`
+	Reason CompletionReason     `json:"reason"`
+}
+
+func (jsonProjectionSerdes) Marshal(_ context.Context, _ SerdesContext, v any) ([]byte, error) {
+	br, ok := v.(BatchResult[string])
+	if !ok {
+		return nil, fmt.Errorf("jsonProjectionSerdes.Marshal: unexpected type %T", v)
+	}
+	p := jsonProjectionPayload{Reason: br.Reason}
+	for _, item := range br.Items {
+		p.Items = append(p.Items, jsonProjectionItem{
+			Index: item.Index, Name: item.Name, Status: item.Status, Result: item.Result,
+		})
+	}
+	return json.Marshal(p)
+}
+
+func (jsonProjectionSerdes) Unmarshal(_ context.Context, _ SerdesContext, data []byte, v any) error {
+	var p jsonProjectionPayload
+	if err := json.Unmarshal(data, &p); err != nil {
+		return err
+	}
+	ptr, ok := v.(*BatchResult[string])
+	if !ok {
+		return fmt.Errorf("jsonProjectionSerdes.Unmarshal: target not *BatchResult[string]")
+	}
+	out := BatchResult[string]{Reason: p.Reason}
+	for _, item := range p.Items {
+		out.Items = append(out.Items, BatchItem[string]{
+			Index: item.Index, Name: item.Name, Status: item.Status, Result: item.Result,
+		})
+	}
+	*ptr = out
+	return nil
+}
+
+// TestMapResultSerdesReplayStatusAndErr runs a Map with a failing item and
+// a custom operation-level result serdes through the real live and replay
+// invocation paths, asserting that Status() and Err() report the failure
+// identically on both. This is the public serialization path: the replayed
+// BatchResult is reconstructed entirely by the user serdes from exported
+// state, with no access to unexported fields.
+func TestMapResultSerdesReplayStatusAndErr(t *testing.T) {
+	type verdict struct {
+		Status string `json:"status"`
+		HasErr bool   `json:"hasErr"`
+		Reason string `json:"reason"`
+	}
+
+	handler := func(ctx Context, _ any) (verdict, error) {
+		items := []string{"ok", "bad"}
+		br, err := Map(ctx, "proj-serde", items, func(_ Context, item string, _ int) (string, error) {
+			if item == "bad" {
+				return "", errors.New("item exploded")
+			}
+			return item, nil
+		}, WithMaxConcurrency(1), WithBatchResultSerdes(jsonProjectionSerdes{}))
+		if err != nil {
+			return verdict{}, err
+		}
+		return verdict{Status: br.Status().String(), HasErr: br.Err() != nil, Reason: br.Reason.String()}, nil
+	}
+
+	// Phase 1: LIVE.
+	fake := &fakeLambda{}
+	resp := invokeBatch(t, fake, batchPayload(`null`), handler)
+	assertSucceeded(t, resp)
+	var live verdict
+	if err := json.Unmarshal([]byte(resp.Result), &live); err != nil {
+		t.Fatalf("unmarshal live result: %v", err)
+	}
+	if live.Status != "FAILED" || !live.HasErr {
+		t.Fatalf("live verdict = %+v, want FAILED with error", live)
+	}
+
+	// Extract the Map parent SUCCEED payload written by the custom serdes.
+	var mapPayload string
+	for _, u := range updateBatch(t, fake) {
+		if aws.ToString(u.SubType) == "Map" && u.Action == types.OperationActionSucceed {
+			mapPayload = aws.ToString(u.Payload)
+		}
+	}
+	if mapPayload == "" {
+		t.Fatal("no Map SUCCEED payload found in checkpoint updates")
+	}
+
+	// Phase 2: REPLAY from the checkpointed payload.
+	replayFake := &fakeLambda{}
+	replayResp := invokeBatch(t, replayFake, batchPayload(`null`,
+		wireOperation{
+			Id:             hashID("1"),
+			Status:         "SUCCEEDED",
+			ContextDetails: &wireContextDetails{Result: mapPayload},
+		},
+	), handler)
+	assertSucceeded(t, replayResp)
+	var replay verdict
+	if err := json.Unmarshal([]byte(replayResp.Result), &replay); err != nil {
+		t.Fatalf("unmarshal replay result: %v", err)
+	}
+	if replay != live {
+		t.Errorf("replay verdict = %+v, live = %+v — Status()/Err() diverged across replay", replay, live)
 	}
 }
 
@@ -1506,7 +1652,7 @@ func TestRouteB_ErrorDataReconstructsRealValues(t *testing.T) {
 	errData := `{"stepName":"fetch-data","stepAttempts":3,"innerErrType":"Error","innerErrMessage":"connection refused"}`
 
 	// Route B: reconstructInnerError with direct fields empty, errData present.
-	inner := reconstructInnerError("StepError", "durable: step \"fetch-data\" failed after 3 attempts: connection refused", "", 0, "", "", errData)
+	inner := reconstructInnerError("StepError", "durable: step \"fetch-data\" failed after 3 attempts: connection refused", childErrorData{}, errData)
 
 	// errors.As for StepError must succeed.
 	var stepErr *StepError
@@ -1538,7 +1684,7 @@ func TestRouteB_ErrorDataReconstructsRealValues(t *testing.T) {
 // empty (old checkpoints pre-dating the ErrorData enhancement). errors.As
 // for StepError must still succeed; fields are zero-valued.
 func TestRouteB_ErrorDataAbsent(t *testing.T) {
-	inner := reconstructInnerError("StepError", "durable: step \"x\" failed after 2 attempts: timeout", "", 0, "", "", "")
+	inner := reconstructInnerError("StepError", "durable: step \"x\" failed after 2 attempts: timeout", childErrorData{}, "")
 
 	var stepErr *StepError
 	if !errors.As(inner, &stepErr) {
@@ -1579,7 +1725,7 @@ func TestRouteB_ErrorDataMalformed(t *testing.T) {
 	}
 	for _, tc := range malformedCases {
 		t.Run(tc.name, func(t *testing.T) {
-			inner := reconstructInnerError("StepError", "step failed", "", 0, "", "", tc.errData)
+			inner := reconstructInnerError("StepError", "step failed", childErrorData{}, tc.errData)
 
 			// Must not panic or return nil.
 			if inner == nil {
@@ -1605,7 +1751,7 @@ func TestRouteB_UserDefinedLeafStaysStringTyped(t *testing.T) {
 	// ErrorData with a user-defined inner error type.
 	errData := `{"stepName":"process","stepAttempts":1,"innerErrType":"MyCustomError","innerErrMessage":"custom failure"}`
 
-	inner := reconstructInnerError("StepError", "durable: step \"process\" failed after 1 attempts: custom failure", "", 0, "", "", errData)
+	inner := reconstructInnerError("StepError", "durable: step \"process\" failed after 1 attempts: custom failure", childErrorData{}, errData)
 
 	var stepErr *StepError
 	if !errors.As(inner, &stepErr) {
@@ -1896,5 +2042,293 @@ func TestSuspendedBranchHoldsConcurrencySlot(t *testing.T) {
 	}
 	if childStarts != 2 {
 		t.Fatalf("expected 2 child context starts (items 0,1), got %d", childStarts)
+	}
+}
+
+// --- Live-to-replay error taxonomy tests ---
+//
+// These tests run real Map/Parallel operations whose items fail with the
+// SDK's typed errors, then replay from the recorded checkpoints, asserting
+// that Status(), Err(), errors.As, and errors.Is behave identically on the
+// live and replay paths. Route A replays from the parent's aggregate
+// payload; Route B replays mid-batch from per-child checkpoints (ErrorData).
+
+// wfcVerdict captures the error-chain observations a handler makes on a
+// BatchResult whose item failed with a WaitForConditionError.
+type wfcVerdict struct {
+	BatchStatus  string `json:"batchStatus"`
+	ErrNonNil    bool   `json:"errNonNil"`
+	AsChildCtx   bool   `json:"asChildCtx"`
+	AsWFC        bool   `json:"asWfc"`
+	WFCName      string `json:"wfcName"`
+	WFCAttempts  int    `json:"wfcAttempts"`
+	LeafContains bool   `json:"leafContains"`
+}
+
+// wfcMapHandler runs a Map where one item fails through a real
+// WaitForCondition whose check function errors, and reports the observed
+// error taxonomy.
+func wfcMapHandler(ctx Context, _ any) (wfcVerdict, error) {
+	items := []string{"a", "b"}
+	br, err := Map(ctx, "wfc-map", items, func(c Context, item string, _ int) (string, error) {
+		if item == "b" {
+			return WaitForCondition(c, "await-sensor", func(_ StepContext, s string) (string, error) {
+				return s, errors.New("sensor offline")
+			}, ConditionConfig[string]{InitialState: "PENDING"})
+		}
+		return item, nil
+	}, WithMaxConcurrency(1))
+	if err != nil {
+		return wfcVerdict{}, err
+	}
+	v := wfcVerdict{BatchStatus: br.Status().String(), ErrNonNil: br.Err() != nil}
+	var childErr *ChildContextError
+	v.AsChildCtx = errors.As(br.Err(), &childErr)
+	var wfcErr *WaitForConditionError
+	if errors.As(br.Err(), &wfcErr) {
+		v.AsWFC = true
+		v.WFCName = wfcErr.Name
+		v.WFCAttempts = wfcErr.Attempts
+		v.LeafContains = wfcErr.Err != nil && strings.Contains(wfcErr.Err.Error(), "sensor offline")
+	}
+	return v, nil
+}
+
+// wantWFCVerdict is the taxonomy both live and replay paths must report.
+var wantWFCVerdict = wfcVerdict{
+	BatchStatus:  "FAILED",
+	ErrNonNil:    true,
+	AsChildCtx:   true,
+	AsWFC:        true,
+	WFCName:      "await-sensor",
+	WFCAttempts:  1,
+	LeafContains: true,
+}
+
+// runWFCMapLive executes the live phase and returns the verdict plus the
+// recorded checkpoint updates.
+func runWFCMapLive(t *testing.T) (wfcVerdict, []types.OperationUpdate) {
+	t.Helper()
+	fake := &fakeLambda{}
+	resp := invokeBatch(t, fake, batchPayload(`null`), wfcMapHandler)
+	assertSucceeded(t, resp)
+	var live wfcVerdict
+	if err := json.Unmarshal([]byte(resp.Result), &live); err != nil {
+		t.Fatalf("unmarshal live result: %v", err)
+	}
+	if live != wantWFCVerdict {
+		t.Fatalf("live verdict = %+v, want %+v", live, wantWFCVerdict)
+	}
+	return live, updateBatch(t, fake)
+}
+
+// TestMapWaitForConditionErrorLiveToReplayAggregate replays a Map whose
+// item failed with a real WaitForConditionError from the parent's aggregate
+// checkpoint payload (Route A) and asserts the full error taxonomy —
+// concrete type, fields, and cause — matches the live run.
+func TestMapWaitForConditionErrorLiveToReplayAggregate(t *testing.T) {
+	live, updates := runWFCMapLive(t)
+
+	var mapPayload string
+	for _, u := range updates {
+		if aws.ToString(u.SubType) == "Map" && u.Action == types.OperationActionSucceed {
+			mapPayload = aws.ToString(u.Payload)
+		}
+	}
+	if mapPayload == "" {
+		t.Fatal("no Map SUCCEED payload found in checkpoint updates")
+	}
+
+	replayResp := invokeBatch(t, &fakeLambda{}, batchPayload(`null`,
+		wireOperation{
+			Id:             hashID("1"),
+			Status:         "SUCCEEDED",
+			Type:           "CONTEXT",
+			SubType:        "Map",
+			Name:           "wfc-map",
+			ContextDetails: &wireContextDetails{Result: mapPayload},
+		},
+	), wfcMapHandler)
+	assertSucceeded(t, replayResp)
+	var replay wfcVerdict
+	if err := json.Unmarshal([]byte(replayResp.Result), &replay); err != nil {
+		t.Fatalf("unmarshal replay result: %v", err)
+	}
+	if replay != live {
+		t.Errorf("aggregate replay verdict = %+v, live = %+v — taxonomy degraded across replay", replay, live)
+	}
+}
+
+// TestMapWaitForConditionErrorLiveToReplayRouteB replays the same Map
+// mid-batch: the parent is still STARTED and only the per-item child
+// checkpoints (including the failed child's ErrorData) are available. The
+// reconstructed error chain must match the live run.
+func TestMapWaitForConditionErrorLiveToReplayRouteB(t *testing.T) {
+	live, updates := runWFCMapLive(t)
+
+	// Rebuild the checkpointed state from the recorded updates: parent
+	// Map STARTED, both MapIteration children terminal.
+	var ops []wireOperation
+	for _, u := range updates {
+		switch aws.ToString(u.SubType) {
+		case "Map":
+			if u.Action == types.OperationActionStart {
+				ops = append(ops, wireOperation{
+					Id:      aws.ToString(u.Id),
+					Status:  "STARTED",
+					Type:    "CONTEXT",
+					SubType: "Map",
+					Name:    aws.ToString(u.Name),
+				})
+			}
+		case "MapIteration":
+			op := wireOperation{
+				Id:       aws.ToString(u.Id),
+				ParentId: aws.ToString(u.ParentId),
+				Type:     "CONTEXT",
+				SubType:  "MapIteration",
+				Name:     aws.ToString(u.Name),
+			}
+			switch u.Action {
+			case types.OperationActionSucceed:
+				op.Status = "SUCCEEDED"
+				op.ContextDetails = &wireContextDetails{Result: aws.ToString(u.Payload)}
+			case types.OperationActionFail:
+				op.Status = "FAILED"
+				op.ContextDetails = &wireContextDetails{Error: &wireFullError{
+					ErrorType:    aws.ToString(u.Error.ErrorType),
+					ErrorMessage: aws.ToString(u.Error.ErrorMessage),
+					ErrorData:    aws.ToString(u.Error.ErrorData),
+				}}
+			default:
+				continue // starts are superseded by the terminal update
+			}
+			ops = append(ops, op)
+		}
+	}
+	if len(ops) != 3 {
+		t.Fatalf("rebuilt %d wire operations, want 3 (Map STARTED + 2 terminal iterations)", len(ops))
+	}
+
+	replayResp := invokeBatch(t, &fakeLambda{}, batchPayload(`null`, ops...), wfcMapHandler)
+	assertSucceeded(t, replayResp)
+	var replay wfcVerdict
+	if err := json.Unmarshal([]byte(replayResp.Result), &replay); err != nil {
+		t.Fatalf("unmarshal replay result: %v", err)
+	}
+	if replay != live {
+		t.Errorf("Route B replay verdict = %+v, live = %+v — taxonomy degraded across replay", replay, live)
+	}
+}
+
+// taxVerdict captures the error-chain observations for a Parallel whose
+// branches failed with SerdesError and a timed-out CallbackError.
+type taxVerdict struct {
+	BatchStatus string `json:"batchStatus"`
+	ErrAsSerdes bool   `json:"errAsSerdes"`
+	SerdesAs    bool   `json:"serdesAs"`
+	SerdesOp    string `json:"serdesOp"`
+	SerdesDir   string `json:"serdesDir"`
+	CallbackAs  bool   `json:"callbackAs"`
+	CbName      string `json:"cbName"`
+	CbID        string `json:"cbId"`
+	IsTimedOut  bool   `json:"isTimedOut"`
+}
+
+// taxParallelHandler runs a Parallel whose branches fail with the typed
+// errors the batch machinery must carry across replay: a SerdesError (as a
+// resumed-state decode failure inside the branch would produce) and a
+// CallbackError matching ErrCallbackTimedOut (as a timed-out callback
+// inside the branch would produce).
+func taxParallelHandler(ctx Context, _ any) (taxVerdict, error) {
+	br, err := Parallel(ctx, "tax-parallel", []Branch[string]{
+		{Name: "decode", Func: func(_ Context) (string, error) {
+			return "", &SerdesError{Operation: "decode-state", Direction: "unmarshal", Err: errors.New("bad json")}
+		}},
+		{Name: "await", Func: func(_ Context) (string, error) {
+			return "", &CallbackError{Name: "ext", CallbackID: "cb-123", Err: ErrCallbackTimedOut}
+		}},
+	}, WithMaxConcurrency(1))
+	if err != nil {
+		return taxVerdict{}, err
+	}
+	v := taxVerdict{BatchStatus: br.Status().String()}
+
+	// Err() returns the first failed item's error (the serdes branch).
+	var errSerdes *SerdesError
+	v.ErrAsSerdes = errors.As(br.Err(), &errSerdes)
+
+	var serdesErr *SerdesError
+	if errors.As(br.Items[0].Err, &serdesErr) {
+		v.SerdesAs = true
+		v.SerdesOp = serdesErr.Operation
+		v.SerdesDir = serdesErr.Direction
+	}
+	var cbErr *CallbackError
+	if errors.As(br.Items[1].Err, &cbErr) {
+		v.CallbackAs = true
+		v.CbName = cbErr.Name
+		v.CbID = cbErr.CallbackID
+	}
+	v.IsTimedOut = errors.Is(br.Items[1].Err, ErrCallbackTimedOut)
+	return v, nil
+}
+
+// TestParallelSerdesAndCallbackTaxonomyLiveToReplay asserts that
+// SerdesError fields and the CallbackError timeout sentinel survive a
+// Parallel replay from the aggregate checkpoint payload.
+func TestParallelSerdesAndCallbackTaxonomyLiveToReplay(t *testing.T) {
+	want := taxVerdict{
+		BatchStatus: "FAILED",
+		ErrAsSerdes: true,
+		SerdesAs:    true,
+		SerdesOp:    "decode-state",
+		SerdesDir:   "unmarshal",
+		CallbackAs:  true,
+		CbName:      "ext",
+		CbID:        "cb-123",
+		IsTimedOut:  true,
+	}
+
+	// Phase 1: LIVE.
+	fake := &fakeLambda{}
+	resp := invokeBatch(t, fake, batchPayload(`null`), taxParallelHandler)
+	assertSucceeded(t, resp)
+	var live taxVerdict
+	if err := json.Unmarshal([]byte(resp.Result), &live); err != nil {
+		t.Fatalf("unmarshal live result: %v", err)
+	}
+	if live != want {
+		t.Fatalf("live verdict = %+v, want %+v", live, want)
+	}
+
+	// Phase 2: REPLAY from the parent's aggregate payload.
+	var parallelPayload string
+	for _, u := range updateBatch(t, fake) {
+		if aws.ToString(u.SubType) == "Parallel" && u.Action == types.OperationActionSucceed {
+			parallelPayload = aws.ToString(u.Payload)
+		}
+	}
+	if parallelPayload == "" {
+		t.Fatal("no Parallel SUCCEED payload found in checkpoint updates")
+	}
+
+	replayResp := invokeBatch(t, &fakeLambda{}, batchPayload(`null`,
+		wireOperation{
+			Id:             hashID("1"),
+			Status:         "SUCCEEDED",
+			Type:           "CONTEXT",
+			SubType:        "Parallel",
+			Name:           "tax-parallel",
+			ContextDetails: &wireContextDetails{Result: parallelPayload},
+		},
+	), taxParallelHandler)
+	assertSucceeded(t, replayResp)
+	var replay taxVerdict
+	if err := json.Unmarshal([]byte(replayResp.Result), &replay); err != nil {
+		t.Fatalf("unmarshal replay result: %v", err)
+	}
+	if replay != live {
+		t.Errorf("replay verdict = %+v, live = %+v — taxonomy degraded across replay", replay, live)
 	}
 }
