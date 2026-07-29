@@ -64,3 +64,15 @@ jobs:
       - name: Test
         working-directory: ${{ matrix.module.dir }}
         run: go test -race ./...
+
+      # TestDagE2E_ConcurrentOverlap and TestDagE2E_ConcurrentSuspend assert
+      # order-invariant outcomes under real thread interleaving/timing (peak
+      # observed concurrency, reversed-registration-order resume). A single
+      # run can pass by luck on a given CI runner's scheduling even if the
+      # underlying ordering guarantee has regressed. Repeat just these two
+      # tests -race to give flaky interleavings many more chances to surface
+      # without slowing down the main Test step (above) on every push.
+      - name: Repeat concurrency tests (flake guard)
+        if: matrix.module.name == 'durable'
+        working-directory: ${{ matrix.module.dir }}
+        run: go test -race -run 'TestDagE2E_ConcurrentOverlap|TestDagE2E_ConcurrentSuspend' -count=20 ./...
