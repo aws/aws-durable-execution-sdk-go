@@ -373,6 +373,9 @@ Resources:
         Fn::GetAtt:
         - DurableFunctionRole
         - Arn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
   DagRulesEngine:
     Type: AWS::Serverless::Function
     TestingMetadata:
