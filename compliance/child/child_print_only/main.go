@@ -15,7 +15,7 @@ func handler(ctx durable.Context, event string) (string, error) {
 	result, err := durable.RunInChildContext(ctx, "print-child", func(child durable.Context) (string, error) {
 		// Raw stdout write: the SDK's context logger suppresses emissions during
 		// replay, and custom runtimes do not get platform-injected execution metadata.
-		fmt.Printf("{\"executionArn\":%q,\"msg\":%q}\n", executionID, event)
+		fmt.Printf("{\"executionArn\":%q,\"message\":%q}\n", executionID, event)
 		return event, nil
 	})
 	if err != nil {

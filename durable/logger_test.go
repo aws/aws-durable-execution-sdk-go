@@ -80,8 +80,8 @@ func TestWriterLoggerOutput(t *testing.T) {
 	if record["level"] != "INFO" {
 		t.Errorf("level = %v, want INFO", record["level"])
 	}
-	if record["msg"] != "hello" {
-		t.Errorf("msg = %v, want hello", record["msg"])
+	if record["message"] != "hello" {
+		t.Errorf("message = %v, want hello", record["message"])
 	}
 	if record["count"] != float64(42) {
 		t.Errorf("count = %v, want 42", record["count"])

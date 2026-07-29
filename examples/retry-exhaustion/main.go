@@ -16,7 +16,7 @@ func handler(ctx durable.Context, _ any) (any, error) {
 		func(_ durable.StepContext) (any, error) {
 			return nil, errors.New("persistent failure")
 		},
-		durable.WithRetry(durable.NewRetryStrategy(durable.RetryConfig{
+		durable.WithRetry(durable.MustNewRetryStrategy(durable.RetryConfig{
 			MaxAttempts:  6, // 1 initial + 5 retries, then exhausted
 			InitialDelay: 1 * time.Second,
 			BackoffRate:  1,

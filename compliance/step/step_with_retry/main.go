@@ -23,7 +23,7 @@ func handler(ctx durable.Context, _ any) (string, error) {
 			return "", fmt.Errorf("Attempt %d failed", count)
 		}
 		return "Operation succeeded", nil
-	}, durable.WithRetry(durable.NewRetryStrategy(durable.RetryConfig{
+	}, durable.WithRetry(durable.MustNewRetryStrategy(durable.RetryConfig{
 		MaxAttempts:  3,
 		InitialDelay: time.Second,
 		Jitter:       durable.JitterNone,

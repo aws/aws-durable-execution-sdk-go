@@ -16,7 +16,7 @@ func handler(ctx durable.Context, event string) (any, error) {
 	result, err := durable.RunInChildContext(ctx, "large-data-processor", func(child durable.Context) (string, error) {
 		// Raw stdout write: the SDK's context logger suppresses emissions during
 		// replay, and custom runtimes do not get platform-injected execution metadata.
-		fmt.Printf("{\"executionArn\":%q,\"msg\":%q}\n", executionID, event)
+		fmt.Printf("{\"executionArn\":%q,\"message\":%q}\n", executionID, event)
 
 		stepResult, err := durable.Step(child, "", func(_ durable.StepContext) (string, error) {
 			return strings.Repeat("A", 50*1024), nil

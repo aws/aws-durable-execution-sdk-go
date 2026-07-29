@@ -8,6 +8,7 @@ package main
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
 )
@@ -62,9 +63,9 @@ func handler(ctx durable.Context, _ any) (Output, error) {
 						"result":    fmt.Sprintf("Item %d processed successfully", item.ID),
 					}, nil
 				},
-				durable.WithRetry(durable.NewRetryStrategy(durable.RetryConfig{
+				durable.WithRetry(durable.MustNewRetryStrategy(durable.RetryConfig{
 					MaxAttempts:  2,
-					InitialDelay: 1,
+					InitialDelay: 1 * time.Second,
 				})),
 			)
 		},

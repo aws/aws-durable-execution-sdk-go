@@ -33,7 +33,7 @@ func handler(ctx durable.Context, _ any) (string, error) {
 
 // retryOnValidation retries only ValidationError.
 func retryOnValidation() durable.RetryStrategy {
-	base := durable.NewRetryStrategy(durable.RetryConfig{
+	base := durable.MustNewRetryStrategy(durable.RetryConfig{
 		MaxAttempts:  3,
 		InitialDelay: time.Second,
 		Jitter:       durable.JitterNone,

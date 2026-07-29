@@ -43,7 +43,7 @@ func handler(ctx durable.Context, _ any) (Output, error) {
 					}
 					return fmt.Sprintf("Processed item %d", item.ID), nil
 				},
-				durable.WithRetry(durable.NewRetryStrategy(durable.RetryConfig{
+				durable.WithRetry(durable.MustNewRetryStrategy(durable.RetryConfig{
 					MaxAttempts: 1,
 				})),
 			)

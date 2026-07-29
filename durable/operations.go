@@ -31,7 +31,13 @@ type ConditionConfig[S any] struct {
 
 	// WaitStrategy decides, after each check, whether to keep waiting and
 	// for how long. attempt is the 1-based number of completed checks.
-	// The strategy must be a deterministic function of its arguments.
+	// The strategy must be a deterministic function of its arguments,
+	// except for randomized jitter in the returned delay.
+	//
+	// If nil, a default strategy is used: keep polling with exponential
+	// backoff — a 5 second initial delay multiplied by 1.5 after each
+	// attempt, capped at 300 seconds, with full jitter — and fail the
+	// operation once 60 attempts have been made.
 	WaitStrategy func(state S, attempt int) WaitDecision
 
 	// Serdes overrides the serializer for the condition state.

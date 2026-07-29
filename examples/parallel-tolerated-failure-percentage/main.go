@@ -36,7 +36,7 @@ func handler(ctx durable.Context, _ any) (Output, error) {
 		{Name: "branch-2", Func: func(ctx durable.Context) (string, error) {
 			return durable.Step(ctx, "branch-2", func(_ durable.StepContext) (string, error) {
 				return "", fmt.Errorf("branch-2 failed")
-			}, durable.WithRetry(durable.NewRetryStrategy(durable.RetryConfig{
+			}, durable.WithRetry(durable.MustNewRetryStrategy(durable.RetryConfig{
 				MaxAttempts: 1,
 			})))
 		}},
@@ -48,7 +48,7 @@ func handler(ctx durable.Context, _ any) (Output, error) {
 		{Name: "branch-4", Func: func(ctx durable.Context) (string, error) {
 			return durable.Step(ctx, "branch-4", func(_ durable.StepContext) (string, error) {
 				return "", fmt.Errorf("branch-4 failed")
-			}, durable.WithRetry(durable.NewRetryStrategy(durable.RetryConfig{
+			}, durable.WithRetry(durable.MustNewRetryStrategy(durable.RetryConfig{
 				MaxAttempts: 1,
 			})))
 		}},

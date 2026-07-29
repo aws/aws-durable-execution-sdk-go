@@ -1,5 +1,5 @@
 // Command wait-callback-submitter-retry demonstrates WaitForCallback with
-// a submitter retry strategy. Uses NewRetryStrategy to configure
+// a submitter retry strategy. Uses MustNewRetryStrategy to configure
 // exponential backoff for up to 4 attempts.
 package main
 
@@ -38,7 +38,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 			return err
 		},
 		durable.WithCallbackTimeout(30*time.Second),
-		durable.WithSubmitterRetry(durable.NewRetryStrategy(durable.RetryConfig{
+		durable.WithSubmitterRetry(durable.MustNewRetryStrategy(durable.RetryConfig{
 			MaxAttempts:  4,
 			InitialDelay: 1 * time.Second,
 			MaxDelay:     8 * time.Second,

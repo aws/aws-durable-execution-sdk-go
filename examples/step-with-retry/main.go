@@ -21,7 +21,7 @@ func handler(ctx durable.Context, _ any) (string, error) {
 			}
 			return "step succeeded", nil
 		},
-		durable.WithRetry(durable.NewRetryStrategy(durable.RetryConfig{
+		durable.WithRetry(durable.MustNewRetryStrategy(durable.RetryConfig{
 			MaxAttempts:  4,
 			InitialDelay: 1 * time.Second,
 			BackoffRate:  1,

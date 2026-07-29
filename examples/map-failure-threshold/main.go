@@ -31,7 +31,7 @@ func handler(ctx durable.Context, _ any) (Output, error) {
 					}
 					return item * 2, nil
 				},
-				durable.WithRetry(durable.NewRetryStrategy(durable.RetryConfig{
+				durable.WithRetry(durable.MustNewRetryStrategy(durable.RetryConfig{
 					MaxAttempts: 1,
 				})),
 			)

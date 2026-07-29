@@ -24,7 +24,14 @@ var _ Logger = (*defaultLogger)(nil)
 
 func newDefaultLogger(executionArn string) *defaultLogger {
 	return &defaultLogger{
-		inner:        slog.New(slog.NewJSONHandler(os.Stderr, nil)).With("executionArn", executionArn),
+		inner: slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+			ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+				if a.Key == slog.MessageKey {
+					a.Key = "message"
+				}
+				return a
+			},
+		})).With("executionArn", executionArn),
 		replaying:    &atomic.Bool{},
 		executionArn: executionArn,
 	}
@@ -136,7 +143,7 @@ func (l *WriterLogger) Error(msg string, fields ...any) { l.emit("ERROR", msg, f
 func (l *WriterLogger) emit(level, msg string, fields []any) {
 	record := map[string]any{
 		"level":     level,
-		"msg":       msg,
+		"message":   msg,
 		"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	for i := 0; i+1 < len(fields); i += 2 {

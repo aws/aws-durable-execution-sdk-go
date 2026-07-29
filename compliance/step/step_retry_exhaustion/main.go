@@ -12,7 +12,7 @@ import (
 func handler(ctx durable.Context, _ any) (string, error) {
 	return durable.Step(ctx, "", func(_ durable.StepContext) (string, error) {
 		return "", errors.New("Always fails")
-	}, durable.WithRetry(durable.NewRetryStrategy(durable.RetryConfig{
+	}, durable.WithRetry(durable.MustNewRetryStrategy(durable.RetryConfig{
 		MaxAttempts:  4,
 		InitialDelay: time.Second,
 		BackoffRate:  1,

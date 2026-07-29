@@ -24,7 +24,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 				func(_ durable.StepContext) (any, error) {
 					return nil, fmt.Errorf("step failed in child context")
 				},
-				durable.WithRetry(durable.NewRetryStrategy(durable.RetryConfig{MaxAttempts: 3})))
+				durable.WithRetry(durable.MustNewRetryStrategy(durable.RetryConfig{MaxAttempts: 3})))
 			return nil, stepErr
 		})
 

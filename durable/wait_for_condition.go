@@ -2,6 +2,7 @@ package durable
 
 import (
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -11,6 +12,33 @@ import (
 // operationSubTypeWaitForCondition is the wire subtype for wait-for-condition
 // operations.
 const operationSubTypeWaitForCondition = "WaitForCondition"
+
+// Default wait strategy parameters substituted when
+// [ConditionConfig].WaitStrategy is nil.
+const (
+	defaultConditionMaxAttempts     = 60
+	defaultConditionInitialDelaySec = 5.0
+	defaultConditionMaxDelaySec     = 300.0
+	defaultConditionBackoffRate     = 1.5
+	defaultConditionJitterStrategy  = JitterFull
+)
+
+// defaultConditionWaitStrategy is the wait strategy used when
+// ConditionConfig.WaitStrategy is nil: keep polling with exponential
+// backoff (5 second initial delay, backoff rate 1.5, capped at 300
+// seconds, full jitter) and fail once 60 attempts have been made.
+func defaultConditionWaitStrategy[S any](_ S, attempt int) WaitDecision {
+	if attempt >= defaultConditionMaxAttempts {
+		return WaitDecision{
+			Err: fmt.Errorf("durable: WaitForCondition exceeded maximum attempts (%d)", defaultConditionMaxAttempts),
+		}
+	}
+	base := math.Min(
+		defaultConditionInitialDelaySec*math.Pow(defaultConditionBackoffRate, float64(attempt-1)),
+		defaultConditionMaxDelaySec,
+	)
+	return WaitDecision{Continue: true, Delay: finalizeDelay(base, defaultConditionJitterStrategy)}
+}
 
 // WaitForCondition polls check until the configured wait strategy stops,
 // checkpointing the state between attempts and suspending for the strategy's
@@ -237,8 +265,13 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 		return zero, fmt.Errorf("durable: WaitForCondition %q: deserialize state: %w", name, err)
 	}
 
-	// Consult the wait strategy with the deserialized state.
-	decision := cfg.WaitStrategy(deserialized, attempt)
+	// Consult the wait strategy with the deserialized state, substituting
+	// the documented default strategy when none is configured.
+	strategy := cfg.WaitStrategy
+	if strategy == nil {
+		strategy = defaultConditionWaitStrategy[S]
+	}
+	decision := strategy(deserialized, attempt)
 
 	if !decision.Continue {
 		// Strategy signaled failure (e.g., max attempts exceeded):

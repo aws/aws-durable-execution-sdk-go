@@ -1,6 +1,8 @@
 package durable
 
 import (
+	"errors"
+	"fmt"
 	"math"
 	"math/rand/v2"
 	"time"
@@ -51,26 +53,28 @@ const (
 )
 
 // RetryConfig configures an exponential backoff retry strategy created with
-// [NewRetryStrategy]. The zero value of each field selects its documented
-// default.
+// [NewRetryStrategy] or [MustNewRetryStrategy]. The zero value of each field
+// selects its documented default.
 type RetryConfig struct {
 	// MaxAttempts is the maximum number of total attempts, including the
-	// first. The default is 3.
+	// first. The default is 3. It must not be negative.
 	MaxAttempts int
 
 	// InitialDelay is the delay before the first retry. The default is
-	// 5 seconds.
+	// 5 seconds. When set, it must be at least 1 second.
 	InitialDelay time.Duration
 
 	// MaxDelay caps the delay between retries. The default is 5 minutes.
+	// When set, it must be at least 1 second.
 	MaxDelay time.Duration
 
 	// BackoffRate multiplies the delay after each attempt. The default
-	// is 2.
+	// is 2. It must not be negative.
 	BackoffRate float64
 
 	// Jitter is the jitter strategy applied to computed delays. The
-	// default is [JitterFull].
+	// default is [JitterFull]. When set, it must be one of the defined
+	// [JitterStrategy] constants.
 	Jitter JitterStrategy
 }
 
@@ -78,7 +82,57 @@ type RetryConfig struct {
 // before retry n is InitialDelay × BackoffRate^(n-1), capped at MaxDelay,
 // with jitter applied, rounded to a whole number of seconds no less than
 // one.
-func NewRetryStrategy(cfg RetryConfig) RetryStrategy {
+//
+// It returns an error if cfg is invalid; see [RetryConfig] for the
+// constraints on each field. Zero-value fields are always valid and select
+// their documented defaults.
+func NewRetryStrategy(cfg RetryConfig) (RetryStrategy, error) {
+	if err := validateRetryConfig(cfg); err != nil {
+		return nil, err
+	}
+	return newRetryStrategy(cfg), nil
+}
+
+// MustNewRetryStrategy is like [NewRetryStrategy] but panics if cfg is
+// invalid. It is intended for initialization with hard-coded
+// configurations, where invalid values are programming errors.
+func MustNewRetryStrategy(cfg RetryConfig) RetryStrategy {
+	strategy, err := NewRetryStrategy(cfg)
+	if err != nil {
+		panic(err)
+	}
+	return strategy
+}
+
+// validateRetryConfig checks each RetryConfig field against its documented
+// constraints. Zero values are valid (they select defaults). It returns an
+// [errors.Join] of one plain error per invalid field, or nil.
+func validateRetryConfig(cfg RetryConfig) error {
+	var errs []error
+	if cfg.MaxAttempts < 0 {
+		errs = append(errs, errors.New("durable: RetryConfig.MaxAttempts must not be negative"))
+	}
+	if cfg.InitialDelay != 0 && cfg.InitialDelay < time.Second {
+		errs = append(errs, errors.New("durable: RetryConfig.InitialDelay must be at least 1 second when set"))
+	}
+	if cfg.MaxDelay != 0 && cfg.MaxDelay < time.Second {
+		errs = append(errs, errors.New("durable: RetryConfig.MaxDelay must be at least 1 second when set"))
+	}
+	if cfg.BackoffRate < 0 {
+		errs = append(errs, errors.New("durable: RetryConfig.BackoffRate must not be negative"))
+	}
+	switch cfg.Jitter {
+	case "", JitterFull, JitterHalf, JitterNone:
+	default:
+		errs = append(errs, fmt.Errorf("durable: RetryConfig.Jitter must be a defined JitterStrategy constant, got %q", cfg.Jitter))
+	}
+	return errors.Join(errs...)
+}
+
+// newRetryStrategy builds the exponential backoff strategy from a config
+// already known to be valid, applying the documented default for each
+// zero-value field.
+func newRetryStrategy(cfg RetryConfig) RetryStrategy {
 	if cfg.MaxAttempts == 0 {
 		cfg.MaxAttempts = 3
 	}
@@ -130,7 +184,7 @@ func NoRetry() RetryStrategy {
 // with exponentially increasing delays, starting at 5 seconds, doubling
 // each attempt, capped at 60 seconds, with full jitter.
 func ExponentialBackoff() RetryStrategy {
-	return NewRetryStrategy(RetryConfig{
+	return newRetryStrategy(RetryConfig{
 		MaxAttempts:  6,
 		InitialDelay: 5 * time.Second,
 		MaxDelay:     60 * time.Second,
@@ -142,11 +196,28 @@ func ExponentialBackoff() RetryStrategy {
 // LinearBackoff returns a strategy with a fixed delay between attempts and
 // 6 total attempts. The delay is rounded to a whole number of seconds no
 // less than one, without jitter.
-func LinearBackoff(delay time.Duration) RetryStrategy {
-	return NewRetryStrategy(RetryConfig{
+//
+// A zero delay selects the default of 5 seconds. It returns an error if
+// delay is set and less than 1 second.
+func LinearBackoff(delay time.Duration) (RetryStrategy, error) {
+	if delay != 0 && delay < time.Second {
+		return nil, errors.New("durable: LinearBackoff delay must be at least 1 second when set")
+	}
+	return newRetryStrategy(RetryConfig{
 		MaxAttempts:  6,
 		InitialDelay: delay,
 		BackoffRate:  1,
 		Jitter:       JitterNone,
-	})
+	}), nil
+}
+
+// MustLinearBackoff is like [LinearBackoff] but panics if delay is
+// invalid. It is intended for initialization with hard-coded
+// configurations, where invalid values are programming errors.
+func MustLinearBackoff(delay time.Duration) RetryStrategy {
+	strategy, err := LinearBackoff(delay)
+	if err != nil {
+		panic(err)
+	}
+	return strategy
 }

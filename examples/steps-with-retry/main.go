@@ -24,7 +24,7 @@ type Record struct {
 
 // retryFiveTimesOneSecond retries up to 5 times with a 1-second fixed delay.
 func retryFiveTimesOneSecond() durable.RetryStrategy {
-	return durable.NewRetryStrategy(durable.RetryConfig{
+	return durable.MustNewRetryStrategy(durable.RetryConfig{
 		MaxAttempts:  6, // 1 initial + 5 retries
 		InitialDelay: 1 * time.Second,
 		BackoffRate:  1,

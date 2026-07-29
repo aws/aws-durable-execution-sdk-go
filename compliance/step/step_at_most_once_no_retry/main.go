@@ -13,7 +13,7 @@ func handler(ctx durable.Context, event string) (string, error) {
 	return durable.Step(ctx, "at_most_once_flaky_step", func(sc durable.StepContext) (string, error) {
 		// Raw stdout write: the SDK's context logger suppresses emissions during
 		// replay, and custom runtimes do not get platform-injected execution metadata.
-		fmt.Printf("{\"executionArn\":%q,\"msg\":%q}\n", executionID, event)
+		fmt.Printf("{\"executionArn\":%q,\"message\":%q}\n", executionID, event)
 		os.Exit(1)
 		return "unreachable", nil
 	}, durable.WithSemantics(durable.AtMostOncePerRetry), durable.WithRetry(durable.NoRetry()))

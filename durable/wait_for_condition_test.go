@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -792,5 +793,351 @@ func TestWaitForConditionStateDeserFailure(t *testing.T) {
 	}
 	if parsed.Status != invocationFailed {
 		t.Errorf("response status = %q, want FAILED", parsed.Status)
+	}
+}
+
+func TestWaitForConditionDefaultWaitStrategyInitial(t *testing.T) {
+	// A zero ConditionConfig (nil WaitStrategy) must not panic: the
+	// default strategy applies. First attempt: base delay 5s with full
+	// jitter, so the checkpointed delay is within [1s, 5s].
+	fake := &fakeLambda{}
+	resp := invokeStep(t, fake, stepPayload(`""`), func(ctx Context, _ string) (string, error) {
+		result, err := WaitForCondition(ctx, "default-strategy", func(_ StepContext, state int) (int, error) {
+			return state + 1, nil
+		}, ConditionConfig[int]{})
+		if err != nil {
+			return "", err
+		}
+		return strconv.Itoa(result), nil
+	})
+
+	if want := `{"Status":"PENDING"}`; resp != want {
+		t.Errorf("response = %s, want %s", resp, want)
+	}
+
+	updates := updateBatch(t, fake)
+	var retry *types.OperationUpdate
+	for i, u := range updates {
+		if u.Action == types.OperationActionRetry {
+			retry = &updates[i]
+		}
+	}
+	if retry == nil {
+		t.Fatal("expected a RETRY checkpoint from the default wait strategy")
+	}
+	delay := aws.ToInt32(retry.StepOptions.NextAttemptDelaySeconds)
+	if delay < 1 || delay > 5 {
+		t.Errorf("attempt 1 delay = %ds, want within [1s, 5s] (5s base, full jitter)", delay)
+	}
+	if aws.ToString(retry.Payload) != "1" {
+		t.Errorf("payload = %q, want 1", aws.ToString(retry.Payload))
+	}
+}
+
+func TestWaitForConditionDefaultWaitStrategyReplay(t *testing.T) {
+	// Re-invocation resuming a checkpointed operation: the default
+	// strategy also applies on replay. With 3 completed attempts this is
+	// attempt 4: base delay 5 × 1.5³ = 16.875s, full jitter, rounded, so
+	// the checkpointed delay is within [1s, 17s].
+	fake := &fakeLambda{}
+	payload := stepPayload(`""`,
+		checkpointedStep("1", "STARTED", &wireStepDetails{Attempt: 3, Result: "3"}),
+	)
+	resp := invokeStep(t, fake, payload, func(ctx Context, _ string) (string, error) {
+		result, err := WaitForCondition(ctx, "default-strategy", func(_ StepContext, state int) (int, error) {
+			return state + 1, nil
+		}, ConditionConfig[int]{})
+		if err != nil {
+			return "", err
+		}
+		return strconv.Itoa(result), nil
+	})
+
+	if want := `{"Status":"PENDING"}`; resp != want {
+		t.Errorf("response = %s, want %s", resp, want)
+	}
+
+	updates := updateBatch(t, fake)
+	var retry *types.OperationUpdate
+	for i, u := range updates {
+		if u.Action == types.OperationActionRetry {
+			retry = &updates[i]
+		}
+	}
+	if retry == nil {
+		t.Fatal("expected a RETRY checkpoint from the default wait strategy")
+	}
+	delay := aws.ToInt32(retry.StepOptions.NextAttemptDelaySeconds)
+	if delay < 1 || delay > 17 {
+		t.Errorf("attempt 4 delay = %ds, want within [1s, 17s] (16.875s base, full jitter)", delay)
+	}
+	if aws.ToString(retry.Payload) != "4" {
+		t.Errorf("payload = %q, want 4 (state carried from checkpoint)", aws.ToString(retry.Payload))
+	}
+}
+
+func TestWaitForConditionDefaultWaitStrategyDelayCap(t *testing.T) {
+	// Deep into the schedule the base delay caps at 300s: with 11
+	// completed attempts this is attempt 12, base 5 × 1.5¹¹ ≈ 432s
+	// capped to 300s, full jitter, so the delay is within [1s, 300s].
+	fake := &fakeLambda{}
+	payload := stepPayload(`""`,
+		checkpointedStep("1", "STARTED", &wireStepDetails{Attempt: 11, Result: "11"}),
+	)
+	invokeStep(t, fake, payload, func(ctx Context, _ string) (string, error) {
+		_, err := WaitForCondition(ctx, "default-strategy", func(_ StepContext, state int) (int, error) {
+			return state + 1, nil
+		}, ConditionConfig[int]{})
+		return "", err
+	})
+
+	updates := updateBatch(t, fake)
+	var retry *types.OperationUpdate
+	for i, u := range updates {
+		if u.Action == types.OperationActionRetry {
+			retry = &updates[i]
+		}
+	}
+	if retry == nil {
+		t.Fatal("expected a RETRY checkpoint from the default wait strategy")
+	}
+	delay := aws.ToInt32(retry.StepOptions.NextAttemptDelaySeconds)
+	if delay < 1 || delay > 300 {
+		t.Errorf("attempt 12 delay = %ds, want within [1s, 300s] (capped base, full jitter)", delay)
+	}
+}
+
+func TestWaitForConditionDefaultWaitStrategyExhaustion(t *testing.T) {
+	// After 59 completed attempts, attempt 60 exhausts the default
+	// strategy: the operation fails with a max-attempts error.
+	fake := &fakeLambda{}
+	payload := stepPayload(`""`,
+		checkpointedStep("1", "STARTED", &wireStepDetails{Attempt: 59, Result: "59"}),
+	)
+	var got error
+	invokeStep(t, fake, payload, func(ctx Context, _ string) (string, error) {
+		_, err := WaitForCondition(ctx, "default-strategy", func(_ StepContext, state int) (int, error) {
+			return state + 1, nil
+		}, ConditionConfig[int]{})
+		got = err
+		return "", err
+	})
+
+	var wfcErr *WaitForConditionError
+	if !errors.As(got, &wfcErr) {
+		t.Fatalf("error = %v (%T), want *WaitForConditionError", got, got)
+	}
+	if wfcErr.Attempts != 60 {
+		t.Errorf("Attempts = %d, want 60", wfcErr.Attempts)
+	}
+	if !strings.Contains(got.Error(), "exceeded maximum attempts (60)") {
+		t.Errorf("error %q does not mention exceeding 60 attempts", got)
+	}
+
+	updates := updateBatch(t, fake)
+	failed := false
+	for _, u := range updates {
+		if u.Action == types.OperationActionFail {
+			failed = true
+		}
+	}
+	if !failed {
+		t.Error("expected a FAIL checkpoint when the default strategy exhausts")
+	}
+}
+
+func TestWaitForConditionDefaultStrategyConstants(t *testing.T) {
+	// Pin the documented default strategy parameters. A change to any
+	// constant fails this test, catching regressions that the jittered
+	// integration tests would miss.
+	if defaultConditionMaxAttempts != 60 {
+		t.Errorf("defaultConditionMaxAttempts = %d, want 60", defaultConditionMaxAttempts)
+	}
+	if defaultConditionInitialDelaySec != 5.0 {
+		t.Errorf("defaultConditionInitialDelaySec = %v, want 5.0", defaultConditionInitialDelaySec)
+	}
+	if defaultConditionMaxDelaySec != 300.0 {
+		t.Errorf("defaultConditionMaxDelaySec = %v, want 300.0", defaultConditionMaxDelaySec)
+	}
+	if defaultConditionBackoffRate != 1.5 {
+		t.Errorf("defaultConditionBackoffRate = %v, want 1.5", defaultConditionBackoffRate)
+	}
+	if defaultConditionJitterStrategy != JitterFull {
+		t.Errorf("defaultConditionJitterStrategy = %q, want %q", defaultConditionJitterStrategy, JitterFull)
+	}
+}
+
+func TestWaitForConditionDefaultStrategyDelayBounds(t *testing.T) {
+	// Verify that the default wait strategy produces delays with exact
+	// upper bounds matching the formula: min(5 × 1.5^(attempt-1), 300),
+	// rounded to whole seconds. Full jitter means the lower bound is 1s.
+	// Running 200 samples per attempt ensures that the upper bound is
+	// tight (probability of never hitting max ≈ (1-1/base)^200, which is
+	// negligible for base ≤ 5).
+	type testCase struct {
+		attempt  int
+		maxDelay time.Duration // expected tight upper bound
+	}
+	cases := []testCase{
+		{1, 5 * time.Second},    // base 5
+		{2, 8 * time.Second},    // base 7.5 → rounds to 8
+		{3, 11 * time.Second},   // base 11.25 → rounds to 11
+		{4, 17 * time.Second},   // base 16.875 → rounds to 17
+		{10, 192 * time.Second}, // base 5 × 1.5^9 ≈ 192.2 → rounds to 192
+		{15, 300 * time.Second}, // base 5 × 1.5^14 ≈ 1458, capped at 300
+	}
+
+	for _, tc := range cases {
+		var maxObserved time.Duration
+		var minObserved = time.Hour
+		// Use more samples for large ranges to ensure coverage of [1s, max].
+		samples := 200
+		if tc.maxDelay > 30*time.Second {
+			samples = 2000
+		}
+		for range samples {
+			decision := defaultConditionWaitStrategy[int](0, tc.attempt)
+			if !decision.Continue {
+				t.Fatalf("attempt %d: expected Continue=true", tc.attempt)
+			}
+			if decision.Delay < time.Second {
+				t.Fatalf("attempt %d: delay %v < 1s minimum", tc.attempt, decision.Delay)
+			}
+			if decision.Delay > tc.maxDelay {
+				t.Fatalf("attempt %d: delay %v exceeds expected max %v", tc.attempt, decision.Delay, tc.maxDelay)
+			}
+			if decision.Delay > maxObserved {
+				maxObserved = decision.Delay
+			}
+			if decision.Delay < minObserved {
+				minObserved = decision.Delay
+			}
+		}
+		// Verify the observed range uses most of the space.
+		if tc.maxDelay >= 5*time.Second && maxObserved < tc.maxDelay-2*time.Second {
+			t.Errorf("attempt %d: max observed %v is far below expected max %v — jitter range suspiciously narrow",
+				tc.attempt, maxObserved, tc.maxDelay)
+		}
+		// For full jitter over [1, max/second], with enough samples
+		// we should observe values close to 1s (the floor).
+		if tc.maxDelay >= 5*time.Second && minObserved > 3*time.Second {
+			t.Errorf("attempt %d: min observed %v is suspiciously high — expected full jitter to reach near 1s",
+				tc.attempt, minObserved)
+		}
+	}
+}
+
+func TestWaitForConditionDefaultStrategyExhaustionBoundary(t *testing.T) {
+	// Attempt 59 must continue; attempt 60 must fail with the max-
+	// attempts error. This pins the exhaustion point.
+	decision59 := defaultConditionWaitStrategy[int](0, 59)
+	if !decision59.Continue {
+		t.Fatal("attempt 59: expected Continue=true (not exhausted yet)")
+	}
+	if decision59.Delay < time.Second {
+		t.Fatalf("attempt 59: delay %v < 1s", decision59.Delay)
+	}
+
+	decision60 := defaultConditionWaitStrategy[int](0, 60)
+	if decision60.Continue {
+		t.Fatal("attempt 60: expected Continue=false (exhausted)")
+	}
+	if decision60.Err == nil {
+		t.Fatal("attempt 60: expected non-nil Err")
+	}
+	if !strings.Contains(decision60.Err.Error(), "60") {
+		t.Errorf("attempt 60 error = %q, want mention of 60", decision60.Err)
+	}
+
+	// Attempt 61 also fails (boundary is at 60).
+	decision61 := defaultConditionWaitStrategy[int](0, 61)
+	if decision61.Continue {
+		t.Fatal("attempt 61: expected Continue=false")
+	}
+}
+
+func TestWaitForConditionDefaultStrategyCheckpointDelay(t *testing.T) {
+	// End-to-end: verify the checkpointed delay on initial execution
+	// (attempt 1) and on replay (attempt 4, STARTED status) have tight
+	// upper bounds derived from the exact formula. This catches changes
+	// to the default strategy that would persist different timing values
+	// in checkpoints.
+
+	// Initial execution: attempt 1, base delay = 5s.
+	fake := &fakeLambda{}
+	invokeStep(t, fake, stepPayload(`""`), func(ctx Context, _ string) (string, error) {
+		_, err := WaitForCondition(ctx, "pinned", func(_ StepContext, state int) (int, error) {
+			return state + 1, nil
+		}, ConditionConfig[int]{})
+		return "", err
+	})
+	updates := updateBatch(t, fake)
+	var retry *types.OperationUpdate
+	for i, u := range updates {
+		if u.Action == types.OperationActionRetry {
+			retry = &updates[i]
+		}
+	}
+	if retry == nil {
+		t.Fatal("attempt 1: no RETRY checkpoint")
+	}
+	delay1 := aws.ToInt32(retry.StepOptions.NextAttemptDelaySeconds)
+	// Exact upper bound: round(5) = 5.
+	if delay1 < 1 || delay1 > 5 {
+		t.Errorf("attempt 1 delay = %ds, want in [1, 5] (base=5, full jitter)", delay1)
+	}
+
+	// Replay: attempt 4, base delay = 5 × 1.5³ = 16.875 → rounds to 17.
+	fake = &fakeLambda{}
+	payload := stepPayload(`""`,
+		checkpointedStep("1", "STARTED", &wireStepDetails{Attempt: 3, Result: "3"}),
+	)
+	invokeStep(t, fake, payload, func(ctx Context, _ string) (string, error) {
+		_, err := WaitForCondition(ctx, "pinned", func(_ StepContext, state int) (int, error) {
+			return state + 1, nil
+		}, ConditionConfig[int]{})
+		return "", err
+	})
+	updates = updateBatch(t, fake)
+	retry = nil
+	for i, u := range updates {
+		if u.Action == types.OperationActionRetry {
+			retry = &updates[i]
+		}
+	}
+	if retry == nil {
+		t.Fatal("attempt 4: no RETRY checkpoint")
+	}
+	delay4 := aws.ToInt32(retry.StepOptions.NextAttemptDelaySeconds)
+	// Exact upper bound: round(16.875) = 17.
+	if delay4 < 1 || delay4 > 17 {
+		t.Errorf("attempt 4 delay = %ds, want in [1, 17] (base=16.875, full jitter)", delay4)
+	}
+
+	// Replay: attempt 12, base = 5 × 1.5¹¹ ≈ 432.7, capped at 300.
+	fake = &fakeLambda{}
+	payload = stepPayload(`""`,
+		checkpointedStep("1", "STARTED", &wireStepDetails{Attempt: 11, Result: "11"}),
+	)
+	invokeStep(t, fake, payload, func(ctx Context, _ string) (string, error) {
+		_, err := WaitForCondition(ctx, "pinned", func(_ StepContext, state int) (int, error) {
+			return state + 1, nil
+		}, ConditionConfig[int]{})
+		return "", err
+	})
+	updates = updateBatch(t, fake)
+	retry = nil
+	for i, u := range updates {
+		if u.Action == types.OperationActionRetry {
+			retry = &updates[i]
+		}
+	}
+	if retry == nil {
+		t.Fatal("attempt 12: no RETRY checkpoint")
+	}
+	delay12 := aws.ToInt32(retry.StepOptions.NextAttemptDelaySeconds)
+	// Exact upper bound: min(432.7, 300) = 300.
+	if delay12 < 1 || delay12 > 300 {
+		t.Errorf("attempt 12 delay = %ds, want in [1, 300] (capped at 300, full jitter)", delay12)
 	}
 }

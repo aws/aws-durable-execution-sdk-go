@@ -14,7 +14,7 @@ func handler(ctx durable.Context, _ any) (string, error) {
 	return durable.RunInChildContext(ctx, "exhaust-child", func(child durable.Context) (string, error) {
 		return durable.Step(child, "", func(_ durable.StepContext) (string, error) {
 			return "", errors.New("Always fails")
-		}, durable.WithRetry(durable.NewRetryStrategy(durable.RetryConfig{
+		}, durable.WithRetry(durable.MustNewRetryStrategy(durable.RetryConfig{
 			MaxAttempts:  2,
 			InitialDelay: time.Second,
 			BackoffRate:  1,

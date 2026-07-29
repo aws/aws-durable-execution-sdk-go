@@ -565,7 +565,7 @@ func TestWaitForCallbackSubmitterRetryExhaustion(t *testing.T) {
 		_, err := WaitForCallback[string](ctx, event, func(_ StepContext, _ string) error {
 			submitterCalls++
 			return errors.New("submitter failure")
-		}, WithSubmitterRetry(NewRetryStrategy(RetryConfig{
+		}, WithSubmitterRetry(MustNewRetryStrategy(RetryConfig{
 			MaxAttempts:  2,
 			InitialDelay: 1 * time.Second,
 			MaxDelay:     1 * time.Second,

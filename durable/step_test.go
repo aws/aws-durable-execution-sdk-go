@@ -233,7 +233,7 @@ func TestStepRetrySchedulesAndSuspends(t *testing.T) {
 	resp := invokeStep(t, fake, stepPayload(`""`), func(ctx Context, _ string) (string, error) {
 		return Step(ctx, "s", func(StepContext) (string, error) {
 			return "", errors.New("transient")
-		}, WithRetry(NewRetryStrategy(RetryConfig{MaxAttempts: 4, InitialDelay: 2 * time.Second, Jitter: JitterNone})))
+		}, WithRetry(MustNewRetryStrategy(RetryConfig{MaxAttempts: 4, InitialDelay: 2 * time.Second, Jitter: JitterNone})))
 	})
 
 	if want := `{"Status":"PENDING"}`; resp != want {
@@ -262,7 +262,7 @@ func TestStepSuspensionWinsOverUserOutcome(t *testing.T) {
 	resp := invokeStep(t, fake, stepPayload(`""`), func(ctx Context, _ string) (string, error) {
 		_, _ = Step(ctx, "s", func(StepContext) (string, error) {
 			return "", errors.New("transient")
-		}, WithRetry(LinearBackoff(time.Second)))
+		}, WithRetry(MustLinearBackoff(time.Second)))
 		return "swallowed", nil
 	})
 
@@ -282,7 +282,7 @@ func TestStepAfterSuspensionFailsFast(t *testing.T) {
 		defer close(handlerDone)
 		_, _ = Step(ctx, "s", func(StepContext) (string, error) {
 			return "", errors.New("transient")
-		}, WithRetry(LinearBackoff(time.Second)))
+		}, WithRetry(MustLinearBackoff(time.Second)))
 		_, secondErr = Step(ctx, "after", func(StepContext) (string, error) {
 			t.Error("step body ran after suspension")
 			return "", nil
@@ -400,7 +400,7 @@ func TestStepStartedAtMostOnceInterrupted(t *testing.T) {
 		},
 		{
 			name:        "retry schedules next attempt",
-			retry:       LinearBackoff(time.Second),
+			retry:       MustLinearBackoff(time.Second),
 			wantStatus:  `"Status":"PENDING"`,
 			wantAction:  types.OperationActionRetry,
 			wantUpdates: 1,

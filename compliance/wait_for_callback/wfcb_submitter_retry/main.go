@@ -14,7 +14,7 @@ func handler(ctx durable.Context, name string) (string, error) {
 		func(_ durable.StepContext, _ string) error {
 			return errors.New("submitter failure")
 		},
-		durable.WithSubmitterRetry(durable.NewRetryStrategy(durable.RetryConfig{
+		durable.WithSubmitterRetry(durable.MustNewRetryStrategy(durable.RetryConfig{
 			MaxAttempts:  2,
 			InitialDelay: 1 * time.Second,
 			MaxDelay:     1 * time.Second,

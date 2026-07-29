@@ -30,7 +30,7 @@ func handler(ctx durable.Context, _ any) (Output, error) {
 		{Name: "failing-task", Func: func(ctx durable.Context) (string, error) {
 			return durable.Step(ctx, "failing-task", func(_ durable.StepContext) (string, error) {
 				return "", fmt.Errorf("custom error message")
-			}, durable.WithRetry(durable.NewRetryStrategy(durable.RetryConfig{
+			}, durable.WithRetry(durable.MustNewRetryStrategy(durable.RetryConfig{
 				MaxAttempts: 1,
 			})))
 		}},

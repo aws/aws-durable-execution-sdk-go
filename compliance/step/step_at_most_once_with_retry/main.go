@@ -19,14 +19,14 @@ func handler(ctx durable.Context, event string) (string, error) {
 		}
 		// Raw stdout write: the SDK's context logger suppresses emissions during
 		// replay, and custom runtimes do not get platform-injected execution metadata.
-		fmt.Printf("{\"executionArn\":%q,\"msg\":%q}\n", executionID, event)
+		fmt.Printf("{\"executionArn\":%q,\"message\":%q}\n", executionID, event)
 		if count < 2 {
 			os.Exit(1)
 		}
 		return "succeeded on second attempt", nil
 	},
 		durable.WithSemantics(durable.AtMostOncePerRetry),
-		durable.WithRetry(durable.NewRetryStrategy(durable.RetryConfig{
+		durable.WithRetry(durable.MustNewRetryStrategy(durable.RetryConfig{
 			MaxAttempts:  3,
 			InitialDelay: time.Second,
 			Jitter:       durable.JitterNone,

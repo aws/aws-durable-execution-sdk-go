@@ -37,7 +37,7 @@ func handler(ctx durable.Context, _ any) (string, error) {
 // retryOnTransient retries only TransientError, up to 3 attempts with a
 // deterministic 1-second delay.
 func retryOnTransient() durable.RetryStrategy {
-	base := durable.NewRetryStrategy(durable.RetryConfig{
+	base := durable.MustNewRetryStrategy(durable.RetryConfig{
 		MaxAttempts:  3,
 		InitialDelay: time.Second,
 		Jitter:       durable.JitterNone,
