@@ -10,6 +10,13 @@ Globals:
     Runtime: provided.al2023
     Timeout: 300
     MemorySize: 128
+    # The conformance runner correlates CloudWatch records to a durable
+    # execution with a JSON filter on the executionArn field the SDK context
+    # logger attaches. That field only survives under the JSON log format.
+    LoggingConfig:
+      LogFormat: JSON
+      ApplicationLogLevel: INFO
+      SystemLogLevel: INFO
 
 Resources:
   CallbackBasic:
