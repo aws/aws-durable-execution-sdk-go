@@ -112,8 +112,11 @@ jobs:
       - name: Build conformance handlers
         run: ./build_examples.sh
 
+      # Installed from main, matching the Python and JS SDK repos: the released
+      # versions do not accept --parameter-overrides.
       - name: Install conformance runner
-        run: pip install aws-durable-execution-conformance-tests==0.1.0
+        run: |
+          pip install "git+https://github.com/aws/aws-durable-execution-conformance-tests.git@main#subdirectory=packages/aws-durable-execution-conformance-tests"
 
       - name: Run conformance suite
         env:
