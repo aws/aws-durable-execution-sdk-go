@@ -652,11 +652,12 @@ func executeBatchItems[I, O any](
 		accepted := make(map[int]BatchItem[O], totalItems)
 		startedIdx := make(map[int]struct{}, totalItems)
 		nextToAdmit := 0
-		inFlight := 0
+		inFlight := 0  // goroutines not yet drained from outcomeCh
+		slotsUsed := 0 // concurrency slots held (terminal release only)
 		var admitErr error
 
 		admit := func() {
-			for nextToAdmit < len(preClaimed) && inFlight < concurrency && !reasonLocked && admitErr == nil {
+			for nextToAdmit < len(preClaimed) && slotsUsed < concurrency && !reasonLocked && admitErr == nil {
 				pc := preClaimed[nextToAdmit]
 				nextToAdmit++
 
@@ -674,6 +675,7 @@ func executeBatchItems[I, O any](
 
 				startedIdx[pc.index] = struct{}{}
 				inFlight++
+				slotsUsed++
 				// Register the worker as an active branch before launching
 				// its goroutine, so the coordinator's view of the count
 				// never races the goroutine start. The token is released on
@@ -714,16 +716,25 @@ func executeBatchItems[I, O any](
 			case out.err != nil:
 				if errors.Is(out.err, errSuspendExecution) {
 					// Suspended (or abandoned via the abandon signal,
-					// which reuses errSuspendExecution). Not terminal.
+					// which reuses errSuspendExecution). The branch
+					// retains its concurrency slot so no replacement is
+					// admitted.
 					sawSuspend = true
-				} else if fatalErr == nil {
-					fatalErr = out.err
+				} else {
+					// Non-suspension error: terminal from the batch's
+					// perspective, release the slot.
+					slotsUsed--
+					if fatalErr == nil {
+						fatalErr = out.err
+					}
 				}
 			case reasonLocked:
 				// A terminal outcome that raced the completion decision:
 				// the branch is abandoned (reported started, not counted).
+				slotsUsed--
 			default:
 				accepted[out.index] = out.item
+				slotsUsed--
 				switch out.item.Status {
 				case BatchItemSucceeded:
 					successCount++

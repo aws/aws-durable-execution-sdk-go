@@ -1683,3 +1683,57 @@ func TestNestedAbandonedWaitDoesNotForcePending(t *testing.T) {
 		t.Errorf("successCount = %d, want 1", r.Success)
 	}
 }
+
+// TestSuspendedBranchHoldsConcurrencySlot verifies that a suspended batch
+// worker retains its max-concurrency slot until reaching a terminal state.
+// No replacement branch is admitted while the suspended branches hold their
+// slots, matching JS and Python behavior.
+//
+// Setup: Map with maxConcurrency=2 and 3 items. Items 0 and 1 each create
+// an unresolved callback (suspend). With the old (incorrect) behavior,
+// each suspension releases a slot and item 2 is admitted. With the correct
+// behavior, the two suspended branches hold both slots, item 2 is never
+// admitted, and the invocation suspends with exactly 2 child starts.
+func TestSuspendedBranchHoldsConcurrencySlot(t *testing.T) {
+	fake := &fakeLambda{}
+	resp := invokeBatch(t, fake, batchPayload(`null`), func(ctx Context, _ any) (string, error) {
+		_, err := Map(ctx, "batch", []int{0, 1, 2},
+			func(c Context, _ int, index int) (string, error) {
+				if index <= 1 {
+					// Both items 0 and 1 suspend on unresolved callbacks.
+					cb, cerr := CreateCallback[string](c, fmt.Sprintf("cb-%d", index))
+					if cerr != nil {
+						return "", cerr
+					}
+					return cb.Result()
+				}
+				// Item 2 must NOT be reached.
+				return "item-2-ran", nil
+			}, WithMaxConcurrency(2))
+		if err != nil {
+			return "", err
+		}
+		return "done", nil
+	})
+
+	// The invocation must suspend because both admitted branches are
+	// blocked on callbacks.
+	if resp.Status != invocationPending {
+		t.Fatalf("expected PENDING, got %s (result: %s)", resp.Status, resp.Result)
+	}
+
+	// Count child context START checkpoints (excluding the batch parent).
+	// With slot-holding, only items 0 and 1 should have started.
+	updates := updateBatch(t, fake)
+	childStarts := 0
+	for _, u := range updates {
+		if u.Type == types.OperationTypeContext && u.Action == types.OperationActionStart {
+			if aws.ToString(u.SubType) == operationSubTypeMapIteration {
+				childStarts++
+			}
+		}
+	}
+	if childStarts != 2 {
+		t.Fatalf("expected 2 child context starts (items 0,1), got %d", childStarts)
+	}
+}
