@@ -11,9 +11,11 @@ import (
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-lambda-go/lambdacontext"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
 	"github.com/aws/aws-sdk-go-v2/config"
 	lambdaservice "github.com/aws/aws-sdk-go-v2/service/lambda"
+	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 	smithymw "github.com/aws/smithy-go/middleware"
 )
 
@@ -120,6 +122,12 @@ type durableHandler[I, O any] struct {
 }
 
 var _ lambda.Handler = (*durableHandler[any, any])(nil)
+
+// lambdaResponseSizeLimit is the maximum serialized result size (in bytes)
+// that an invocation returns inline: the 6MB Lambda response limit minus 50
+// bytes for the response envelope. Results larger than this are persisted
+// through a checkpoint instead, and the response carries an empty Result.
+const lambdaResponseSizeLimit = 6*1024*1024 - 50
 
 // errSuspendExecution signals that the current invocation must end with a
 // PENDING response because execution is blocked on pending operations
@@ -364,6 +372,43 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 			Error:  errorObjectFromError(wrapErr),
 		})
 	default:
+		// Serialize the result first; emit the success plugin hook only
+		// after all durable work (including oversized-result checkpoint)
+		// has completed. This prevents false success telemetry if
+		// serialization or checkpointing fails.
+		serialized, serr := json.Marshal(wrapResult)
+		if serr != nil {
+			return nil, fmt.Errorf("durable: serialize handler result: %w", serr)
+		}
+		if len(serialized) > lambdaResponseSizeLimit {
+			// The result exceeds what the response envelope can carry
+			// inline. Persist it through a checkpoint on the root
+			// execution operation and return an empty Result. The
+			// checkpoint must complete before responding: it is the only
+			// durable copy of the result.
+			executionOpID := ""
+			if len(in.InitialExecutionState.Operations) > 0 {
+				executionOpID = in.InitialExecutionState.Operations[0].Id
+			}
+			if executionOpID == "" {
+				return nil, errors.New("durable: result exceeds response size limit and no execution operation is available to checkpoint it")
+			}
+			update := types.OperationUpdate{
+				Id:      &executionOpID,
+				Type:    types.OperationTypeExecution,
+				Action:  types.OperationActionSucceed,
+				Payload: aws.String(string(serialized)),
+			}
+			if cerr := cp.checkpoint(ctx, []types.OperationUpdate{update}); cerr != nil {
+				return nil, fmt.Errorf("durable: checkpoint oversized result: %w", cerr)
+			}
+			empty := ""
+			resp, respErr = respond(invocationResponse{Status: invocationSucceeded, Result: &empty})
+		} else {
+			s := string(serialized)
+			resp, respErr = respond(invocationResponse{Status: invocationSucceeded, Result: &s})
+		}
+		// OnInvocationEnd fires only after result durability is guaranteed.
 		dispatchNotification(pd, func(p *Plugin) {
 			if p.OnInvocationEnd != nil {
 				p.OnInvocationEnd(ctx, InvocationEndHookInfo{
@@ -373,13 +418,6 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 				})
 			}
 		})
-		// Serialize the result.
-		serialized, serr := json.Marshal(wrapResult)
-		if serr != nil {
-			return nil, fmt.Errorf("durable: serialize handler result: %w", serr)
-		}
-		s := string(serialized)
-		resp, respErr = respond(invocationResponse{Status: invocationSucceeded, Result: &s})
 	}
 	return resp, respErr
 }

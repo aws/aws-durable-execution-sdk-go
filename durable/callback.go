@@ -296,8 +296,9 @@ func wfcbFailedError(op *operation, name string) error {
 	// child-context failure wrapping on the wire).
 	if cause.errType == "CallbackError" || cause.errType == "Callback.Timeout" || cause.errType == "Callback.Heartbeat" {
 		// Set sentinel so errors.Is traverses the Unwrap chain correctly,
-		// matching the pattern in invokeErrorFromCheckpoint.
-		if cause.errType == "Callback.Timeout" {
+		// matching the pattern in invokeErrorFromCheckpoint. Both regular
+		// and heartbeat timeouts match [ErrCallbackTimedOut].
+		if cause.errType == "Callback.Timeout" || cause.errType == "Callback.Heartbeat" {
 			cause.sentinel = ErrCallbackTimedOut
 		}
 		return &CallbackError{Name: name, Err: cause}

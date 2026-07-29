@@ -9,7 +9,7 @@ import "time"
 //   - Stop: the condition is met, return the state (Continue false, Err nil).
 //   - Fail: an operational limit (such as max attempts) was exceeded
 //     (Continue false, Err non-nil). The error is checkpointed and
-//     returned as a [*StepError].
+//     returned as a [*WaitForConditionError].
 type WaitDecision struct {
 	// Continue indicates whether to keep waiting and check again.
 	Continue bool

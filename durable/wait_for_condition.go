@@ -22,7 +22,8 @@ const operationSubTypeWaitForCondition = "WaitForCondition"
 // and decides whether to continue waiting or stop.
 //
 // If check returns an error, the operation fails immediately: there is no
-// internal retry. The error is checkpointed and returned as a [*StepError].
+// internal retry. The error is checkpointed and returned as a
+// [*WaitForConditionError].
 //
 // If the wait strategy's Continue field is true, its Delay determines how
 // long the execution suspends before re-invoking. When Continue is false, the
@@ -86,7 +87,7 @@ func runWaitForCondition[S any](ec *execContext, id, name string, check func(Ste
 			if op.step == nil {
 				return zero, fmt.Errorf("durable: WaitForCondition %q: checkpointed %s operation has no step details", name, op.status)
 			}
-			return zero, &StepError{
+			return zero, &WaitForConditionError{
 				Name:     name,
 				Attempts: op.step.attempt,
 				Err:      &replayedError{errType: op.step.errType, message: op.step.errMessage},
@@ -133,9 +134,9 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 	var currentState S
 	if op != nil && op.step != nil && op.step.result != "" {
 		if err := serdes.Unmarshal(ec.serdesCtx(id), []byte(op.step.result), &currentState); err != nil {
-			// Deserialization failure: use initial state as fallback
-			// rather than failing the condition wait.
-			currentState = cfg.InitialState
+			// The checkpointed state cannot be reconstructed; the
+			// operation cannot continue with a consistent view of it.
+			return zero, &SerdesError{Operation: name, Direction: "unmarshal", Err: err}
 		}
 	} else {
 		currentState = cfg.InitialState
@@ -201,13 +202,15 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 				})
 			}
 		})
-		// Check function failure: checkpoint FAIL and return error.
+		// Check function failure: checkpoint FAIL and return error. The
+		// checkpointed ErrorType stays the cause's concrete type name;
+		// the wrapping applies only to the returned Go error.
 		update := waitForConditionUpdate(ec, id, name, types.OperationActionFail)
 		update.Error = errorObject(checkErr)
 		if cerr := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); cerr != nil {
 			return zero, cerr
 		}
-		return zero, &StepError{Name: name, Attempts: attempt, Err: checkErr}
+		return zero, &WaitForConditionError{Name: name, Attempts: attempt, Err: checkErr}
 	}
 
 	// Serialize the new state for checkpointing.
@@ -246,7 +249,7 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 			if cerr := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); cerr != nil {
 				return zero, cerr
 			}
-			return zero, &StepError{Name: name, Attempts: attempt, Err: decision.Err}
+			return zero, &WaitForConditionError{Name: name, Attempts: attempt, Err: decision.Err}
 		}
 
 		// Condition met: checkpoint terminal SUCCEED with the final state.

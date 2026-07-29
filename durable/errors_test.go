@@ -123,6 +123,7 @@ func TestErrorUnwrap(t *testing.T) {
 		{"CallbackError.Unwrap", &CallbackError{Err: cause}, cause},
 		{"ChildContextError.Unwrap", &ChildContextError{Err: cause}, cause},
 		{"WaitForConditionError.Unwrap", &WaitForConditionError{Err: cause}, cause},
+		{"SerdesError.Unwrap", &SerdesError{Err: cause}, cause},
 		{"replayedError.Unwrap nil", &replayedError{}, nil},
 		{"replayedError.Unwrap sentinel", &replayedError{sentinel: ErrExecutionStopped}, ErrExecutionStopped},
 	}
@@ -133,6 +134,29 @@ func TestErrorUnwrap(t *testing.T) {
 				t.Errorf("Unwrap = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// typedSerdesCause is a named cause type for SerdesError chain matching.
+type typedSerdesCause struct{ msg string }
+
+func (e *typedSerdesCause) Error() string { return e.msg }
+
+func TestSerdesErrorIsAsChain(t *testing.T) {
+	sentinel := errors.New("bad payload")
+	wrapped := &SerdesError{Operation: "op", Direction: "unmarshal", Err: fmt.Errorf("decode: %w", sentinel)}
+	if !errors.Is(wrapped, sentinel) {
+		t.Error("errors.Is should reach the underlying cause through Unwrap")
+	}
+
+	cause := &typedSerdesCause{msg: "typed cause"}
+	typed := &SerdesError{Operation: "op", Direction: "marshal", Err: cause}
+	var got *typedSerdesCause
+	if !errors.As(typed, &got) {
+		t.Fatal("errors.As should reach the underlying cause through Unwrap")
+	}
+	if got != cause {
+		t.Errorf("errors.As extracted %v, want %v", got, cause)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -65,26 +66,38 @@ func handler(ctx durable.Context, _ any) (Output, error) {
 		}
 	}
 
-	// 2. Provoke an InvokeError: invoke a function that the test will fail.
-	_, err = durable.Invoke[any](ctx, "failing-invoke",
-		"arn:aws:lambda:us-east-1:123456789012:function:nonexistent",
-		struct{}{},
+	// 2. Provoke an InvokeError: invoke the retry-invoke-target function
+	// with an attempt below its failure threshold so it fails
+	// deliberately. The target function name is resolved the same way as
+	// in the retry-invoke example. In local testing the invoke suspends
+	// and the test fails it externally via runner.FailChainedInvoke.
+	targetFunction := os.Getenv("FUNCTION_NAME_PREFIX") + "go-retry-invoke-target:$LATEST"
+	_, err = durable.Invoke[any](ctx, "failing-invoke", targetFunction,
+		struct {
+			Attempt          int `json:"attempt"`
+			FailUntilAttempt int `json:"failUntilAttempt"`
+		}{Attempt: 1, FailUntilAttempt: 2},
 	)
-	if err != nil {
-		var invokeErr *durable.InvokeError
-		if errors.As(err, &invokeErr) {
-			var opErr *durable.OperationError
-			isOp := errors.As(err, &opErr)
-			out.InvokeErrorInfo = ErrorInfo{
-				Matched:       true,
-				TypeName:      "InvokeError",
-				OperationName: invokeErr.Name,
-				IsOpError:     isOp,
-			}
-			if isOp {
-				out.InvokeErrorInfo.OpErrorName = opErr.Name
-			}
+	var invokeErr *durable.InvokeError
+	switch {
+	case err == nil:
+		// Unexpected success; leave the info zeroed.
+	case errors.As(err, &invokeErr):
+		var opErr *durable.OperationError
+		isOp := errors.As(err, &opErr)
+		out.InvokeErrorInfo = ErrorInfo{
+			Matched:       true,
+			TypeName:      "InvokeError",
+			OperationName: invokeErr.Name,
+			IsOpError:     isOp,
 		}
+		if isOp {
+			out.InvokeErrorInfo.OpErrorName = opErr.Name
+		}
+	default:
+		// Not the handled terminal type: propagate unchanged so
+		// suspension signals reach the SDK.
+		return Output{}, err
 	}
 
 	// 3. Provoke a CallbackError: create a callback then send an external
@@ -123,21 +136,26 @@ func handler(ctx durable.Context, _ any) (Output, error) {
 	_ = err // Step failure is expected locally; cloud succeeds and resolves the callback.
 
 	_, err = cb.Result()
-	if err != nil {
-		var cbErr *durable.CallbackError
-		if errors.As(err, &cbErr) {
-			var opErr *durable.OperationError
-			isOp := errors.As(err, &opErr)
-			out.CallbackErrorInfo = ErrorInfo{
-				Matched:       true,
-				TypeName:      "CallbackError",
-				OperationName: cbErr.Name,
-				IsOpError:     isOp,
-			}
-			if isOp {
-				out.CallbackErrorInfo.OpErrorName = opErr.Name
-			}
+	var cbErr *durable.CallbackError
+	switch {
+	case err == nil:
+		// Unexpected success; leave the info zeroed.
+	case errors.As(err, &cbErr):
+		var opErr *durable.OperationError
+		isOp := errors.As(err, &opErr)
+		out.CallbackErrorInfo = ErrorInfo{
+			Matched:       true,
+			TypeName:      "CallbackError",
+			OperationName: cbErr.Name,
+			IsOpError:     isOp,
 		}
+		if isOp {
+			out.CallbackErrorInfo.OpErrorName = opErr.Name
+		}
+	default:
+		// Not the handled terminal type: propagate unchanged so
+		// suspension signals reach the SDK.
+		return Output{}, err
 	}
 
 	return out, nil

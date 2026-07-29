@@ -154,7 +154,7 @@ func TestWaitForConditionReplaySucceeded(t *testing.T) {
 }
 
 func TestWaitForConditionReplayFailed(t *testing.T) {
-	// Terminal FAILED: return StepError without re-executing.
+	// Terminal FAILED: return WaitForConditionError without re-executing.
 	fake := &fakeLambda{}
 	payload := stepPayload(`""`,
 		checkpointedStep("1", "FAILED", &wireStepDetails{
@@ -175,11 +175,11 @@ func TestWaitForConditionReplayFailed(t *testing.T) {
 		if err == nil {
 			return "unexpected", nil
 		}
-		var stepErr *StepError
-		if !errors.As(err, &stepErr) {
+		var condErr *WaitForConditionError
+		if !errors.As(err, &condErr) {
 			return "", err
 		}
-		return "caught: " + stepErr.Name, nil
+		return "caught: " + condErr.Name, nil
 	})
 
 	if want := `{"Status":"SUCCEEDED","Result":"\"caught: poll\""}`; resp != want {
@@ -212,7 +212,8 @@ func TestWaitForConditionPending(t *testing.T) {
 }
 
 func TestWaitForConditionCheckError(t *testing.T) {
-	// Check function returns an error: FAIL checkpoint, StepError returned.
+	// Check function returns an error: FAIL checkpoint, WaitForConditionError
+	// returned.
 	fake := &fakeLambda{}
 	resp := invokeStep(t, fake, stepPayload(`""`), func(ctx Context, _ string) (string, error) {
 		_, err := WaitForCondition(ctx, "flaky", func(_ StepContext, _ int) (int, error) {
@@ -226,9 +227,9 @@ func TestWaitForConditionCheckError(t *testing.T) {
 		if err == nil {
 			return "unexpected", nil
 		}
-		var stepErr *StepError
-		if errors.As(err, &stepErr) {
-			return "caught: " + stepErr.Name, nil
+		var condErr *WaitForConditionError
+		if errors.As(err, &condErr) {
+			return "caught: " + condErr.Name, nil
 		}
 		return "", err
 	})
@@ -242,6 +243,61 @@ func TestWaitForConditionCheckError(t *testing.T) {
 	for _, u := range updates {
 		if u.Action == types.OperationActionFail && aws.ToString(u.SubType) == "WaitForCondition" {
 			found = true
+			// The checkpointed ErrorType is the cause's concrete type
+			// name, not the SDK wrapper type. errors.New causes map to
+			// "Error" on the wire.
+			if got := aws.ToString(u.Error.ErrorType); got != "Error" {
+				t.Errorf("checkpointed ErrorType = %q, want %q", got, "Error")
+			}
+			if got := aws.ToString(u.Error.ErrorMessage); got != "check function failed" {
+				t.Errorf("checkpointed ErrorMessage = %q, want %q", got, "check function failed")
+			}
+		}
+	}
+	if !found {
+		t.Error("expected FAIL checkpoint for WaitForCondition")
+	}
+}
+
+// conditionCheckError is a named error type used to pin the checkpointed
+// wire ErrorType for wait-for-condition failures.
+type conditionCheckError struct{ msg string }
+
+func (e *conditionCheckError) Error() string { return e.msg }
+
+func TestWaitForConditionCheckErrorTypePinned(t *testing.T) {
+	// The checkpointed operation ErrorType for a condition failure must be
+	// the cause's concrete type name: WaitForConditionError wrapping is
+	// applied only on the Go-return side, never on the wire.
+	fake := &fakeLambda{}
+	invokeStep(t, fake, stepPayload(`""`), func(ctx Context, _ string) (string, error) {
+		_, err := WaitForCondition(ctx, "pinned", func(_ StepContext, _ int) (int, error) {
+			return 0, &conditionCheckError{msg: "typed check failure"}
+		}, ConditionConfig[int]{
+			InitialState: 0,
+			WaitStrategy: func(_ int, _ int) WaitDecision {
+				return WaitDecision{Continue: false}
+			},
+		})
+		var condErr *WaitForConditionError
+		if !errors.As(err, &condErr) {
+			t.Errorf("returned error = %T, want *WaitForConditionError", err)
+		}
+		var cause *conditionCheckError
+		if !errors.As(err, &cause) {
+			t.Error("cause not reachable through Unwrap chain")
+		}
+		return "done", nil
+	})
+
+	updates := updateBatch(t, fake)
+	found := false
+	for _, u := range updates {
+		if u.Action == types.OperationActionFail && aws.ToString(u.SubType) == "WaitForCondition" {
+			found = true
+			if got := aws.ToString(u.Error.ErrorType); got != "conditionCheckError" {
+				t.Errorf("checkpointed ErrorType = %q, want %q", got, "conditionCheckError")
+			}
 		}
 	}
 	if !found {
@@ -465,9 +521,9 @@ func TestWaitForConditionMaxAttempts(t *testing.T) {
 		if err == nil {
 			return "unexpected", nil
 		}
-		var stepErr *StepError
-		if errors.As(err, &stepErr) {
-			return "failed: " + stepErr.Name, nil
+		var condErr *WaitForConditionError
+		if errors.As(err, &condErr) {
+			return "failed: " + condErr.Name, nil
 		}
 		return "", err
 	})
@@ -513,6 +569,11 @@ func TestWaitForConditionMaxAttemptsTerminal(t *testing.T) {
 			found = true
 			if aws.ToString(u.Error.ErrorMessage) != "max attempts exceeded" {
 				t.Errorf("error message = %q", aws.ToString(u.Error.ErrorMessage))
+			}
+			// Checkpointed ErrorType stays the cause's concrete type
+			// name (errors.New maps to "Error"), not the wrapper type.
+			if got := aws.ToString(u.Error.ErrorType); got != "Error" {
+				t.Errorf("checkpointed ErrorType = %q, want %q", got, "Error")
 			}
 		}
 	}
@@ -686,4 +747,50 @@ func (s *uppercaseSerdes) Unmarshal(_ SerdesContext, data []byte, v any) error {
 		}
 	}
 	return json.Unmarshal(lower, v)
+}
+
+func TestWaitForConditionStateDeserFailure(t *testing.T) {
+	// A checkpointed state that cannot be deserialized fails the
+	// operation with a SerdesError; it must not silently fall back to
+	// the initial state.
+	fake := &fakeLambda{}
+	payload := stepPayload(`""`,
+		checkpointedStep("1", "STARTED", &wireStepDetails{Attempt: 1, Result: "not-json"}),
+	)
+	var got error
+	resp := invokeStep(t, fake, payload, func(ctx Context, _ string) (string, error) {
+		_, err := WaitForCondition(ctx, "corrupt", func(_ StepContext, state int) (int, error) {
+			t.Error("check must not execute when checkpointed state cannot be deserialized")
+			return state, nil
+		}, ConditionConfig[int]{
+			InitialState: 0,
+			WaitStrategy: func(_ int, _ int) WaitDecision {
+				return WaitDecision{Continue: false}
+			},
+		})
+		got = err
+		return "", err
+	})
+
+	var serdesErr *SerdesError
+	if !errors.As(got, &serdesErr) {
+		t.Fatalf("error = %v (%T), want *SerdesError", got, got)
+	}
+	if serdesErr.Operation != "corrupt" {
+		t.Errorf("SerdesError.Operation = %q, want %q", serdesErr.Operation, "corrupt")
+	}
+	if serdesErr.Direction != "unmarshal" {
+		t.Errorf("SerdesError.Direction = %q, want %q", serdesErr.Direction, "unmarshal")
+	}
+	var jsonErr *json.SyntaxError
+	if !errors.As(got, &jsonErr) {
+		t.Errorf("underlying cause %v not reachable via errors.As through Unwrap", serdesErr.Err)
+	}
+	var parsed invocationResponse
+	if err := json.Unmarshal([]byte(resp), &parsed); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if parsed.Status != invocationFailed {
+		t.Errorf("response status = %q, want FAILED", parsed.Status)
+	}
 }
