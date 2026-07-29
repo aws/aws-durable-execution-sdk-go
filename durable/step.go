@@ -182,7 +182,7 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 			})
 			var out O
 			if err := options.serdes.Unmarshal(ec.Context, ec.serdesCtx(id), []byte(op.step.result), &out); err != nil {
-				return zero, fmt.Errorf("durable: step %q: deserialize checkpointed result: %w", name, err)
+				return zero, newSerdesError(name, serdesDirectionUnmarshal, err)
 			}
 			dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
 				if p.OnOperationEnd != nil {
@@ -416,17 +416,18 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 
 	serialized, err := options.serdes.Marshal(ec.Context, ec.serdesCtx(id), result)
 	if err != nil {
+		wrapped := newSerdesError(name, serdesDirectionMarshal, err)
 		dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
 			if p.OnOperationAttemptEnd != nil {
 				p.OnOperationAttemptEnd(ec, AttemptEndHookInfo{
 					OperationHookInfo: attemptInfo.OperationHookInfo,
 					Attempt:           attempt,
 					Outcome:           PluginAttemptFailed,
-					Error:             err,
+					Error:             wrapped,
 				})
 			}
 		})
-		return settleStepFailure[O](ec, id, name, options, fmt.Errorf("durable: step %q: serialize result: %w", name, err), attempt)
+		return settleStepFailure[O](ec, id, name, options, wrapped, attempt)
 	}
 
 	if sizeErr := checkResultSize(serialized, name); sizeErr != nil {
@@ -468,7 +469,7 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 	// identical result.
 	var out O
 	if err := options.serdes.Unmarshal(ec.Context, ec.serdesCtx(id), serialized, &out); err != nil {
-		return zero, fmt.Errorf("durable: step %q: deserialize result: %w", name, err)
+		return zero, newSerdesError(name, serdesDirectionUnmarshal, err)
 	}
 	return out, nil
 }

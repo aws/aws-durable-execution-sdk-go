@@ -185,7 +185,7 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 			}
 			var out O
 			if err := ec.serdes.Unmarshal(ec.Context, ec.serdesCtx(id), []byte(op.childCtx.result), &out); err != nil {
-				return zero, fmt.Errorf("durable: WaitForCallback %q: deserialize result: %w", name, err)
+				return zero, newSerdesError(name, serdesDirectionUnmarshal, err)
 			}
 			return out, nil
 
@@ -234,7 +234,7 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 	// Checkpoint ContextSucceeded.
 	serialized, serr := ec.serdes.Marshal(ec.Context, ec.serdesCtx(id), result)
 	if serr != nil {
-		return zero, fmt.Errorf("durable: WaitForCallback %q: serialize result: %w", name, serr)
+		return zero, newSerdesError(name, serdesDirectionMarshal, serr)
 	}
 	update := wfcbContextUpdate(ec, id, name, types.OperationActionSucceed)
 	update.Payload = aws.String(string(serialized))
@@ -248,7 +248,7 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 	// Round-trip for consistency (first-run == replay).
 	var out O
 	if err := ec.serdes.Unmarshal(ec.Context, ec.serdesCtx(id), serialized, &out); err != nil {
-		return zero, fmt.Errorf("durable: WaitForCallback %q: deserialize result: %w", name, err)
+		return zero, newSerdesError(name, serdesDirectionUnmarshal, err)
 	}
 	return out, nil
 }
@@ -322,7 +322,7 @@ func resolveCallbackSuccess[O any](ctx context.Context, op *operation, id, name 
 	}
 	var out O
 	if err := serdes.Unmarshal(ctx, sctx, []byte(op.callback.result), &out); err != nil {
-		fut := newFailedFuture[O](fmt.Errorf("durable: callback %q: deserialize result: %w", name, err))
+		fut := newFailedFuture[O](newSerdesError(name, serdesDirectionUnmarshal, err))
 		return &Callback[O]{id: op.callback.callbackID, future: fut}
 	}
 	return &Callback[O]{id: op.callback.callbackID, future: newSettledFuture(out, nil)}

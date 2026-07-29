@@ -376,9 +376,26 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		// after all durable work (including oversized-result checkpoint)
 		// has completed. This prevents false success telemetry if
 		// serialization or checkpointing fails.
+		//
+		// failInvocationEnd dispatches the failure-side OnInvocationEnd
+		// hook for errors raised during result finalization, so lifecycle
+		// telemetry observes exactly one terminal hook per invocation.
+		failInvocationEnd := func(err error) {
+			dispatchNotification(pd, func(p *Plugin) {
+				if p.OnInvocationEnd != nil {
+					p.OnInvocationEnd(ctx, InvocationEndHookInfo{
+						ExecutionArn:   in.DurableExecutionArn,
+						Status:         PluginInvocationFailed,
+						ExecutionError: err,
+					})
+				}
+			})
+		}
 		serialized, serr := json.Marshal(wrapResult)
 		if serr != nil {
-			return nil, fmt.Errorf("durable: serialize handler result: %w", serr)
+			err := fmt.Errorf("durable: serialize handler result: %w", serr)
+			failInvocationEnd(err)
+			return nil, err
 		}
 		if len(serialized) > lambdaResponseSizeLimit {
 			// The result exceeds what the response envelope can carry
@@ -391,7 +408,9 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 				executionOpID = in.InitialExecutionState.Operations[0].Id
 			}
 			if executionOpID == "" {
-				return nil, errors.New("durable: result exceeds response size limit and no execution operation is available to checkpoint it")
+				err := errors.New("durable: result exceeds response size limit and no execution operation is available to checkpoint it")
+				failInvocationEnd(err)
+				return nil, err
 			}
 			update := types.OperationUpdate{
 				Id:      &executionOpID,
@@ -400,7 +419,9 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 				Payload: aws.String(string(serialized)),
 			}
 			if cerr := cp.checkpoint(ctx, []types.OperationUpdate{update}); cerr != nil {
-				return nil, fmt.Errorf("durable: checkpoint oversized result: %w", cerr)
+				err := fmt.Errorf("durable: checkpoint oversized result: %w", cerr)
+				failInvocationEnd(err)
+				return nil, err
 			}
 			empty := ""
 			resp, respErr = respond(invocationResponse{Status: invocationSucceeded, Result: &empty})
@@ -471,6 +492,7 @@ func errorObjectFromError(err error) *wireError {
 	var childErr *ChildContextError
 	var condErr *WaitForConditionError
 	var combErr *CombinatorError
+	var batchErr *BatchCompletionError
 	switch {
 	case errors.As(err, &stepErr):
 		we.ErrorType = "StepError"
@@ -504,6 +526,8 @@ func errorObjectFromError(err error) *wireError {
 		we.ErrorType = "WaitForConditionError"
 	case errors.As(err, &combErr):
 		we.ErrorType = "PromiseCombinatorError"
+	case errors.As(err, &batchErr):
+		we.ErrorType = "BatchCompletionError"
 	}
 	return we
 }

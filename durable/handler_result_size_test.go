@@ -207,11 +207,12 @@ func TestRootResultOversizedCheckpointBeforePlugin(t *testing.T) {
 }
 
 func TestRootResultCheckpointFailureNoSuccessPlugin(t *testing.T) {
-	// When the oversized-result checkpoint fails, the success plugin hook
-	// must NOT fire — the result was never durably recorded.
+	// When the oversized-result checkpoint fails, exactly one FAILED
+	// OnInvocationEnd hook must fire carrying the returned error, and the
+	// success hook must NOT fire — the result was never durably recorded.
 	large := resultOfSerializedSize(lambdaResponseSizeLimit + 1)
 
-	var pluginFired bool
+	var hooks []InvocationEndHookInfo
 	fake := &fakeLambdaFunc{
 		getState: emptyGetState,
 		checkpoint: func(_ context.Context, _ *lambda.CheckpointDurableExecutionInput, _ ...func(*lambda.Options)) (*lambda.CheckpointDurableExecutionOutput, error) {
@@ -225,7 +226,7 @@ func TestRootResultCheckpointFailureNoSuccessPlugin(t *testing.T) {
 
 	plugin := Plugin{
 		OnInvocationEnd: func(_ context.Context, info InvocationEndHookInfo) {
-			pluginFired = true
+			hooks = append(hooks, info)
 		},
 	}
 
@@ -237,7 +238,96 @@ func TestRootResultCheckpointFailureNoSuccessPlugin(t *testing.T) {
 	if err == nil {
 		t.Fatal("Invoke succeeded despite checkpoint failure")
 	}
-	if pluginFired {
-		t.Error("OnInvocationEnd fired despite checkpoint failure — success telemetry emitted for non-durable result")
+	if len(hooks) != 1 {
+		t.Fatalf("OnInvocationEnd fired %d times, want exactly 1", len(hooks))
+	}
+	if hooks[0].Status != PluginInvocationFailed {
+		t.Errorf("hook Status = %q, want %q", hooks[0].Status, PluginInvocationFailed)
+	}
+	if hooks[0].ExecutionError != err { //nolint:errorlint // identity check is intentional
+		t.Errorf("hook ExecutionError = %v, want the exact returned error %v", hooks[0].ExecutionError, err)
+	}
+}
+
+func TestRootResultSerializationFailureFiresFailedHook(t *testing.T) {
+	// When the handler result cannot be serialized, exactly one FAILED
+	// OnInvocationEnd hook must fire carrying the returned error, and the
+	// success hook must NOT fire.
+	var hooks []InvocationEndHookInfo
+	fake := &fakeLambdaFunc{getState: emptyGetState}
+
+	plugin := Plugin{
+		OnInvocationEnd: func(_ context.Context, info InvocationEndHookInfo) {
+			hooks = append(hooks, info)
+		},
+	}
+
+	h := Wrap(func(_ Context, _ string) (chan int, error) {
+		return make(chan int), nil // json.Marshal fails on channels
+	}, withLambdaAPI(fake), WithPlugins(plugin))
+
+	_, err := h.Invoke(context.Background(), stepPayload(`""`))
+	if err == nil {
+		t.Fatal("Invoke succeeded despite unserializable result")
+	}
+	if !strings.Contains(err.Error(), "serialize handler result") {
+		t.Fatalf("error = %v, want result serialization failure", err)
+	}
+	if len(hooks) != 1 {
+		t.Fatalf("OnInvocationEnd fired %d times, want exactly 1", len(hooks))
+	}
+	if hooks[0].Status != PluginInvocationFailed {
+		t.Errorf("hook Status = %q, want %q", hooks[0].Status, PluginInvocationFailed)
+	}
+	if hooks[0].ExecutionError != err { //nolint:errorlint // identity check is intentional
+		t.Errorf("hook ExecutionError = %v, want the exact returned error %v", hooks[0].ExecutionError, err)
+	}
+}
+
+func TestRootResultOversizedNoExecutionOpFiresFailedHook(t *testing.T) {
+	// An oversized result with no execution operation in the initial
+	// state cannot be checkpointed. Exactly one FAILED OnInvocationEnd
+	// hook must fire carrying the returned error.
+	large := resultOfSerializedSize(lambdaResponseSizeLimit + 1)
+
+	var hooks []InvocationEndHookInfo
+	fake := &fakeLambdaFunc{getState: emptyGetState}
+
+	plugin := Plugin{
+		OnInvocationEnd: func(_ context.Context, info InvocationEndHookInfo) {
+			hooks = append(hooks, info)
+		},
+	}
+
+	// Payload with an empty initial state: no execution operation exists
+	// to carry the oversized-result checkpoint.
+	in := invocationInput{
+		DurableExecutionArn: "arn:test",
+		CheckpointToken:     "token-0",
+	}
+	payload, merr := json.Marshal(in)
+	if merr != nil {
+		t.Fatal(merr)
+	}
+
+	h := Wrap(func(_ Context, _ string) (string, error) {
+		return large, nil
+	}, withLambdaAPI(fake), WithPlugins(plugin))
+
+	_, err := h.Invoke(context.Background(), payload)
+	if err == nil {
+		t.Fatal("Invoke succeeded despite missing execution operation")
+	}
+	if !strings.Contains(err.Error(), "no execution operation") {
+		t.Fatalf("error = %v, want the no-execution-operation guard", err)
+	}
+	if len(hooks) != 1 {
+		t.Fatalf("OnInvocationEnd fired %d times, want exactly 1", len(hooks))
+	}
+	if hooks[0].Status != PluginInvocationFailed {
+		t.Errorf("hook Status = %q, want %q", hooks[0].Status, PluginInvocationFailed)
+	}
+	if hooks[0].ExecutionError != err { //nolint:errorlint // identity check is intentional
+		t.Errorf("hook ExecutionError = %v, want the exact returned error %v", hooks[0].ExecutionError, err)
 	}
 }

@@ -14,6 +14,7 @@ var (
 	_ error = (*ChildContextError)(nil)
 	_ error = (*WaitForConditionError)(nil)
 	_ error = (*CombinatorError)(nil)
+	_ error = (*BatchCompletionError)(nil)
 	_ error = (*OperationError)(nil)
 	_ error = (*NonDeterministicReplayError)(nil)
 	_ error = (*ResultTooLargeError)(nil)
@@ -63,7 +64,8 @@ const (
 //
 // Every typed operation error ([StepError], [InvokeError], [CallbackError],
 // [ChildContextError], [WaitForConditionError], [CombinatorError],
-// [NonDeterministicReplayError], [ResultTooLargeError]) is matchable via:
+// [BatchCompletionError], [NonDeterministicReplayError],
+// [ResultTooLargeError]) is matchable via:
 //
 //	var opErr *durable.OperationError
 //	if errors.As(err, &opErr) {
@@ -286,6 +288,29 @@ func (e *CombinatorError) As(target any) bool {
 	return false
 }
 
+// BatchCompletionError is returned by [BatchResult.Err] when a batch
+// completed as failed at the batch level without any item carrying its own
+// error — for example, a [BatchResult] reconstructed from public state
+// (where item errors do not survive serialization) whose status indicates
+// failure.
+type BatchCompletionError struct {
+	// Reason is the completion reason of the failed batch.
+	Reason CompletionReason
+}
+
+func (e *BatchCompletionError) Error() string {
+	return fmt.Sprintf("durable: batch failed: %s", e.Reason)
+}
+
+// As supports [errors.As] matching against [*OperationError].
+func (e *BatchCompletionError) As(target any) bool {
+	if t, ok := target.(**OperationError); ok {
+		*t = &OperationError{}
+		return true
+	}
+	return false
+}
+
 // SerdesError indicates that a serialization or deserialization operation
 // failed. It wraps the underlying serdes failure with context about which
 // operation and direction (marshal/unmarshal) triggered it.
@@ -306,6 +331,20 @@ func (e *SerdesError) Error() string {
 }
 
 func (e *SerdesError) Unwrap() error { return e.Err }
+
+// Serdes failure directions recorded in [SerdesError.Direction].
+const (
+	serdesDirectionMarshal   = "marshal"
+	serdesDirectionUnmarshal = "unmarshal"
+)
+
+// newSerdesError wraps a failure at a configurable [Serdes] boundary,
+// carrying the operation name and the direction that failed. Every
+// Marshal/Unmarshal call on an operation's serdes reports failure through
+// this wrapper; internal envelope serialization does not.
+func newSerdesError(operation, direction string, cause error) *SerdesError {
+	return &SerdesError{Operation: operation, Direction: direction, Err: cause}
+}
 
 // NonDeterministicReplayError indicates that a checkpointed operation's
 // type does not match what the current code expects at the same position.

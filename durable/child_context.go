@@ -81,7 +81,7 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 			}
 			var out O
 			if err := options.serdes.Unmarshal(ec.Context, ec.serdesCtx(id), []byte(op.childCtx.result), &out); err != nil {
-				return zero, fmt.Errorf("durable: child context %q: deserialize result: %w", name, err)
+				return zero, newSerdesError(name, serdesDirectionUnmarshal, err)
 			}
 			return out, nil
 
@@ -170,7 +170,7 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 
 	serialized, err := options.serdes.Marshal(ec.Context, ec.serdesCtx(id), result)
 	if err != nil {
-		return zero, fmt.Errorf("durable: child context %q: serialize result: %w", name, err)
+		return zero, newSerdesError(name, serdesDirectionMarshal, err)
 	}
 	update := childUpdate(ec, id, name, types.OperationActionSucceed)
 	if len(serialized) > checkpointSizeLimitBytes {
@@ -189,7 +189,7 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 
 	var out O
 	if err := options.serdes.Unmarshal(ec.Context, ec.serdesCtx(id), serialized, &out); err != nil {
-		return zero, fmt.Errorf("durable: child context %q: deserialize result: %w", name, err)
+		return zero, newSerdesError(name, serdesDirectionUnmarshal, err)
 	}
 	return out, nil
 }
@@ -311,7 +311,7 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 
 		serialized, serr := options.serdes.Marshal(ec.Context, ec.serdesCtx(id), result)
 		if serr != nil {
-			fut.settle(result, fmt.Errorf("durable: child context %q: serialize result: %w", name, serr))
+			fut.settle(result, newSerdesError(name, serdesDirectionMarshal, serr))
 			return
 		}
 		update := childUpdate(ec, id, name, types.OperationActionSucceed)
@@ -336,7 +336,7 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 		// variant (first-run value == replay value).
 		var out O
 		if err := options.serdes.Unmarshal(ec.Context, ec.serdesCtx(id), serialized, &out); err != nil {
-			fut.settle(result, fmt.Errorf("durable: child context %q: deserialize result: %w", name, err))
+			fut.settle(result, newSerdesError(name, serdesDirectionUnmarshal, err))
 			return
 		}
 		fut.settle(out, nil)
@@ -378,7 +378,7 @@ func resolveTerminalChild[O any](ec *execContext, op *operation, id, name string
 		}
 		var out O
 		if err := options.serdes.Unmarshal(ec.Context, ec.serdesCtx(id), []byte(op.childCtx.result), &out); err != nil {
-			return newFailedFuture[O](fmt.Errorf("durable: child context %q: deserialize result: %w", name, err))
+			return newFailedFuture[O](newSerdesError(name, serdesDirectionUnmarshal, err))
 		}
 		return newSettledFuture(out, nil)
 
