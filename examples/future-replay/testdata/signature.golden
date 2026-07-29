@@ -1,15 +1,15 @@
 [
   {
-    "type": "CONTEXT",
-    "subType": "RunInChildContext",
-    "name": "settle",
-    "status": "SUCCEEDED"
-  },
-  {
     "type": "STEP",
     "subType": "Step",
     "name": "failure-step",
     "status": "FAILED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "RunInChildContext",
+    "name": "settle",
+    "status": "SUCCEEDED"
   },
   {
     "type": "WAIT",
