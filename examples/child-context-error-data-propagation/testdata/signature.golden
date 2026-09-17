@@ -1,0 +1,20 @@
+[
+  {
+    "type": "CONTEXT",
+    "subType": "RunInChildContext",
+    "name": "outer-child",
+    "status": "FAILED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "RunInChildContext",
+    "name": "inner-child",
+    "status": "FAILED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "throw-with-error-data",
+    "status": "FAILED"
+  }
+]

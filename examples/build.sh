@@ -49,6 +49,7 @@ EXAMPLES="
   child-context-serdes-large-payload
   child-context-large-data
   child-context-error-propagation
+  child-context-error-data-propagation
   child-context-failing-step
   child-context-checkpoint-size-limit
   child-context-nested-blocks

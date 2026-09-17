@@ -219,15 +219,11 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 						IsReplay:       true,
 						ParentID:       ec.parentWireID(),
 						StartTimestamp: op.startTimestamp,
-						Error:          &replayedError{errType: op.step.errType, message: op.step.errMessage},
+						Error:          op.step.record().standIn(nil),
 					})
 				}
 			})
-			stepErr := &StepError{
-				Name:     name,
-				Attempts: op.step.attempt,
-				Err:      &replayedError{errType: op.step.errType, message: op.step.errMessage},
-			}
+			stepErr := newStepError(name, op.step.attempt, op.step.record())
 			dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
 				if p.OnOperationEnd != nil {
 					p.OnOperationEnd(ec, OperationHookInfo{
@@ -488,7 +484,7 @@ func settleStepFailure[O any](ec *execContext, id, name string, options stepOpti
 			}
 			return zero, err
 		}
-		return zero, &StepError{Name: name, Attempts: attempt, Err: cause}
+		return zero, newStepError(name, attempt, recordOf(cause))
 	}
 
 	update := stepUpdate(ec, id, name, OperationActionRetry)
@@ -567,16 +563,42 @@ func (c *stepContext) sealed() {}
 
 // errorObject converts a Go error into the wire error shape recorded with
 // FAIL and RETRY updates. The ErrorType follows [wireErrorType], the same
-// rule the FAILED invocation response uses.
+// rule the FAILED invocation response uses. ErrorData carries the payload
+// attached with [WithErrorData], when the chain holds one.
 func errorObject(err error) *ErrorObject {
-	return &ErrorObject{
-		ErrorType:    aws.String(wireErrorType(err)),
-		ErrorMessage: aws.String(err.Error()),
+	return errorObjectFromRecord(recordOf(err))
+}
+
+// errorObjectFromRecord converts a failure record into the wire error
+// shape. Empty fields are omitted.
+func errorObjectFromRecord(rec errorRecord) *ErrorObject {
+	obj := &ErrorObject{
+		ErrorType:    aws.String(rec.errType),
+		ErrorMessage: aws.String(rec.message),
+	}
+	if rec.data != "" {
+		obj.ErrorData = aws.String(rec.data)
+	}
+	if len(rec.stackTrace) > 0 {
+		obj.StackTrace = rec.stackTrace
+	}
+	return obj
+}
+
+// newStepError builds the [StepError] for a failed step from the failure
+// record, on both the first invocation and on replay.
+func newStepError(name string, attempts int, rec errorRecord) *StepError {
+	return &StepError{
+		Name: name, Attempts: attempts,
+		ErrorType: rec.errType, Message: rec.message, ErrorData: rec.data, StackTrace: rec.stackTrace,
+		Err: rec.cause("", nil),
 	}
 }
 
-// replayedError reconstructs a failure recorded in a checkpoint, for
-// replaying a FAILED step without re-executing it.
+// replayedError is the stand-in for a recorded failure. It carries the
+// wire ErrorType and message of the error that escaped an operation, and
+// nothing else, so a typed operation error wrapping it looks the same on
+// the first invocation as on replay. Its Error() is "<ErrorType>: <message>".
 type replayedError struct {
 	errType  string
 	message  string

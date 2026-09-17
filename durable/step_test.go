@@ -468,6 +468,12 @@ func TestStepStartedAtMostOnceInterrupted(t *testing.T) {
 			}
 			assertStepUpdate(t, updates[0], "1", tt.wantAction)
 			if tt.wantAction == OperationActionFail {
+				// The interruption is recorded as the step's final error;
+				// the StepError names it and rebuilds it as the cause.
+				var stepErr *StepError
+				if !errors.As(gotErr, &stepErr) || stepErr.ErrorType != "StepInterruptedError" {
+					t.Errorf("step error = %v, want *StepError with ErrorType StepInterruptedError", gotErr)
+				}
 				var interrupted *StepInterruptedError
 				if !errors.As(gotErr, &interrupted) {
 					t.Errorf("step error = %v, want wrapping *StepInterruptedError", gotErr)

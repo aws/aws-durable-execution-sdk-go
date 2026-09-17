@@ -85,11 +85,7 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 			return out, nil
 
 		case statusFailed:
-			cause := &replayedError{errType: "Error", message: "child context failed"}
-			if op.childCtx != nil {
-				cause = &replayedError{errType: op.childCtx.errType, message: op.childCtx.errMessage}
-			}
-			return zero, &ChildContextError{Name: name, Err: cause}
+			return zero, newChildContextError(name, childFailureRecord(op))
 
 		case statusStarted, statusPending, statusReady, statusCancelled, statusTimedOut, statusStopped:
 			// STARTED re-enters below and replays the child's own
@@ -164,7 +160,7 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 			}
 			return zero, cerr
 		}
-		return zero, &ChildContextError{Name: name, Err: fnErr}
+		return zero, newChildContextError(name, recordOf(fnErr))
 	}
 
 	serialized, err := options.serdes.Marshal(ec.Context, ec.serdesCtx(id), result)
@@ -304,7 +300,7 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 				return
 			}
 			var zero O
-			fut.settle(zero, &ChildContextError{Name: name, Err: fnErr})
+			fut.settle(zero, newChildContextError(name, recordOf(fnErr)))
 			return
 		}
 
@@ -383,11 +379,7 @@ func resolveTerminalChild[O any](ec *execContext, op *operation, id, name string
 		return newSettledFuture(out, nil)
 
 	case statusFailed:
-		cause := &replayedError{errType: "Error", message: "child context failed"}
-		if op.childCtx != nil {
-			cause = &replayedError{errType: op.childCtx.errType, message: op.childCtx.errMessage}
-		}
-		return newFailedFuture[O](&ChildContextError{Name: name, Err: cause})
+		return newFailedFuture[O](newChildContextError(name, childFailureRecord(op)))
 
 	default:
 		// CANCELLED, TIMED_OUT, STOPPED: not expected for context ops,
@@ -426,4 +418,13 @@ func childUpdate(ec *execContext, id, name string, action OperationAction) Opera
 		update.ParentId = aws.String(hashID(parent))
 	}
 	return update
+}
+
+// childFailureRecord returns the failure recorded for a FAILED child
+// context, or a generic record when the checkpoint carries no details.
+func childFailureRecord(op *operation) errorRecord {
+	if op.childCtx == nil {
+		return errorRecord{errType: "Error", message: "child context failed"}
+	}
+	return op.childCtx.record()
 }

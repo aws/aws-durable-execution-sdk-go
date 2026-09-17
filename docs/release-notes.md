@@ -2,6 +2,68 @@
 
 ## Unreleased
 
+### Breaking: operation errors expose the recorded failure; the cause is a stand-in
+
+Every typed operation error (`StepError`, `InvokeError`, `CallbackError`,
+`ChildContextError`, `WaitForConditionError`) and `OperationError` now
+carry `ErrorType`, `Message`, `ErrorData`, and `StackTrace`, the fields
+recorded for the failure. `Err` is a stand-in rebuilt from `ErrorType`
+and `Message` on the first invocation as well as on replay. It never holds
+the error value the operation body returned, so `errors.As` against a
+handler's own error type is now false on every invocation instead of true
+on the first and false on replay. Match on `ErrorType` instead:
+
+```go
+var stepErr *durable.StepError
+if errors.As(err, &stepErr) && stepErr.ErrorType == "CardDeclinedError" { ... }
+```
+
+An SDK error that escapes a child context is rebuilt as that type from the
+record, so `errors.As` against `*StepError` or `*CombinatorError` through a
+`ChildContextError` works on both invocations. Sentinels
+(`ErrCallbackTimedOut`, `ErrInvokeTimedOut`, `ErrExecutionStopped`,
+`ErrExecutionCancelled`) still match through the stand-in.
+
+`Error()` strings of typed errors now end in `<ErrorType>: <message>` on
+the first invocation too, matching the replay form.
+
+### New: `WithErrorData`
+
+`durable.WithErrorData(err, data)` attaches a string payload to an error.
+When the error escapes a step, a child context, a wait-for-condition
+check, or the handler, the SDK records the payload as the failure's
+`ErrorData`, and the typed error exposes it as `ErrorData` on both
+invocations. Payloads over 256 KiB are truncated on a UTF-8 boundary.
+
+### New: callback failure subtypes
+
+`CallbackExternalError` (the external system reported failure),
+`CallbackTimeoutError` (with a `Heartbeat` field distinguishing a
+heartbeat timeout from the overall timeout), and `CallbackSubmitterError`
+(the `WaitForCallback` submitter step failed) embed `CallbackError`, so
+`errors.As` against `*CallbackError` still matches all of them. Each has
+its own wire `ErrorType`, shared with the other Durable Execution SDKs. A
+failed submitter previously surfaced as a bare `StepError`; it is now a
+`CallbackSubmitterError` whose `ErrorType` and `Message` are the
+submitter's.
+
+### `Settled` keeps the error type
+
+`Settled[O]` (from `AllSettled`) now serializes the error's type and
+`OperationError` fields alongside its message. After a checkpoint, an SDK
+error is rebuilt as its type, so `errors.As` matches it; an unknown type
+yields a stand-in carrying the name and message. Values written in the
+older message-only form still deserialize. Detail fields outside
+`OperationError` (such as `StepError.Attempts` or
+`ResultTooLargeError.SizeBytes`) are zero after the round trip; a rebuilt
+`NonDeterministicReplayError` or `ResultTooLargeError` keeps the recorded
+text as its `Error()`, and a rebuilt `BatchCompletionError` recovers its
+`Reason`.
+
+Checkpoints that record a callback timeout under the older
+`Callback.Timeout` or `Callback.Heartbeat` names still read back as a
+`CallbackTimeoutError`; the older heartbeat name sets `Heartbeat`.
+
 ### Breaking: `RetryStrategy` takes a `RetryAttempt` struct
 
 `RetryStrategy` is now `func(RetryAttempt) RetryDecision` instead of

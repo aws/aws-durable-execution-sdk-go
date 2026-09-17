@@ -220,6 +220,8 @@ func operationFromAPI(op Operation) *operation {
 		if sd.Error != nil {
 			rec.step.errType = aws.ToString(sd.Error.ErrorType)
 			rec.step.errMessage = aws.ToString(sd.Error.ErrorMessage)
+			rec.step.errData = aws.ToString(sd.Error.ErrorData)
+			rec.step.stackTrace = sd.Error.StackTrace
 		}
 	}
 	if id := op.ChainedInvokeDetails; id != nil {
@@ -228,6 +230,7 @@ func operationFromAPI(op Operation) *operation {
 			rec.invoke.errType = aws.ToString(id.Error.ErrorType)
 			rec.invoke.errMessage = aws.ToString(id.Error.ErrorMessage)
 			rec.invoke.errData = aws.ToString(id.Error.ErrorData)
+			rec.invoke.stackTrace = id.Error.StackTrace
 		}
 	}
 	if cd := op.ContextDetails; cd != nil {
@@ -239,6 +242,7 @@ func operationFromAPI(op Operation) *operation {
 			rec.childCtx.errType = aws.ToString(cd.Error.ErrorType)
 			rec.childCtx.errMessage = aws.ToString(cd.Error.ErrorMessage)
 			rec.childCtx.errData = aws.ToString(cd.Error.ErrorData)
+			rec.childCtx.stackTrace = cd.Error.StackTrace
 		}
 	}
 	if cb := op.CallbackDetails; cb != nil {
@@ -249,6 +253,8 @@ func operationFromAPI(op Operation) *operation {
 		if cb.Error != nil {
 			rec.callback.errType = aws.ToString(cb.Error.ErrorType)
 			rec.callback.errMessage = aws.ToString(cb.Error.ErrorMessage)
+			rec.callback.errData = aws.ToString(cb.Error.ErrorData)
+			rec.callback.stackTrace = cb.Error.StackTrace
 		}
 	}
 	return rec

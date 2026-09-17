@@ -1,6 +1,9 @@
 // Command wait-callback-failures demonstrates handling of callback failure
 // scenarios where the submitter succeeds but sends a failure response via
 // SendDurableExecutionCallbackFailure. The error is caught and inspected.
+// Every failure mode of WaitForCallback (external failure, timeout, and a
+// failed submitter) matches CallbackError, so one errors.As call catches
+// them all; the concrete subtype names the mode.
 package main
 
 import (
@@ -16,8 +19,10 @@ import (
 )
 
 type Result struct {
-	Success bool   `json:"success"`
-	Error   string `json:"error,omitempty"`
+	Success   bool   `json:"success"`
+	Error     string `json:"error,omitempty"`
+	ErrorType string `json:"errorType,omitempty"`
+	Mode      string `json:"mode,omitempty"`
 }
 
 func handler(ctx durable.Context, _ any) (Result, error) {
@@ -49,11 +54,27 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 	if err != nil {
 		var cbErr *durable.CallbackError
 		if errors.As(err, &cbErr) {
-			return Result{Success: false, Error: cbErr.Error()}, nil
+			return Result{Success: false, Error: cbErr.Error(), ErrorType: cbErr.ErrorType, Mode: callbackFailureMode(err)}, nil
 		}
 		return Result{}, err
 	}
 	return Result{Success: true}, nil
+}
+
+// callbackFailureMode names the concrete CallbackError subtype.
+func callbackFailureMode(err error) string {
+	var external *durable.CallbackExternalError
+	var timeout *durable.CallbackTimeoutError
+	var submitter *durable.CallbackSubmitterError
+	switch {
+	case errors.As(err, &external):
+		return "external"
+	case errors.As(err, &timeout):
+		return "timeout"
+	case errors.As(err, &submitter):
+		return "submitter"
+	}
+	return "callback"
 }
 
 func main() { durable.Start(handler) }

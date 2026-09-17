@@ -1,5 +1,6 @@
-// Command wait-callback-error-instance-submitter verifies that a
-// submitter failure error is correctly typed through replay cycles.
+// Command wait-callback-error-instance-submitter verifies that a failing
+// WaitForCallback submitter is returned as a CallbackSubmitterError that
+// matches CallbackError and carries the submitter's error type and message.
 package main
 
 import (
@@ -10,8 +11,10 @@ import (
 )
 
 type Result struct {
-	IsStepError  bool   `json:"isStepError"`
-	ErrorMessage string `json:"errorMessage,omitempty"`
+	IsCallbackError  bool   `json:"isCallbackError"`
+	IsSubmitterError bool   `json:"isSubmitterError"`
+	ErrorType        string `json:"errorType,omitempty"`
+	ErrorMessage     string `json:"errorMessage,omitempty"`
 }
 
 func handler(ctx durable.Context, _ any) (Result, error) {
@@ -30,13 +33,17 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 	// Verify error type in a step.
 	result, err := durable.Step[Result](ctx, "check-error-type",
 		func(_ durable.StepContext) (Result, error) {
-			var stepErr *durable.StepError
-			isStepErr := errors.As(cbErr, &stepErr)
-			msg := ""
-			if cbErr != nil {
-				msg = cbErr.Error()
+			var callbackErr *durable.CallbackError
+			var submitterErr *durable.CallbackSubmitterError
+			result := Result{
+				IsCallbackError:  errors.As(cbErr, &callbackErr),
+				IsSubmitterError: errors.As(cbErr, &submitterErr),
 			}
-			return Result{IsStepError: isStepErr, ErrorMessage: msg}, nil
+			if callbackErr != nil {
+				result.ErrorType = callbackErr.ErrorType
+				result.ErrorMessage = callbackErr.Message
+			}
+			return result, nil
 		})
 	if err != nil {
 		return Result{}, err

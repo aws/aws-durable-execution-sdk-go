@@ -23,13 +23,22 @@ func TestHandler(t *testing.T) {
 
 	// The handler's submitter calls the real Lambda API
 	// (SendDurableExecutionCallbackFailure) which is unavailable in local
-	// testing. The submitter step exhausts retries and the execution fails.
-	if result.Status != durabletest.Failed {
-		t.Fatalf("expected Failed (no real AWS endpoint for callback submitter), got %s", result.Status)
+	// testing. The submitter step exhausts retries, WaitForCallback returns
+	// a CallbackSubmitterError, and the handler catches it as a
+	// CallbackError. In the cloud the submitter succeeds and the external
+	// failure is caught the same way.
+	if result.Status != durabletest.Succeeded {
+		t.Fatalf("expected Succeeded (callback failure caught), got %s", result.Status)
 	}
-
-	if result.Error == nil {
-		t.Fatal("expected error details")
+	out, err := durabletest.ResultAs[Result](result)
+	if err != nil {
+		t.Fatalf("deserialize result: %v", err)
+	}
+	if out.Success {
+		t.Error("expected Success=false")
+	}
+	if out.Mode != "submitter" {
+		t.Errorf("Mode = %q, want %q (no AWS endpoint locally)", out.Mode, "submitter")
 	}
 
 	durabletest.AssertGoldenSignature(t, result, filepath.Join("testdata", "signature.golden"))

@@ -1032,7 +1032,7 @@ func TestRaceEarlyTerminalNoSuspension(t *testing.T) {
 	if err == nil || errors.Is(err, errSuspendExecution) {
 		t.Fatalf("Race error = %v, want the pre-settled terminal error", err)
 	}
-	if want := `durable: child context "race-early" failed: race-loser`; err.Error() != want {
+	if want := `durable: child context "race-early" failed: Error: race-loser`; err.Error() != want {
 		t.Errorf("Race error = %q, want %q", err.Error(), want)
 	}
 }

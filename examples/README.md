@@ -53,6 +53,7 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [child-context-serdes-large-payload](child-context-serdes-large-payload/main.go) | RunInChildContext, FileSystemSerdes (>256KB) | SUCCEEDED |
 | [child-context-large-data](child-context-large-data/main.go) | RunInChildContext (ReplayChildren) | SUCCEEDED |
 | [child-context-error-propagation](child-context-error-propagation/main.go) | RunInChildContext, error propagation | SUCCEEDED |
+| [child-context-error-data-propagation](child-context-error-data-propagation/main.go) | RunInChildContext, WithErrorData propagation | SUCCEEDED |
 | [child-context-failing-step](child-context-failing-step/main.go) | RunInChildContext, Step failure | SUCCEEDED |
 | [child-context-checkpoint-size-limit](child-context-checkpoint-size-limit/main.go) | RunInChildContext, size limit | SUCCEEDED |
 | [child-context-nested-blocks](child-context-nested-blocks/main.go) | RunInChildContext, nested parent/child/grandchild | SUCCEEDED |

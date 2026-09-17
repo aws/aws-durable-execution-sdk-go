@@ -67,10 +67,17 @@ type callbackDetails struct {
 	// succeeded.
 	result string
 
-	// errType and errMessage describe the callback failure. Set when the
-	// callback failed or timed out.
+	// errType, errMessage, errData, and stackTrace describe the callback
+	// failure. Set when the callback failed or timed out.
 	errType    string
 	errMessage string
+	errData    string
+	stackTrace []string
+}
+
+// record returns the recorded failure.
+func (d *callbackDetails) record() errorRecord {
+	return errorRecord{errType: d.errType, message: d.errMessage, data: d.errData, stackTrace: d.stackTrace}
 }
 
 // invokeDetails is the chained-invoke portion of a checkpointed operation.
@@ -79,11 +86,17 @@ type invokeDetails struct {
 	// the invoke succeeded.
 	result string
 
-	// errType, errMessage, and errData describe the invoked function's
-	// failure. Set when the invoke failed.
+	// errType, errMessage, errData, and stackTrace describe the invoked
+	// function's failure. Set when the invoke failed.
 	errType    string
 	errMessage string
 	errData    string
+	stackTrace []string
+}
+
+// record returns the recorded failure.
+func (d *invokeDetails) record() errorRecord {
+	return errorRecord{errType: d.errType, message: d.errMessage, data: d.errData, stackTrace: d.stackTrace}
 }
 
 // contextDetails is the child-context portion of a checkpointed operation.
@@ -98,11 +111,17 @@ type contextDetails struct {
 	// from the checkpoint.
 	replayChildren bool
 
-	// errType, errMessage, and errData describe the child-context failure.
-	// Set when the context failed.
+	// errType, errMessage, errData, and stackTrace describe the
+	// child-context failure. Set when the context failed.
 	errType    string
 	errMessage string
 	errData    string
+	stackTrace []string
+}
+
+// record returns the recorded failure.
+func (d *contextDetails) record() errorRecord {
+	return errorRecord{errType: d.errType, message: d.errMessage, data: d.errData, stackTrace: d.stackTrace}
 }
 
 // stepDetails is the step-specific portion of a checkpointed operation.
@@ -113,10 +132,17 @@ type stepDetails struct {
 	// result is the serialized step result. Set when the step succeeded.
 	result string
 
-	// errType and errMessage describe the failure recorded by the last
-	// attempt. Set when the step failed.
+	// errType, errMessage, errData, and stackTrace describe the failure
+	// recorded by the last attempt. Set when the step failed.
 	errType    string
 	errMessage string
+	errData    string
+	stackTrace []string
+}
+
+// record returns the recorded failure.
+func (d *stepDetails) record() errorRecord {
+	return errorRecord{errType: d.errType, message: d.errMessage, data: d.errData, stackTrace: d.stackTrace}
 }
 
 // executionState holds the checkpointed operations for the current
@@ -226,13 +252,13 @@ func (op *operation) operationError() error {
 	}
 	switch {
 	case op.step != nil && op.step.errType != "":
-		return &replayedError{errType: op.step.errType, message: op.step.errMessage}
+		return op.step.record().standIn(nil)
 	case op.invoke != nil && op.invoke.errType != "":
-		return &replayedError{errType: op.invoke.errType, message: op.invoke.errMessage}
+		return op.invoke.record().standIn(nil)
 	case op.childCtx != nil && op.childCtx.errType != "":
-		return &replayedError{errType: op.childCtx.errType, message: op.childCtx.errMessage}
+		return op.childCtx.record().standIn(nil)
 	case op.callback != nil && op.callback.errType != "":
-		return &replayedError{errType: op.callback.errType, message: op.callback.errMessage}
+		return op.callback.record().standIn(nil)
 	default:
 		return nil
 	}

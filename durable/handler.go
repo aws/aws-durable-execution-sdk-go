@@ -481,32 +481,40 @@ func assembleState(ctx context.Context, cp *checkpointer, initial *wire.InitialE
 // use. The message is the outermost error's message, except for callback
 // and child-context failures, which report their cause's message.
 func errorObjectFromError(err error) *wire.ErrorObject {
-	we := &wire.ErrorObject{ErrorType: wireErrorType(err), ErrorMessage: err.Error()}
-	// Use the cause's message for the wire. For replayed errors (from the
-	// checkpoint), extract just the message portion (without the
-	// ErrorType prefix) so it matches the original ErrorMessage on the
-	// wire.
+	rec := recordOf(err)
+	we := &wire.ErrorObject{ErrorType: rec.errType, ErrorMessage: rec.message, ErrorData: rec.data}
+	// Callback and child-context failures report their recorded cause
+	// message, so the response matches the message the operation recorded.
 	switch e := outermostSDKError(err).(type) {
 	case *CallbackError:
-		if e.Err != nil {
-			we.ErrorMessage = causeMessage(e.Err)
-		}
+		we.ErrorMessage = causeMessage(e.operationError())
+	case *CallbackExternalError:
+		we.ErrorMessage = causeMessage(e.operationError())
+	case *CallbackTimeoutError:
+		we.ErrorMessage = causeMessage(e.operationError())
+	case *CallbackSubmitterError:
+		we.ErrorMessage = causeMessage(e.operationError())
 	case *ChildContextError:
-		if e.Err != nil {
-			we.ErrorMessage = causeMessage(e.Err)
-		}
+		we.ErrorMessage = causeMessage(e.operationError())
 	}
 	return we
 }
 
-// causeMessage returns the message recorded for a wrapper's cause: the
-// original message for a replayed error, and Error() otherwise.
-func causeMessage(cause error) string {
+// causeMessage returns the message recorded for an operation's cause: the
+// Message field when set, otherwise the stand-in's message, otherwise the
+// cause's own text.
+func causeMessage(op *OperationError) string {
+	if op.Message != "" {
+		return op.Message
+	}
 	var re *replayedError
-	if errors.As(cause, &re) {
+	if errors.As(op.Err, &re) {
 		return re.message
 	}
-	return cause.Error()
+	if op.Err != nil {
+		return op.Err.Error()
+	}
+	return ""
 }
 
 // respond serializes an invocation response.

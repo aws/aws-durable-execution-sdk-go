@@ -284,9 +284,14 @@ func TestWaitForConditionCheckErrorTypePinned(t *testing.T) {
 		if !errors.As(err, &condErr) {
 			t.Errorf("returned error = %T, want *WaitForConditionError", err)
 		}
+		// The cause is a stand-in: the check error's type is exposed by
+		// name, never as the original value.
+		if condErr != nil && condErr.ErrorType != "conditionCheckError" {
+			t.Errorf("WaitForConditionError.ErrorType = %q, want %q", condErr.ErrorType, "conditionCheckError")
+		}
 		var cause *conditionCheckError
-		if !errors.As(err, &cause) {
-			t.Error("cause not reachable through Unwrap chain")
+		if errors.As(err, &cause) {
+			t.Error("original check error reachable through Unwrap chain; the cause must be a stand-in")
 		}
 		return "done", nil
 	})

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -65,10 +66,26 @@ func TestStepSerdesErrorLiveMarshal(t *testing.T) {
 		return "", nil
 	})
 
-	assertSerdesError(t, got, "encode", "marshal", cause)
+	// The StepError carries a stand-in for the SerdesError, not the
+	// original value: ErrorType names it, and the stand-in is rebuilt as a
+	// SerdesError so errors.As reaches the type, while the original
+	// marshal cause is not in the chain.
 	var stepErr *StepError
 	if !errors.As(got, &stepErr) {
 		t.Fatalf("error = %v (%T), want *StepError wrapping the SerdesError", got, got)
+	}
+	if stepErr.ErrorType != "SerdesError" {
+		t.Errorf("StepError.ErrorType = %q, want %q", stepErr.ErrorType, "SerdesError")
+	}
+	var serdesErr *SerdesError
+	if !errors.As(got, &serdesErr) {
+		t.Fatalf("error = %v, want *SerdesError reachable through the stand-in", got)
+	}
+	if !strings.Contains(stepErr.Message, cause.Error()) {
+		t.Errorf("StepError.Message = %q, want containing %q", stepErr.Message, cause.Error())
+	}
+	if errors.Is(got, cause) {
+		t.Error("original serdes cause is reachable through the stand-in; the cause must be rebuilt from the record")
 	}
 
 	var failUpdate *OperationUpdate

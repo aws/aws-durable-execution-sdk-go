@@ -1,7 +1,10 @@
 // Command error-handling-taxonomy demonstrates the SDK's typed error
 // hierarchy. Each durable operation that can fail produces a specific error
-// type (StepError, InvokeError, CallbackError) that is matchable with
-// errors.As and participates in the OperationError super-type.
+// type (StepError, InvokeError, CallbackError and its subtypes) that is
+// matchable with errors.As and participates in the OperationError
+// super-type. Every typed error exposes the recorded failure as ErrorType
+// and Message; the wrapped cause is a stand-in rebuilt from those fields,
+// so callers match on ErrorType rather than on their own error types.
 package main
 
 import (
@@ -35,6 +38,7 @@ type ErrorInfo struct {
 	Attempts      int    `json:"attempts,omitempty"`
 	IsOpError     bool   `json:"isOpError"`
 	OpErrorName   string `json:"opErrorName,omitempty"`
+	ErrorType     string `json:"errorType,omitempty"`
 }
 
 func handler(ctx durable.Context, _ any) (Output, error) {
@@ -61,6 +65,7 @@ func handler(ctx durable.Context, _ any) (Output, error) {
 			}
 			if isOp {
 				out.StepErrorInfo.OpErrorName = opErr.Name
+				out.StepErrorInfo.ErrorType = opErr.ErrorType
 			}
 		}
 	}
@@ -92,6 +97,7 @@ func handler(ctx durable.Context, _ any) (Output, error) {
 		}
 		if isOp {
 			out.InvokeErrorInfo.OpErrorName = opErr.Name
+			out.InvokeErrorInfo.ErrorType = opErr.ErrorType
 		}
 	default:
 		// Not the handled terminal type: propagate unchanged so
@@ -101,8 +107,9 @@ func handler(ctx durable.Context, _ any) (Output, error) {
 
 	// 3. Provoke a CallbackError: create a callback then send an external
 	// failure via the Lambda API. The failure resolves the callback with a
-	// typed CallbackError, distinct from the StepError a submitter failure
-	// would produce.
+	// CallbackExternalError, which matches CallbackError; a timeout would
+	// produce a CallbackTimeoutError and a failed WaitForCallback submitter
+	// a CallbackSubmitterError.
 	cb, err := durable.CreateCallback[string](ctx, "failing-callback",
 		durable.WithCallbackTimeout(30*time.Second))
 	if err != nil {
@@ -142,14 +149,20 @@ func handler(ctx durable.Context, _ any) (Output, error) {
 	case errors.As(err, &cbErr):
 		var opErr *durable.OperationError
 		isOp := errors.As(err, &opErr)
+		typeName := "CallbackError"
+		var externalErr *durable.CallbackExternalError
+		if errors.As(err, &externalErr) {
+			typeName = "CallbackExternalError"
+		}
 		out.CallbackErrorInfo = ErrorInfo{
 			Matched:       true,
-			TypeName:      "CallbackError",
+			TypeName:      typeName,
 			OperationName: cbErr.Name,
 			IsOpError:     isOp,
 		}
 		if isOp {
 			out.CallbackErrorInfo.OpErrorName = opErr.Name
+			out.CallbackErrorInfo.ErrorType = opErr.ErrorType
 		}
 	default:
 		// Not the handled terminal type: propagate unchanged so

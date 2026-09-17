@@ -46,11 +46,18 @@
 //	switch {
 //	case err == nil:
 //		// Use result.
-//	case errors.As(err, &stepErr):
+//	case errors.As(err, &stepErr) && stepErr.ErrorType == "CardDeclinedError":
 //		// A business-level decision belongs here.
 //	default:
 //		return OrderResult{}, err
 //	}
+//
+// A typed failure never carries the original error value returned by the
+// operation body. Its Err field is a stand-in rebuilt from the recorded
+// ErrorType and Message, on the first invocation and on replay alike, so
+// [errors.As] against the handler's own error types is always false.
+// Match on the ErrorType field instead, as above. Structured data travels
+// with the failure through [WithErrorData]. See [OperationError].
 //
 // [Wait] is stricter. Its error carries no business-level terminal result,
 // so return it immediately in every case.

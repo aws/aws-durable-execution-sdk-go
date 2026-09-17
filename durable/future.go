@@ -2,6 +2,7 @@ package durable
 
 import (
 	"encoding/json"
+	"errors"
 	"sync"
 )
 
@@ -142,6 +143,14 @@ type Settled[O any] struct {
 	Value O
 
 	// Err is the future's error, or nil if the future succeeded.
+	//
+	// After a checkpoint round trip (AllSettled runs in a child context),
+	// Err is rebuilt from the serialized outcome: an SDK error type is
+	// rebuilt as that type with its [OperationError] fields, so
+	// [errors.As] matches it and a timed-out callback still matches
+	// [ErrCallbackTimedOut]; any other error is a stand-in whose Error()
+	// is "<ErrorType>: <message>". Fields outside [OperationError], such
+	// as [StepError.Attempts], are zero after the round trip.
 	Err error
 }
 
@@ -149,32 +158,73 @@ type Settled[O any] struct {
 type settledJSON[O any] struct {
 	Status string `json:"status"`
 	Value  O      `json:"value,omitempty"`
-	Err    string `json:"error,omitempty"`
+
+	// Err is the error's message. Values written before the typed form
+	// existed carry only this field.
+	Err string `json:"error,omitempty"`
+
+	// ErrorType is the wire ErrorType of the error itself: the SDK type
+	// name for an SDK error, or the Go type name otherwise.
+	ErrorType string `json:"errorType,omitempty"`
+
+	// Operation carries the [OperationError] fields of an SDK error so the
+	// concrete type can be rebuilt on deserialization.
+	Operation *settledOperationJSON `json:"operation,omitempty"`
 }
 
-// MarshalJSON serializes a Settled value. Errors are stored as their
-// message string, so serialized outcomes carry no Go-specific error
-// structure.
+// settledOperationJSON is the serialized [OperationError] of a rejected
+// Settled value.
+type settledOperationJSON struct {
+	Name       string   `json:"name,omitempty"`
+	ErrorType  string   `json:"errorType,omitempty"`
+	Message    string   `json:"message,omitempty"`
+	ErrorData  string   `json:"errorData,omitempty"`
+	StackTrace []string `json:"stackTrace,omitempty"`
+}
+
+// MarshalJSON serializes a Settled value. A rejected outcome records the
+// error's message, its wire ErrorType, and, for an SDK operation error,
+// the [OperationError] fields, so the SDK type is rebuilt on
+// deserialization.
+//
+// The message is taken from [recordOf], not from Error(). A stand-in's
+// Error() is "<ErrorType>: <message>"; storing that text would prefix the
+// type name again on every further round trip. [recordOf] yields the
+// stand-in's raw message, so a value that is serialized, deserialized, and
+// serialized again keeps the same message.
 func (s Settled[O]) MarshalJSON() ([]byte, error) {
 	j := settledJSON[O]{Status: "fulfilled", Value: s.Value}
 	if s.Err != nil {
 		j.Status = "rejected"
-		j.Err = s.Err.Error()
+		rec := recordOf(s.Err)
+		j.Err = rec.message
+		j.ErrorType = rec.errType
+		var opErr *OperationError
+		if errors.As(s.Err, &opErr) {
+			j.Operation = &settledOperationJSON{
+				Name: opErr.Name, ErrorType: opErr.ErrorType, Message: opErr.Message,
+				ErrorData: opErr.ErrorData, StackTrace: opErr.StackTrace,
+			}
+		}
 		var zero O
 		j.Value = zero
 	}
 	return json.Marshal(j)
 }
 
-// UnmarshalJSON deserializes a Settled value. Errors are reconstructed
-// as [replayedError] values carrying the original message.
+// UnmarshalJSON deserializes a Settled value. A rejected outcome that names
+// an SDK error type is rebuilt as that type, so [errors.As] matches it and
+// [errors.Is] matches its sentinel; fields outside [OperationError] are
+// zero. An unknown name yields a stand-in whose Error() is
+// "<ErrorType>: <message>". A value in the older message-only form yields
+// a stand-in with ErrorType "Error".
 func (s *Settled[O]) UnmarshalJSON(data []byte) error {
 	var j settledJSON[O]
 	if err := json.Unmarshal(data, &j); err != nil {
 		return err
 	}
 	if j.Status == "rejected" {
-		s.Err = &replayedError{errType: "Error", message: j.Err}
+		s.Err = settledError(j)
 		var zero O
 		s.Value = zero
 	} else {
@@ -182,4 +232,18 @@ func (s *Settled[O]) UnmarshalJSON(data []byte) error {
 		s.Err = nil
 	}
 	return nil
+}
+
+// settledError rebuilds the error of a rejected Settled value.
+func settledError[O any](j settledJSON[O]) error {
+	if j.ErrorType == "" {
+		return &replayedError{errType: "Error", message: j.Err}
+	}
+	if j.Operation == nil {
+		return &replayedError{errType: j.ErrorType, message: j.Err}
+	}
+	return reconstructSDKError(j.ErrorType, OperationError{
+		Name: j.Operation.Name, ErrorType: j.Operation.ErrorType, Message: j.Operation.Message,
+		ErrorData: j.Operation.ErrorData, StackTrace: j.Operation.StackTrace,
+	}, nil)
 }

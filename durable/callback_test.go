@@ -403,23 +403,39 @@ func TestWaitForCallbackFirstInvocation(t *testing.T) {
 	}
 }
 
-func TestWaitForCallbackTimedOut(t *testing.T) {
-	fake := &fakeLambda{statePages: [][]Operation{{}}}
-
-	// Context is FAILED with Callback.Timeout errType — this is the wire
-	// representation when a WaitForCallback times out.
-	payload := callbackPayload(`"timeout-cb"`,
+// wfcbTimeoutPayload builds the checkpoint state of a WaitForCallback that
+// timed out: the context is FAILED with the failure mode as its ErrorType,
+// and the inner callback operation is TIMED_OUT carrying the message the
+// service recorded.
+func wfcbTimeoutPayload(recordedMessage string) []byte {
+	return callbackPayload(`"timeout-cb"`,
 		wireOperation{
-			Id:     hashID("1"),
-			Status: "FAILED",
+			Id:      hashID("1"),
+			Name:    "timeout-cb",
+			Type:    string(OperationTypeContext),
+			SubType: operationSubTypeWaitForCallback,
+			Status:  "FAILED",
 			ContextDetails: &wireContextDetails{
-				Error: &wireFullError{
-					ErrorType:    "Callback.Timeout",
-					ErrorMessage: "callback timed out",
-				},
+				Error: &wireFullError{ErrorType: "CallbackTimeoutError", ErrorMessage: recordedMessage},
+			},
+		},
+		wireOperation{
+			Id:       hashID("1-1"),
+			ParentId: hashID("1"),
+			Type:     string(OperationTypeCallback),
+			SubType:  operationSubTypeCallback,
+			Status:   "TIMED_OUT",
+			CallbackDetails: &wireCallbackDetails{
+				CallbackId: "cb-1",
+				Error:      &wireFullError{ErrorMessage: recordedMessage},
 			},
 		},
 	)
+}
+
+func TestWaitForCallbackTimedOut(t *testing.T) {
+	fake := &fakeLambda{statePages: [][]Operation{{}}}
+	payload := wfcbTimeoutPayload("Callback timed out")
 
 	handler := func(ctx Context, event string) (string, error) {
 		_, err := WaitForCallback[string](ctx, event, func(_ StepContext, _ string) error {
@@ -428,14 +444,24 @@ func TestWaitForCallbackTimedOut(t *testing.T) {
 		if err == nil {
 			return "", errors.New("expected error")
 		}
-		// This is the critical assertion: errors.Is must traverse the
-		// CallbackError → replayedError → sentinel chain.
+		// errors.Is must traverse the CallbackTimeoutError → stand-in →
+		// sentinel chain.
 		if !errors.Is(err, ErrCallbackTimedOut) {
 			return "", fmt.Errorf("errors.Is(err, ErrCallbackTimedOut) = false; err = %v", err)
 		}
 		var cbErr *CallbackError
 		if !errors.As(err, &cbErr) {
 			return "", errors.New("expected CallbackError")
+		}
+		var timeoutErr *CallbackTimeoutError
+		if !errors.As(err, &timeoutErr) {
+			return "", errors.New("expected CallbackTimeoutError")
+		}
+		if timeoutErr.Heartbeat {
+			return "", errors.New("Heartbeat = true, want false for an overall timeout")
+		}
+		if timeoutErr.Name != event || timeoutErr.CallbackID != "cb-1" {
+			return "", fmt.Errorf("Name/CallbackID = %q/%q, want %q/cb-1", timeoutErr.Name, timeoutErr.CallbackID, event)
 		}
 		return "timed-out-caught", nil
 	}
@@ -451,28 +477,13 @@ func TestWaitForCallbackTimedOut(t *testing.T) {
 		t.Fatalf("unmarshal response: %v", err)
 	}
 	if resp.Status != invocationSucceeded {
-		t.Fatalf("response status = %q, want SUCCEEDED (caught timeout)", resp.Status)
+		t.Fatalf("response = %s, want SUCCEEDED (caught timeout)", got)
 	}
 }
 
 func TestWaitForCallbackHeartbeatTimedOut(t *testing.T) {
 	fake := &fakeLambda{statePages: [][]Operation{{}}}
-
-	// Context is FAILED with Callback.Heartbeat errType — the wire
-	// representation when a WaitForCallback misses its heartbeat window.
-	// Heartbeat timeouts match the same sentinel as regular timeouts.
-	payload := callbackPayload(`"heartbeat-cb"`,
-		wireOperation{
-			Id:     hashID("1"),
-			Status: "FAILED",
-			ContextDetails: &wireContextDetails{
-				Error: &wireFullError{
-					ErrorType:    "Callback.Heartbeat",
-					ErrorMessage: "callback heartbeat timed out",
-				},
-			},
-		},
-	)
+	payload := wfcbTimeoutPayload("Callback timed out on heartbeat")
 
 	handler := func(ctx Context, event string) (string, error) {
 		_, err := WaitForCallback[string](ctx, event, func(_ StepContext, _ string) error {
@@ -484,9 +495,12 @@ func TestWaitForCallbackHeartbeatTimedOut(t *testing.T) {
 		if !errors.Is(err, ErrCallbackTimedOut) {
 			return "", fmt.Errorf("errors.Is(err, ErrCallbackTimedOut) = false; err = %v", err)
 		}
-		var cbErr *CallbackError
-		if !errors.As(err, &cbErr) {
-			return "", errors.New("expected CallbackError")
+		var timeoutErr *CallbackTimeoutError
+		if !errors.As(err, &timeoutErr) {
+			return "", errors.New("expected CallbackTimeoutError")
+		}
+		if !timeoutErr.Heartbeat {
+			return "", errors.New("Heartbeat = false, want true for a heartbeat timeout")
 		}
 		return "heartbeat-timeout-caught", nil
 	}
@@ -502,7 +516,75 @@ func TestWaitForCallbackHeartbeatTimedOut(t *testing.T) {
 		t.Fatalf("unmarshal response: %v", err)
 	}
 	if resp.Status != invocationSucceeded {
-		t.Fatalf("response status = %q, want SUCCEEDED (caught heartbeat timeout)", resp.Status)
+		t.Fatalf("response = %s, want SUCCEEDED (caught heartbeat timeout)", got)
+	}
+}
+
+// TestWaitForCallbackLegacyTimeoutRecords verifies that a WaitForCallback
+// checkpoint written under an older wire form — the context FAILED with the
+// timeout named by its ErrorType and no inner callback or step record —
+// still yields a CallbackTimeoutError with the sentinel and the correct
+// Heartbeat discriminator.
+func TestWaitForCallbackLegacyTimeoutRecords(t *testing.T) {
+	tests := []struct {
+		name      string
+		errType   string
+		message   string
+		heartbeat bool
+	}{
+		{"timeout", legacyCallbackTimeoutType, "callback timed out", false},
+		{"heartbeat", legacyCallbackHeartbeatType, "callback heartbeat timed out", true},
+		{"heartbeat without message", legacyCallbackHeartbeatType, "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := &fakeLambda{statePages: [][]Operation{{}}}
+			payload := callbackPayload(`"legacy-cb"`,
+				wireOperation{
+					Id:     hashID("1"),
+					Status: "FAILED",
+					ContextDetails: &wireContextDetails{
+						Error: &wireFullError{ErrorType: tt.errType, ErrorMessage: tt.message},
+					},
+				},
+			)
+
+			handler := func(ctx Context, event string) (string, error) {
+				_, err := WaitForCallback[string](ctx, event, func(_ StepContext, _ string) error {
+					return nil
+				})
+				if err == nil {
+					return "", errors.New("expected error")
+				}
+				if !errors.Is(err, ErrCallbackTimedOut) {
+					return "", fmt.Errorf("errors.Is(err, ErrCallbackTimedOut) = false; err = %v", err)
+				}
+				var timeoutErr *CallbackTimeoutError
+				if !errors.As(err, &timeoutErr) {
+					return "", fmt.Errorf("expected CallbackTimeoutError, got %T", err)
+				}
+				if timeoutErr.Heartbeat != tt.heartbeat {
+					return "", fmt.Errorf("Heartbeat = %v, want %v", timeoutErr.Heartbeat, tt.heartbeat)
+				}
+				if timeoutErr.ErrorType != tt.errType {
+					return "", fmt.Errorf("ErrorType = %q, want %q", timeoutErr.ErrorType, tt.errType)
+				}
+				return "caught", nil
+			}
+
+			h := Wrap(handler, withLambdaAPI(fake))
+			got, err := h(context.Background(), payload)
+			if err != nil {
+				t.Fatalf("Invoke error: %v", err)
+			}
+			var resp invocationResponse
+			if err := json.Unmarshal(got, &resp); err != nil {
+				t.Fatalf("unmarshal response: %v", err)
+			}
+			if resp.Status != invocationSucceeded {
+				t.Fatalf("response = %s, want SUCCEEDED", got)
+			}
+		})
 	}
 }
 

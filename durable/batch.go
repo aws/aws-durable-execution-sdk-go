@@ -920,7 +920,7 @@ func runPreClaimedBatchItem[O any](
 			Index:  index,
 			Name:   itemName,
 			Status: BatchItemFailed,
-			Err:    &ChildContextError{Name: itemName, Err: fnErr},
+			Err:    liveBatchItemError(itemName, fnErr),
 		}, nil
 	}
 
@@ -1120,7 +1120,7 @@ func runNestedBatchItem[O any](
 			Index:  index,
 			Name:   itemName,
 			Status: BatchItemFailed,
-			Err:    &ChildContextError{Name: itemName, Err: fnErr},
+			Err:    liveBatchItemError(itemName, fnErr),
 		}, nil
 	}
 
@@ -1208,7 +1208,7 @@ func replayTerminalChildItem[O any](
 			Index:  index,
 			Name:   itemName,
 			Status: BatchItemFailed,
-			Err:    &ChildContextError{Name: itemName, Err: reconstructInnerError(errType, errMessage, childErrorData{}, errData)},
+			Err:    batchItemError(itemName, errType, errMessage, childErrorData{}, errData),
 		}, nil
 
 	default:
@@ -1280,7 +1280,7 @@ func replayTerminalBatch[I, O any](
 			errMessage = op.childCtx.errMessage
 			errData = op.childCtx.errData
 		}
-		return BatchResult[O]{}, &ChildContextError{Name: name, Err: reconstructInnerError(errType, errMessage, childErrorData{}, errData)}
+		return BatchResult[O]{}, batchItemError(name, errType, errMessage, childErrorData{}, errData)
 
 	default:
 		return BatchResult[O]{}, fmt.Errorf("durable: batch %q: unexpected terminal status %s", name, op.status)
@@ -1461,10 +1461,7 @@ func toBatchResult[O any](ctx context.Context, payload batchCheckpointPayload, i
 			}
 			items[i].Result = out
 		case BatchItemFailed:
-			items[i].Err = &ChildContextError{
-				Name: cp.Name,
-				Err:  reconstructInnerError(cp.ErrType, cp.ErrMessage, cp.childErrorData, ""),
-			}
+			items[i].Err = batchItemError(cp.Name, cp.ErrType, cp.ErrMessage, cp.childErrorData, "")
 		}
 	}
 	return BatchResult[O]{Items: items, Reason: payload.Reason}, nil
@@ -1519,6 +1516,11 @@ type childErrorData struct {
 
 	InnerErrType    string `json:"innerErrType,omitempty"`
 	InnerErrMessage string `json:"innerErrMessage,omitempty"`
+
+	// ErrorData is the payload attached with [WithErrorData] anywhere in
+	// the item's failure chain. Batch children use the wire ErrorData field
+	// for this metadata object, so the user payload travels inside it.
+	ErrorData string `json:"errorData,omitempty"`
 }
 
 // isZero reports whether no metadata field is set.
@@ -1526,13 +1528,16 @@ func (d childErrorData) isZero() bool {
 	return d == childErrorData{}
 }
 
-// setInner records the wrapper's cause as the reconstructable leaf.
+// setInner records the wrapper's cause as the reconstructable leaf. The
+// cause is normally a stand-in, so its record supplies the type and the
+// message without the stand-in's type prefix.
 func (d *childErrorData) setInner(cause error) {
 	if cause == nil {
 		return
 	}
-	d.InnerErrType = wireErrorType(cause)
-	d.InnerErrMessage = truncateUTF8(cause.Error(), maxInnerErrMessageBytes)
+	rec := recordOf(cause)
+	d.InnerErrType = rec.errType
+	d.InnerErrMessage = truncateUTF8(rec.message, maxInnerErrMessageBytes)
 }
 
 // wrapperErrorData extracts reconstructable metadata from a known SDK
@@ -1541,7 +1546,7 @@ func (d *childErrorData) setInner(cause error) {
 // the metadata always describes the type that [reconstructInnerError] will
 // rebuild. The second result is false for other error types.
 func wrapperErrorData(err error) (childErrorData, bool) {
-	var d childErrorData
+	d := childErrorData{ErrorData: errorDataOf(err)}
 	switch e := outermostSDKError(err).(type) {
 	case *StepError:
 		d.Name = e.Name
@@ -1556,6 +1561,19 @@ func wrapperErrorData(err error) (childErrorData, bool) {
 		d.CallbackID = e.CallbackID
 		d.TimedOut = errors.Is(e, ErrCallbackTimedOut)
 		d.setInner(e.Err)
+	case *CallbackExternalError:
+		d.Name = e.Name
+		d.CallbackID = e.CallbackID
+		d.setInner(e.Err)
+	case *CallbackTimeoutError:
+		d.Name = e.Name
+		d.CallbackID = e.CallbackID
+		d.TimedOut = true
+		d.setInner(e.Err)
+	case *CallbackSubmitterError:
+		d.Name = e.Name
+		d.CallbackID = e.CallbackID
+		d.setInner(e.Err)
 	case *SerdesError:
 		d.Name = e.Operation
 		d.Direction = e.Direction
@@ -1567,10 +1585,17 @@ func wrapperErrorData(err error) (childErrorData, bool) {
 }
 
 // encodeChildErrorData marshals inner wrapper metadata as a JSON string
-// suitable for ErrorObject.ErrorData. Returns nil if the error does not
-// carry reconstructable inner wrapper data.
+// suitable for ErrorObject.ErrorData. Returns nil if the error carries
+// neither reconstructable inner wrapper data nor a [WithErrorData]
+// payload.
 func encodeChildErrorData(err error) *string {
 	d, ok := wrapperErrorData(err)
+	if !ok {
+		if data := errorDataOf(err); data != "" {
+			d = childErrorData{ErrorData: data}
+			ok = true
+		}
+	}
 	if !ok {
 		return nil
 	}
@@ -1584,11 +1609,11 @@ func encodeChildErrorData(err error) *string {
 
 // reconstructInnerError rebuilds the concrete SDK wrapper type from
 // checkpointed error metadata. Known SDK wrapper types ([StepError],
-// [WaitForConditionError], [CallbackError], [SerdesError]) are
-// reconstructed so errors.As — and, for a timed-out callback,
-// errors.Is(err, [ErrCallbackTimedOut]) — succeed after replay, matching
-// live behavior. Unknown or user-defined error types remain as
-// replayedError carrying the type name as a string.
+// [WaitForConditionError], [CallbackError] and its subtypes,
+// [SerdesError]) are reconstructed so errors.As — and, for a timed-out
+// callback, errors.Is(err, [ErrCallbackTimedOut]) — succeed after replay,
+// matching live behavior. Any other type is rebuilt by
+// [errorRecord.cause]: an SDK type by name, or the leaf stand-in.
 //
 // meta carries the wrapper field values from the aggregate checkpoint
 // payload; errData carries the JSON-encoded childErrorData from the
@@ -1597,36 +1622,75 @@ func encodeChildErrorData(err error) *string {
 // When both are absent or malformed, fields fall back to zero values —
 // the function never fails.
 func reconstructInnerError(errType, errMessage string, meta childErrorData, errData string) error {
-	if errData != "" && meta.isZero() {
-		var d childErrorData
-		if json.Unmarshal([]byte(errData), &d) == nil {
-			meta = d
-		}
-	}
+	meta = meta.merged(errData)
 
-	leaf := func() *replayedError {
-		if meta.InnerErrType != "" || meta.InnerErrMessage != "" {
-			return &replayedError{errType: meta.InnerErrType, message: meta.InnerErrMessage}
-		}
-		return &replayedError{errType: "Error", message: errMessage}
+	inner := errorRecord{errType: meta.InnerErrType, message: meta.InnerErrMessage, data: meta.ErrorData}
+	if inner.errType == "" && inner.message == "" {
+		inner = errorRecord{errType: "Error", message: errMessage, data: meta.ErrorData}
 	}
 
 	switch errType {
 	case "StepError":
-		return &StepError{Name: meta.Name, Attempts: meta.Attempts, Err: leaf()}
+		return newStepError(meta.Name, meta.Attempts, inner)
 	case "WaitForConditionError":
-		return &WaitForConditionError{Name: meta.Name, Attempts: meta.Attempts, Err: leaf()}
+		return newWaitForConditionError(meta.Name, meta.Attempts, inner)
 	case "CallbackError":
-		cause := leaf()
+		var sentinel error
 		if meta.TimedOut {
-			cause.sentinel = ErrCallbackTimedOut
+			sentinel = ErrCallbackTimedOut
 		}
-		return &CallbackError{Name: meta.Name, CallbackID: meta.CallbackID, Err: cause}
+		return &CallbackError{
+			Name: meta.Name, CallbackID: meta.CallbackID,
+			ErrorType: inner.errType, Message: inner.message, ErrorData: inner.data,
+			Err: inner.standIn(sentinel),
+		}
+	case "CallbackExternalError":
+		return newCallbackExternalError(meta.Name, meta.CallbackID, inner)
+	case "CallbackTimeoutError":
+		return newCallbackTimeoutError(meta.Name, meta.CallbackID, inner)
+	case "CallbackSubmitterError":
+		return newCallbackSubmitterError(meta.Name, meta.CallbackID, inner)
 	case "SerdesError":
-		return &SerdesError{Operation: meta.Name, Direction: meta.Direction, Err: leaf()}
+		return &SerdesError{Operation: meta.Name, Direction: meta.Direction, Err: inner.standIn(nil)}
 	default:
-		return &replayedError{errType: errType, message: errMessage}
+		return errorRecord{errType: errType, message: errMessage, data: meta.ErrorData}.cause("", nil)
 	}
+}
+
+// merged returns d with the values parsed from errData when d is empty and
+// errData holds a childErrorData object.
+func (d childErrorData) merged(errData string) childErrorData {
+	if errData != "" && d.isZero() {
+		var parsed childErrorData
+		if json.Unmarshal([]byte(errData), &parsed) == nil {
+			return parsed
+		}
+	}
+	return d
+}
+
+// batchItemError builds the [ChildContextError] for a failed batch item
+// from its recorded failure. The same function serves the live path (via
+// [liveBatchItemError]) and every replay route, so the error a caller
+// inspects has the same type chain, field values, and message on the first
+// invocation and on replay.
+func batchItemError(itemName, errType, errMessage string, meta childErrorData, errData string) *ChildContextError {
+	meta = meta.merged(errData)
+	return &ChildContextError{
+		Name: itemName, ErrorType: errType, Message: errMessage, ErrorData: meta.ErrorData,
+		Err: reconstructInnerError(errType, errMessage, meta, ""),
+	}
+}
+
+// liveBatchItemError builds the [ChildContextError] for a batch item that
+// failed on this invocation, by recording the failure the same way the
+// checkpoint does and rebuilding from that record.
+func liveBatchItemError(itemName string, fnErr error) *ChildContextError {
+	meta, _ := wrapperErrorData(fnErr)
+	if meta.isZero() {
+		meta = childErrorData{ErrorData: errorDataOf(fnErr)}
+	}
+	return batchItemError(itemName, wireErrorType(fnErr), fnErr.Error(), meta, "")
 }
 
 // fromBatchResult converts a live [BatchResult] into the checkpoint payload
@@ -1654,13 +1718,20 @@ func fromBatchResult[O any](ctx context.Context, result BatchResult[O], itemSerd
 				// Extract inner error details for child context errors.
 				var childErr *ChildContextError
 				if errors.As(item.Err, &childErr) && childErr.Err != nil {
-					cpItems[i].ErrType = wireErrorType(childErr.Err)
-					cpItems[i].ErrMessage = childErr.Err.Error()
+					cpItems[i].ErrType = childErr.ErrorType
+					cpItems[i].ErrMessage = childErr.Message
+					if cpItems[i].ErrType == "" {
+						cpItems[i].ErrType = wireErrorType(childErr.Err)
+						cpItems[i].ErrMessage = childErr.Err.Error()
+					}
 					// Persist inner wrapper metadata for known SDK types
 					// so replay reconstructs the concrete wrapper chain
 					// with matching fields, causes, and sentinels.
 					if meta, ok := wrapperErrorData(childErr.Err); ok {
 						cpItems[i].childErrorData = meta
+					}
+					if cpItems[i].ErrorData == "" {
+						cpItems[i].ErrorData = childErr.ErrorData
 					}
 				}
 			}

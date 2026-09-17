@@ -557,6 +557,23 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 120
 
+  ChildContextErrorDataPropagationFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-child-context-error-data-propagation
+      CodeUri: .aws-sam/build-artifacts/child-context-error-data-propagation/
+      Handler: bootstrap
+      Description: ErrorData propagation through nested child contexts
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
   ChildContextFailingStepFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -2275,6 +2292,9 @@ Outputs:
   ChildContextErrorPropagationFunction:
     Description: Child Context Error Propagation Function ARN
     Value: !GetAtt ChildContextErrorPropagationFunction.Arn
+  ChildContextErrorDataPropagationFunction:
+    Description: Child Context Error Data Propagation Function ARN
+    Value: !GetAtt ChildContextErrorDataPropagationFunction.Arn
   ChildContextFailingStepFunction:
     Description: Child Context Failing Step Function ARN
     Value: !GetAtt ChildContextFailingStepFunction.Arn

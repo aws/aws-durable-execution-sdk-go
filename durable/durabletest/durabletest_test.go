@@ -481,7 +481,8 @@ func TestCallbackFailureSurfacesCallbackError(t *testing.T) {
 		t.Fatalf("SendCallbackFailure error: %v", err)
 	}
 
-	// Run again — should fail with CallbackError.
+	// Run again — the external failure surfaces as CallbackExternalError,
+	// and the execution fails with that wire type and the external message.
 	result = runner.RunUntilComplete(t, "input")
 	if result.Status != durabletest.Failed {
 		t.Fatalf("expected FAILED, got %s", result.Status)
@@ -489,8 +490,11 @@ func TestCallbackFailureSurfacesCallbackError(t *testing.T) {
 	if result.Error == nil {
 		t.Fatal("expected error details, got nil")
 	}
-	if result.Error.Type != "CallbackError" {
-		t.Errorf("error type = %q, want %q", result.Error.Type, "CallbackError")
+	if result.Error.Type != "CallbackExternalError" {
+		t.Errorf("error type = %q, want %q", result.Error.Type, "CallbackExternalError")
+	}
+	if result.Error.Message != "bad input" {
+		t.Errorf("error message = %q, want %q", result.Error.Message, "bad input")
 	}
 }
 

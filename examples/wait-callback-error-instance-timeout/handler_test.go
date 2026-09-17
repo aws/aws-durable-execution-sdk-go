@@ -38,8 +38,17 @@ func TestHandler(t *testing.T) {
 	if err != nil {
 		t.Fatalf("deserialize result: %v", err)
 	}
+	if !output.IsCallbackError {
+		t.Error("expected IsCallbackError=true")
+	}
+	if !output.IsTimeoutError {
+		t.Error("expected IsTimeoutError=true")
+	}
 	if !output.ContainsTimedOut {
-		t.Error("expected ContainsTimedOut=true")
+		t.Error("expected ContainsTimedOut=true (errors.Is ErrCallbackTimedOut)")
+	}
+	if output.Heartbeat {
+		t.Error("expected Heartbeat=false for an overall timeout")
 	}
 	if output.ErrorMessage == "" {
 		t.Error("expected non-empty ErrorMessage")

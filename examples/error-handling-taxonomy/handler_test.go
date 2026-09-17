@@ -100,8 +100,10 @@ func TestHandler(t *testing.T) {
 	if !out.CallbackErrorInfo.Matched {
 		t.Error("CallbackErrorInfo: expected Matched=true")
 	}
-	if out.CallbackErrorInfo.TypeName != "CallbackError" {
-		t.Errorf("CallbackErrorInfo.TypeName = %q, want %q", out.CallbackErrorInfo.TypeName, "CallbackError")
+	// An external failure is the CallbackExternalError subtype; it still
+	// matches CallbackError, which is how the handler caught it.
+	if out.CallbackErrorInfo.TypeName != "CallbackExternalError" {
+		t.Errorf("CallbackErrorInfo.TypeName = %q, want %q", out.CallbackErrorInfo.TypeName, "CallbackExternalError")
 	}
 	if out.CallbackErrorInfo.OperationName != "failing-callback" {
 		t.Errorf("CallbackErrorInfo.OperationName = %q, want %q", out.CallbackErrorInfo.OperationName, "failing-callback")

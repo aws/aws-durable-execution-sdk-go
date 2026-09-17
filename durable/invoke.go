@@ -197,28 +197,31 @@ func runInvoke[O, I any](ec *execContext, id, name, functionID string, input I, 
 // invokeErrorFromCheckpoint reconstructs the failure of a settled invoke
 // operation.
 func invokeErrorFromCheckpoint(name, functionID string, op *operation) *InvokeError {
-	// Extract the checkpointed cause message.
-	re := &replayedError{errType: "Error", message: "invoked function failed"}
+	rec := errorRecord{errType: "Error", message: "invoked function failed"}
 	if op.invoke != nil {
-		re = &replayedError{errType: op.invoke.errType, message: op.invoke.errMessage}
+		rec = op.invoke.record()
 	}
-	var cause error = re
-	// Wrap sentinel errors so callers can use errors.Is. The sentinel is
-	// added to the chain UNDER the replayedError so that both errors.Is
-	// (for the sentinel) and the checkpointed message are accessible.
+	// The sentinel for an externally assigned terminal status sits under
+	// the stand-in, so errors.Is matches it while the stand-in still
+	// reports the recorded type and message.
+	var sentinel error
 	var status OperationStatus
 	switch op.status {
 	case statusTimedOut:
-		re.sentinel = ErrInvokeTimedOut
+		sentinel = ErrInvokeTimedOut
 		status = OperationStatusTimedOut
 	case statusStopped:
-		re.sentinel = ErrExecutionStopped
+		sentinel = ErrExecutionStopped
 		status = OperationStatusStopped
 	case statusCancelled:
-		re.sentinel = ErrExecutionCancelled
+		sentinel = ErrExecutionCancelled
 		status = OperationStatusCancelled
 	case statusFailed:
 		status = OperationStatusFailed
 	}
-	return &InvokeError{Name: name, FunctionID: functionID, Status: status, Err: cause}
+	return &InvokeError{
+		Name: name, FunctionID: functionID, Status: status,
+		ErrorType: rec.errType, Message: rec.message, ErrorData: rec.data, StackTrace: rec.stackTrace,
+		Err: rec.cause("", sentinel),
+	}
 }

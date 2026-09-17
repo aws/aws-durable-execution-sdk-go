@@ -1,11 +1,11 @@
-// Command wait-callback-error-instance-timeout verifies that
-// CallbackError from a timeout is correctly typed through replay.
-// The error chain propagates through WaitForCallback's child context.
+// Command wait-callback-error-instance-timeout verifies that a
+// WaitForCallback timeout is returned as a CallbackTimeoutError that
+// matches CallbackError and ErrCallbackTimedOut, and that the same typed
+// error is observed after a replay.
 package main
 
 import (
 	"errors"
-	"strings"
 	"time"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
@@ -13,7 +13,9 @@ import (
 
 type Result struct {
 	IsCallbackError  bool   `json:"isCallbackError"`
+	IsTimeoutError   bool   `json:"isTimeoutError"`
 	ContainsTimedOut bool   `json:"containsTimedOut"`
+	Heartbeat        bool   `json:"heartbeat"`
 	ErrorMessage     string `json:"errorMessage,omitempty"`
 }
 
@@ -39,19 +41,21 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 	result, err := durable.Step[Result](ctx, "check-error-type",
 		func(_ durable.StepContext) (Result, error) {
 			var callbackErr *durable.CallbackError
-			isCbErr := errors.As(cbErr, &callbackErr)
+			var timeoutErr *durable.CallbackTimeoutError
 			msg := ""
 			if cbErr != nil {
 				msg = cbErr.Error()
 			}
-			// WaitForCallback wraps the timeout through a child context,
-			// so we check the message contains the timeout sentinel text.
-			containsTimeout := strings.Contains(msg, "callback timed out")
-			return Result{
-				IsCallbackError:  isCbErr,
-				ContainsTimedOut: containsTimeout,
+			result := Result{
+				IsCallbackError:  errors.As(cbErr, &callbackErr),
+				IsTimeoutError:   errors.As(cbErr, &timeoutErr),
+				ContainsTimedOut: errors.Is(cbErr, durable.ErrCallbackTimedOut),
 				ErrorMessage:     msg,
-			}, nil
+			}
+			if timeoutErr != nil {
+				result.Heartbeat = timeoutErr.Heartbeat
+			}
+			return result, nil
 		})
 	if err != nil {
 		return Result{}, err

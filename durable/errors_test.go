@@ -289,6 +289,8 @@ func TestErrorObjectFromErrorMessage(t *testing.T) {
 		{"child context wrapping step reports step message",
 			&ChildContextError{Name: "cc", Err: &StepError{Name: "s", Attempts: 1, Err: fmt.Errorf("x")}},
 			(&StepError{Name: "s", Attempts: 1, Err: fmt.Errorf("x")}).Error()},
+		{"child context reports recorded message over cause",
+			&ChildContextError{Name: "cc", ErrorType: "StepError", Message: "recorded", Err: fmt.Errorf("x")}, "recorded"},
 		{"step reports own message", &StepError{Name: "s", Attempts: 1, Err: fmt.Errorf("x")},
 			(&StepError{Name: "s", Attempts: 1, Err: fmt.Errorf("x")}).Error()},
 		{"plain error", fmt.Errorf("plain"), "plain"},

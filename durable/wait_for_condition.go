@@ -114,11 +114,7 @@ func runWaitForCondition[S any](ec *execContext, id, name string, check func(Ste
 			if op.step == nil {
 				return zero, fmt.Errorf("durable: WaitForCondition %q: checkpointed %s operation has no step details", name, op.status)
 			}
-			return zero, &WaitForConditionError{
-				Name:     name,
-				Attempts: op.step.attempt,
-				Err:      &replayedError{errType: op.step.errType, message: op.step.errMessage},
-			}
+			return zero, newWaitForConditionError(name, op.step.attempt, op.step.record())
 
 		case statusPending:
 			// A retry (continue) is scheduled and its timer has not
@@ -237,7 +233,7 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 		if cerr := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); cerr != nil {
 			return zero, cerr
 		}
-		return zero, &WaitForConditionError{Name: name, Attempts: attempt, Err: checkErr}
+		return zero, newWaitForConditionError(name, attempt, recordOf(checkErr))
 	}
 
 	// Serialize the new state for checkpointing.
@@ -281,7 +277,7 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 			if cerr := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); cerr != nil {
 				return zero, cerr
 			}
-			return zero, &WaitForConditionError{Name: name, Attempts: attempt, Err: decision.Err}
+			return zero, newWaitForConditionError(name, attempt, recordOf(decision.Err))
 		}
 
 		// Condition met: checkpoint terminal SUCCEED with the final state.
@@ -342,4 +338,15 @@ func waitForConditionUpdate(ec *execContext, id, name string, action OperationAc
 		update.ParentId = aws.String(hashID(parent))
 	}
 	return update
+}
+
+// newWaitForConditionError builds the [WaitForConditionError] for a failed
+// wait-for-condition from the failure record, on both the first invocation
+// and on replay.
+func newWaitForConditionError(name string, attempts int, rec errorRecord) *WaitForConditionError {
+	return &WaitForConditionError{
+		Name: name, Attempts: attempts,
+		ErrorType: rec.errType, Message: rec.message, ErrorData: rec.data, StackTrace: rec.stackTrace,
+		Err: rec.cause("", nil),
+	}
 }

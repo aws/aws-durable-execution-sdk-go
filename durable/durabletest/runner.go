@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
@@ -349,12 +350,7 @@ func operationToSnapshot(op durable.Operation) operationSnapshot {
 			Attempt: int(sd.Attempt),
 			Result:  ptrStr(sd.Result),
 		}
-		if sd.Error != nil {
-			details.Error = &wire.ErrorObject{
-				ErrorType:    ptrStr(sd.Error.ErrorType),
-				ErrorMessage: ptrStr(sd.Error.ErrorMessage),
-			}
-		}
+		details.Error = wireErrorObject(sd.Error)
 		s.StepDetails = details
 	}
 	if cd := op.CallbackDetails; cd != nil {
@@ -362,24 +358,13 @@ func operationToSnapshot(op durable.Operation) operationSnapshot {
 			CallbackId: ptrStr(cd.CallbackId),
 			Result:     ptrStr(cd.Result),
 		}
-		if cd.Error != nil {
-			s.CallbackDetails.Error = &wire.ErrorObject{
-				ErrorType:    ptrStr(cd.Error.ErrorType),
-				ErrorMessage: ptrStr(cd.Error.ErrorMessage),
-			}
-		}
+		s.CallbackDetails.Error = wireErrorObject(cd.Error)
 	}
 	if id := op.ChainedInvokeDetails; id != nil {
 		s.ChainedInvokeDetails = &wire.ChainedInvokeDetails{
 			Result: ptrStr(id.Result),
 		}
-		if id.Error != nil {
-			s.ChainedInvokeDetails.Error = &wire.ErrorObject{
-				ErrorType:    ptrStr(id.Error.ErrorType),
-				ErrorMessage: ptrStr(id.Error.ErrorMessage),
-				ErrorData:    ptrStr(id.Error.ErrorData),
-			}
-		}
+		s.ChainedInvokeDetails.Error = wireErrorObject(id.Error)
 	}
 	if cd := op.ContextDetails; cd != nil {
 		s.ContextDetails = &wire.ContextDetails{
@@ -388,12 +373,7 @@ func operationToSnapshot(op durable.Operation) operationSnapshot {
 		if cd.ReplayChildren != nil && *cd.ReplayChildren {
 			s.ContextDetails.ReplayChildren = true
 		}
-		if cd.Error != nil {
-			s.ContextDetails.Error = &wire.ErrorObject{
-				ErrorType:    ptrStr(cd.Error.ErrorType),
-				ErrorMessage: ptrStr(cd.Error.ErrorMessage),
-			}
-		}
+		s.ContextDetails.Error = wireErrorObject(cd.Error)
 	}
 	return s
 }
@@ -418,4 +398,19 @@ func ptrStr(p *string) string {
 		return ""
 	}
 	return *p
+}
+
+// wireErrorObject converts a stored error record to the invocation payload
+// shape, carrying every field the service would return: type, message,
+// data, and the stack trace joined into the payload's single string.
+func wireErrorObject(e *durable.ErrorObject) *wire.ErrorObject {
+	if e == nil {
+		return nil
+	}
+	return &wire.ErrorObject{
+		ErrorType:    ptrStr(e.ErrorType),
+		ErrorMessage: ptrStr(e.ErrorMessage),
+		ErrorData:    ptrStr(e.ErrorData),
+		StackTrace:   strings.Join(e.StackTrace, "\n"),
+	}
 }

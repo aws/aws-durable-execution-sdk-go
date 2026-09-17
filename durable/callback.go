@@ -35,6 +35,7 @@ func (c *Callback[O]) ID() string {
 
 // Result blocks until the external system submits a result or the timeout
 // elapses, then returns the outcome. Failures are returned as a
+// [*CallbackExternalError] or a [*CallbackTimeoutError]; both match
 // [*CallbackError].
 func (c *Callback[O]) Result() (O, error) {
 	return c.future.Result()
@@ -138,6 +139,8 @@ func CreateCallback[O any](ctx Context, name string, opts ...CallbackOption) (*C
 // WaitForCallback creates a callback, runs submitter to deliver the
 // callback identifier to an external system, and blocks until the system
 // submits a result or the timeout elapses. Failures are returned as a
+// [*CallbackExternalError], a [*CallbackTimeoutError], or, when the
+// submitter step fails, a [*CallbackSubmitterError]; all match
 // [*CallbackError].
 //
 // Internally WaitForCallback wraps a child context containing a callback
@@ -188,7 +191,7 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 			return out, nil
 
 		case statusFailed:
-			return zero, wfcbFailedError(op, name)
+			return zero, wfcbFailedError(ec, op, id, name)
 
 		case statusStarted, statusPending, statusReady:
 			// Context is in flight; fall through to execute/replay.
@@ -217,9 +220,15 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 		if errors.Is(fnErr, errSuspendExecution) {
 			return zero, fnErr
 		}
-		// Checkpoint ContextFailed.
+		fnErr = wfcbMapError(name, fnErr)
+		// Checkpoint ContextFailed. The record names the callback failure
+		// mode as its ErrorType and carries the cause's message, matching
+		// the shape the other SDKs write.
 		update := wfcbContextUpdate(ec, id, name, OperationActionFail)
 		update.Error = errorObject(fnErr)
+		if cbErr, ok := fnErr.(interface{ operationError() *OperationError }); ok {
+			update.Error.ErrorMessage = aws.String(cbErr.operationError().Message)
+		}
 		if cerr := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); cerr != nil {
 			if errors.Is(cerr, errCheckpointTerminated) {
 				return zero, errSuspendExecution
@@ -284,25 +293,69 @@ func runWaitForCallbackBody[O any](child *execContext, name string, submitter fu
 	return result, nil
 }
 
-// wfcbFailedError constructs the appropriate error when a WaitForCallback
-// context has a FAILED checkpointed status.
-func wfcbFailedError(op *operation, name string) error {
-	cause := &replayedError{errType: "Error", message: "wait-for-callback failed"}
-	if op.childCtx != nil {
-		cause = &replayedError{errType: op.childCtx.errType, message: op.childCtx.errMessage}
+// wfcbMapError maps the error that escaped the WaitForCallback body to the
+// error WaitForCallback returns. A callback failure passes through with the
+// WaitForCallback's name. A failed submitter step becomes a
+// [CallbackSubmitterError] carrying the step's final error. Any other
+// error is returned unchanged.
+func wfcbMapError(name string, err error) error {
+	switch e := err.(type) {
+	case *CallbackTimeoutError:
+		e.Name = name
+		return e
+	case *CallbackExternalError:
+		e.Name = name
+		return e
+	case *CallbackSubmitterError:
+		e.Name = name
+		return e
+	case *CallbackError:
+		e.Name = name
+		return e
+	case *StepError:
+		return newCallbackSubmitterError(name, "", errorRecord{
+			errType: e.ErrorType, message: e.Message, data: e.ErrorData, stackTrace: e.StackTrace,
+		})
 	}
-	// Propagate callback errors directly (they bubble through the
-	// child-context failure wrapping on the wire).
-	if cause.errType == "CallbackError" || cause.errType == "Callback.Timeout" || cause.errType == "Callback.Heartbeat" {
-		// Set sentinel so errors.Is traverses the Unwrap chain correctly,
-		// matching the pattern in invokeErrorFromCheckpoint. Both regular
-		// and heartbeat timeouts match [ErrCallbackTimedOut].
-		if cause.errType == "Callback.Timeout" || cause.errType == "Callback.Heartbeat" {
-			cause.sentinel = ErrCallbackTimedOut
+	return err
+}
+
+// wfcbFailedError reconstructs the error for a WaitForCallback context with
+// a FAILED checkpointed status. The inner callback and submitter step are
+// checkpointed operations of their own, so their records rebuild the same
+// error the first invocation returned: a callback timeout or external
+// failure from the callback operation, or a submitter failure from the
+// step operation. When neither child record is present, the context's own
+// record names the failure mode, in the current or an older wire form.
+func wfcbFailedError(ec *execContext, op *operation, id, name string) error {
+	if cbOp := ec.state.get(id + "-1"); cbOp != nil && cbOp.callback != nil {
+		switch cbOp.status {
+		case statusTimedOut:
+			return newCallbackTimeoutError(name, cbOp.callback.callbackID, cbOp.callback.record())
+		case statusFailed:
+			return newCallbackExternalError(name, cbOp.callback.callbackID, cbOp.callback.record())
 		}
-		return &CallbackError{Name: name, Err: cause}
 	}
-	return &ChildContextError{Name: name, Err: cause}
+	if stepOp := ec.state.get(id + "-2"); stepOp != nil && stepOp.status == statusFailed && stepOp.step != nil {
+		callbackID := ""
+		if cbOp := ec.state.get(id + "-1"); cbOp != nil && cbOp.callback != nil {
+			callbackID = cbOp.callback.callbackID
+		}
+		return newCallbackSubmitterError(name, callbackID, stepOp.step.record())
+	}
+	rec := errorRecord{errType: "Error", message: "wait-for-callback failed"}
+	if op.childCtx != nil {
+		rec = op.childCtx.record()
+	}
+	switch {
+	case isCallbackTimeoutType(rec.errType):
+		return newCallbackTimeoutError(name, "", rec)
+	case rec.errType == "CallbackExternalError", rec.errType == "CallbackError":
+		return newCallbackExternalError(name, "", rec)
+	case rec.errType == "CallbackSubmitterError":
+		return newCallbackSubmitterError(name, "", rec)
+	}
+	return newChildContextError(name, rec)
 }
 
 // resolveCallbackSuccess creates a pre-settled callback for a SUCCEEDED
@@ -327,15 +380,15 @@ func resolveCallbackSuccess[O any](ctx context.Context, op *operation, id, name 
 }
 
 // resolveCallbackFailure creates a pre-settled callback for a FAILED
-// checkpointed status.
+// checkpointed status: the external system reported the failure.
 func resolveCallbackFailure[O any](op *operation, name string) *Callback[O] {
 	callbackID := ""
-	cause := &replayedError{errType: "Error", message: "callback failed"}
+	rec := errorRecord{}
 	if op.callback != nil {
 		callbackID = op.callback.callbackID
-		cause = &replayedError{errType: op.callback.errType, message: op.callback.errMessage}
+		rec = op.callback.record()
 	}
-	cbErr := &CallbackError{Name: name, CallbackID: callbackID, Err: cause}
+	cbErr := newCallbackExternalError(name, callbackID, rec)
 	return &Callback[O]{id: callbackID, future: newFailedFuture[O](cbErr)}
 }
 
@@ -343,10 +396,12 @@ func resolveCallbackFailure[O any](op *operation, name string) *Callback[O] {
 // checkpointed status.
 func resolveCallbackTimeout[O any](op *operation, name string) *Callback[O] {
 	callbackID := ""
+	rec := errorRecord{}
 	if op.callback != nil {
 		callbackID = op.callback.callbackID
+		rec = op.callback.record()
 	}
-	cbErr := &CallbackError{Name: name, CallbackID: callbackID, Err: ErrCallbackTimedOut}
+	cbErr := newCallbackTimeoutError(name, callbackID, rec)
 	return &Callback[O]{id: callbackID, future: newFailedFuture[O](cbErr)}
 }
 
@@ -426,15 +481,16 @@ type CallbackOption interface {
 }
 
 // WithCallbackTimeout bounds how long the callback waits for an external
-// submission. On expiry the callback fails with a [*CallbackError] matching
-// [ErrCallbackTimedOut].
+// submission. On expiry the callback fails with a [*CallbackTimeoutError]
+// matching [ErrCallbackTimedOut].
 func WithCallbackTimeout(d time.Duration) CallbackOption {
 	return callbackOptionFunc(func(o *callbackOptions) { o.timeout = d })
 }
 
 // WithCallbackHeartbeatTimeout bounds the interval between heartbeats from
 // the external system. If no heartbeat arrives within the interval, the
-// callback fails with a [*CallbackError] matching [ErrCallbackTimedOut].
+// callback fails with a [*CallbackTimeoutError] whose Heartbeat field is
+// true, matching [ErrCallbackTimedOut].
 func WithCallbackHeartbeatTimeout(d time.Duration) CallbackOption {
 	return callbackOptionFunc(func(o *callbackOptions) { o.heartbeatTimeout = d })
 }
