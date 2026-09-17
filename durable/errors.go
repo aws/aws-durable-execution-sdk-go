@@ -55,16 +55,20 @@ func wireErrorType(err error) string {
 	return userErrorTypeName(err)
 }
 
-// unwrapErrorData removes the [WithErrorData] wrappers from the head of
-// err's chain. The wrapper carries data only; it never contributes a type
-// or a message.
+// unwrapErrorData removes the transparent metadata wrappers from the head
+// of err's chain: the [WithErrorData] wrapper and the FLAT-mode batch item
+// trace wrapper. Each carries metadata only; neither contributes a type or
+// a message.
 func unwrapErrorData(err error) error {
 	for {
-		w, ok := err.(*errorWithData)
-		if !ok {
+		switch w := err.(type) {
+		case *errorWithData:
+			err = w.err
+		case *flatItemTraceError:
+			err = w.err
+		default:
 			return err
 		}
-		err = w.err
 	}
 }
 
@@ -292,16 +296,30 @@ type errorRecord struct {
 }
 
 // recordOf derives the record the SDK writes for a live error: the wire
-// ErrorType, the error's message, and any [WithErrorData] payload found in
-// its chain. A stand-in yields the record it was built from, so recording
-// an operation error's cause a second time does not prefix the message
-// with the type name again.
+// ErrorType, the error's message, any [WithErrorData] payload found in
+// its chain, and the stack trace already recorded for the outermost SDK
+// error in the chain, if any. A stand-in yields the record it was built
+// from, so recording an operation error's cause a second time does not
+// prefix the message with the type name again.
 func recordOf(err error) errorRecord {
 	rec := errorRecord{errType: wireErrorType(err), message: err.Error(), data: errorDataOf(err)}
 	if re, ok := unwrapErrorData(err).(*replayedError); ok {
 		rec.message = re.message
 	}
+	if oe, ok := outermostSDKError(err).(interface{ operationError() *OperationError }); ok {
+		rec.stackTrace = oe.operationError().StackTrace
+	}
 	return rec
+}
+
+// withTrace returns the record carrying trace as its stack trace. A trace
+// the record already holds wins: it was recorded closer to the failure's
+// origin, by the operation that failed first.
+func (r errorRecord) withTrace(trace []string) errorRecord {
+	if len(r.stackTrace) == 0 {
+		r.stackTrace = trace
+	}
+	return r
 }
 
 // standIn builds the leaf stand-in error for a record. sentinel, when

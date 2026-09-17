@@ -256,7 +256,7 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 			if options.semantics == AtMostOncePerRetry {
 				// The previous attempt was interrupted before
 				// recording an outcome and must not re-execute.
-				return settleStepFailure[O](ec, id, name, options, &StepInterruptedError{Name: name}, attempt)
+				return settleStepFailure[O](ec, id, name, options, &StepInterruptedError{Name: name}, nil, attempt)
 			}
 
 		case statusReady, statusCancelled, statusTimedOut, statusStopped:
@@ -372,6 +372,10 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 	// WrapOperationAttemptFn wraps the step body execution.
 	var result O
 	var stepErr error
+	// stepTrace is the stack trace captured when the step body failed. It
+	// is recorded with the failure; nil when the body succeeded or capture
+	// is disabled.
+	var stepTrace []string
 
 	wrappedResult, wrappedErr := wrapChain(ec.pluginDispatcher,
 		func(p *Plugin) func(func() (any, error)) (any, error) {
@@ -383,7 +387,8 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 			}
 		},
 		func() (any, error) {
-			r, e := runStepFunc(ec, fn, attempt)
+			r, trace, e := runStepFunc(ec, fn, attempt)
+			stepTrace = trace
 			return r, e
 		},
 	)
@@ -405,7 +410,7 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 				})
 			}
 		})
-		return settleStepFailure[O](ec, id, name, options, stepErr, attempt)
+		return settleStepFailure[O](ec, id, name, options, stepErr, stepTrace, attempt)
 	}
 
 	serialized, err := options.serdes.Marshal(ec.Context, ec.serdesCtx(id), result)
@@ -421,7 +426,7 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 				})
 			}
 		})
-		return settleStepFailure[O](ec, id, name, options, wrapped, attempt)
+		return settleStepFailure[O](ec, id, name, options, wrapped, nil, attempt)
 	}
 
 	if sizeErr := checkResultSize(serialized, name); sizeErr != nil {
@@ -435,7 +440,7 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 				})
 			}
 		})
-		return settleStepFailure[O](ec, id, name, options, sizeErr, attempt)
+		return settleStepFailure[O](ec, id, name, options, sizeErr, nil, attempt)
 	}
 
 	update := stepUpdate(ec, id, name, OperationActionSucceed)
@@ -470,25 +475,27 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 
 // settleStepFailure consults the retry strategy for a failed attempt and
 // checkpoints the outcome: RETRY with a delay (then suspends the
-// invocation) or FAIL when retries are exhausted.
-func settleStepFailure[O any](ec *execContext, id, name string, options stepOptions, cause error, attempt int) (O, error) {
+// invocation) or FAIL when retries are exhausted. trace is the stack trace
+// captured where the step body failed; it is recorded with the failure.
+func settleStepFailure[O any](ec *execContext, id, name string, options stepOptions, cause error, trace []string, attempt int) (O, error) {
 	var zero O
 
+	rec := recordOf(cause).withTrace(trace)
 	decision := options.retry(RetryAttempt{Err: cause, Attempt: attempt})
 	if !decision.Retry {
 		update := stepUpdate(ec, id, name, OperationActionFail)
-		update.Error = errorObject(cause)
+		update.Error = errorObjectFromRecord(rec)
 		if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
 			if errors.Is(err, errCheckpointTerminated) {
 				return zero, errSuspendExecution
 			}
 			return zero, err
 		}
-		return zero, newStepError(name, attempt, recordOf(cause))
+		return zero, newStepError(name, attempt, rec)
 	}
 
 	update := stepUpdate(ec, id, name, OperationActionRetry)
-	update.Error = errorObject(cause)
+	update.Error = errorObjectFromRecord(rec)
 	delaySec, delayErr := durationToSeconds(decision.Delay)
 	if delayErr != nil {
 		return zero, fmt.Errorf("durable: step %q: retry delay: %w", name, delayErr)
@@ -512,13 +519,12 @@ func settleStepFailure[O any](ec *execContext, id, name string, options stepOpti
 
 // runStepFunc executes the step body with panic recovery: a panicking step
 // is a failed attempt, subject to the retry strategy like any other error.
-func runStepFunc[O any](ec *execContext, fn func(StepContext) (O, error), attempt int) (result O, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			err = fmt.Errorf("durable: step panicked: %v", r)
-		}
-	}()
-	return fn(&stepContext{Context: ec.Context, logger: ec.logger, attempt: attempt})
+// trace is the stack trace of the failure as [runUserFunc] captures it,
+// nil when the body succeeds or when capture is disabled.
+func runStepFunc[O any](ec *execContext, fn func(StepContext) (O, error), attempt int) (O, []string, error) {
+	return runUserFunc(ec, fn, "durable: step panicked", func() (O, error) {
+		return fn(&stepContext{Context: ec.Context, logger: ec.logger, attempt: attempt})
+	})
 }
 
 // stepUpdate assembles the shared fields of a step operation update. IDs

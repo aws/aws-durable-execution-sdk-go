@@ -123,6 +123,7 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 	}
 
 	// WrapChildContextFn wraps the child body execution.
+	var fnTrace []string
 	wrappedResult, wrappedErr := wrapChain(ec.pluginDispatcher,
 		func(p *Plugin) func(func() (any, error)) (any, error) {
 			if p.WrapChildContextFn == nil {
@@ -133,7 +134,11 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 			}
 		},
 		func() (any, error) {
-			return fn(child)
+			r, e := fn(child)
+			if e != nil {
+				fnTrace = ec.returnedErrorTrace(fn, e, 0)
+			}
+			return r, e
 		},
 	)
 
@@ -152,15 +157,16 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 		if errors.Is(fnErr, errSuspendExecution) || errors.Is(fnErr, errCheckpointTerminated) {
 			return zero, errSuspendExecution
 		}
+		rec := recordOf(fnErr).withTrace(fnTrace)
 		update := childUpdate(ec, id, name, OperationActionFail)
-		update.Error = errorObject(fnErr)
+		update.Error = errorObjectFromRecord(rec)
 		if cerr := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); cerr != nil {
 			if errors.Is(cerr, errCheckpointTerminated) {
 				return zero, errSuspendExecution
 			}
 			return zero, cerr
 		}
-		return zero, newChildContextError(name, recordOf(fnErr))
+		return zero, newChildContextError(name, rec)
 	}
 
 	serialized, err := options.serdes.Marshal(ec.Context, ec.serdesCtx(id), result)
@@ -262,19 +268,11 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 		child := ec.child(id, currentGoroutineOwner(), mode)
 		child.branchTok = tok
 
-		var result O
-		var fnErr error
-
 		// Recover panics in the child function so they settle the
 		// future as a failure rather than crashing the process.
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					fnErr = fmt.Errorf("durable: child context %q panicked: %v", name, r)
-				}
-			}()
-			result, fnErr = fn(child)
-		}()
+		result, fnTrace, fnErr := runUserFunc(child, fn, fmt.Sprintf("durable: child context %q panicked", name), func() (O, error) {
+			return fn(child)
+		})
 
 		if fnErr != nil {
 			// Suspension propagates: settle with suspension error
@@ -286,8 +284,9 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 			}
 			// Checkpoint the failure. If checkpointing fails, the
 			// settle error is the checkpoint failure.
+			rec := recordOf(fnErr).withTrace(fnTrace)
 			update := childUpdate(ec, id, name, OperationActionFail)
-			update.Error = errorObject(fnErr)
+			update.Error = errorObjectFromRecord(rec)
 			if cerr := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); cerr != nil {
 				// Terminated checkpointer means the invocation is
 				// answering PENDING; treat as suspension.
@@ -300,7 +299,7 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 				return
 			}
 			var zero O
-			fut.settle(zero, newChildContextError(name, recordOf(fnErr)))
+			fut.settle(zero, newChildContextError(name, rec))
 			return
 		}
 

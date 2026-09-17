@@ -1,8 +1,6 @@
 package durable
 
 import (
-	"strings"
-
 	"github.com/aws/aws-durable-execution-sdk-go/durable/internal/wire"
 )
 
@@ -34,7 +32,7 @@ func operationsFromPayload(in *wire.InitialExecutionState) []*operation {
 				op.step.errType = sd.Error.ErrorType
 				op.step.errMessage = sd.Error.ErrorMessage
 				op.step.errData = sd.Error.ErrorData
-				op.step.stackTrace = stackTraceLines(sd.Error.StackTrace)
+				op.step.stackTrace = sd.Error.StackTrace
 			}
 		}
 		if id := w.ChainedInvokeDetails; id != nil {
@@ -43,7 +41,7 @@ func operationsFromPayload(in *wire.InitialExecutionState) []*operation {
 				op.invoke.errType = id.Error.ErrorType
 				op.invoke.errMessage = id.Error.ErrorMessage
 				op.invoke.errData = id.Error.ErrorData
-				op.invoke.stackTrace = stackTraceLines(id.Error.StackTrace)
+				op.invoke.stackTrace = id.Error.StackTrace
 			}
 		}
 		if cd := w.ContextDetails; cd != nil {
@@ -52,7 +50,7 @@ func operationsFromPayload(in *wire.InitialExecutionState) []*operation {
 				op.childCtx.errType = cd.Error.ErrorType
 				op.childCtx.errMessage = cd.Error.ErrorMessage
 				op.childCtx.errData = cd.Error.ErrorData
-				op.childCtx.stackTrace = stackTraceLines(cd.Error.StackTrace)
+				op.childCtx.stackTrace = cd.Error.StackTrace
 			}
 		}
 		if cb := w.CallbackDetails; cb != nil {
@@ -61,7 +59,7 @@ func operationsFromPayload(in *wire.InitialExecutionState) []*operation {
 				op.callback.errType = cb.Error.ErrorType
 				op.callback.errMessage = cb.Error.ErrorMessage
 				op.callback.errData = cb.Error.ErrorData
-				op.callback.stackTrace = stackTraceLines(cb.Error.StackTrace)
+				op.callback.stackTrace = cb.Error.StackTrace
 			}
 		}
 		ops = append(ops, op)
@@ -82,14 +80,4 @@ func customerInput(in *wire.InitialExecutionState) (string, bool) {
 		return "", false
 	}
 	return details.InputPayload, true
-}
-
-// stackTraceLines splits the stack trace carried in the invocation payload
-// into lines. The payload carries the trace as one string; the checkpoint
-// API carries it as a list. An empty trace yields nil.
-func stackTraceLines(trace string) []string {
-	if trace == "" {
-		return nil
-	}
-	return strings.Split(trace, "\n")
 }

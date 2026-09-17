@@ -142,11 +142,12 @@ type CallbackDetails struct {
 // ErrorObject is a recorded failure. It appears inside the *Details of a
 // failed operation and as the Error of a FAILED invocation response. Every
 // field is optional on the wire; an empty field is omitted when encoding.
+// StackTrace is a list of frame strings, innermost frame first.
 type ErrorObject struct {
-	ErrorType    string `json:"ErrorType,omitempty"`
-	ErrorMessage string `json:"ErrorMessage,omitempty"`
-	ErrorData    string `json:"ErrorData,omitempty"`
-	StackTrace   string `json:"StackTrace,omitempty"`
+	ErrorType    string   `json:"ErrorType,omitempty"`
+	ErrorMessage string   `json:"ErrorMessage,omitempty"`
+	ErrorData    string   `json:"ErrorData,omitempty"`
+	StackTrace   []string `json:"StackTrace,omitempty"`
 }
 
 // InvocationResponse is what a durable invocation returns: the terminal

@@ -85,6 +85,10 @@ type handlerOptions struct {
 	// plugins holds registered instrumentation plugins. Set via
 	// [WithPlugins].
 	plugins []Plugin
+
+	// noStackTraces disables stack trace capture for failures. Set via
+	// [WithStackTraces]; the zero value keeps capture enabled.
+	noStackTraces bool
 }
 
 // WithExecutionClient sets the execution client for the durable handler.
@@ -265,10 +269,14 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	type outcome struct {
 		result O
 		err    error
+		// trace is the stack trace captured when the handler failed. It
+		// is recorded in the FAILED response; nil otherwise.
+		trace []string
 	}
 	ec := newExecContext(ctx, in.DurableExecutionArn, invMeta, logger, state)
 	ec.checkpointer = cp
 	ec.executionStartTime = execStartTimestamp
+	ec.noStackTraces = h.options.noStackTraces
 	cp.state = state
 	if h.options.serdes != nil {
 		ec.serdes = h.options.serdes
@@ -278,6 +286,9 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	}
 	ec.pluginDispatcher = pd
 	outcomeCh := make(chan outcome, 1)
+	// handlerTrace is the stack trace of the handler's failure, copied out
+	// of the outcome on this goroutine once the handler has returned.
+	var handlerTrace []string
 
 	// WrapInvocation: compose around the handler execution.
 	runHandler := func() (any, error) {
@@ -288,23 +299,21 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		// the invocation completes with that outcome immediately.
 		ec.branchTok = ec.suspend.registerBranchToken()
 		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					outcomeCh <- outcome{err: fmt.Errorf("durable: handler panicked: %v", r)}
-				}
-			}()
 			// The root context is owned by this goroutine, not the one
 			// that constructed it.
 			ec.owner = currentGoroutineOwner()
-			result, err := h.handler(ec, event)
+			result, trace, err := runUserFunc(ec, h.handler, "durable: handler panicked", func() (O, error) {
+				return h.handler(ec, event)
+			})
 			if errors.Is(err, errSuspendExecution) {
 				ec.branchTok.release()
 			}
-			outcomeCh <- outcome{result: result, err: err}
+			outcomeCh <- outcome{result: result, err: err, trace: trace}
 		}()
 
 		select {
 		case out := <-outcomeCh:
+			handlerTrace = out.trace
 			if ec.suspend.fired() || ec.suspend.committed() {
 				// The handler returned while a pending commitment
 				// stands. Terminate the checkpointer so orphaned
@@ -366,7 +375,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		})
 		resp, respErr = respond(wire.InvocationResponse{
 			Status: wire.StatusFailed,
-			Error:  errorObjectFromError(wrapErr),
+			Error:  errorObjectFromError(wrapErr, handlerTrace),
 		})
 	default:
 		// Serialize the result first; emit the success plugin hook only
@@ -479,10 +488,13 @@ func assembleState(ctx context.Context, cp *checkpointer, initial *wire.InitialE
 // errorObjectFromError builds the wire error object for a FAILED response.
 // The ErrorType follows [wireErrorType], the same rule checkpoint updates
 // use. The message is the outermost error's message, except for callback
-// and child-context failures, which report their cause's message.
-func errorObjectFromError(err error) *wire.ErrorObject {
-	rec := recordOf(err)
-	we := &wire.ErrorObject{ErrorType: rec.errType, ErrorMessage: rec.message, ErrorData: rec.data}
+// and child-context failures, which report their cause's message. trace
+// is the stack trace captured where the handler failed; a trace already
+// recorded for an operation error in the chain takes precedence, so the
+// response points at the operation that failed first.
+func errorObjectFromError(err error, trace []string) *wire.ErrorObject {
+	rec := recordOf(err).withTrace(trace)
+	we := &wire.ErrorObject{ErrorType: rec.errType, ErrorMessage: rec.message, ErrorData: rec.data, StackTrace: rec.stackTrace}
 	// Callback and child-context failures report their recorded cause
 	// message, so the response matches the message the operation recorded.
 	switch e := outermostSDKError(err).(type) {

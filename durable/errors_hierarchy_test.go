@@ -29,7 +29,7 @@ func TestCallbackSubtypeWireNames(t *testing.T) {
 			t.Errorf("wire name %q is not distinct", tt.want)
 		}
 		seen[tt.want] = true
-		if got := errorObjectFromError(tt.err).ErrorType; got != tt.want {
+		if got := errorObjectFromError(tt.err, nil).ErrorType; got != tt.want {
 			t.Errorf("FAILED response ErrorType for %T = %q, want %q", tt.err, got, tt.want)
 		}
 	}
@@ -417,7 +417,7 @@ func TestWithErrorData(t *testing.T) {
 	if obj := errorObject(err); obj.ErrorData == nil || *obj.ErrorData != "payload" {
 		t.Errorf("checkpoint ErrorData = %v, want payload", obj.ErrorData)
 	}
-	if obj := errorObjectFromError(err); obj.ErrorData != "payload" {
+	if obj := errorObjectFromError(err, nil); obj.ErrorData != "payload" {
 		t.Errorf("FAILED response ErrorData = %q, want payload", obj.ErrorData)
 	}
 

@@ -201,7 +201,7 @@ var wireErrorTypeCases = []struct {
 // path (errorObject) and by the invocation-response path
 // (errorObjectFromError).
 func wireErrorTypeOnBothPaths(err error) (checkpoint, response string) {
-	return *errorObject(err).ErrorType, errorObjectFromError(err).ErrorType
+	return *errorObject(err).ErrorType, errorObjectFromError(err, nil).ErrorType
 }
 
 func TestWireErrorTypeEveryExportedTypeOnBothPaths(t *testing.T) {
@@ -297,7 +297,7 @@ func TestErrorObjectFromErrorMessage(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := errorObjectFromError(tt.err).ErrorMessage; got != tt.want {
+			if got := errorObjectFromError(tt.err, nil).ErrorMessage; got != tt.want {
 				t.Errorf("ErrorMessage = %q, want %q", got, tt.want)
 			}
 		})

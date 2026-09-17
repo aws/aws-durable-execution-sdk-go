@@ -35,6 +35,22 @@ check, or the handler, the SDK records the payload as the failure's
 `ErrorData`, and the typed error exposes it as `ErrorData` on both
 invocations. Payloads over 256 KiB are truncated on a UTF-8 boundary.
 
+### New: stack traces for step and handler failures; `WithStackTraces`
+
+A failed step body or a failed handler now records a stack trace with
+the failure. The trace is captured where user code hands the error to
+the SDK: at the step body's return, at the handler's return, or inside
+the recovery of a panic in either. It is written to the operation's
+checkpoint and to the FAILED invocation response, and the typed
+operation errors expose it as `StackTrace`. Each frame is one string of
+the form `function file:line`, innermost frame first. At most
+`MaxStackTraceFrames` (32) frames are kept.
+
+Capture is on by default. `durable.WithStackTraces(false)` disables it,
+so failures carry no `StackTrace` on any path. The wire `StackTrace`
+field is a list of frame strings; earlier builds encoded a single
+string, which no code path populated.
+
 ### New: callback failure subtypes
 
 `CallbackExternalError` (the external system reported failure),

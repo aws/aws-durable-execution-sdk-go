@@ -44,7 +44,7 @@ func TestBatchCompletionErrorTyped(t *testing.T) {
 
 func TestBatchCompletionErrorWireType(t *testing.T) {
 	// The wire-error mapper stamps the public type name.
-	we := errorObjectFromError(&BatchCompletionError{Reason: CompletionFailureToleranceExceeded})
+	we := errorObjectFromError(&BatchCompletionError{Reason: CompletionFailureToleranceExceeded}, nil)
 	if we.ErrorType != "BatchCompletionError" {
 		t.Errorf("ErrorType = %q, want %q", we.ErrorType, "BatchCompletionError")
 	}

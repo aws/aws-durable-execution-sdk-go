@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
@@ -402,15 +401,20 @@ func ptrStr(p *string) string {
 
 // wireErrorObject converts a stored error record to the invocation payload
 // shape, carrying every field the service would return: type, message,
-// data, and the stack trace joined into the payload's single string.
+// data, and the stack trace frames.
 func wireErrorObject(e *durable.ErrorObject) *wire.ErrorObject {
 	if e == nil {
 		return nil
+	}
+	var trace []string
+	if len(e.StackTrace) > 0 {
+		trace = make([]string, len(e.StackTrace))
+		copy(trace, e.StackTrace)
 	}
 	return &wire.ErrorObject{
 		ErrorType:    ptrStr(e.ErrorType),
 		ErrorMessage: ptrStr(e.ErrorMessage),
 		ErrorData:    ptrStr(e.ErrorData),
-		StackTrace:   strings.Join(e.StackTrace, "\n"),
+		StackTrace:   trace,
 	}
 }

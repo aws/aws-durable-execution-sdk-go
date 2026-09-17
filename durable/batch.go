@@ -93,8 +93,10 @@ func Map[I, O any](ctx Context, name string, items []I, fn func(ctx Context, ite
 	}
 
 	// Execute items with bounded concurrency and completion checking.
-	return executeBatchItems[I, O](ec, id, name, totalItems, options, operationSubTypeMap, operationSubTypeMapIteration, func(childCtx Context, index int) (O, error) {
-		return fn(childCtx, items[index], index)
+	return executeBatchItems[I, O](ec, id, name, totalItems, options, operationSubTypeMap, operationSubTypeMapIteration, func(childCtx Context, index int) (O, []string, error) {
+		return runBatchItemFunc(childCtx, index, fn, func() (O, error) {
+			return fn(childCtx, items[index], index)
+		})
 	})
 }
 
@@ -180,8 +182,10 @@ func Parallel[O any](ctx Context, name string, branches []Branch[O], opts ...Bat
 		return checkpointBatchSuccess(ec, id, name, operationSubTypeParallel, result, options)
 	}
 
-	return executeBatchItems[struct{}, O](ec, id, name, totalItems, options, operationSubTypeParallel, operationSubTypeParallelBranch, func(childCtx Context, index int) (O, error) {
-		return branches[index].Func(childCtx)
+	return executeBatchItems[struct{}, O](ec, id, name, totalItems, options, operationSubTypeParallel, operationSubTypeParallelBranch, func(childCtx Context, index int) (O, []string, error) {
+		return runBatchItemFunc(childCtx, index, branches[index].Func, func() (O, error) {
+			return branches[index].Func(childCtx)
+		})
 	})
 }
 
@@ -544,6 +548,20 @@ func resolveBatchOptions(ec *execContext, opts []BatchOption) batchOptions {
 	return o
 }
 
+// batchItemFunc runs one batch item in its child context and returns the
+// item result or error. On failure the middle result is the stack trace
+// captured where the item's user function failed, as [runUserFunc]
+// captures it; it is nil on success or when capture is disabled.
+type batchItemFunc[O any] func(childCtx Context, index int) (O, []string, error)
+
+// runBatchItemFunc runs one call into a batch item's user function
+// through [runUserFunc], so a panic becomes a failure of that item and a
+// failure's trace names userFn. childCtx is the item's child context.
+func runBatchItemFunc[O any](childCtx Context, index int, userFn any, call func() (O, error)) (O, []string, error) {
+	ec, _ := childCtx.(*execContext)
+	return runUserFunc(ec, userFn, fmt.Sprintf("durable: batch item %d panicked", index), call)
+}
+
 // executeBatchItems runs the core batch loop: schedule items up to max
 // concurrency, collect results, check completion conditions.
 //
@@ -555,7 +573,7 @@ func executeBatchItems[I, O any](
 	totalItems int,
 	options batchOptions,
 	parentSubType, childSubType string,
-	runItem func(childCtx Context, index int) (O, error),
+	runItem batchItemFunc[O],
 ) (BatchResult[O], error) {
 	// Items collects results in input order. We allocate for all items
 	// but only fill the ones that actually start.
@@ -853,7 +871,7 @@ func runPreClaimedBatchItem[O any](
 	terminal bool,
 	options batchOptions,
 	childSubType string,
-	runItem func(childCtx Context, index int) (O, error),
+	runItem batchItemFunc[O],
 	abandon *atomic.Bool,
 	tok *branchToken,
 ) (BatchItem[O], error) {
@@ -866,7 +884,7 @@ func runPreClaimedBatchItem[O any](
 		virtualChild := ec.child(childID, currentGoroutineOwner(), mode)
 		virtualChild.abandon = abandon
 		virtualChild.branchTok = tok
-		result, fnErr := runItem(virtualChild, index)
+		result, fnTrace, fnErr := runItem(virtualChild, index)
 		if fnErr != nil {
 			if errors.Is(fnErr, errSuspendExecution) {
 				return BatchItem[O]{}, fnErr
@@ -875,7 +893,7 @@ func runPreClaimedBatchItem[O any](
 				Index:  index,
 				Name:   itemName,
 				Status: BatchItemFailed,
-				Err:    fnErr,
+				Err:    flatItemError(fnErr, fnTrace),
 			}, nil
 		}
 		serialized, serErr := options.itemSerdes.Marshal(ec.Context, ec.serdesCtx(childID), result)
@@ -905,13 +923,13 @@ func runPreClaimedBatchItem[O any](
 	child.abandon = abandon
 	child.branchTok = tok
 
-	result, fnErr := runItem(child, index)
+	result, fnTrace, fnErr := runItem(child, index)
 	if fnErr != nil {
 		if errors.Is(fnErr, errSuspendExecution) {
 			return BatchItem[O]{}, fnErr
 		}
 		update := batchChildUpdate(ec, childID, itemName, childSubType, parentID, OperationActionFail)
-		update.Error = errorObject(fnErr)
+		update.Error = errorObjectFromRecord(recordOf(fnErr).withTrace(fnTrace))
 		update.Error.ErrorData = encodeChildErrorData(fnErr)
 		if cerr := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); cerr != nil {
 			return BatchItem[O]{}, cerr
@@ -920,7 +938,7 @@ func runPreClaimedBatchItem[O any](
 			Index:  index,
 			Name:   itemName,
 			Status: BatchItemFailed,
-			Err:    liveBatchItemError(itemName, fnErr),
+			Err:    liveBatchItemError(itemName, fnErr, update.Error.StackTrace),
 		}, nil
 	}
 
@@ -958,7 +976,7 @@ func runFlatBatchItem[O any](
 	index int,
 	itemName string,
 	options batchOptions,
-	runItem func(childCtx Context, index int) (O, error),
+	runItem batchItemFunc[O],
 ) (BatchItem[O], error) {
 	// In FLAT mode, the item's operations are minted under the parent
 	// context's ID space. We create a virtual child that shares the
@@ -974,7 +992,7 @@ func runFlatBatchItem[O any](
 	mode := childReplayMode(ec, childID, ec.state.get(childID))
 	virtualChild := ec.child(childID, ec.owner, mode)
 
-	result, fnErr := runItem(virtualChild, index)
+	result, fnTrace, fnErr := runItem(virtualChild, index)
 	if fnErr != nil {
 		if errors.Is(fnErr, errSuspendExecution) {
 			return BatchItem[O]{}, fnErr
@@ -983,7 +1001,7 @@ func runFlatBatchItem[O any](
 			Index:  index,
 			Name:   itemName,
 			Status: BatchItemFailed,
-			Err:    fnErr,
+			Err:    flatItemError(fnErr, fnTrace),
 		}, nil
 	}
 
@@ -1015,18 +1033,9 @@ func runFlatBatchItemShared[O any](
 	index int,
 	itemName string,
 	options batchOptions,
-	runItem func(childCtx Context, index int) (O, error),
+	runItem batchItemFunc[O],
 ) (BatchItem[O], error) {
-	var result O
-	var fnErr error
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				fnErr = fmt.Errorf("durable: batch item %d panicked: %v", index, r)
-			}
-		}()
-		result, fnErr = runItem(flatCtx, index)
-	}()
+	result, fnTrace, fnErr := runItem(flatCtx, index)
 	if fnErr != nil {
 		if errors.Is(fnErr, errSuspendExecution) {
 			return BatchItem[O]{}, fnErr
@@ -1035,7 +1044,7 @@ func runFlatBatchItemShared[O any](
 			Index:  index,
 			Name:   itemName,
 			Status: BatchItemFailed,
-			Err:    fnErr,
+			Err:    flatItemError(fnErr, fnTrace),
 		}, nil
 	}
 
@@ -1065,7 +1074,7 @@ func runNestedBatchItem[O any](
 	index int,
 	options batchOptions,
 	childSubType string,
-	runItem func(childCtx Context, index int) (O, error),
+	runItem batchItemFunc[O],
 ) (item BatchItem[O], retErr error) {
 	// Claim the child's operation ID from the parent.
 	childID, err := ec.claimOperation()
@@ -1092,18 +1101,7 @@ func runNestedBatchItem[O any](
 	mode := childReplayMode(ec, childID, op)
 	child := ec.child(childID, ec.owner, mode)
 
-	// Recover panics in the item function so they become failures, not
-	// process crashes.
-	var result O
-	var fnErr error
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				fnErr = fmt.Errorf("durable: batch item %d panicked: %v", index, r)
-			}
-		}()
-		result, fnErr = runItem(child, index)
-	}()
+	result, fnTrace, fnErr := runItem(child, index)
 
 	if fnErr != nil {
 		if errors.Is(fnErr, errSuspendExecution) {
@@ -1111,7 +1109,7 @@ func runNestedBatchItem[O any](
 		}
 		// Checkpoint the failure.
 		update := batchChildUpdate(ec, childID, itemName, childSubType, parentID, OperationActionFail)
-		update.Error = errorObject(fnErr)
+		update.Error = errorObjectFromRecord(recordOf(fnErr).withTrace(fnTrace))
 		update.Error.ErrorData = encodeChildErrorData(fnErr)
 		if cerr := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); cerr != nil {
 			return BatchItem[O]{}, cerr
@@ -1120,7 +1118,7 @@ func runNestedBatchItem[O any](
 			Index:  index,
 			Name:   itemName,
 			Status: BatchItemFailed,
-			Err:    liveBatchItemError(itemName, fnErr),
+			Err:    liveBatchItemError(itemName, fnErr, update.Error.StackTrace),
 		}, nil
 	}
 
@@ -1163,7 +1161,7 @@ func replayTerminalChildItem[O any](
 	index int,
 	options batchOptions,
 	childSubType string,
-	runItem func(childCtx Context, index int) (O, error),
+	runItem batchItemFunc[O],
 ) (BatchItem[O], error) {
 	switch op.status {
 	case statusSucceeded:
@@ -1173,7 +1171,7 @@ func replayTerminalChildItem[O any](
 		if op.childCtx.replayChildren {
 			mode := modeReplaySucceededContext
 			child := ec.child(childID, ec.owner, mode)
-			result, err := runItem(child, index)
+			result, _, err := runItem(child, index)
 			if err != nil {
 				return BatchItem[O]{}, err
 			}
@@ -1199,16 +1197,20 @@ func replayTerminalChildItem[O any](
 		errType := "Error"
 		errMessage := "item failed"
 		var errData string
+		var trace []string
 		if op.childCtx != nil {
 			errType = op.childCtx.errType
 			errMessage = op.childCtx.errMessage
 			errData = op.childCtx.errData
+			trace = op.childCtx.stackTrace
 		}
+		cerr := batchItemError(itemName, errType, errMessage, childErrorData{}, errData)
+		cerr.StackTrace = trace
 		return BatchItem[O]{
 			Index:  index,
 			Name:   itemName,
 			Status: BatchItemFailed,
-			Err:    batchItemError(itemName, errType, errMessage, childErrorData{}, errData),
+			Err:    cerr,
 		}, nil
 
 	default:
@@ -1275,12 +1277,16 @@ func replayTerminalBatch[I, O any](
 		errType := "Error"
 		errMessage := "batch failed"
 		var errData string
+		var trace []string
 		if op.childCtx != nil {
 			errType = op.childCtx.errType
 			errMessage = op.childCtx.errMessage
 			errData = op.childCtx.errData
+			trace = op.childCtx.stackTrace
 		}
-		return BatchResult[O]{}, batchItemError(name, errType, errMessage, childErrorData{}, errData)
+		cerr := batchItemError(name, errType, errMessage, childErrorData{}, errData)
+		cerr.StackTrace = trace
+		return BatchResult[O]{}, cerr
 
 	default:
 		return BatchResult[O]{}, fmt.Errorf("durable: batch %q: unexpected terminal status %s", name, op.status)
@@ -1307,27 +1313,25 @@ func replayBatchChildren[I, O any](
 	var successCount, failureCount int
 	reason := CompletionAllCompleted
 
+	runItem := func(childCtx Context, index int) (O, []string, error) {
+		if fn != nil && items != nil {
+			return runBatchItemFunc(childCtx, index, fn, func() (O, error) {
+				return fn(childCtx, items[index], index)
+			})
+		}
+		var zero O
+		return zero, nil, fmt.Errorf("durable: cannot replay parallel branches without branch functions")
+	}
+
 	for i := 0; i < totalItems; i++ {
 		itemName := itemNameForIndex(options, i)
 		var result BatchItem[O]
 		var err error
 
 		if options.nesting == NestingFlat {
-			result, err = runFlatBatchItem[O](ec, parentID, i, itemName, options, func(ctx Context, idx int) (O, error) {
-				if fn != nil && items != nil {
-					return fn(ctx, items[idx], idx)
-				}
-				var zero O
-				return zero, fmt.Errorf("durable: cannot replay parallel branches without branch functions")
-			})
+			result, err = runFlatBatchItem[O](ec, parentID, i, itemName, options, runItem)
 		} else {
-			result, err = runNestedBatchItem[O](ec, parentID, parentName, itemName, i, options, childSubType, func(ctx Context, idx int) (O, error) {
-				if fn != nil && items != nil {
-					return fn(ctx, items[idx], idx)
-				}
-				var zero O
-				return zero, fmt.Errorf("durable: cannot replay parallel branches without branch functions")
-			})
+			result, err = runNestedBatchItem[O](ec, parentID, parentName, itemName, i, options, childSubType, runItem)
 		}
 
 		if err != nil {
@@ -1438,6 +1442,11 @@ type batchCheckpointItem struct {
 	ErrType    string          `json:"errType,omitempty"`
 	ErrMessage string          `json:"errMessage,omitempty"`
 
+	// StackTrace holds the stack trace recorded for a failed item, one
+	// frame per string, innermost first. Persisting it in the aggregate
+	// payload keeps the item's user-code trace across replay.
+	StackTrace []string `json:"stackTrace,omitempty"`
+
 	childErrorData
 }
 
@@ -1461,7 +1470,9 @@ func toBatchResult[O any](ctx context.Context, payload batchCheckpointPayload, i
 			}
 			items[i].Result = out
 		case BatchItemFailed:
-			items[i].Err = batchItemError(cp.Name, cp.ErrType, cp.ErrMessage, cp.childErrorData, "")
+			cerr := batchItemError(cp.Name, cp.ErrType, cp.ErrMessage, cp.childErrorData, "")
+			cerr.StackTrace = cp.StackTrace
+			items[i].Err = cerr
 		}
 	}
 	return BatchResult[O]{Items: items, Reason: payload.Reason}, nil
@@ -1684,13 +1695,70 @@ func batchItemError(itemName, errType, errMessage string, meta childErrorData, e
 
 // liveBatchItemError builds the [ChildContextError] for a batch item that
 // failed on this invocation, by recording the failure the same way the
-// checkpoint does and rebuilding from that record.
-func liveBatchItemError(itemName string, fnErr error) *ChildContextError {
+// checkpoint does and rebuilding from that record. trace is the stack
+// trace the checkpoint recorded for the failure.
+func liveBatchItemError(itemName string, fnErr error, trace []string) *ChildContextError {
 	meta, _ := wrapperErrorData(fnErr)
 	if meta.isZero() {
 		meta = childErrorData{ErrorData: errorDataOf(fnErr)}
 	}
-	return batchItemError(itemName, wireErrorType(fnErr), fnErr.Error(), meta, "")
+	cerr := batchItemError(itemName, wireErrorType(fnErr), fnErr.Error(), meta, "")
+	cerr.StackTrace = trace
+	return cerr
+}
+
+// flatItemTraceError carries the stack trace recorded for a FLAT-mode
+// batch item failure. FLAT mode keeps the item function's own error as
+// the item error — no child context wraps it — so the error has no trace
+// field of its own. The wrapper supplies the trace through the StackTrace
+// method, which trace capture reads from an error's chain, so the failure
+// still points at the item's user code when the handler returns it. The
+// wrapper contributes no type and no message: [unwrapErrorData] strips it
+// wherever the wire ErrorType or message is derived.
+type flatItemTraceError struct {
+	err   error
+	trace []string
+}
+
+func (e *flatItemTraceError) Error() string { return e.err.Error() }
+
+func (e *flatItemTraceError) Unwrap() error { return e.err }
+
+// StackTrace returns the recorded trace, one frame per string, innermost
+// first. [suppliedStackTrace] finds it through this method.
+func (e *flatItemTraceError) StackTrace() []string { return e.trace }
+
+// itemErrorTrace returns the stack trace the SDK recorded for a failed
+// item's error: the trace on the outermost SDK error in its chain, or the
+// one a [flatItemTraceError] wrapper carries. Both were produced by the
+// SDK's own capture, so they honour [WithStackTraces] and the
+// [MaxStackTraceFrames] bound. A trace that a user error supplies through
+// its own StackTrace method is not read here; it reaches the record only
+// after capture has bounded it, through the wrapper. It returns nil when
+// the chain carries no recorded trace.
+func itemErrorTrace(err error) []string {
+	if trace := recordOf(err).stackTrace; len(trace) > 0 {
+		return trace
+	}
+	var wrapped *flatItemTraceError
+	if errors.As(err, &wrapped) {
+		return wrapped.trace
+	}
+	return nil
+}
+
+// flatItemError returns the error recorded for a FLAT-mode item failure.
+// An error whose chain already carries an SDK-recorded trace keeps it:
+// that trace was recorded closer to the failure's origin. Otherwise
+// fnTrace, the trace capture produced when the item function handed the
+// SDK the failure, is carried in a [flatItemTraceError] wrapper. fnTrace
+// is already bounded and is nil when capture is disabled, so the wrapper
+// is the only route by which an item error's own trace is recorded.
+func flatItemError(fnErr error, fnTrace []string) error {
+	if len(fnTrace) == 0 || len(recordOf(fnErr).stackTrace) > 0 {
+		return fnErr
+	}
+	return &flatItemTraceError{err: fnErr, trace: fnTrace}
 }
 
 // fromBatchResult converts a live [BatchResult] into the checkpoint payload
@@ -1713,6 +1781,7 @@ func fromBatchResult[O any](ctx context.Context, result BatchResult[O], itemSerd
 			cpItems[i].Result = string(raw)
 		case BatchItemFailed:
 			if item.Err != nil {
+				cpItems[i].StackTrace = itemErrorTrace(item.Err)
 				cpItems[i].ErrType = wireErrorType(item.Err)
 				cpItems[i].ErrMessage = item.Err.Error()
 				// Extract inner error details for child context errors.
@@ -1861,12 +1930,14 @@ func replayBatchChildrenFromRecord[I, O any](
 ) (BatchResult[O], error) {
 	abandoned := record.abandonedSet()
 	sib := &opIDs{prefix: ec.ids.prefix, counter: ec.ids.counter}
-	runItem := func(childCtx Context, index int) (O, error) {
+	runItem := func(childCtx Context, index int) (O, []string, error) {
 		if fn != nil && items != nil {
-			return fn(childCtx, items[index], index)
+			return runBatchItemFunc(childCtx, index, fn, func() (O, error) {
+				return fn(childCtx, items[index], index)
+			})
 		}
 		var zero O
-		return zero, fmt.Errorf("durable: cannot replay parallel branches without branch functions")
+		return zero, nil, fmt.Errorf("durable: cannot replay parallel branches without branch functions")
 	}
 	results := make([]BatchItem[O], 0, record.StartedTotal)
 	for i := 0; i < record.StartedTotal; i++ {

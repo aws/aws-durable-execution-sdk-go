@@ -123,8 +123,8 @@ func TestInvocationResponseJSON(t *testing.T) {
 		{name: "succeeded", in: InvocationResponse{Status: StatusSucceeded, Result: &result}, want: `{"Status":"SUCCEEDED","Result":"{\"ok\":true}"}`},
 		{
 			name: "failed",
-			in:   InvocationResponse{Status: StatusFailed, Error: &ErrorObject{ErrorType: "E", ErrorMessage: "m", StackTrace: "st"}},
-			want: `{"Status":"FAILED","Error":{"ErrorType":"E","ErrorMessage":"m","StackTrace":"st"}}`,
+			in:   InvocationResponse{Status: StatusFailed, Error: &ErrorObject{ErrorType: "E", ErrorMessage: "m", StackTrace: []string{"f1", "f2"}}},
+			want: `{"Status":"FAILED","Error":{"ErrorType":"E","ErrorMessage":"m","StackTrace":["f1","f2"]}}`,
 		},
 	}
 	for _, tt := range tests {

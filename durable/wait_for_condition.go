@@ -191,6 +191,9 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 	// WrapOperationAttemptFn wraps the check function execution.
 	var newState S
 	var checkErr error
+	// checkTrace is the stack trace captured when the check failed; nil
+	// when it succeeded or capture is disabled.
+	var checkTrace []string
 
 	wrappedResult, wrappedErr := wrapChain(ec.pluginDispatcher,
 		func(p *Plugin) func(func() (any, error)) (any, error) {
@@ -202,7 +205,8 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 			}
 		},
 		func() (any, error) {
-			s, e := runCheckFunc(ec, check, currentState)
+			s, trace, e := runCheckFunc(ec, check, currentState)
+			checkTrace = trace
 			return s, e
 		},
 	)
@@ -228,12 +232,13 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 		// Check function failure: checkpoint FAIL and return error. The
 		// checkpointed ErrorType stays the cause's concrete type name;
 		// the wrapping applies only to the returned Go error.
+		rec := recordOf(checkErr).withTrace(checkTrace)
 		update := waitForConditionUpdate(ec, id, name, OperationActionFail)
-		update.Error = errorObject(checkErr)
+		update.Error = errorObjectFromRecord(rec)
 		if cerr := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); cerr != nil {
 			return zero, cerr
 		}
-		return zero, newWaitForConditionError(name, attempt, recordOf(checkErr))
+		return zero, newWaitForConditionError(name, attempt, rec)
 	}
 
 	// Serialize the new state for checkpointing.
@@ -272,12 +277,15 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 		// Strategy signaled failure (e.g., max attempts exceeded):
 		// checkpoint FAIL and return error.
 		if decision.Err != nil {
+			// The strategy returned the error to this frame, so the
+			// trace names the strategy and runs outward from here.
+			rec := recordOf(decision.Err).withTrace(ec.returnedErrorTrace(strategy, decision.Err, 0))
 			update := waitForConditionUpdate(ec, id, name, OperationActionFail)
-			update.Error = errorObject(decision.Err)
+			update.Error = errorObjectFromRecord(rec)
 			if cerr := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); cerr != nil {
 				return zero, cerr
 			}
-			return zero, newWaitForConditionError(name, attempt, recordOf(decision.Err))
+			return zero, newWaitForConditionError(name, attempt, rec)
 		}
 
 		// Condition met: checkpoint terminal SUCCEED with the final state.
@@ -312,14 +320,13 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 	return zero, errSuspendExecution
 }
 
-// runCheckFunc executes the check function with panic recovery.
-func runCheckFunc[S any](ec *execContext, check func(StepContext, S) (S, error), state S) (result S, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			err = fmt.Errorf("durable: WaitForCondition check panicked: %v", r)
-		}
-	}()
-	return check(&stepContext{Context: ec.Context, logger: ec.logger}, state)
+// runCheckFunc executes the check function with panic recovery. The trace
+// is the stack trace of the failure as [runUserFunc] captures it, nil when
+// the check succeeds or when capture is disabled.
+func runCheckFunc[S any](ec *execContext, check func(StepContext, S) (S, error), state S) (S, []string, error) {
+	return runUserFunc(ec, check, "durable: WaitForCondition check panicked", func() (S, error) {
+		return check(&stepContext{Context: ec.Context, logger: ec.logger}, state)
+	})
 }
 
 // waitForConditionUpdate assembles the shared fields of a

@@ -88,6 +88,11 @@ type execContext struct {
 	// EXECUTION operation. It is the same value on every invocation of
 	// one execution, making it safe to use between durable operations.
 	executionStartTime time.Time
+
+	// noStackTraces disables stack trace capture for failures produced by
+	// user code. Set from [WithStackTraces]; the zero value keeps capture
+	// enabled. Shared by the root and all child contexts.
+	noStackTraces bool
 }
 
 var _ Context = (*execContext)(nil)
@@ -257,6 +262,7 @@ func (c *execContext) child(entityID string, owner goroutineOwner, mode executio
 		checkpointer:         c.checkpointer,
 		pluginDispatcher:     c.pluginDispatcher,
 		executionStartTime:   c.executionStartTime,
+		noStackTraces:        c.noStackTraces,
 		abandon:              c.abandon,
 		branchTok:            c.branchTok,
 	}
@@ -288,6 +294,7 @@ func (c *execContext) branch(owner goroutineOwner) *execContext {
 		checkpointer:         c.checkpointer,
 		pluginDispatcher:     c.pluginDispatcher,
 		executionStartTime:   c.executionStartTime,
+		noStackTraces:        c.noStackTraces,
 		abandon:              c.abandon,
 		branchTok:            c.branchTok,
 	}
