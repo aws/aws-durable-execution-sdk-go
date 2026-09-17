@@ -42,12 +42,12 @@ func retryOnTransient() durable.RetryStrategy {
 		InitialDelay: time.Second,
 		Jitter:       durable.JitterNone,
 	})
-	return func(err error, attempt int) durable.RetryDecision {
+	return func(a durable.RetryAttempt) durable.RetryDecision {
 		var transient *TransientError
-		if !errors.As(err, &transient) {
+		if !errors.As(a.Err, &transient) {
 			return durable.RetryDecision{}
 		}
-		return base(err, attempt)
+		return base(a)
 	}
 }
 

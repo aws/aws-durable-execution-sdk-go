@@ -38,12 +38,12 @@ func retryOnValidation() durable.RetryStrategy {
 		InitialDelay: time.Second,
 		Jitter:       durable.JitterNone,
 	})
-	return func(err error, attempt int) durable.RetryDecision {
+	return func(a durable.RetryAttempt) durable.RetryDecision {
 		var validation *ValidationError
-		if !errors.As(err, &validation) {
+		if !errors.As(a.Err, &validation) {
 			return durable.RetryDecision{}
 		}
-		return base(err, attempt)
+		return base(a)
 	}
 }
 

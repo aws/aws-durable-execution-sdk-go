@@ -254,6 +254,41 @@ func TestStepRetrySchedulesAndSuspends(t *testing.T) {
 	}
 }
 
+func TestStepRetryStrategyReceivesAttempt(t *testing.T) {
+	// The strategy sees the failing error and the 1-based attempt number
+	// in the RetryAttempt it receives. Elapsed is not tracked yet, so it
+	// is zero.
+	fake := &fakeLambda{}
+	cause := errors.New("transient")
+	var got RetryAttempt
+	var calls int
+	resp := invokeStep(t, fake, stepPayload(`""`), func(ctx Context, _ string) (string, error) {
+		return Step(ctx, "s", func(StepContext) (string, error) {
+			return "", cause
+		}, WithRetry(func(a RetryAttempt) RetryDecision {
+			calls++
+			got = a
+			return RetryDecision{}
+		}))
+	})
+
+	if !strings.Contains(resp, `"Status":"FAILED"`) {
+		t.Errorf("response = %s, want FAILED", resp)
+	}
+	if calls != 1 {
+		t.Fatalf("retry strategy called %d times, want 1", calls)
+	}
+	if !errors.Is(got.Err, cause) {
+		t.Errorf("RetryAttempt.Err = %v, want %v", got.Err, cause)
+	}
+	if got.Attempt != 1 {
+		t.Errorf("RetryAttempt.Attempt = %d, want 1", got.Attempt)
+	}
+	if got.Elapsed != 0 {
+		t.Errorf("RetryAttempt.Elapsed = %v, want 0", got.Elapsed)
+	}
+}
+
 func TestStepSuspensionWinsOverUserOutcome(t *testing.T) {
 	// User code swallows the suspension error and returns success; the
 	// invocation must still respond PENDING.
@@ -329,8 +364,8 @@ func TestStepReadyReexecutesWithNextAttempt(t *testing.T) {
 	// number derives from the checkpointed attempt count.
 	fake := &fakeLambda{}
 	var gotAttempt int
-	strategy := func(_ error, attempt int) RetryDecision {
-		gotAttempt = attempt
+	strategy := func(a RetryAttempt) RetryDecision {
+		gotAttempt = a.Attempt
 		return RetryDecision{}
 	}
 	resp := invokeStep(t, fake,

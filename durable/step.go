@@ -479,7 +479,7 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 func settleStepFailure[O any](ec *execContext, id, name string, options stepOptions, cause error, attempt int) (O, error) {
 	var zero O
 
-	decision := options.retry(cause, attempt)
+	decision := options.retry(RetryAttempt{Err: cause, Attempt: attempt})
 	if !decision.Retry {
 		update := stepUpdate(ec, id, name, OperationActionFail)
 		update.Error = errorObject(cause)

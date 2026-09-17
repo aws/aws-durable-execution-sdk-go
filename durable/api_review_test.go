@@ -408,7 +408,7 @@ func TestStepRetryNegativeDelayReturnsError(t *testing.T) {
 	resp := invokeStep(t, fake, stepPayload(`"x"`), func(ctx Context, _ string) (string, error) {
 		_, err := Step(ctx, "bad-retry", func(StepContext) (string, error) {
 			return "", errors.New("fail")
-		}, WithRetry(func(_ error, _ int) RetryDecision {
+		}, WithRetry(func(RetryAttempt) RetryDecision {
 			return RetryDecision{Retry: true, Delay: -1 * time.Second}
 		}))
 		if err == nil {
@@ -427,7 +427,7 @@ func TestStepRetryOverflowDelayReturnsError(t *testing.T) {
 	resp := invokeStep(t, fake, stepPayload(`"x"`), func(ctx Context, _ string) (string, error) {
 		_, err := Step(ctx, "overflow-retry", func(StepContext) (string, error) {
 			return "", errors.New("fail")
-		}, WithRetry(func(_ error, _ int) RetryDecision {
+		}, WithRetry(func(RetryAttempt) RetryDecision {
 			return RetryDecision{Retry: true, Delay: d}
 		}))
 		if err == nil {

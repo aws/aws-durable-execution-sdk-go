@@ -32,7 +32,7 @@ func TestNewRetryStrategyDeterministic(t *testing.T) {
 		{6, false, 0},
 	}
 	for _, tt := range tests {
-		d := strategy(err, tt.attempt)
+		d := strategy(RetryAttempt{Err: err, Attempt: tt.attempt})
 		if d.Retry != tt.wantRetry {
 			t.Errorf("attempt %d: Retry = %v, want %v", tt.attempt, d.Retry, tt.wantRetry)
 		}
@@ -47,13 +47,13 @@ func TestNewRetryStrategyDefaults(t *testing.T) {
 	strategy := MustNewRetryStrategy(RetryConfig{Jitter: JitterNone})
 	err := errors.New("x")
 
-	if d := strategy(err, 1); !d.Retry || d.Delay != 5*time.Second {
+	if d := strategy(RetryAttempt{Err: err, Attempt: 1}); !d.Retry || d.Delay != 5*time.Second {
 		t.Errorf("attempt 1 = %+v, want retry with 5s delay", d)
 	}
-	if d := strategy(err, 2); !d.Retry || d.Delay != 10*time.Second {
+	if d := strategy(RetryAttempt{Err: err, Attempt: 2}); !d.Retry || d.Delay != 10*time.Second {
 		t.Errorf("attempt 2 = %+v, want retry with 10s delay", d)
 	}
-	if d := strategy(err, 3); d.Retry {
+	if d := strategy(RetryAttempt{Err: err, Attempt: 3}); d.Retry {
 		t.Errorf("attempt 3 = %+v, want no retry (default 3 max attempts)", d)
 	}
 }
@@ -150,7 +150,7 @@ func TestMustNewRetryStrategyPanicsOnNaNBackoffRate(t *testing.T) {
 
 func TestMustNewRetryStrategyValidConfig(t *testing.T) {
 	strategy := MustNewRetryStrategy(RetryConfig{MaxAttempts: 2, Jitter: JitterNone})
-	if d := strategy(errors.New("x"), 1); !d.Retry {
+	if d := strategy(RetryAttempt{Err: errors.New("x"), Attempt: 1}); !d.Retry {
 		t.Errorf("attempt 1 = %+v, want retry", d)
 	}
 }
@@ -218,12 +218,12 @@ func TestNewRetryStrategyScheduleUnchanged(t *testing.T) {
 				t.Fatalf("NewRetryStrategy(%+v) error = %v, want nil", tt.cfg, cerr)
 			}
 			for i, want := range tt.want {
-				d := strategy(err, i+1)
+				d := strategy(RetryAttempt{Err: err, Attempt: i + 1})
 				if !d.Retry || d.Delay != want {
 					t.Errorf("attempt %d = %+v, want retry with %v delay", i+1, d, want)
 				}
 			}
-			if d := strategy(err, tt.noMore); d.Retry {
+			if d := strategy(RetryAttempt{Err: err, Attempt: tt.noMore}); d.Retry {
 				t.Errorf("attempt %d = %+v, want retries exhausted", tt.noMore, d)
 			}
 		})
@@ -240,7 +240,7 @@ func TestNewRetryStrategyFullJitterBounds(t *testing.T) {
 	err := errors.New("x")
 
 	for range 100 {
-		d := strategy(err, 1)
+		d := strategy(RetryAttempt{Err: err, Attempt: 1})
 		if !d.Retry {
 			t.Fatal("expected retry")
 		}
@@ -263,7 +263,7 @@ func TestNewRetryStrategyHalfJitterBounds(t *testing.T) {
 	err := errors.New("x")
 
 	for range 100 {
-		d := strategy(err, 1)
+		d := strategy(RetryAttempt{Err: err, Attempt: 1})
 		if d.Delay < 4*time.Second || d.Delay > 8*time.Second {
 			t.Fatalf("half jitter Delay = %v, want within [4s, 8s]", d.Delay)
 		}
@@ -279,13 +279,13 @@ func TestNewRetryStrategyMinimumOneSecond(t *testing.T) {
 		BackoffRate:  0.25,
 		Jitter:       JitterNone,
 	})
-	if d := strategy(errors.New("x"), 3); d.Delay != time.Second {
+	if d := strategy(RetryAttempt{Err: errors.New("x"), Attempt: 3}); d.Delay != time.Second {
 		t.Errorf("sub-second delay = %v, want floored to 1s", d.Delay)
 	}
 }
 
 func TestNoRetry(t *testing.T) {
-	if d := NoRetry()(errors.New("x"), 1); d.Retry {
+	if d := NoRetry()(RetryAttempt{Err: errors.New("x"), Attempt: 1}); d.Retry {
 		t.Errorf("NoRetry attempt 1 = %+v, want no retry", d)
 	}
 }
@@ -297,7 +297,7 @@ func TestExponentialBackoffPreset(t *testing.T) {
 	err := errors.New("x")
 
 	for attempt := 1; attempt <= 5; attempt++ {
-		d := strategy(err, attempt)
+		d := strategy(RetryAttempt{Err: err, Attempt: attempt})
 		if !d.Retry {
 			t.Fatalf("attempt %d: want retry", attempt)
 		}
@@ -306,7 +306,7 @@ func TestExponentialBackoffPreset(t *testing.T) {
 			t.Errorf("attempt %d: Delay = %v, want within [1s, %ds]", attempt, d.Delay, maxBase)
 		}
 	}
-	if d := strategy(err, 6); d.Retry {
+	if d := strategy(RetryAttempt{Err: err, Attempt: 6}); d.Retry {
 		t.Errorf("attempt 6 = %+v, want retries exhausted", d)
 	}
 }
@@ -319,12 +319,12 @@ func TestLinearBackoffFixedDelay(t *testing.T) {
 	cause := errors.New("x")
 
 	for attempt := 1; attempt <= 5; attempt++ {
-		d := strategy(cause, attempt)
+		d := strategy(RetryAttempt{Err: cause, Attempt: attempt})
 		if !d.Retry || d.Delay != 3*time.Second {
 			t.Errorf("attempt %d = %+v, want retry with fixed 3s delay", attempt, d)
 		}
 	}
-	if d := strategy(cause, 6); d.Retry {
+	if d := strategy(RetryAttempt{Err: cause, Attempt: 6}); d.Retry {
 		t.Errorf("attempt 6 = %+v, want retries exhausted", d)
 	}
 }
@@ -335,7 +335,7 @@ func TestLinearBackoffZeroDelayDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LinearBackoff(0) error = %v, want nil", err)
 	}
-	if d := strategy(errors.New("x"), 1); !d.Retry || d.Delay != 5*time.Second {
+	if d := strategy(RetryAttempt{Err: errors.New("x"), Attempt: 1}); !d.Retry || d.Delay != 5*time.Second {
 		t.Errorf("attempt 1 = %+v, want retry with default 5s delay", d)
 	}
 }

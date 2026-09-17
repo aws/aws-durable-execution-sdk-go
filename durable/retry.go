@@ -20,22 +20,38 @@ type RetryDecision struct {
 	Delay time.Duration
 }
 
+// RetryAttempt describes a failed attempt to a [RetryStrategy].
+type RetryAttempt struct {
+	_ [0]func() // blocks unkeyed literals; keeps fields addable
+
+	// Err is the error from the attempt that just failed.
+	Err error
+
+	// Attempt is the 1-based number of the attempt that just failed,
+	// inclusive of the first attempt.
+	Attempt int
+
+	// Elapsed is the time since the first attempt began. It is zero when
+	// the SDK does not track it.
+	Elapsed time.Duration
+}
+
 // RetryStrategy decides whether and when to retry a failed step attempt.
-// err is the error from the attempt that just failed, and attempt is its
-// 1-based number. Strategies must be deterministic functions of their
-// arguments, except for randomized jitter in the returned delay.
+// Strategies must be deterministic functions of the [RetryAttempt] they
+// receive, except for randomized jitter in the returned delay.
 //
-// To retry only specific errors, write a strategy that inspects err with
-// [errors.Is] or [errors.As] before delegating to a configured strategy:
+// To retry only specific errors, write a strategy that inspects
+// [RetryAttempt.Err] with [errors.Is] or [errors.As] before delegating to
+// a configured strategy:
 //
-//	transientOnly := func(err error, attempt int) durable.RetryDecision {
+//	transientOnly := func(a durable.RetryAttempt) durable.RetryDecision {
 //		var te *TransientError
-//		if !errors.As(err, &te) {
+//		if !errors.As(a.Err, &te) {
 //			return durable.RetryDecision{}
 //		}
-//		return durable.ExponentialBackoff()(err, attempt)
+//		return durable.ExponentialBackoff()(a)
 //	}
-type RetryStrategy func(err error, attempt int) RetryDecision
+type RetryStrategy func(RetryAttempt) RetryDecision
 
 // JitterStrategy randomizes retry delays to avoid thundering herds.
 type JitterStrategy string
@@ -154,12 +170,12 @@ func newRetryStrategy(cfg RetryConfig) RetryStrategy {
 	if cfg.Jitter == "" {
 		cfg.Jitter = JitterFull
 	}
-	return func(_ error, attempt int) RetryDecision {
-		if attempt >= cfg.MaxAttempts {
+	return func(a RetryAttempt) RetryDecision {
+		if a.Attempt >= cfg.MaxAttempts {
 			return RetryDecision{}
 		}
 		base := math.Min(
-			cfg.InitialDelay.Seconds()*math.Pow(cfg.BackoffRate, float64(attempt-1)),
+			cfg.InitialDelay.Seconds()*math.Pow(cfg.BackoffRate, float64(a.Attempt-1)),
 			cfg.MaxDelay.Seconds(),
 		)
 		return RetryDecision{Retry: true, Delay: finalizeDelay(base, cfg.Jitter)}
@@ -181,7 +197,7 @@ func finalizeDelay(seconds float64, jitter JitterStrategy) time.Duration {
 
 // NoRetry returns a strategy that never retries.
 func NoRetry() RetryStrategy {
-	return func(error, int) RetryDecision {
+	return func(RetryAttempt) RetryDecision {
 		return RetryDecision{}
 	}
 }

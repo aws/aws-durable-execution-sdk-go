@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### Breaking: `RetryStrategy` takes a `RetryAttempt` struct
+
+`RetryStrategy` is now `func(RetryAttempt) RetryDecision` instead of
+`func(err error, attempt int) RetryDecision`. `RetryAttempt` carries the
+failing error as `Err`, the 1-based attempt number as `Attempt`, and the
+time since the first attempt began as `Elapsed` (currently always zero;
+the field is present so it can be filled later). A struct parameter lets
+future releases add fields without breaking existing strategies.
+
+Custom strategies change from
+
+```go
+func(err error, attempt int) durable.RetryDecision { ... }
+```
+
+to
+
+```go
+func(a durable.RetryAttempt) durable.RetryDecision { ... }
+```
+
+and read `a.Err` and `a.Attempt` in place of the former parameters.
+Strategies built with `NewRetryStrategy`, `MustNewRetryStrategy`,
+`ExponentialBackoff`, `LinearBackoff`, `MustLinearBackoff`, and `NoRetry`
+are unaffected from the caller's side. Like `RetryConfig` and
+`RetryDecision`, `RetryAttempt` must be constructed with keyed fields.
+
 ### Breaking: AWS SDK and aws-lambda-go types removed from the exported surface
 
 The exported `durable` API now names only this SDK's own types and the

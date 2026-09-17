@@ -32,8 +32,8 @@ func handler(ctx durable.Context, _ any) (string, error) {
 					return "", fmt.Errorf("attempt %d failed", attemptCount)
 				}
 				return "retry-complete", nil
-			}, durable.WithRetry(func(_ error, attempt int) durable.RetryDecision {
-				if attempt >= 5 {
+			}, durable.WithRetry(func(a durable.RetryAttempt) durable.RetryDecision {
+				if a.Attempt >= 5 {
 					return durable.RetryDecision{Retry: false}
 				}
 				return durable.RetryDecision{Retry: true, Delay: 1 * time.Second}
