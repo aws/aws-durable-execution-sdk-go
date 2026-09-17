@@ -170,16 +170,16 @@ func TestDurableHandlerInvokeRejectsBadInput(t *testing.T) {
 	}
 }
 
-func TestInitialExecutionStateToOperations(t *testing.T) {
+func TestOperationsFromPayload(t *testing.T) {
 	in := initialExecutionState{
 		Operations: []wireOperation{
 			{Id: "1", Status: "SUCCEEDED"},
 			{Id: "1-1", Status: "STARTED"},
 		},
 	}
-	ops := in.toOperations()
+	ops := operationsFromPayload(&in)
 	if len(ops) != 2 {
-		t.Fatalf("toOperations() returned %d, want 2", len(ops))
+		t.Fatalf("operationsFromPayload() returned %d, want 2", len(ops))
 	}
 	if ops[0].id != "1" || ops[0].status != statusSucceeded {
 		t.Errorf("ops[0] = %+v, want id 1 SUCCEEDED", ops[0])
@@ -189,7 +189,7 @@ func TestInitialExecutionStateToOperations(t *testing.T) {
 	}
 }
 
-func TestInitialExecutionStateCustomerInput(t *testing.T) {
+func TestCustomerInput(t *testing.T) {
 	tests := []struct {
 		name   string
 		state  initialExecutionState
@@ -219,7 +219,7 @@ func TestInitialExecutionStateCustomerInput(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, ok := tt.state.customerInput()
+			got, ok := customerInput(&tt.state)
 			if ok != tt.wantOK {
 				t.Fatalf("customerInput() ok = %v, want %v", ok, tt.wantOK)
 			}

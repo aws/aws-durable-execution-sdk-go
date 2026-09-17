@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
+	"github.com/aws/aws-durable-execution-sdk-go/durable/internal/wire"
 )
 
 // ExecutionStatus represents the outcome of a durable execution invocation.
@@ -252,14 +253,7 @@ func ResultAs[O any](r *TestResult) (O, error) {
 // testResultFromResponse parses an invocation response and builds a
 // TestResult with the operation snapshot.
 func testResultFromResponse(response []byte, ops []durable.Operation) (*TestResult, error) {
-	var resp struct {
-		Status string  `json:"Status"`
-		Result *string `json:"Result,omitempty"`
-		Error  *struct {
-			ErrorType    string `json:"ErrorType,omitempty"`
-			ErrorMessage string `json:"ErrorMessage,omitempty"`
-		} `json:"Error,omitempty"`
-	}
+	var resp wire.InvocationResponse
 	if err := json.Unmarshal(response, &resp); err != nil {
 		return nil, fmt.Errorf("durabletest: parse invocation response: %w", err)
 	}

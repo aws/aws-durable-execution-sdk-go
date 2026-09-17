@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
+	"github.com/aws/aws-durable-execution-sdk-go/durable/internal/wire"
 )
 
 // DefaultMaxInvocations is the maximum number of re-invocations that
@@ -270,14 +271,14 @@ func (r *LocalRunner[I, O]) buildPayload(event I) ([]byte, error) {
 	// execution operation carrying the customer input, followed by all
 	// checkpointed operations.
 	allOps := r.client.allOperationsRaw()
-	wireOps := make([]invocationOperation, 0, len(allOps)+1)
+	wireOps := make([]wire.Operation, 0, len(allOps)+1)
 
 	// Execution operation always first.
-	wireOps = append(wireOps, invocationOperation{
-		ID:     "exec-op",
+	wireOps = append(wireOps, wire.Operation{
+		Id:     "exec-op",
 		Status: "STARTED",
 		Type:   "EXECUTION",
-		ExecutionDetails: &executionDetails{
+		ExecutionDetails: &wire.ExecutionDetails{
 			InputPayload: string(eventJSON),
 		},
 	})
@@ -287,10 +288,10 @@ func (r *LocalRunner[I, O]) buildPayload(event I) ([]byte, error) {
 		wireOps = append(wireOps, apiOperationToWire(op))
 	}
 
-	input := invocationPayload{
-		DurableExecutionArn: "arn:aws:lambda:us-east-1:123456789012:durable-execution:test",
+	input := wire.InvocationInput{
+		DurableExecutionArn: "arn:aws:lambda:local:local:durable-execution:test",
 		CheckpointToken:     r.client.currentToken(),
-		InitialExecutionState: initialState{
+		InitialExecutionState: wire.InitialExecutionState{
 			Operations: wireOps,
 		},
 	}
@@ -319,70 +320,6 @@ func (m *memoryClient) allOperationsRaw() []operationSnapshot {
 	return ops
 }
 
-// Wire types for constructing the invocation payload. These mirror the
-// durable package's invocationInput but are defined locally because the
-// durable package's types are unexported.
-
-type invocationPayload struct {
-	DurableExecutionArn   string       `json:"DurableExecutionArn"`
-	CheckpointToken       string       `json:"CheckpointToken"`
-	InitialExecutionState initialState `json:"InitialExecutionState"`
-}
-
-type initialState struct {
-	Operations []invocationOperation `json:"Operations"`
-}
-
-type invocationOperation struct {
-	ID                   string               `json:"Id"`
-	Status               string               `json:"Status"`
-	Type                 string               `json:"Type,omitempty"`
-	SubType              string               `json:"SubType,omitempty"`
-	Name                 string               `json:"Name,omitempty"`
-	ParentId             string               `json:"ParentId,omitempty"`
-	ExecutionDetails     *executionDetails    `json:"ExecutionDetails,omitempty"`
-	StepDetails          *stepDetailsWire     `json:"StepDetails,omitempty"`
-	CallbackDetails      *callbackDetailsWire `json:"CallbackDetails,omitempty"`
-	ChainedInvokeDetails *invokeDetailsWire   `json:"ChainedInvokeDetails,omitempty"`
-	ContextDetails       *contextDetailsWire  `json:"ContextDetails,omitempty"`
-	WaitDetails          *waitDetailsWire     `json:"WaitDetails,omitempty"`
-}
-
-type executionDetails struct {
-	InputPayload string `json:"InputPayload,omitempty"`
-}
-
-type stepDetailsWire struct {
-	Attempt int32      `json:"Attempt,omitempty"`
-	Result  string     `json:"Result,omitempty"`
-	Error   *errorWire `json:"Error,omitempty"`
-}
-
-type callbackDetailsWire struct {
-	CallbackId string     `json:"CallbackId,omitempty"`
-	Result     string     `json:"Result,omitempty"`
-	Error      *errorWire `json:"Error,omitempty"`
-}
-
-type invokeDetailsWire struct {
-	Result string     `json:"Result,omitempty"`
-	Error  *errorWire `json:"Error,omitempty"`
-}
-
-type contextDetailsWire struct {
-	Result         string     `json:"Result,omitempty"`
-	ReplayChildren bool       `json:"ReplayChildren,omitempty"`
-	Error          *errorWire `json:"Error,omitempty"`
-}
-
-type waitDetailsWire struct{}
-
-type errorWire struct {
-	ErrorType    string `json:"ErrorType,omitempty"`
-	ErrorMessage string `json:"ErrorMessage,omitempty"`
-	ErrorData    string `json:"ErrorData,omitempty"`
-}
-
 // operationSnapshot is a denormalized view of an operation for payload
 // construction.
 type operationSnapshot struct {
@@ -392,10 +329,10 @@ type operationSnapshot struct {
 	SubType              string
 	Name                 string
 	ParentId             string
-	StepDetails          *stepDetailsWire
-	CallbackDetails      *callbackDetailsWire
-	ChainedInvokeDetails *invokeDetailsWire
-	ContextDetails       *contextDetailsWire
+	StepDetails          *wire.StepDetails
+	CallbackDetails      *wire.CallbackDetails
+	ChainedInvokeDetails *wire.ChainedInvokeDetails
+	ContextDetails       *wire.ContextDetails
 }
 
 func operationToSnapshot(op durable.Operation) operationSnapshot {
@@ -408,36 +345,36 @@ func operationToSnapshot(op durable.Operation) operationSnapshot {
 		ParentId: ptrStr(op.ParentId),
 	}
 	if sd := op.StepDetails; sd != nil {
-		wire := &stepDetailsWire{
-			Attempt: sd.Attempt,
+		details := &wire.StepDetails{
+			Attempt: int(sd.Attempt),
 			Result:  ptrStr(sd.Result),
 		}
 		if sd.Error != nil {
-			wire.Error = &errorWire{
+			details.Error = &wire.ErrorObject{
 				ErrorType:    ptrStr(sd.Error.ErrorType),
 				ErrorMessage: ptrStr(sd.Error.ErrorMessage),
 			}
 		}
-		s.StepDetails = wire
+		s.StepDetails = details
 	}
 	if cd := op.CallbackDetails; cd != nil {
-		s.CallbackDetails = &callbackDetailsWire{
+		s.CallbackDetails = &wire.CallbackDetails{
 			CallbackId: ptrStr(cd.CallbackId),
 			Result:     ptrStr(cd.Result),
 		}
 		if cd.Error != nil {
-			s.CallbackDetails.Error = &errorWire{
+			s.CallbackDetails.Error = &wire.ErrorObject{
 				ErrorType:    ptrStr(cd.Error.ErrorType),
 				ErrorMessage: ptrStr(cd.Error.ErrorMessage),
 			}
 		}
 	}
 	if id := op.ChainedInvokeDetails; id != nil {
-		s.ChainedInvokeDetails = &invokeDetailsWire{
+		s.ChainedInvokeDetails = &wire.ChainedInvokeDetails{
 			Result: ptrStr(id.Result),
 		}
 		if id.Error != nil {
-			s.ChainedInvokeDetails.Error = &errorWire{
+			s.ChainedInvokeDetails.Error = &wire.ErrorObject{
 				ErrorType:    ptrStr(id.Error.ErrorType),
 				ErrorMessage: ptrStr(id.Error.ErrorMessage),
 				ErrorData:    ptrStr(id.Error.ErrorData),
@@ -445,14 +382,14 @@ func operationToSnapshot(op durable.Operation) operationSnapshot {
 		}
 	}
 	if cd := op.ContextDetails; cd != nil {
-		s.ContextDetails = &contextDetailsWire{
+		s.ContextDetails = &wire.ContextDetails{
 			Result: ptrStr(cd.Result),
 		}
 		if cd.ReplayChildren != nil && *cd.ReplayChildren {
 			s.ContextDetails.ReplayChildren = true
 		}
 		if cd.Error != nil {
-			s.ContextDetails.Error = &errorWire{
+			s.ContextDetails.Error = &wire.ErrorObject{
 				ErrorType:    ptrStr(cd.Error.ErrorType),
 				ErrorMessage: ptrStr(cd.Error.ErrorMessage),
 			}
@@ -461,9 +398,9 @@ func operationToSnapshot(op durable.Operation) operationSnapshot {
 	return s
 }
 
-func apiOperationToWire(s operationSnapshot) invocationOperation {
-	return invocationOperation{
-		ID:                   s.ID,
+func apiOperationToWire(s operationSnapshot) wire.Operation {
+	return wire.Operation{
+		Id:                   s.ID,
 		Status:               s.Status,
 		Type:                 s.Type,
 		SubType:              s.SubType,

@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+
+	"github.com/aws/aws-durable-execution-sdk-go/durable/internal/wire"
 )
 
 // Handler is a durable function handler. It receives the deserialized
@@ -135,7 +137,7 @@ var errSuspendExecution = errors.New("durable: execution suspended")
 // reconstruct execution state, run the user handler on its own goroutine
 // under replay, and translate the outcome into the invocation response.
 func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]byte, error) {
-	var in invocationInput
+	var in wire.InvocationInput
 	if err := json.Unmarshal(payload, &in); err != nil {
 		return nil, fmt.Errorf("durable: parse invocation input: %w", err)
 	}
@@ -155,7 +157,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	}
 
 	var event I
-	if raw, ok := in.InitialExecutionState.customerInput(); ok {
+	if raw, ok := customerInput(&in.InitialExecutionState); ok {
 		if err := json.Unmarshal([]byte(raw), &event); err != nil {
 			return nil, fmt.Errorf("durable: deserialize customer input: %w", err)
 		}
@@ -351,7 +353,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 				})
 			}
 		})
-		resp, respErr = respond(invocationResponse{Status: invocationPending})
+		resp, respErr = respond(wire.InvocationResponse{Status: wire.StatusPending})
 	case wrapErr != nil:
 		dispatchNotification(pd, func(p *Plugin) {
 			if p.OnInvocationEnd != nil {
@@ -362,8 +364,8 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 				})
 			}
 		})
-		resp, respErr = respond(invocationResponse{
-			Status: invocationFailed,
+		resp, respErr = respond(wire.InvocationResponse{
+			Status: wire.StatusFailed,
 			Error:  errorObjectFromError(wrapErr),
 		})
 	default:
@@ -419,10 +421,10 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 				return nil, err
 			}
 			empty := ""
-			resp, respErr = respond(invocationResponse{Status: invocationSucceeded, Result: &empty})
+			resp, respErr = respond(wire.InvocationResponse{Status: wire.StatusSucceeded, Result: &empty})
 		} else {
 			s := string(serialized)
-			resp, respErr = respond(invocationResponse{Status: invocationSucceeded, Result: &s})
+			resp, respErr = respond(wire.InvocationResponse{Status: wire.StatusSucceeded, Result: &s})
 		}
 		// OnInvocationEnd fires only after result durability is guaranteed.
 		dispatchNotification(pd, func(p *Plugin) {
@@ -462,8 +464,8 @@ func (h *durableHandler[I, O]) lambdaClient(ctx context.Context) (ExecutionClien
 
 // assembleState combines the operation page embedded in the invocation
 // payload with any remaining pages fetched from the backend.
-func assembleState(ctx context.Context, cp *checkpointer, initial *initialExecutionState) (*executionState, error) {
-	ops := initial.toOperations()
+func assembleState(ctx context.Context, cp *checkpointer, initial *wire.InitialExecutionState) (*executionState, error) {
+	ops := operationsFromPayload(initial)
 	if initial.NextMarker != "" {
 		rest, err := cp.loadStateFrom(ctx, initial.NextMarker)
 		if err != nil {
@@ -475,8 +477,8 @@ func assembleState(ctx context.Context, cp *checkpointer, initial *initialExecut
 }
 
 // errorObjectFromError builds the wire error object for a FAILED response.
-func errorObjectFromError(err error) *wireError {
-	we := &wireError{ErrorType: "Error", ErrorMessage: err.Error()}
+func errorObjectFromError(err error) *wire.ErrorObject {
+	we := &wire.ErrorObject{ErrorType: "Error", ErrorMessage: err.Error()}
 	var stepErr *StepError
 	var invokeErr *InvokeError
 	var callbackErr *CallbackError
@@ -524,7 +526,7 @@ func errorObjectFromError(err error) *wireError {
 }
 
 // respond serializes an invocation response.
-func respond(r invocationResponse) ([]byte, error) {
+func respond(r wire.InvocationResponse) ([]byte, error) {
 	b, err := json.Marshal(r)
 	if err != nil {
 		return nil, fmt.Errorf("durable: marshal invocation response: %w", err)
