@@ -1531,18 +1531,18 @@ func (d *childErrorData) setInner(cause error) {
 	if cause == nil {
 		return
 	}
-	d.InnerErrType = errorTypeName(cause)
+	d.InnerErrType = wireErrorType(cause)
 	d.InnerErrMessage = truncateUTF8(cause.Error(), maxInnerErrMessageBytes)
 }
 
 // wrapperErrorData extracts reconstructable metadata from a known SDK
-// wrapper error. It switches on the error's outermost concrete type — the
-// same identity [errorTypeName] records as the checkpointed ErrorType — so
+// wrapper error. It switches on the outermost SDK error in the chain — the
+// same identity [wireErrorType] records as the checkpointed ErrorType — so
 // the metadata always describes the type that [reconstructInnerError] will
 // rebuild. The second result is false for other error types.
 func wrapperErrorData(err error) (childErrorData, bool) {
 	var d childErrorData
-	switch e := err.(type) {
+	switch e := outermostSDKError(err).(type) {
 	case *StepError:
 		d.Name = e.Name
 		d.Attempts = e.Attempts
@@ -1649,12 +1649,12 @@ func fromBatchResult[O any](ctx context.Context, result BatchResult[O], itemSerd
 			cpItems[i].Result = string(raw)
 		case BatchItemFailed:
 			if item.Err != nil {
-				cpItems[i].ErrType = errorTypeName(item.Err)
+				cpItems[i].ErrType = wireErrorType(item.Err)
 				cpItems[i].ErrMessage = item.Err.Error()
 				// Extract inner error details for child context errors.
 				var childErr *ChildContextError
 				if errors.As(item.Err, &childErr) && childErr.Err != nil {
-					cpItems[i].ErrType = errorTypeName(childErr.Err)
+					cpItems[i].ErrType = wireErrorType(childErr.Err)
 					cpItems[i].ErrMessage = childErr.Err.Error()
 					// Persist inner wrapper metadata for known SDK types
 					// so replay reconstructs the concrete wrapper chain

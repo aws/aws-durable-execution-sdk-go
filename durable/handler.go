@@ -477,52 +477,36 @@ func assembleState(ctx context.Context, cp *checkpointer, initial *wire.InitialE
 }
 
 // errorObjectFromError builds the wire error object for a FAILED response.
+// The ErrorType follows [wireErrorType], the same rule checkpoint updates
+// use. The message is the outermost error's message, except for callback
+// and child-context failures, which report their cause's message.
 func errorObjectFromError(err error) *wire.ErrorObject {
-	we := &wire.ErrorObject{ErrorType: "Error", ErrorMessage: err.Error()}
-	var stepErr *StepError
-	var invokeErr *InvokeError
-	var callbackErr *CallbackError
-	var childErr *ChildContextError
-	var condErr *WaitForConditionError
-	var combErr *CombinatorError
-	var batchErr *BatchCompletionError
-	switch {
-	case errors.As(err, &stepErr):
-		we.ErrorType = "StepError"
-	case errors.As(err, &invokeErr):
-		we.ErrorType = "InvokeError"
-	case errors.As(err, &callbackErr):
-		we.ErrorType = "CallbackError"
-		// Use the inner error's message for the wire. For replayed errors
-		// (from the checkpoint), extract just the message portion
-		// (without the ErrorType prefix) so it matches the original
-		// external system's ErrorMessage on the wire.
-		if callbackErr.Err != nil {
-			var re *replayedError
-			if errors.As(callbackErr.Err, &re) {
-				we.ErrorMessage = re.message
-			} else {
-				we.ErrorMessage = callbackErr.Err.Error()
-			}
+	we := &wire.ErrorObject{ErrorType: wireErrorType(err), ErrorMessage: err.Error()}
+	// Use the cause's message for the wire. For replayed errors (from the
+	// checkpoint), extract just the message portion (without the
+	// ErrorType prefix) so it matches the original ErrorMessage on the
+	// wire.
+	switch e := outermostSDKError(err).(type) {
+	case *CallbackError:
+		if e.Err != nil {
+			we.ErrorMessage = causeMessage(e.Err)
 		}
-	case errors.As(err, &childErr):
-		we.ErrorType = "ChildContextError"
-		if childErr.Err != nil {
-			var re *replayedError
-			if errors.As(childErr.Err, &re) {
-				we.ErrorMessage = re.message
-			} else {
-				we.ErrorMessage = childErr.Err.Error()
-			}
+	case *ChildContextError:
+		if e.Err != nil {
+			we.ErrorMessage = causeMessage(e.Err)
 		}
-	case errors.As(err, &condErr):
-		we.ErrorType = "WaitForConditionError"
-	case errors.As(err, &combErr):
-		we.ErrorType = "PromiseCombinatorError"
-	case errors.As(err, &batchErr):
-		we.ErrorType = "BatchCompletionError"
 	}
 	return we
+}
+
+// causeMessage returns the message recorded for a wrapper's cause: the
+// original message for a replayed error, and Error() otherwise.
+func causeMessage(cause error) string {
+	var re *replayedError
+	if errors.As(cause, &re) {
+		return re.message
+	}
+	return cause.Error()
 }
 
 // respond serializes an invocation response.

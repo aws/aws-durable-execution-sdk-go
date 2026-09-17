@@ -568,7 +568,7 @@ type transientError struct{ msg string }
 
 func (e *transientError) Error() string { return e.msg }
 
-func TestErrorTypeName(t *testing.T) {
+func TestWireErrorTypeUserErrors(t *testing.T) {
 	tests := []struct {
 		name string
 		err  error
@@ -577,13 +577,14 @@ func TestErrorTypeName(t *testing.T) {
 		{"errors.New", errors.New("x"), "Error"},
 		{"fmt.Errorf", fmt.Errorf("x"), "Error"},
 		{"wrapped", fmt.Errorf("x: %w", errors.New("y")), "Error"},
+		{"joined", errors.Join(errors.New("x"), errors.New("y")), "Error"},
 		{"custom type", &transientError{"x"}, "transientError"},
 		{"interrupted", &StepInterruptedError{Name: "s"}, "StepInterruptedError"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := errorTypeName(tt.err); got != tt.want {
-				t.Errorf("errorTypeName(%v) = %q, want %q", tt.err, got, tt.want)
+			if got := wireErrorType(tt.err); got != tt.want {
+				t.Errorf("wireErrorType(%v) = %q, want %q", tt.err, got, tt.want)
 			}
 		})
 	}

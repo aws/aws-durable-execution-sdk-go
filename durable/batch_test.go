@@ -1544,7 +1544,7 @@ func TestBatchCheckpointPreservesInnerErrorType(t *testing.T) {
 		t.Fatalf("replayed StepError.Err type = %T, want *replayedError", replayedStep.Err)
 	}
 	if leafErr.errType != "errorString" && leafErr.errType != "Error" {
-		// fmt.Errorf produces *errors.errorString; errorTypeName normalizes
+		// fmt.Errorf produces *errors.errorString; wireErrorType normalizes
 		// it to "Error".
 		t.Errorf("replayed leaf errType = %q, want %q", leafErr.errType, "Error")
 	}

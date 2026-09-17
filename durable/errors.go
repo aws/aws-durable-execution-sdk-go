@@ -3,6 +3,7 @@ package durable
 import (
 	"errors"
 	"fmt"
+	"reflect"
 )
 
 // Verify interface compliance for all error types.
@@ -20,6 +21,114 @@ var (
 	_ error = (*ResultTooLargeError)(nil)
 	_ error = (*SerdesError)(nil)
 )
+
+// wireErrorType returns the ErrorType string recorded for err. Every path
+// that serializes an error — checkpoint FAIL and RETRY updates, batch item
+// results, and the FAILED invocation response — uses this one function, so
+// the same Go error always produces the same wire name.
+//
+// The rule has two parts:
+//
+//  1. The chain is walked from the outermost error inward. The first SDK
+//     error type found gives the name, via [sdkWireErrorType]. So a
+//     [ChildContextError] wrapping a [StepError] is reported as
+//     "ChildContextError", and a [StepError] wrapped by [fmt.Errorf] is
+//     reported as "StepError".
+//  2. If the chain holds no SDK error type, the outermost error's Go type
+//     name is the wire name. Unnamed types (from [errors.New],
+//     [fmt.Errorf], and [errors.Join]) are reported as "Error".
+func wireErrorType(err error) string {
+	if sdkErr := outermostSDKError(err); sdkErr != nil {
+		name, _ := sdkWireErrorType(sdkErr)
+		return name
+	}
+	return userErrorTypeName(err)
+}
+
+// sdkWireErrorType maps an SDK error type to its wire ErrorType. It is the
+// single source of these names; no other code derives them. The wire names
+// are shared with the other Durable Execution SDKs, so consumers can match
+// on one name regardless of the SDK that recorded the failure. The mapping
+// is keyed on the concrete type, not on the type's name, so renaming a Go
+// type cannot change the wire contract.
+//
+// The second result is false when err is not an SDK error type.
+func sdkWireErrorType(err error) (string, bool) {
+	switch err.(type) {
+	case *StepError:
+		return "StepError", true
+	case *StepInterruptedError:
+		return "StepInterruptedError", true
+	case *InvokeError:
+		return "InvokeError", true
+	case *CallbackError:
+		return "CallbackError", true
+	case *ChildContextError:
+		return "ChildContextError", true
+	case *WaitForConditionError:
+		return "WaitForConditionError", true
+	case *CombinatorError:
+		return "PromiseCombinatorError", true
+	case *BatchCompletionError:
+		return "BatchCompletionError", true
+	case *OperationError:
+		return "OperationError", true
+	case *SerdesError:
+		return "SerdesError", true
+	case *NonDeterministicReplayError:
+		return "NonDeterministicReplayError", true
+	case *ResultTooLargeError:
+		return "ResultTooLargeError", true
+	case *CheckpointError:
+		return "CheckpointError", true
+	}
+	return "", false
+}
+
+// outermostSDKError returns the first SDK error type in err's chain,
+// walking from the outermost error inward through Unwrap. Errors that
+// unwrap to several causes are searched in cause order. It returns nil
+// when the chain holds no SDK error type.
+func outermostSDKError(err error) error {
+	for err != nil {
+		if _, ok := sdkWireErrorType(err); ok {
+			return err
+		}
+		switch u := err.(type) {
+		case interface{ Unwrap() error }:
+			err = u.Unwrap()
+		case interface{ Unwrap() []error }:
+			for _, cause := range u.Unwrap() {
+				if found := outermostSDKError(cause); found != nil {
+					return found
+				}
+			}
+			return nil
+		default:
+			return nil
+		}
+	}
+	return nil
+}
+
+// userErrorTypeName derives the wire ErrorType for an error that is not an
+// SDK error type: the error's concrete Go type name, so retry strategies
+// keyed on error identity see a stable name. Unnamed error types (such as
+// those from [errors.New], [fmt.Errorf], and [errors.Join]) map to "Error".
+func userErrorTypeName(err error) string {
+	t := reflect.TypeOf(err)
+	for t != nil && t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t == nil {
+		return "Error"
+	}
+	name := t.Name()
+	if name == "" || name == "errorString" || name == "wrapError" || name == "joinError" {
+		return "Error"
+	}
+	return name
+}
 
 // Sentinel errors for matching with [errors.Is]. These indicate terminal
 // operation statuses assigned externally (TIMED_OUT, STOPPED, CANCELLED).

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -567,31 +566,13 @@ func (c *stepContext) Attempt() int { return c.attempt }
 func (c *stepContext) sealed() {}
 
 // errorObject converts a Go error into the wire error shape recorded with
-// FAIL and RETRY updates.
+// FAIL and RETRY updates. The ErrorType follows [wireErrorType], the same
+// rule the FAILED invocation response uses.
 func errorObject(err error) *ErrorObject {
 	return &ErrorObject{
-		ErrorType:    aws.String(errorTypeName(err)),
+		ErrorType:    aws.String(wireErrorType(err)),
 		ErrorMessage: aws.String(err.Error()),
 	}
-}
-
-// errorTypeName derives the wire ErrorType from an error's concrete type
-// name, so retry strategies keyed on error identity see a stable name.
-// Unnamed error types (such as those from [errors.New] and [fmt.Errorf])
-// map to "Error".
-func errorTypeName(err error) string {
-	t := reflect.TypeOf(err)
-	for t != nil && t.Kind() == reflect.Pointer {
-		t = t.Elem()
-	}
-	if t == nil {
-		return "Error"
-	}
-	name := t.Name()
-	if name == "" || name == "errorString" || name == "wrapError" || name == "joinError" {
-		return "Error"
-	}
-	return name
 }
 
 // replayedError reconstructs a failure recorded in a checkpoint, for

@@ -172,25 +172,131 @@ func TestCombinatorErrorMultiUnwrap(t *testing.T) {
 	}
 }
 
-func TestErrorObjectFromError(t *testing.T) {
+// wireErrorTypeCases lists every exported error type with the wire
+// ErrorType it must produce. For the types shared with the other Durable
+// Execution SDKs the name is the shared wire name; for the Go-only types
+// it is the Go type name. Adding an exported error type requires adding a
+// row here, so the wire contract is stated in one place.
+var wireErrorTypeCases = []struct {
+	name string
+	err  error
+	want string
+}{
+	{"StepError", &StepError{Name: "s", Attempts: 2, Err: fmt.Errorf("x")}, "StepError"},
+	{"StepInterruptedError", &StepInterruptedError{Name: "s"}, "StepInterruptedError"},
+	{"InvokeError", &InvokeError{Name: "i", Err: fmt.Errorf("x")}, "InvokeError"},
+	{"CallbackError", &CallbackError{Name: "c", Err: fmt.Errorf("x")}, "CallbackError"},
+	{"ChildContextError", &ChildContextError{Name: "cc", Err: fmt.Errorf("x")}, "ChildContextError"},
+	{"WaitForConditionError", &WaitForConditionError{Name: "w", Err: fmt.Errorf("x")}, "WaitForConditionError"},
+	{"CombinatorError", &CombinatorError{Name: "any", Errors: []error{fmt.Errorf("x")}}, "PromiseCombinatorError"},
+	{"BatchCompletionError", &BatchCompletionError{Reason: CompletionFailureToleranceExceeded}, "BatchCompletionError"},
+	{"OperationError", &OperationError{Name: "op", Err: fmt.Errorf("x")}, "OperationError"},
+	{"SerdesError", &SerdesError{Operation: "op", Direction: "marshal", Err: fmt.Errorf("x")}, "SerdesError"},
+	{"NonDeterministicReplayError", &NonDeterministicReplayError{Name: "n"}, "NonDeterministicReplayError"},
+	{"ResultTooLargeError", &ResultTooLargeError{Name: "r"}, "ResultTooLargeError"},
+	{"CheckpointError", &CheckpointError{Err: fmt.Errorf("x")}, "CheckpointError"},
+}
+
+// wireErrorTypeOnBothPaths returns the ErrorType produced by the checkpoint
+// path (errorObject) and by the invocation-response path
+// (errorObjectFromError).
+func wireErrorTypeOnBothPaths(err error) (checkpoint, response string) {
+	return *errorObject(err).ErrorType, errorObjectFromError(err).ErrorType
+}
+
+func TestWireErrorTypeEveryExportedTypeOnBothPaths(t *testing.T) {
+	for _, tt := range wireErrorTypeCases {
+		t.Run(tt.name, func(t *testing.T) {
+			cp, resp := wireErrorTypeOnBothPaths(tt.err)
+			if cp != tt.want {
+				t.Errorf("checkpoint ErrorType = %q, want %q", cp, tt.want)
+			}
+			if resp != tt.want {
+				t.Errorf("response ErrorType = %q, want %q", resp, tt.want)
+			}
+		})
+	}
+}
+
+func TestWireErrorTypeChildContextWrappingStep(t *testing.T) {
+	// The outermost SDK type names the wire ErrorType on both paths.
+	err := &ChildContextError{Name: "cc", Err: &StepError{Name: "s", Attempts: 1, Err: fmt.Errorf("x")}}
+	cp, resp := wireErrorTypeOnBothPaths(err)
+	if cp != "ChildContextError" || resp != "ChildContextError" {
+		t.Errorf("ErrorType = (checkpoint %q, response %q), want ChildContextError on both", cp, resp)
+	}
+}
+
+func TestWireErrorTypeCombinator(t *testing.T) {
+	err := &CombinatorError{Name: "any", Errors: []error{fmt.Errorf("x")}}
+	cp, resp := wireErrorTypeOnBothPaths(err)
+	if cp != "PromiseCombinatorError" || resp != "PromiseCombinatorError" {
+		t.Errorf("ErrorType = (checkpoint %q, response %q), want PromiseCombinatorError on both", cp, resp)
+	}
+}
+
+type userDefinedError struct{ msg string }
+
+func (e *userDefinedError) Error() string { return e.msg }
+
+// userWrapError is a user-defined error that wraps a cause.
+type userWrapError struct{ cause error }
+
+func (e *userWrapError) Error() string { return "user wrap: " + e.cause.Error() }
+func (e *userWrapError) Unwrap() error { return e.cause }
+
+func TestWireErrorTypeUserDefinedOnBothPaths(t *testing.T) {
+	cp, resp := wireErrorTypeOnBothPaths(&userDefinedError{"boom"})
+	if cp != "userDefinedError" || resp != "userDefinedError" {
+		t.Errorf("ErrorType = (checkpoint %q, response %q), want userDefinedError on both", cp, resp)
+	}
+}
+
+func TestWireErrorTypeWrappedChains(t *testing.T) {
 	tests := []struct {
-		name     string
-		err      error
-		wantType string
+		name string
+		err  error
+		want string
 	}{
-		{"StepError", &StepError{Err: fmt.Errorf("x")}, "StepError"},
-		{"InvokeError", &InvokeError{Err: fmt.Errorf("x")}, "InvokeError"},
-		{"CallbackError", &CallbackError{Err: fmt.Errorf("x")}, "CallbackError"},
-		{"ChildContextError", &ChildContextError{Err: fmt.Errorf("x")}, "ChildContextError"},
-		{"WaitForConditionError", &WaitForConditionError{Err: fmt.Errorf("x")}, "WaitForConditionError"},
-		{"CombinatorError", &CombinatorError{Errors: []error{fmt.Errorf("x")}}, "PromiseCombinatorError"},
+		{"fmt.Errorf around StepError", fmt.Errorf("w: %w", &StepError{Err: fmt.Errorf("x")}), "StepError"},
+		{"user wrapper around StepError", &userWrapError{&StepError{Err: fmt.Errorf("x")}}, "StepError"},
+		{"user wrapper around plain error", &userWrapError{fmt.Errorf("x")}, "userWrapError"},
+		{"StepError around user type", &StepError{Err: &userDefinedError{"inner"}}, "StepError"},
+		{"CallbackError around ChildContextError", &CallbackError{Err: &ChildContextError{Err: fmt.Errorf("x")}}, "CallbackError"},
+		{"errors.Join with StepError second", errors.Join(fmt.Errorf("a"), &InvokeError{Err: fmt.Errorf("b")}), "InvokeError"},
 		{"plain error", fmt.Errorf("plain"), "Error"},
+		{"nil-cause wrapper", &ChildContextError{Name: "cc"}, "ChildContextError"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			we := errorObjectFromError(tt.err)
-			if we.ErrorType != tt.wantType {
-				t.Errorf("ErrorType = %q, want %q", we.ErrorType, tt.wantType)
+			cp, resp := wireErrorTypeOnBothPaths(tt.err)
+			if cp != tt.want || resp != tt.want {
+				t.Errorf("ErrorType = (checkpoint %q, response %q), want %q on both", cp, resp, tt.want)
+			}
+		})
+	}
+}
+
+func TestErrorObjectFromErrorMessage(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"callback reports cause", &CallbackError{Name: "c", Err: fmt.Errorf("external")}, "external"},
+		{"callback replayed cause", &CallbackError{Name: "c", Err: &replayedError{errType: "T", message: "m"}}, "m"},
+		{"child context reports cause", &ChildContextError{Name: "cc", Err: fmt.Errorf("inner")}, "inner"},
+		{"child context wrapping step reports step message",
+			&ChildContextError{Name: "cc", Err: &StepError{Name: "s", Attempts: 1, Err: fmt.Errorf("x")}},
+			(&StepError{Name: "s", Attempts: 1, Err: fmt.Errorf("x")}).Error()},
+		{"step reports own message", &StepError{Name: "s", Attempts: 1, Err: fmt.Errorf("x")},
+			(&StepError{Name: "s", Attempts: 1, Err: fmt.Errorf("x")}).Error()},
+		{"plain error", fmt.Errorf("plain"), "plain"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := errorObjectFromError(tt.err).ErrorMessage; got != tt.want {
+				t.Errorf("ErrorMessage = %q, want %q", got, tt.want)
 			}
 		})
 	}
