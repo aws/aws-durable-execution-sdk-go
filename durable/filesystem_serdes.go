@@ -30,6 +30,8 @@ const fileSystemSerdesOverflowThreshold = 255 * 1024
 
 // FileSystemSerdesConfig configures a [FileSystemSerdes].
 type FileSystemSerdesConfig struct {
+	_ [0]func() // blocks unkeyed literals; keeps fields addable
+
 	// Mode controls when data is written to the filesystem. Default is
 	// FileSystemSerdesModeAlways.
 	Mode FileSystemSerdesMode

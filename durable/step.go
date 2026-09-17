@@ -551,12 +551,20 @@ type stepContext struct {
 	attempt int
 }
 
+// Compile-time assertion that stepContext implements StepContext. It fails
+// to build if stepContext loses a method the interface requires. It does not
+// detect removal of sealed from the interface alone, because a concrete type
+// may carry methods its interface omits. TestStepContextSealedVarSatisfied
+// checks the interface side by reflection.
 var _ StepContext = (*stepContext)(nil)
 
 func (c *stepContext) Logger() Logger { return c.logger }
 
 // Attempt returns the 1-based attempt number for this step execution.
 func (c *stepContext) Attempt() int { return c.attempt }
+
+// sealed marks stepContext as the SDK's StepContext implementation.
+func (c *stepContext) sealed() {}
 
 // errorObject converts a Go error into the wire error shape recorded with
 // FAIL and RETRY updates.

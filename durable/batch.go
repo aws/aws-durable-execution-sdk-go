@@ -187,6 +187,8 @@ func Parallel[O any](ctx Context, name string, branches []Branch[O], opts ...Bat
 
 // Branch is one branch of a [Parallel] operation.
 type Branch[O any] struct {
+	_ [0]func() // blocks unkeyed literals; keeps fields addable
+
 	// Name identifies the branch. It may be empty.
 	Name string
 
@@ -232,6 +234,8 @@ func (s BatchItemStatus) String() string {
 
 // BatchItem is the outcome of one item or branch in a batch operation.
 type BatchItem[O any] struct {
+	_ [0]func() // blocks unkeyed literals; keeps fields addable
+
 	// Index is the zero-based position of this item in the original input
 	// slice.
 	Index int
@@ -253,6 +257,8 @@ type BatchItem[O any] struct {
 
 // BatchResult is the collected outcome of a [Map] or [Parallel] operation.
 type BatchResult[O any] struct {
+	_ [0]func() // blocks unkeyed literals; keeps fields addable
+
 	// Items holds the per-item outcomes in input order. Items that started
 	// but were abandoned when the batch completed early are included with
 	// status [BatchItemStarted]; items that never started are omitted.
@@ -497,6 +503,8 @@ func WithNesting(m NestingMode) BatchOption {
 // the corresponding threshold unset. Thresholds may be combined — when
 // multiple are set, the first threshold to fire wins.
 type CompletionConfig struct {
+	_ [0]func() // blocks unkeyed literals; keeps fields addable
+
 	// MinSuccessful completes the batch early once this many items
 	// succeed.
 	MinSuccessful int

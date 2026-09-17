@@ -11,6 +11,8 @@ import "time"
 //     (Continue false, Err non-nil). The error is checkpointed and
 //     returned as a [*WaitForConditionError].
 type WaitDecision struct {
+	_ [0]func() // blocks unkeyed literals; keeps fields addable
+
 	// Continue indicates whether to keep waiting and check again.
 	Continue bool
 
@@ -31,6 +33,8 @@ type WaitDecision struct {
 // (InitialState and WaitStrategy) depend on the state type S, and Go's
 // non-generic option interfaces cannot carry a type parameter.
 type ConditionConfig[S any] struct {
+	_ [0]func() // blocks unkeyed literals; keeps fields addable
+
 	// InitialState is the state passed to the first check.
 	InitialState S
 

@@ -60,4 +60,24 @@
 // the swallowed error execute and subsequent durable operations on the same
 // context refuse to proceed. The handler appears to run past the blocking
 // point while later operations fail.
+//
+// # Struct Literals
+//
+// Exported configuration and result structs such as [RetryConfig],
+// [ConditionConfig], [Branch], [BatchItem], and [Settled] begin with a
+// blank zero-size field of type [0]func(). The field lets the SDK add fields
+// to these structs later without breaking user code. It has four visible
+// effects:
+//
+//   - An unkeyed literal such as Branch[string]{"name", fn} fails to compile
+//     outside this package. Use keyed fields: Branch[string]{Name: "name",
+//     Func: fn}.
+//   - The struct is not comparable. Operators and functions that require a
+//     comparable type, such as ==, [slices.Contains], and [slices.Index], do
+//     not compile over it. The *Func variants such as [slices.ContainsFunc]
+//     still work. This is intended, because adding a slice or func field
+//     later would otherwise remove comparability and break callers.
+//   - The fmt verb %+v prints the blank field as _:[].
+//   - Copying, JSON encoding, [reflect.DeepEqual], [errors.Is], [errors.As],
+//     and use as a map value are unaffected.
 package durable

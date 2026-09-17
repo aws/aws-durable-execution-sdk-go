@@ -63,6 +63,11 @@ type Context interface {
 // StepContext deliberately exposes no durable operations: a step is a single
 // atomic unit of work. To group durable operations, use [RunInChildContext]
 // or [Go].
+//
+// StepContext is sealed: only the SDK can implement it. External types that
+// embed or imitate this interface will fail to compile because of the
+// unexported method. Sealing lets the SDK add methods to StepContext
+// without breaking user code.
 type StepContext interface {
 	context.Context
 
@@ -72,6 +77,11 @@ type StepContext interface {
 	// Attempt returns the 1-based attempt number for this step
 	// execution. The first attempt is 1.
 	Attempt() int
+
+	// sealed prevents external implementations of StepContext. Only the
+	// SDK creates StepContext values, so adding a method to this
+	// interface cannot break a user type.
+	sealed()
 }
 
 // Logger is the minimal structured logging interface used by the SDK.
@@ -87,6 +97,8 @@ type Logger interface {
 // enabling context-aware serialization strategies (e.g., using the execution
 // ARN or operation ID in file paths for a filesystem-backed serdes).
 type SerdesContext struct {
+	_ [0]func() // blocks unkeyed literals; keeps fields addable
+
 	// OperationID is the positional ID of the operation being serialized
 	// (e.g., "1", "1-2-3").
 	OperationID string

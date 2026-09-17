@@ -10,6 +10,8 @@ import (
 
 // RetryDecision is a retry strategy's verdict for a failed attempt.
 type RetryDecision struct {
+	_ [0]func() // blocks unkeyed literals; keeps fields addable
+
 	// Retry indicates whether the operation should be attempted again.
 	Retry bool
 
@@ -56,6 +58,8 @@ const (
 // [NewRetryStrategy] or [MustNewRetryStrategy]. The zero value of each field
 // selects its documented default.
 type RetryConfig struct {
+	_ [0]func() // blocks unkeyed literals; keeps fields addable
+
 	// MaxAttempts is the maximum number of total attempts, including the
 	// first. The default is 3. It must not be negative.
 	MaxAttempts int

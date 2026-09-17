@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -292,6 +293,28 @@ func TestContextSealedVarSatisfied(t *testing.T) {
 	// breaks the build.
 	ec := newTestContext(t, nil)
 	var _ Context = ec // compilation proves sealing
+}
+
+// TestStepContextSealedVarSatisfied documents the two halves of the
+// StepContext seal. The compile-time assertion in step.go proves that
+// stepContext implements every method StepContext requires. The reflection
+// check below proves that StepContext requires the unexported sealed method.
+// The two checks are independent: a concrete type may carry methods its
+// interface omits, so removing sealed from the interface alone still
+// compiles. Only the reflection check catches that removal.
+func TestStepContextSealedVarSatisfied(t *testing.T) {
+	// Implementation side: stepContext satisfies StepContext. This mirrors
+	// the var _ StepContext = (*stepContext)(nil) declaration in step.go.
+	sc := &stepContext{Context: context.Background(), logger: nopLogger{}, attempt: 1}
+	var _ StepContext = sc
+
+	// Interface side: StepContext must carry an unexported method. Without
+	// one, any user type with Logger and Attempt would satisfy StepContext,
+	// and adding a method later would break that user type.
+	typ := reflect.TypeOf((*StepContext)(nil)).Elem()
+	if _, ok := typ.MethodByName("sealed"); !ok {
+		t.Fatal("StepContext has no sealed() method; the interface is not sealed")
+	}
 }
 
 // --- Item 1 helper: newTestContextWithExecTime ---

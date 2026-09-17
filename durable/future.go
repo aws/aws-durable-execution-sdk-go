@@ -120,6 +120,8 @@ func newFailedFuture[O any](err error) *Future[O] {
 
 // Settled is the per-future outcome returned by [AllSettled].
 type Settled[O any] struct {
+	_ [0]func() // blocks unkeyed literals; keeps fields addable
+
 	// Value is the future's result. It is the zero value when Err is
 	// non-nil.
 	Value O
