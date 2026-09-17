@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -106,20 +107,55 @@ func TestFutureResultBlocks(t *testing.T) {
 	}
 }
 
-func TestFutureDoneChannel(t *testing.T) {
+func TestFutureSettled(t *testing.T) {
 	f := newFuture[int]()
-	select {
-	case <-f.Done():
-		t.Fatal("Done() closed before settle")
-	default:
+	if f.settled() {
+		t.Fatal("settled() = true before settle")
 	}
 
 	f.settle(42, nil)
 
-	select {
-	case <-f.Done():
-	default:
-		t.Fatal("Done() not closed after settle")
+	if !f.settled() {
+		t.Fatal("settled() = false after settle")
+	}
+}
+
+// TestFutureSettledDoesNotRunPreResult verifies that settled is a passive
+// observation: unlike Result, it must not fire the pre-result hook that
+// commits a pending callback future to suspension.
+func TestFutureSettledDoesNotRunPreResult(t *testing.T) {
+	f := newFuture[int]()
+	fired := false
+	f.preResult = func() { fired = true }
+
+	if f.settled() {
+		t.Fatal("settled() = true before settle")
+	}
+	if fired {
+		t.Fatal("settled() ran the pre-result hook")
+	}
+}
+
+// TestFutureAndCallbackExposeNoChannel guards the API decision that the
+// only ways to wait on a Future or Callback are Result and the combinators.
+// A select over settle signals is not replay-safe, so no method may hand
+// out a channel.
+func TestFutureAndCallbackExposeNoChannel(t *testing.T) {
+	for _, typ := range []reflect.Type{
+		reflect.TypeOf(&Future[int]{}),
+		reflect.TypeOf(&Callback[int]{}),
+	} {
+		if _, ok := typ.MethodByName("Done"); ok {
+			t.Errorf("%s has an exported Done method", typ)
+		}
+		for i := range typ.NumMethod() {
+			m := typ.Method(i)
+			for j := range m.Type.NumOut() {
+				if m.Type.Out(j).Kind() == reflect.Chan {
+					t.Errorf("%s.%s returns a channel", typ, m.Name)
+				}
+			}
+		}
 	}
 }
 

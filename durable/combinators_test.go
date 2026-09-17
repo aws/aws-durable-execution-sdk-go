@@ -1209,12 +1209,7 @@ func TestAnyPendingCallbackLoserDoesNotForcePending(t *testing.T) {
 		// The losing callback future must remain unsettled: settling
 		// requires its pre-result hook (which commits PENDING) or a
 		// fired suspend signal, and neither may happen here.
-		select {
-		case <-cb.future.Done():
-			cbAwaited <- true
-		default:
-			cbAwaited <- false
-		}
+		cbAwaited <- cb.future.settled()
 		return val, err
 	})
 
@@ -1275,12 +1270,7 @@ func TestRacePendingCallbackLoserDoesNotForcePending(t *testing.T) {
 		})
 
 		val, err := Race(ctx, "race-cb-loser", []*Future[string]{cb.future, winner})
-		select {
-		case <-cb.future.Done():
-			cbAwaited <- true
-		default:
-			cbAwaited <- false
-		}
+		cbAwaited <- cb.future.settled()
 		return val, err
 	})
 

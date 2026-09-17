@@ -12,6 +12,15 @@ type Void struct{}
 // Future is the result of an asynchronous durable operation. It settles
 // exactly once, with either a value or an error, and can be read any number
 // of times from any goroutine.
+//
+// The only ways to wait on a Future are [Future.Result] and the combinators
+// [All], [AllSettled], [Any], and [Race]. Each of these checkpoints its
+// outcome, so the value observed on first execution is the value observed
+// on replay. A Future deliberately exposes no channel: a select over
+// several futures picks whichever settles first in the current invocation,
+// and that choice is not checkpointed. On replay every future may already
+// be settled, so the select could pick a different case, and any code that
+// branches on the winner would diverge from the first execution.
 type Future[O any] struct {
 	once  sync.Once
 	done  chan struct{}
@@ -35,20 +44,26 @@ type Future[O any] struct {
 	deferredSuspension bool
 }
 
-// Done returns a channel that is closed when the operation settles. It
-// exists for use in select statements alongside other channels.
-func (f *Future[O]) Done() <-chan struct{} {
-	return f.done
-}
-
 // Result blocks until the operation settles, then returns its outcome.
-// After Done is closed, Result returns immediately.
+// Once the future has settled, Result returns immediately.
 func (f *Future[O]) Result() (O, error) {
 	if f.preResult != nil {
 		f.preResultOnce.Do(f.preResult)
 	}
 	<-f.done
 	return f.value, f.err
+}
+
+// settled reports whether the future has settled, without blocking and
+// without running the pre-result hook. It exists for internal tests that
+// must observe a future's state without awaiting it.
+func (f *Future[O]) settled() bool {
+	select {
+	case <-f.done:
+		return true
+	default:
+		return false
+	}
 }
 
 // settle resolves the future with value and err. Only the first call takes

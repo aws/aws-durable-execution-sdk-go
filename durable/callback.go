@@ -19,6 +19,10 @@ const operationSubTypeWaitForCallback = "WaitForCallback"
 // Callback is a pending callback operation. It carries the identifier that
 // an external system uses to submit a result, and it settles when the
 // submission arrives or the timeout elapses.
+//
+// The only way to wait on a Callback is [Callback.Result]. Like [Future],
+// a Callback exposes no channel, because a select over settle signals is
+// not replay-safe.
 type Callback[O any] struct {
 	id     string
 	future *Future[O]
@@ -27,11 +31,6 @@ type Callback[O any] struct {
 // ID returns the callback identifier to hand to the external system.
 func (c *Callback[O]) ID() string {
 	return c.id
-}
-
-// Done returns a channel that is closed when the callback settles.
-func (c *Callback[O]) Done() <-chan struct{} {
-	return c.future.Done()
 }
 
 // Result blocks until the external system submits a result or the timeout

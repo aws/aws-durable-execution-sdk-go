@@ -22,10 +22,10 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 
 	// Wait for the async step to settle before consuming its future. A
 	// step checkpoints its outcome before settling its future, so this
-	// gate guarantees the failed step is recorded before the settle
-	// context, keeping the operation log order deterministic. Done does
-	// not consume the outcome: AllSettled still absorbs the failure.
-	<-failFuture.Done()
+	// await guarantees the failed step is recorded before the settle
+	// context, keeping the operation log order deterministic. The outcome
+	// is discarded here: AllSettled below absorbs the failure.
+	_, _ = failFuture.Result()
 
 	// AllSettled absorbs the failure — no unhandled error propagation.
 	_, err := durable.AllSettled(ctx, "settle", []*durable.Future[string]{failFuture})
