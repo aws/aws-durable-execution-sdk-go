@@ -28,19 +28,73 @@ func WithChildSerdes(s Serdes) ChildOption {
 	return childOptionFunc(func(o *childOptions) { o.serdes = s })
 }
 
+// WithChildErrorMapper supplies a function that maps a child context's
+// failure before [RunInChildContext], [RunInChildContextAsync], or [Go]
+// returns it. Without a mapper a failed child returns a
+// [*ChildContextError]. With a mapper, that same [*ChildContextError] is
+// passed to mapper and mapper's result is returned instead. A nil result
+// is ignored and the [*ChildContextError] is returned unchanged, so a
+// failure cannot become a success by mistake.
+//
+// Mapper runs on every invocation that reaches the failed child: on the
+// first invocation after the body fails, and on each replay, where the
+// body does not run. Its input is the same each time. The
+// [*ChildContextError] is built from the recorded failure, never from the
+// live error value, so the ErrorType, Message, ErrorData, and StackTrace
+// mapper sees on the first invocation are the ones it sees on replay.
+// Mapper must therefore be deterministic: the same input yields the same
+// output, with no dependence on time, randomness, or state outside the
+// error. A deterministic mapper reproduces the mapped error on replay:
+//
+//	durable.WithChildErrorMapper(func(err *durable.ChildContextError) error {
+//		if err.ErrorType == "StepError" {
+//			return &PaymentError{Reason: err.Message}
+//		}
+//		return err
+//	})
+//
+// The checkpoint records the failure that escaped the child body, which
+// is mapper's input, not mapper's result. A result of the handler's own
+// type cannot be rebuilt from a record, so recording the input and
+// mapping it again is what reproduces the mapped error on replay. A
+// mapper that alters the fields of the [*ChildContextError] it receives,
+// or returns a new one, changes what the handler sees but not what is
+// recorded. The execution history therefore shows the original failure.
+func WithChildErrorMapper(mapper func(err *ChildContextError) error) ChildOption {
+	return childOptionFunc(func(o *childOptions) { o.errorMapper = mapper })
+}
+
 type childOptions struct {
-	serdes Serdes
+	serdes      Serdes
+	errorMapper func(err *ChildContextError) error
 }
 
 type childOptionFunc func(*childOptions)
 
 func (f childOptionFunc) applyChild(o *childOptions) { f(o) }
 
+// failure builds the error a failed child context returns from the record
+// of the error that escaped its body, applying the configured mapper. rec
+// is what the checkpoint stores; on the first invocation the caller
+// checkpoints it, on replay it is the stored record. Building the
+// [*ChildContextError] from rec on both paths gives the mapper one input.
+func (o *childOptions) failure(name string, rec errorRecord) error {
+	childErr := newChildContextError(name, rec)
+	if o.errorMapper == nil {
+		return childErr
+	}
+	if mapped := o.errorMapper(childErr); mapped != nil {
+		return mapped
+	}
+	return childErr
+}
+
 // RunInChildContext runs fn in a child context with isolated operation
 // tracking. Use it to group durable operations into a named sub-workflow
 // whose overall result is checkpointed: on replay of a completed child
 // context, the stored result is returned without re-executing fn. If fn
-// fails, RunInChildContext returns a [*ChildContextError].
+// fails, RunInChildContext returns a [*ChildContextError], or the error
+// a [WithChildErrorMapper] mapper derives from it.
 func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, error), opts ...ChildOption) (O, error) {
 	var zero O
 	ec, ok := ctx.(*execContext)
@@ -85,7 +139,7 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 			return out, nil
 
 		case statusFailed:
-			return zero, newChildContextError(name, childFailureRecord(op))
+			return zero, options.failure(name, childFailureRecord(op))
 
 		case statusStarted, statusPending, statusReady, statusCancelled, statusTimedOut, statusStopped:
 			// STARTED re-enters below and replays the child's own
@@ -166,7 +220,7 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 			}
 			return zero, cerr
 		}
-		return zero, newChildContextError(name, rec)
+		return zero, options.failure(name, rec)
 	}
 
 	serialized, err := options.serdes.Marshal(ec.Context, ec.serdesCtx(id), result)
@@ -202,7 +256,9 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 // The child's operation identity is claimed synchronously before
 // RunInChildContextAsync returns, preserving deterministic program order.
 // Inside fn, the provided Context is owned by fn's goroutine, and all
-// durable operations on it are safe, including nested Go calls.
+// durable operations on it are safe, including nested Go calls. If fn
+// fails, the future settles with a [*ChildContextError], or the error a
+// [WithChildErrorMapper] mapper derives from it.
 //
 // On invocation suspension, the returned future is settled with
 // errSuspendExecution so goroutines blocked on [Future.Result] unwind.
@@ -299,7 +355,7 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 				return
 			}
 			var zero O
-			fut.settle(zero, newChildContextError(name, rec))
+			fut.settle(zero, options.failure(name, rec))
 			return
 		}
 
@@ -342,7 +398,8 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 // Go runs fn concurrently in its own child context and returns a future for
 // its result. It is the replay-safe substitute for the go statement inside
 // durable functions, and shorthand for [RunInChildContextAsync]: opts are
-// forwarded unchanged, so [WithChildSerdes] applies to the child result.
+// forwarded unchanged, so [WithChildSerdes] applies to the child result
+// and [WithChildErrorMapper] to its failure.
 //
 // The child's operation identity is claimed before Go returns, so
 // consecutive Go calls from one goroutine are replay-deterministic. Inside
@@ -378,7 +435,7 @@ func resolveTerminalChild[O any](ec *execContext, op *operation, id, name string
 		return newSettledFuture(out, nil)
 
 	case statusFailed:
-		return newFailedFuture[O](newChildContextError(name, childFailureRecord(op)))
+		return newFailedFuture[O](options.failure(name, childFailureRecord(op)))
 
 	default:
 		// CANCELLED, TIMED_OUT, STOPPED: not expected for context ops,

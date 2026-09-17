@@ -159,6 +159,22 @@ oversized-result checkpoint now responds FAILED instead of ending the
 invocation with an error. Handler code that wants the execution to fail
 returns its own error.
 
+### New: `WithChildErrorMapper`
+
+`durable.WithChildErrorMapper(mapper)` is a `ChildOption` for
+`RunInChildContext`, `RunInChildContextAsync`, and `Go`. When the child
+body fails, the `*ChildContextError` the SDK would otherwise return is
+passed to `mapper`, and `mapper`'s result is returned instead. A nil
+result is ignored and the `*ChildContextError` is returned unchanged.
+
+The mapper runs on the first invocation and again on every replay, with
+the same input each time: a `*ChildContextError` built from the recorded
+failure. The checkpoint records that failure, the mapper's input, not the
+mapper's result; a result of the handler's own type cannot be rebuilt from
+a record, so re-mapping the recorded input is what reproduces the mapped
+error on replay. The mapper must be deterministic. It needs no knowledge
+of its own output type.
+
 ### Breaking: AWS SDK and aws-lambda-go types removed from the exported surface
 
 The exported `durable` API now names only this SDK's own types and the

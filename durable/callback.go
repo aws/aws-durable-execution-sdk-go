@@ -324,6 +324,21 @@ func runWaitForCallbackBody[O any](child *execContext, name string, submitter fu
 // WaitForCallback's name. A failed submitter step becomes a
 // [CallbackSubmitterError] carrying the step's final error. Any other
 // error is returned unchanged.
+//
+// This mapping is not expressed as a [WithChildErrorMapper] mapper. A
+// mapper receives a [*ChildContextError], which carries only the failure
+// record: the wire ErrorType, Message, ErrorData, and StackTrace. The
+// mapping here needs more than the record. On the first invocation it keeps
+// the live callback error's CallbackID and Heartbeat fields, which the
+// record does not carry. On replay, [wfcbFailedError] rebuilds the same
+// error from the inner callback and submitter step operations, so a
+// callback timeout is distinguished from an external failure by the
+// callback operation's status rather than by the context record, and the
+// CallbackID is restored. WaitForCallback also checkpoints under its own
+// subtype through [wfcbContextUpdate] rather than through
+// [RunInChildContext], so there is no child option to attach a mapper to,
+// and its context record names the mapped failure mode, the wire shape the
+// other SDKs write, where [RunInChildContext] records the mapper's input.
 func wfcbMapError(name string, err error) error {
 	switch e := err.(type) {
 	case *CallbackTimeoutError:
