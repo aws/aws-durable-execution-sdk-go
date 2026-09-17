@@ -5,7 +5,7 @@
 # Usage:
 #   scripts/ci-local.sh [module...]
 #
-# Modules default to all four: . insight compliance examples
+# Modules default to all four: . insight conformance examples
 # (e.g. `scripts/ci-local.sh examples` to check only the examples module).
 #
 # Requires: Go and golangci-lint at the versions pinned in .mise.toml
@@ -18,7 +18,7 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 if [ $# -gt 0 ]; then
     MODULES=$*
 else
-    MODULES=". insight compliance examples"
+    MODULES=". insight conformance examples"
 fi
 
 for mod in $MODULES; do

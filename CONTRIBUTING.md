@@ -48,7 +48,7 @@ The repository is a multi-module Go workspace:
 |------|-------------|
 | `durable/` | Core SDK: handler, context, checkpoint, futures, operations |
 | `insight/` | Observability plugin (separate `go.mod`) |
-| `compliance/` | Conformance test handlers for cross-SDK validation |
+| `conformance/` | Conformance test handlers for cross-SDK validation |
 | `examples/` | Self-contained example Lambda functions |
 
 Each module with its own `go.mod` is built and tested independently.
@@ -88,7 +88,7 @@ make check-all
 ```
 
 Both run the following steps in each of the four modules (root/durable,
-insight, compliance, examples):
+insight, conformance, examples):
 
 1. `go build ./...`
 2. `go vet ./...`

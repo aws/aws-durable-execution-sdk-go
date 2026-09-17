@@ -18,7 +18,7 @@ linters:
       # Conformance handler error strings mirror the other language SDKs'
       # handlers and may be asserted verbatim by the conformance suite;
       # their capitalization must not be "fixed".
-      - path: compliance/
+      - path: conformance/
         linters:
           - staticcheck
         text: "ST1005"

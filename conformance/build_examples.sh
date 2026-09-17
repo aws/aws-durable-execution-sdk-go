@@ -3,7 +3,7 @@
 # Compiles each handler into publish/<handler>/bootstrap for SAM deployment
 # on the provided.al2023 runtime.
 #
-# The compliance/go.mod uses a committed `replace` directive pointing at
+# The conformance/go.mod uses a committed `replace` directive pointing at
 # the parent SDK (../), so no go.work generation is needed.
 #
 # Requires:

@@ -6,7 +6,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/aws/aws-durable-execution-sdk-go/compliance/internal/attempts"
+	"github.com/aws/aws-durable-execution-sdk-go/conformance/internal/attempts"
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
 )
 

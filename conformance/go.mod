@@ -1,4 +1,4 @@
-module github.com/aws/aws-durable-execution-sdk-go/compliance
+module github.com/aws/aws-durable-execution-sdk-go/conformance
 
 go 1.24
 

@@ -202,8 +202,21 @@ Subsequent deploys reuse the saved `samconfig.toml`:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `ExecutionRoleArn` | (required) | IAM role the deployed functions assume. The template does not create a role, so pass an existing one. |
+| `ExecutionRoleArn` | (required) | IAM role the deployed functions assume. The template does not create a role, so pass an existing one. `scripts/test-execution-role.yaml` at the repository root is a one-time template that creates a suitable role; its `RoleArn` output is the value to pass. |
 | `FunctionNamePrefix` | (empty) | Optional prefix for Lambda function names |
+
+## Cloud tests
+
+`cloud/cloud_test.go` invokes every deployed example and asserts that its
+durable execution reaches the terminal state listed in the tables above. It
+is what `.github/workflows/cloud-tests.yml` runs. Deploy with a stack name and
+`FunctionNamePrefix` of your own so that concurrent deployments from different
+branches do not overwrite each other. Then set `FUNCTION_NAME_PREFIX` to that
+prefix (empty if none) and run the test with the same credentials and region:
+
+```bash
+FUNCTION_NAME_PREFIX=myprefix- go test -tags cloud ./cloud -run TestExamples -v -timeout 80m -parallel 8
+```
 
 ## Invoke
 

@@ -19,7 +19,7 @@ jobs:
         module:
           - { name: durable, dir: "." }
           - { name: insight, dir: "insight" }
-          - { name: compliance, dir: "compliance" }
+          - { name: conformance, dir: "conformance" }
           - { name: examples, dir: "examples" }
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0

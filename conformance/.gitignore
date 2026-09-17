@@ -1,0 +1,9 @@
+# Build artifacts
+publish/
+.aws-sam/
+
+# Conformance runner output when run from this directory (CI does). The
+# histories contain account ARNs; never commit them.
+build/
+history-*/
+report-*.xml
