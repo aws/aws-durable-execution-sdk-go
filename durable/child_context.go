@@ -346,14 +346,15 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 
 // Go runs fn concurrently in its own child context and returns a future for
 // its result. It is the replay-safe substitute for the go statement inside
-// durable functions.
+// durable functions, and shorthand for [RunInChildContextAsync]: opts are
+// forwarded unchanged, so [WithChildSerdes] applies to the child result.
 //
 // The child's operation identity is claimed before Go returns, so
 // consecutive Go calls from one goroutine are replay-deterministic. Inside
 // fn, the provided Context is owned by fn's goroutine, and all durable
 // operations on it are safe, including nested Go calls.
-func Go[O any](ctx Context, name string, fn func(Context) (O, error)) *Future[O] {
-	return RunInChildContextAsync(ctx, name, fn)
+func Go[O any](ctx Context, name string, fn func(Context) (O, error), opts ...ChildOption) *Future[O] {
+	return RunInChildContextAsync(ctx, name, fn, opts...)
 }
 
 // resolveTerminalChild handles a child operation that already has a terminal

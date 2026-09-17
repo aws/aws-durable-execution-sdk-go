@@ -3,6 +3,7 @@ package durable
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1314,5 +1315,135 @@ func TestRaceOnlyPendingCallbackSuspends(t *testing.T) {
 	}
 	if err := <-errCh; !errors.Is(err, errSuspendExecution) {
 		t.Errorf("Race error = %v, want errSuspendExecution", err)
+	}
+}
+
+// --- ChildOption forwarding ---
+//
+// Each combinator records one child-context operation and checkpoints its
+// aggregate result through that operation's serdes. upperSerdes uppercases
+// on Marshal and decodes as standard JSON, so a transformed value in both
+// the checkpoint payload and the returned value proves the option reached
+// the child-context operation. The futures below are pre-settled and claim
+// no operation IDs, so the combinator is positional ID 1.
+
+func TestAllHonoursChildSerdes(t *testing.T) {
+	fake := &fakeLambda{}
+	resp := invokeStep(t, fake, childPayload(`"x"`), func(ctx Context, _ string) (string, error) {
+		results, err := All(ctx, "all", []*Future[string]{
+			newSettledFuture("one", nil),
+			newSettledFuture("two", nil),
+		}, WithChildSerdes(upperSerdes{}))
+		if err != nil {
+			return "", err
+		}
+		return strings.Join(results, ","), nil
+	})
+
+	if want := `{"Status":"SUCCEEDED","Result":"\"ONE,TWO\""}`; resp != want {
+		t.Errorf("response = %s, want %s", resp, want)
+	}
+	if got, want := succeedPayload(t, fake, "1"), `["ONE","TWO"]`; got != want {
+		t.Errorf("All SUCCEED Payload = %q, want %q", got, want)
+	}
+}
+
+func TestAllSettledHonoursChildSerdes(t *testing.T) {
+	fake := &fakeLambda{}
+	resp := invokeStep(t, fake, childPayload(`"x"`), func(ctx Context, _ string) (string, error) {
+		results, err := AllSettled(ctx, "settled", []*Future[string]{
+			newSettledFuture("one", nil),
+		}, WithChildSerdes(upperSerdes{}))
+		if err != nil {
+			return "", err
+		}
+		if results[0].Err != nil {
+			return "", results[0].Err
+		}
+		return results[0].Value, nil
+	})
+
+	if want := `{"Status":"SUCCEEDED","Result":"\"ONE\""}`; resp != want {
+		t.Errorf("response = %s, want %s", resp, want)
+	}
+	if got, want := succeedPayload(t, fake, "1"), `[{"STATUS":"FULFILLED","VALUE":"ONE"}]`; got != want {
+		t.Errorf("AllSettled SUCCEED Payload = %q, want %q", got, want)
+	}
+}
+
+func TestAnyHonoursChildSerdes(t *testing.T) {
+	fake := &fakeLambda{}
+	resp := invokeStep(t, fake, childPayload(`"x"`), func(ctx Context, _ string) (string, error) {
+		return Any(ctx, "any", []*Future[string]{
+			newFailedFuture[string](errors.New("lost")),
+			newSettledFuture("winner", nil),
+		}, WithChildSerdes(upperSerdes{}))
+	})
+
+	if want := `{"Status":"SUCCEEDED","Result":"\"WINNER\""}`; resp != want {
+		t.Errorf("response = %s, want %s", resp, want)
+	}
+	if got, want := succeedPayload(t, fake, "1"), `"WINNER"`; got != want {
+		t.Errorf("Any SUCCEED Payload = %q, want %q", got, want)
+	}
+}
+
+func TestRaceHonoursChildSerdes(t *testing.T) {
+	fake := &fakeLambda{}
+	resp := invokeStep(t, fake, childPayload(`"x"`), func(ctx Context, _ string) (string, error) {
+		return Race(ctx, "race", []*Future[string]{
+			newSettledFuture("first", nil),
+		}, WithChildSerdes(upperSerdes{}))
+	})
+
+	if want := `{"Status":"SUCCEEDED","Result":"\"FIRST\""}`; resp != want {
+		t.Errorf("response = %s, want %s", resp, want)
+	}
+	if got, want := succeedPayload(t, fake, "1"), `"FIRST"`; got != want {
+		t.Errorf("Race SUCCEED Payload = %q, want %q", got, want)
+	}
+}
+
+func TestCombinatorsReplayWithChildSerdes(t *testing.T) {
+	// On replay of a SUCCEEDED combinator operation, the stored aggregate
+	// is decoded with the serdes passed to the combinator. A serdes that
+	// cannot decode it surfaces as a SerdesError from each combinator.
+	cause := errors.New("unmarshal exploded")
+	failing := WithChildSerdes(failingSerdes{failUnmarshal: true, cause: cause})
+	noFutures := []*Future[string]{newSettledFuture("unused", nil)}
+	tests := []struct {
+		name   string
+		stored string
+		call   func(Context) error
+	}{
+		{"All", `["a"]`, func(ctx Context) error {
+			_, err := All(ctx, "op", noFutures, failing)
+			return err
+		}},
+		{"AllSettled", `[{"status":"fulfilled","value":"a"}]`, func(ctx Context) error {
+			_, err := AllSettled(ctx, "op", noFutures, failing)
+			return err
+		}},
+		{"Any", `"a"`, func(ctx Context) error {
+			_, err := Any(ctx, "op", noFutures, failing)
+			return err
+		}},
+		{"Race", `"a"`, func(ctx Context) error {
+			_, err := Race(ctx, "op", noFutures, failing)
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := &fakeLambda{}
+			payload := childPayload(`"x"`,
+				checkpointedChild("1", "SUCCEEDED", &wireContextDetails{Result: tt.stored}))
+			var got error
+			invokeStep(t, fake, payload, func(ctx Context, _ string) (string, error) {
+				got = tt.call(ctx)
+				return "", nil
+			})
+			assertSerdesError(t, got, "op", "unmarshal", cause)
+		})
 	}
 }

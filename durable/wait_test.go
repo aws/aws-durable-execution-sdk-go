@@ -224,3 +224,55 @@ func TestFailedStepCaughtThenWait(t *testing.T) {
 		}
 	})
 }
+
+// countingWaitOption is an in-package WaitOption that records each
+// application. WaitOption exports no constructors yet, so this is the only
+// way to observe that Wait and WaitAsync apply the options they receive.
+type countingWaitOption struct{ applied *int }
+
+func (o countingWaitOption) applyWait(*waitOptions) { *o.applied++ }
+
+func TestWaitAppliesOptions(t *testing.T) {
+	// Wait and WaitAsync accept variadic WaitOption values and apply each
+	// one exactly once, in order, before claiming the operation.
+	fake := &fakeLambda{}
+	var syncApplied, asyncApplied int
+	resp := invokeStep(t, fake, stepPayload(`""`), func(ctx Context, _ string) (string, error) {
+		fut := WaitAsync(ctx, "async", time.Second,
+			countingWaitOption{&asyncApplied}, countingWaitOption{&asyncApplied})
+		if err := Wait(ctx, "sync", time.Second, countingWaitOption{&syncApplied}); err != nil {
+			return "", err
+		}
+		_, err := fut.Result()
+		return "", err
+	})
+
+	if want := `{"Status":"PENDING"}`; resp != want {
+		t.Errorf("response = %s, want %s", resp, want)
+	}
+	if syncApplied != 1 {
+		t.Errorf("Wait applied option %d times, want 1", syncApplied)
+	}
+	if asyncApplied != 2 {
+		t.Errorf("WaitAsync applied options %d times, want 2", asyncApplied)
+	}
+}
+
+func TestWaitWithoutOptionsUnchanged(t *testing.T) {
+	// A zero-option call issues the same START update as before the
+	// variadic parameter existed.
+	fake := &fakeLambda{}
+	invokeStep(t, fake, stepPayload(`""`), func(ctx Context, _ string) (string, error) {
+		return "", Wait(ctx, "pause", 3*time.Second)
+	})
+	updates := updateBatch(t, fake)
+	if len(updates) != 1 {
+		t.Fatalf("received %d updates, want 1", len(updates))
+	}
+	if updates[0].Type != OperationTypeWait || updates[0].Action != OperationActionStart {
+		t.Errorf("update = %s %s, want WAIT START", updates[0].Type, updates[0].Action)
+	}
+	if got := aws.ToInt32(updates[0].WaitOptions.WaitSeconds); got != 3 {
+		t.Errorf("WaitSeconds = %d, want 3", got)
+	}
+}

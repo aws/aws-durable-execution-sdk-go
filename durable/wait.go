@@ -11,6 +11,19 @@ import (
 // operationSubTypeWait is the wire subtype for wait operations.
 const operationSubTypeWait = "Wait"
 
+// WaitOption configures a single [Wait] or [WaitAsync] operation.
+//
+// The interface is sealed: only this package can implement it. No option
+// constructors exist yet. The parameter is present so that options can be
+// added later without changing the signatures of Wait and WaitAsync.
+type WaitOption interface {
+	applyWait(*waitOptions)
+}
+
+// waitOptions holds the resolved configuration of one wait operation. It
+// has no fields yet; see [WaitOption].
+type waitOptions struct{}
+
 // Wait suspends the execution for duration d without consuming compute
 // resources: the invocation ends and the execution resumes in a
 // new invocation when the duration elapses. On replay a completed wait
@@ -18,10 +31,15 @@ const operationSubTypeWait = "Wait"
 // pass "" for an unnamed wait.
 //
 // The duration is rounded up to a whole number of seconds.
-func Wait(ctx Context, name string, d time.Duration) error {
+func Wait(ctx Context, name string, d time.Duration, opts ...WaitOption) error {
 	ec, ok := ctx.(*execContext)
 	if !ok {
 		return fmt.Errorf("durable: Wait %q: Context was not created by the SDK", name)
+	}
+
+	var options waitOptions
+	for _, o := range opts {
+		o.applyWait(&options)
 	}
 
 	id, err := ec.claimOperation()
@@ -37,10 +55,15 @@ func Wait(ctx Context, name string, d time.Duration) error {
 //
 // On invocation suspension, the returned future is settled with
 // errSuspendExecution so goroutines blocked on [Future.Result] unwind.
-func WaitAsync(ctx Context, name string, d time.Duration) *Future[Void] {
+func WaitAsync(ctx Context, name string, d time.Duration, opts ...WaitOption) *Future[Void] {
 	ec, ok := ctx.(*execContext)
 	if !ok {
 		return newFailedFuture[Void](fmt.Errorf("durable: WaitAsync %q: Context was not created by the SDK", name))
+	}
+
+	var options waitOptions
+	for _, o := range opts {
+		o.applyWait(&options)
 	}
 
 	id, err := ec.claimOperation()

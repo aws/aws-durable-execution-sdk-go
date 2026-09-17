@@ -22,10 +22,11 @@ var combinatorObserve func(err error)
 //
 // All uses [RunInChildContext] internally, so the aggregate result is
 // checkpointed: on replay, the stored result is returned without
-// re-awaiting the futures.
+// re-awaiting the futures. opts configure that child-context operation;
+// [WithChildSerdes] selects the serializer for the aggregate result.
 //
 // Empty input returns an empty slice immediately (matching Promise.all([])).
-func All[O any](ctx Context, name string, fs []*Future[O]) ([]O, error) {
+func All[O any](ctx Context, name string, fs []*Future[O], opts ...ChildOption) ([]O, error) {
 	return RunInChildContext(ctx, name, func(_ Context) ([]O, error) {
 		results := make([]O, len(fs))
 		var sawSuspend bool
@@ -49,7 +50,7 @@ func All[O any](ctx Context, name string, fs []*Future[O]) ([]O, error) {
 			return nil, errSuspendExecution
 		}
 		return results, nil
-	})
+	}, opts...)
 }
 
 // AllSettled records a combinator operation and waits for every future to
@@ -61,10 +62,11 @@ func All[O any](ctx Context, name string, fs []*Future[O]) ([]O, error) {
 //
 // AllSettled uses [RunInChildContext] internally, so the aggregate result is
 // checkpointed. On replay, the stored outcomes are returned without
-// re-awaiting the futures.
+// re-awaiting the futures. opts configure that child-context operation;
+// [WithChildSerdes] selects the serializer for the aggregate result.
 //
 // Empty input returns an empty slice immediately.
-func AllSettled[O any](ctx Context, name string, fs []*Future[O]) ([]Settled[O], error) {
+func AllSettled[O any](ctx Context, name string, fs []*Future[O], opts ...ChildOption) ([]Settled[O], error) {
 	return RunInChildContext(ctx, name, func(_ Context) ([]Settled[O], error) {
 		results := make([]Settled[O], len(fs))
 		var sawSuspend bool
@@ -83,7 +85,7 @@ func AllSettled[O any](ctx Context, name string, fs []*Future[O]) ([]Settled[O],
 			return nil, errSuspendExecution
 		}
 		return results, nil
-	})
+	}, opts...)
 }
 
 // Any records a combinator operation and returns the value of the first
@@ -98,11 +100,12 @@ func AllSettled[O any](ctx Context, name string, fs []*Future[O]) ([]Settled[O],
 //
 // Any uses [RunInChildContext] internally, so the winning result is
 // checkpointed: on replay, the same winner is returned deterministically
-// regardless of future settlement order.
+// regardless of future settlement order. opts configure that child-context
+// operation; [WithChildSerdes] selects the serializer for the winner.
 //
 // Empty input fails immediately with a [*CombinatorError] (no futures can
 // succeed), matching Promise.any([]).
-func Any[O any](ctx Context, name string, fs []*Future[O]) (O, error) {
+func Any[O any](ctx Context, name string, fs []*Future[O], opts ...ChildOption) (O, error) {
 	return RunInChildContext(ctx, name, func(_ Context) (O, error) {
 		var zero O
 		if len(fs) == 0 {
@@ -174,7 +177,7 @@ func Any[O any](ctx Context, name string, fs []*Future[O]) (O, error) {
 		// blocked.
 		awaitDeferred(deferred)
 		return zero, errSuspendExecution
-	})
+	}, opts...)
 }
 
 // Race records a combinator operation and returns the outcome of the first
@@ -188,11 +191,12 @@ func Any[O any](ctx Context, name string, fs []*Future[O]) (O, error) {
 //
 // Race uses [RunInChildContext] internally, so the winner is checkpointed:
 // on replay, the same outcome is returned deterministically regardless of
-// future settlement order.
+// future settlement order. opts configure that child-context operation;
+// [WithChildSerdes] selects the serializer for the winner.
 //
 // Empty input suspends (no future will ever settle), matching
 // Promise.race([]) which returns a forever-pending promise.
-func Race[O any](ctx Context, name string, fs []*Future[O]) (O, error) {
+func Race[O any](ctx Context, name string, fs []*Future[O], opts ...ChildOption) (O, error) {
 	return RunInChildContext(ctx, name, func(childCtx Context) (O, error) {
 		var zero O
 		if len(fs) == 0 {
@@ -258,7 +262,7 @@ func Race[O any](ctx Context, name string, fs []*Future[O]) (O, error) {
 		// contexts blocked.
 		awaitDeferred(deferred)
 		return zero, errSuspendExecution
-	})
+	}, opts...)
 }
 
 // awaitDeferred awaits deferred-suspension futures (pending callbacks) on

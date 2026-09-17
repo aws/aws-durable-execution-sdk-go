@@ -1183,3 +1183,61 @@ func TestRunInChildContextReplayChildrenNoResult(t *testing.T) {
 		t.Errorf("response = %s, want %s", resp, want)
 	}
 }
+
+// --- Go option forwarding ---
+
+// succeedPayload returns the Payload of the SUCCEED update recorded for the
+// context operation with the given positional ID.
+func succeedPayload(t *testing.T, fake *fakeLambda, positionalID string) string {
+	t.Helper()
+	for _, u := range updateBatch(t, fake) {
+		if u.Type == OperationTypeContext && u.Action == OperationActionSucceed &&
+			aws.ToString(u.Id) == hashID(positionalID) {
+			return aws.ToString(u.Payload)
+		}
+	}
+	t.Fatalf("no SUCCEED update for context operation %q", positionalID)
+	return ""
+}
+
+func TestGoForwardsChildSerdes(t *testing.T) {
+	// Go is shorthand for RunInChildContextAsync, so WithChildSerdes
+	// passed to Go must serialize the child result. upperSerdes uppercases
+	// on Marshal and decodes as standard JSON, so the transformed value is
+	// visible both in the checkpoint and in the future's result.
+	fake := &fakeLambda{}
+	resp := invokeStep(t, fake, childPayload(`"x"`), func(ctx Context, _ string) (string, error) {
+		fut := Go(ctx, "child", func(Context) (string, error) {
+			return "hello", nil
+		}, WithChildSerdes(upperSerdes{}))
+		return fut.Result()
+	})
+
+	if want := `{"Status":"SUCCEEDED","Result":"\"HELLO\""}`; resp != want {
+		t.Errorf("response = %s, want %s", resp, want)
+	}
+	if got := succeedPayload(t, fake, "1"); got != `"HELLO"` {
+		t.Errorf("child SUCCEED Payload = %q, want %q", got, `"HELLO"`)
+	}
+}
+
+func TestGoChildSerdesReplay(t *testing.T) {
+	// On replay of a SUCCEEDED child, Go decodes the stored result with
+	// the serdes it was given, exactly as RunInChildContextAsync does. A
+	// serdes that cannot decode the stored value surfaces as a SerdesError
+	// through the future.
+	cause := errors.New("unmarshal exploded")
+	fake := &fakeLambda{}
+	payload := childPayload(`"x"`,
+		checkpointedChild("1", "SUCCEEDED", &wireContextDetails{Result: `"stored"`}))
+	var got error
+	invokeStep(t, fake, payload, func(ctx Context, _ string) (string, error) {
+		fut := Go(ctx, "child", func(Context) (string, error) {
+			t.Error("child body must not re-execute on replay")
+			return "", nil
+		}, WithChildSerdes(failingSerdes{failUnmarshal: true, cause: cause}))
+		_, got = fut.Result()
+		return "", nil
+	})
+	assertSerdesError(t, got, "child", "unmarshal", cause)
+}
