@@ -80,6 +80,30 @@ Checkpoints that record a callback timeout under the older
 `Callback.Timeout` or `Callback.Heartbeat` names still read back as a
 `CallbackTimeoutError`; the older heartbeat name sets `Heartbeat`.
 
+### Breaking: `WaitForCallback` takes `WaitForCallbackOption`
+
+`WithSubmitterRetry` configures the submitter step, which only
+`WaitForCallback` has. It now returns a `WaitForCallbackOption`, and
+`WaitForCallback` accepts `...WaitForCallbackOption`. Every
+`CallbackOption` (`WithCallbackTimeout`, `WithCallbackHeartbeatTimeout`,
+`WithCallbackSerdes`) is also a `WaitForCallbackOption`, so calls that
+pass options inline are unchanged. Passing `WithSubmitterRetry` to
+`CreateCallback`, which previously compiled and was ignored, is now a
+compile error. A `[]durable.CallbackOption` spread into `WaitForCallback`
+must become a `[]durable.WaitForCallbackOption`.
+
+`WithCallbackSerdes` passed to `WaitForCallback` now decodes the callback
+payload; it was previously ignored on that path.
+
+The documentation for `Deserializer` and `WithCallbackDeserializer`
+stated that callbacks default to a raw-string passthrough. The
+implementation has always decoded payloads with the handler-level
+`Serdes` (default `encoding/json`), and the documentation now says so.
+This is a deliberate difference from the other Durable Execution SDKs,
+whose callbacks return the raw payload string by default: in Go the
+callback result is typed, so the payload goes through the same decoding
+as every other operation result.
+
 ### Breaking: `RetryStrategy` takes a `RetryAttempt` struct
 
 `RetryStrategy` is now `func(RetryAttempt) RetryDecision` instead of

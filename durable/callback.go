@@ -45,6 +45,19 @@ func (c *Callback[O]) Result() (O, error) {
 // the SendDurableExecutionCallbackSuccess or
 // SendDurableExecutionCallbackFailure APIs. The returned callback exposes
 // the identifier to hand off and the settled result.
+//
+// The submitted payload is deserialized into O with, in order of
+// precedence, the per-operation [WithCallbackSerdes], the handler-level
+// [WithCallbackDeserializer], or the handler-level [Serdes] set with
+// [WithSerdes], which defaults to encoding/json. So a payload of "42"
+// deserializes into an int and a payload of "\"ok\"" into a string. This
+// differs from the other Durable Execution SDKs, whose callbacks default to
+// returning the raw payload string; in Go the result is typed, so it goes
+// through the same JSON decoding as every other operation result.
+//
+// CreateCallback accepts only [CallbackOption] values. Options that
+// configure the submitter step of [WaitForCallback], such as
+// [WithSubmitterRetry], have no effect here and do not compile.
 func CreateCallback[O any](ctx Context, name string, opts ...CallbackOption) (*Callback[O], error) {
 	ec, ok := ctx.(*execContext)
 	if !ok {
@@ -146,7 +159,11 @@ func CreateCallback[O any](ctx Context, name string, opts ...CallbackOption) (*C
 // Internally WaitForCallback wraps a child context containing a callback
 // and a submitter step, matching the WaitForCallback wire shape used by
 // all SDK implementations.
-func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepContext, callbackID string) error, opts ...CallbackOption) (O, error) {
+//
+// WaitForCallback accepts every [CallbackOption], which it applies to the
+// callback it creates, plus [WaitForCallbackOption] values such as
+// [WithSubmitterRetry] that configure the submitter step.
+func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepContext, callbackID string) error, opts ...WaitForCallbackOption) (O, error) {
 	var zero O
 	ec, ok := ctx.(*execContext)
 	if !ok {
@@ -155,7 +172,7 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 
 	options := callbackOptions{}
 	for _, o := range opts {
-		o.applyCallback(&options)
+		o.applyWaitForCallback(&options)
 	}
 
 	// WaitForCallback is a child context (SubType WaitForCallback) that:
@@ -265,8 +282,17 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 func runWaitForCallbackBody[O any](child *execContext, name string, submitter func(StepContext, string) error, options callbackOptions, serdes Serdes) (O, error) {
 	var zero O
 
-	// Step 1: create the inner callback (unnamed, per wire spec).
-	cb, err := CreateCallback[O](child, "", WithCallbackTimeout(options.timeout), WithCallbackHeartbeatTimeout(options.heartbeatTimeout))
+	// Step 1: create the inner callback (unnamed, per wire spec). Every
+	// callback-level option the caller passed applies to it; the
+	// submitter retry strategy is consumed by the step below.
+	cbOpts := []CallbackOption{
+		WithCallbackTimeout(options.timeout),
+		WithCallbackHeartbeatTimeout(options.heartbeatTimeout),
+	}
+	if options.serdes != nil {
+		cbOpts = append(cbOpts, WithCallbackSerdes(options.serdes))
+	}
+	cb, err := CreateCallback[O](child, "", cbOpts...)
 	if err != nil {
 		return zero, err
 	}
@@ -475,9 +501,23 @@ func buildCallbackOptions(opts callbackOptions) (*CallbackOptions, error) {
 	}, nil
 }
 
-// CallbackOption configures a single callback operation.
+// CallbackOption configures the callback created by [CreateCallback] or
+// [WaitForCallback]. Every CallbackOption is also a [WaitForCallbackOption],
+// so the same value can be passed to either function.
+//
+// Options that configure only the submitter step of WaitForCallback, such as
+// [WithSubmitterRetry], are not CallbackOptions. Passing one to
+// CreateCallback is a compile error rather than a silently ignored option.
 type CallbackOption interface {
+	WaitForCallbackOption
 	applyCallback(*callbackOptions)
+}
+
+// WaitForCallbackOption configures a [WaitForCallback] operation. It
+// accepts every [CallbackOption] plus options that only apply to the
+// submitter step, such as [WithSubmitterRetry].
+type WaitForCallbackOption interface {
+	applyWaitForCallback(*callbackOptions)
 }
 
 // WithCallbackTimeout bounds how long the callback waits for an external
@@ -498,13 +538,17 @@ func WithCallbackHeartbeatTimeout(d time.Duration) CallbackOption {
 // WithSubmitterRetry configures a retry strategy for the submitter step in
 // [WaitForCallback]. The submitter function re-executes on failure
 // according to this strategy.
-func WithSubmitterRetry(s RetryStrategy) CallbackOption {
-	return callbackOptionFunc(func(o *callbackOptions) { o.retryStrategy = s })
+//
+// WithSubmitterRetry is a [WaitForCallbackOption] only. [CreateCallback]
+// has no submitter step, so passing this option to it is a compile error.
+func WithSubmitterRetry(s RetryStrategy) WaitForCallbackOption {
+	return waitForCallbackOptionFunc(func(o *callbackOptions) { o.retryStrategy = s })
 }
 
 // WithCallbackSerdes overrides the serializer for the callback result. The
 // deserialize path is used when replaying a SUCCEEDED callback to unmarshal
-// the stored payload into the typed result.
+// the stored payload into the typed result. In [WaitForCallback] it applies
+// to the callback the operation creates.
 func WithCallbackSerdes(s Serdes) CallbackOption {
 	return callbackOptionFunc(func(o *callbackOptions) { o.serdes = s })
 }
@@ -516,13 +560,25 @@ type callbackOptions struct {
 	serdes           Serdes
 }
 
+// callbackOptionFunc is an option that applies to both CreateCallback and
+// WaitForCallback. It implements CallbackOption, and through that
+// WaitForCallbackOption.
 type callbackOptionFunc func(*callbackOptions)
 
-func (f callbackOptionFunc) applyCallback(o *callbackOptions) { f(o) }
+func (f callbackOptionFunc) applyCallback(o *callbackOptions)        { f(o) }
+func (f callbackOptionFunc) applyWaitForCallback(o *callbackOptions) { f(o) }
+
+// waitForCallbackOptionFunc is an option that applies only to
+// WaitForCallback. It implements WaitForCallbackOption and deliberately not
+// CallbackOption.
+type waitForCallbackOptionFunc func(*callbackOptions)
+
+func (f waitForCallbackOptionFunc) applyWaitForCallback(o *callbackOptions) { f(o) }
 
 // callbackDeserializerForOptions returns the effective Serdes for
 // deserializing a callback result, respecting the precedence:
-// per-op WithCallbackSerdes > handler-level WithCallbackDeserializer > default serdes.
+// per-op WithCallbackSerdes > handler-level WithCallbackDeserializer >
+// handler-level Serdes (default encoding/json).
 func callbackDeserializerForOptions(ec *execContext, opts callbackOptions) Serdes {
 	if opts.serdes != nil {
 		return opts.serdes

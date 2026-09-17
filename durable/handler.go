@@ -68,7 +68,8 @@ func WithSerdes(s Serdes) HandlerOption {
 // payloads submitted by external systems. This is used when deserializing
 // the result of a SUCCEEDED callback during replay. Per-operation
 // [WithCallbackSerdes] takes precedence. Without it, callbacks use the
-// handler-level serdes (default: encoding/json).
+// handler-level [Serdes] set with [WithSerdes] (default: encoding/json),
+// not a raw-string passthrough; see [CreateCallback].
 func WithCallbackDeserializer(d Deserializer) HandlerOption {
 	return handlerOptionFunc(func(o *handlerOptions) { o.callbackDeserializer = d })
 }
