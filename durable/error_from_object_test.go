@@ -30,7 +30,7 @@ func publicErrorTypeSamples() []error {
 		&NonDeterministicReplayError{Name: "n", StepID: "1", ExpectedType: "STEP", ActualType: "WAIT"},
 		&ResultTooLargeError{Name: "r", SizeBytes: 900, LimitBytes: 100},
 		newSerdesError("s", serdesDirectionMarshal, errors.New("bad json")),
-		&CheckpointError{Err: errors.New("throttled"), retryable: true},
+		&CheckpointError{Err: errors.New("throttled"), scope: ErrorScopeInvocation},
 	}
 }
 

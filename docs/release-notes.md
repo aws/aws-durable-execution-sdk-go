@@ -131,6 +131,34 @@ Strategies built with `NewRetryStrategy`, `MustNewRetryStrategy`,
 are unaffected from the caller's side. Like `RetryConfig` and
 `RetryDecision`, `RetryAttempt` must be constructed with keyed fields.
 
+### New: `ErrorScope` and `ClientError`; `CheckpointError.Scope`
+
+A failed `ExecutionClient` call now has a scope. `ErrorScopeInvocation`
+means the current invocation cannot continue but the execution can resume
+in a later one; `ErrorScopeExecution` means the execution must fail.
+`CheckpointError.Scope()` exposes it. `Retryable()` and
+`IsCheckpointRetryable` are unchanged: `Retryable()` is true exactly when
+the scope is `ErrorScopeInvocation`.
+
+A custom `ExecutionClient` states the scope by returning a
+`*durable.ClientError` (from `Checkpoint` or `GetExecutionState`). The
+SDK honors it wherever the error surfaces: an execution-scoped failure is
+not retried and fails the execution with a FAILED response; an
+invocation-scoped failure is retried and, if it escapes the handler, ends
+the invocation with an error so the execution resumes later. The same
+rule applies to a `ClientError` returned by handler or plugin code and to
+the checkpoint the SDK makes for a result too large to return inline. A
+`ClientError` with the zero or an unknown `Scope` is read as
+`ErrorScopeInvocation`, the safer default. Errors without a `ClientError`
+in their chain are classified from their AWS SDK shape as before.
+
+Behavior change: an invocation-scoped `CheckpointError` or `ClientError`
+that the handler passes through now ends the invocation with an error
+instead of a FAILED response, and an execution-scoped failure of the
+oversized-result checkpoint now responds FAILED instead of ending the
+invocation with an error. Handler code that wants the execution to fail
+returns its own error.
+
 ### Breaking: AWS SDK and aws-lambda-go types removed from the exported surface
 
 The exported `durable` API now names only this SDK's own types and the

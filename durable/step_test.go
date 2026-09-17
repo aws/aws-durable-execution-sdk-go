@@ -559,14 +559,21 @@ func TestStepCheckpointErrorPropagates(t *testing.T) {
 	wantErr := errors.New("throttled")
 	fake := &fakeLambda{checkpointErr: wantErr}
 	var gotErr error
-	invokeStep(t, fake, stepPayload(`""`), func(ctx Context, _ string) (string, error) {
+	h := Wrap(func(ctx Context, _ string) (string, error) {
 		out, err := Step(ctx, "s", func(StepContext) (string, error) { return "x", nil })
 		gotErr = err
 		return out, err
-	})
+	}, withLambdaAPI(fake))
+	_, invokeErr := h(context.Background(), stepPayload(`""`))
 
 	if !errors.Is(gotErr, wantErr) {
 		t.Errorf("Step() error = %v, want wrapping %v", gotErr, wantErr)
+	}
+	// An unstructured checkpoint failure is invocation-scoped, so passing
+	// it through ends the invocation with an error rather than a FAILED
+	// response.
+	if !errors.Is(invokeErr, wantErr) {
+		t.Errorf("Invoke() error = %v, want wrapping %v", invokeErr, wantErr)
 	}
 }
 

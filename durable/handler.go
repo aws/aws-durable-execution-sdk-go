@@ -158,6 +158,16 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 
 	state, err := assembleState(ctx, cp, &in.InitialExecutionState)
 	if err != nil {
+		// Loading state is a client call outside the handler, so a failure
+		// with no stated scope is presumed transient: the invocation ends
+		// with an error and the execution resumes in a later one. A client
+		// that states the failure is fatal for the execution is believed.
+		if failureScope(err, ErrorScopeInvocation) == ErrorScopeExecution {
+			return respond(wire.InvocationResponse{
+				Status: wire.StatusFailed,
+				Error:  errorObjectFromError(err, nil),
+			})
+		}
 		return nil, err
 	}
 
@@ -374,6 +384,15 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 				})
 			}
 		})
+		// A failure the handler returned is an ordinary failure of the
+		// execution unless it states a scope. An invocation-scoped
+		// CheckpointError or ClientError ends the invocation with an
+		// error, so the execution resumes in a later invocation from its
+		// last checkpoint. Everything else, including an execution-scoped
+		// error, fails the execution.
+		if failureScope(wrapErr, ErrorScopeExecution) == ErrorScopeInvocation {
+			return nil, wrapErr
+		}
 		resp, respErr = respond(wire.InvocationResponse{
 			Status: wire.StatusFailed,
 			Error:  errorObjectFromError(wrapErr, handlerTrace),
@@ -428,6 +447,16 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 			if cerr := cp.checkpoint(ctx, []OperationUpdate{update}); cerr != nil {
 				err := fmt.Errorf("durable: checkpoint oversized result: %w", cerr)
 				failInvocationEnd(err)
+				// The checkpoint is a client call outside the handler, so
+				// a failure with no stated scope is presumed transient
+				// and ends the invocation with an error. An
+				// execution-scoped failure fails the execution instead.
+				if failureScope(err, ErrorScopeInvocation) == ErrorScopeExecution {
+					return respond(wire.InvocationResponse{
+						Status: wire.StatusFailed,
+						Error:  errorObjectFromError(err, nil),
+					})
+				}
 				return nil, err
 			}
 			empty := ""

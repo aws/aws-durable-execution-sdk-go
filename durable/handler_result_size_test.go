@@ -128,9 +128,43 @@ func TestRootResultCheckpointCompletesBeforeResponse(t *testing.T) {
 	}
 }
 
-func TestRootResultCheckpointFailureFailsInvocation(t *testing.T) {
-	// If the oversized-result checkpoint fails, the invocation must not
-	// return a success envelope: the result was never durably recorded.
+func TestRootResultCheckpointInvocationScopeFailsInvocation(t *testing.T) {
+	// An invocation-scoped failure of the oversized-result checkpoint ends
+	// the invocation with an error, never a success envelope: the result
+	// was not durably recorded, and the execution resumes later.
+	large := resultOfSerializedSize(lambdaResponseSizeLimit + 1)
+	cause := errors.New("timeout")
+
+	fake := &fakeLambdaFunc{
+		getState: emptyGetState,
+		checkpoint: func(_ context.Context, _ CheckpointInput) (CheckpointOutput, error) {
+			return CheckpointOutput{}, &ClientError{Scope: ErrorScopeInvocation, Err: cause}
+		},
+	}
+
+	h := Wrap(func(_ Context, _ string) (string, error) {
+		return large, nil
+	}, withLambdaAPI(fake))
+	raw, err := h(context.Background(), stepPayload(`""`))
+	if err == nil {
+		t.Fatalf("Invoke returned response %s, want an error", raw)
+	}
+	var cpErr *CheckpointError
+	if !errors.As(err, &cpErr) {
+		t.Fatalf("error = %v (%T), want wrapped *CheckpointError", err, err)
+	}
+	if cpErr.Scope() != ErrorScopeInvocation {
+		t.Errorf("Scope() = %q, want %q", cpErr.Scope(), ErrorScopeInvocation)
+	}
+	if !errors.Is(err, cause) {
+		t.Error("error chain must reach the client's cause")
+	}
+}
+
+func TestRootResultCheckpointExecutionScopeFailsExecution(t *testing.T) {
+	// An execution-scoped failure of the oversized-result checkpoint fails
+	// the execution: the invocation responds FAILED instead of ending with
+	// an error, because a later invocation would fail the same way.
 	large := resultOfSerializedSize(lambdaResponseSizeLimit + 1)
 
 	fake := &fakeLambdaFunc{
@@ -147,13 +181,16 @@ func TestRootResultCheckpointFailureFailsInvocation(t *testing.T) {
 	h := Wrap(func(_ Context, _ string) (string, error) {
 		return large, nil
 	}, withLambdaAPI(fake))
-	_, err := h(context.Background(), stepPayload(`""`))
-	if err == nil {
-		t.Fatal("Invoke succeeded despite the oversized-result checkpoint failing")
+	raw, err := h(context.Background(), stepPayload(`""`))
+	if err != nil {
+		t.Fatalf("Invoke error = %v, want FAILED response", err)
 	}
-	var cpErr *CheckpointError
-	if !errors.As(err, &cpErr) {
-		t.Errorf("error = %v (%T), want wrapped *CheckpointError", err, err)
+	resp := parseResponse(t, raw)
+	if resp.Status != invocationFailed {
+		t.Fatalf("status = %q, want %q", resp.Status, invocationFailed)
+	}
+	if resp.Error == nil || resp.Error.ErrorType != "CheckpointError" {
+		t.Errorf("error = %+v, want ErrorType CheckpointError", resp.Error)
 	}
 }
 
@@ -208,17 +245,15 @@ func TestRootResultCheckpointFailureNoSuccessPlugin(t *testing.T) {
 	// When the oversized-result checkpoint fails, exactly one FAILED
 	// OnInvocationEnd hook must fire carrying the returned error, and the
 	// success hook must NOT fire — the result was never durably recorded.
+	// The failure here is invocation-scoped, so the invocation ends with
+	// an error and the hook carries that exact error.
 	large := resultOfSerializedSize(lambdaResponseSizeLimit + 1)
 
 	var hooks []InvocationEndHookInfo
 	fake := &fakeLambdaFunc{
 		getState: emptyGetState,
 		checkpoint: func(_ context.Context, _ CheckpointInput) (CheckpointOutput, error) {
-			return CheckpointOutput{}, &smithy.GenericAPIError{
-				Code:    "ValidationException",
-				Message: "rejected",
-				Fault:   smithy.FaultClient,
-			}
+			return CheckpointOutput{}, &ClientError{Scope: ErrorScopeInvocation, Err: errors.New("timeout")}
 		},
 	}
 
@@ -244,6 +279,50 @@ func TestRootResultCheckpointFailureNoSuccessPlugin(t *testing.T) {
 	}
 	if hooks[0].ExecutionError != err { //nolint:errorlint // identity check is intentional
 		t.Errorf("hook ExecutionError = %v, want the exact returned error %v", hooks[0].ExecutionError, err)
+	}
+}
+
+func TestRootResultCheckpointExecutionScopeFiresFailedHookOnce(t *testing.T) {
+	// An execution-scoped oversized-result checkpoint failure responds
+	// FAILED. Exactly one FAILED OnInvocationEnd hook fires, carrying the
+	// same checkpoint error the response reports; the success hook must
+	// NOT fire.
+	large := resultOfSerializedSize(lambdaResponseSizeLimit + 1)
+
+	var hooks []InvocationEndHookInfo
+	fake := &fakeLambdaFunc{
+		getState: emptyGetState,
+		checkpoint: func(_ context.Context, _ CheckpointInput) (CheckpointOutput, error) {
+			return CheckpointOutput{}, &ClientError{Scope: ErrorScopeExecution, Err: errors.New("rejected")}
+		},
+	}
+
+	plugin := Plugin{
+		OnInvocationEnd: func(_ context.Context, info InvocationEndHookInfo) {
+			hooks = append(hooks, info)
+		},
+	}
+
+	h := Wrap(func(_ Context, _ string) (string, error) {
+		return large, nil
+	}, withLambdaAPI(fake), WithPlugins(plugin))
+
+	raw, err := h(context.Background(), stepPayload(`""`))
+	if err != nil {
+		t.Fatalf("Invoke error = %v, want FAILED response", err)
+	}
+	if resp := parseResponse(t, raw); resp.Status != invocationFailed {
+		t.Fatalf("status = %q, want %q", resp.Status, invocationFailed)
+	}
+	if len(hooks) != 1 {
+		t.Fatalf("OnInvocationEnd fired %d times, want exactly 1", len(hooks))
+	}
+	if hooks[0].Status != PluginInvocationFailed {
+		t.Errorf("hook Status = %q, want %q", hooks[0].Status, PluginInvocationFailed)
+	}
+	var cpErr *CheckpointError
+	if !errors.As(hooks[0].ExecutionError, &cpErr) || cpErr.Scope() != ErrorScopeExecution {
+		t.Errorf("hook ExecutionError = %v, want an execution-scoped *CheckpointError", hooks[0].ExecutionError)
 	}
 }
 

@@ -15,9 +15,12 @@ import (
 )
 
 func TestClassifyCheckpointError(t *testing.T) {
+	// Retryable is derived from the scope: true exactly for the invocation
+	// scope. Each case asserts both so the relationship stays fixed.
 	tests := []struct {
 		name      string
 		err       error
+		scope     ErrorScope
 		retryable bool
 	}{
 		{
@@ -26,11 +29,52 @@ func TestClassifyCheckpointError(t *testing.T) {
 			retryable: false, // returns nil, not checked
 		},
 		{
+			name:      "client-stated invocation scope",
+			err:       &ClientError{Scope: ErrorScopeInvocation, Err: errors.New("timeout")},
+			scope:     ErrorScopeInvocation,
+			retryable: true,
+		},
+		{
+			name:      "client-stated execution scope",
+			err:       &ClientError{Scope: ErrorScopeExecution, Err: errors.New("rejected")},
+			scope:     ErrorScopeExecution,
+			retryable: false,
+		},
+		{
+			name:      "client-stated zero scope defaults to invocation",
+			err:       &ClientError{Err: errors.New("unclassified")},
+			scope:     ErrorScopeInvocation,
+			retryable: true,
+		},
+		{
+			name:      "client-stated unknown scope defaults to invocation",
+			err:       &ClientError{Scope: ErrorScope("SOMETHING_ELSE"), Err: errors.New("unclassified")},
+			scope:     ErrorScopeInvocation,
+			retryable: true,
+		},
+		{
+			name:      "wrapped client-stated execution scope",
+			err:       fmt.Errorf("transport: %w", &ClientError{Scope: ErrorScopeExecution, Err: errors.New("rejected")}),
+			scope:     ErrorScopeExecution,
+			retryable: false,
+		},
+		{
+			// The client's statement wins over the shape of its cause.
+			name: "client-stated execution scope over a server fault cause",
+			err: &ClientError{Scope: ErrorScopeExecution, Err: &smithy.GenericAPIError{
+				Code:  "ServiceException",
+				Fault: smithy.FaultServer,
+			}},
+			scope:     ErrorScopeExecution,
+			retryable: false,
+		},
+		{
 			name: "server fault (5xx)",
 			err: &smithy.GenericAPIError{
 				Code:  "ServiceException",
 				Fault: smithy.FaultServer,
 			},
+			scope:     ErrorScopeInvocation,
 			retryable: true,
 		},
 		{
@@ -39,6 +83,7 @@ func TestClassifyCheckpointError(t *testing.T) {
 				Code:  "InvalidParameterValueException",
 				Fault: smithy.FaultClient,
 			},
+			scope:     ErrorScopeExecution,
 			retryable: false,
 		},
 		{
@@ -47,6 +92,7 @@ func TestClassifyCheckpointError(t *testing.T) {
 				Code:  "TooManyRequestsException",
 				Fault: smithy.FaultClient,
 			},
+			scope:     ErrorScopeInvocation,
 			retryable: true,
 		},
 		{
@@ -55,6 +101,7 @@ func TestClassifyCheckpointError(t *testing.T) {
 				Code:  "InternalServerError",
 				Fault: smithy.FaultServer,
 			}),
+			scope:     ErrorScopeInvocation,
 			retryable: true,
 		},
 		{
@@ -63,6 +110,7 @@ func TestClassifyCheckpointError(t *testing.T) {
 				Code:  "ResourceNotFoundException",
 				Fault: smithy.FaultClient,
 			}),
+			scope:     ErrorScopeExecution,
 			retryable: false,
 		},
 		{
@@ -71,6 +119,7 @@ func TestClassifyCheckpointError(t *testing.T) {
 				Code:  "TooManyRequestsException",
 				Fault: smithy.FaultClient,
 			}),
+			scope:     ErrorScopeInvocation,
 			retryable: true,
 		},
 		{
@@ -79,6 +128,7 @@ func TestClassifyCheckpointError(t *testing.T) {
 				Response: &smithyhttp.Response{Response: &http.Response{StatusCode: 500}},
 				Err:      errors.New("internal"),
 			},
+			scope:     ErrorScopeInvocation,
 			retryable: true,
 		},
 		{
@@ -87,21 +137,25 @@ func TestClassifyCheckpointError(t *testing.T) {
 				Response: &smithyhttp.Response{Response: &http.Response{StatusCode: 400}},
 				Err:      errors.New("bad request"),
 			},
+			scope:     ErrorScopeExecution,
 			retryable: false,
 		},
 		{
 			name:      "network error (no APIError)",
 			err:       &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")},
+			scope:     ErrorScopeInvocation,
 			retryable: true,
 		},
 		{
 			name:      "context deadline exceeded",
 			err:       context.DeadlineExceeded,
+			scope:     ErrorScopeInvocation,
 			retryable: true,
 		},
 		{
 			name:      "plain error",
 			err:       errors.New("something went wrong"),
+			scope:     ErrorScopeInvocation,
 			retryable: true,
 		},
 		{
@@ -110,6 +164,7 @@ func TestClassifyCheckpointError(t *testing.T) {
 				Code:  "UnknownException",
 				Fault: smithy.FaultUnknown,
 			},
+			scope:     ErrorScopeExecution,
 			retryable: false, // not FaultServer, not throttling → non-retryable
 		},
 	}
@@ -126,6 +181,9 @@ func TestClassifyCheckpointError(t *testing.T) {
 			if classified == nil {
 				t.Fatal("classifyCheckpointError returned nil for non-nil error")
 			}
+			if classified.Scope() != tc.scope {
+				t.Errorf("Scope() = %q, want %q", classified.Scope(), tc.scope)
+			}
 			if classified.Retryable() != tc.retryable {
 				t.Errorf("Retryable() = %v, want %v", classified.Retryable(), tc.retryable)
 			}
@@ -137,8 +195,8 @@ func TestClassifyCheckpointError(t *testing.T) {
 }
 
 func TestIsCheckpointRetryable(t *testing.T) {
-	retryable := &CheckpointError{Err: errors.New("x"), retryable: true}
-	nonRetryable := &CheckpointError{Err: errors.New("y"), retryable: false}
+	retryable := &CheckpointError{Err: errors.New("x"), scope: ErrorScopeInvocation}
+	nonRetryable := &CheckpointError{Err: errors.New("y"), scope: ErrorScopeExecution}
 
 	if !IsCheckpointRetryable(retryable) {
 		t.Error("IsCheckpointRetryable should return true for retryable error")
