@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 )
 
 // itemView is a serializable projection of a batch item used to compare the
@@ -112,7 +111,7 @@ func TestMapReplayRecordAbandonedOverSizeLimit(t *testing.T) {
 			id := aws.ToString(u.Id)
 			switch aws.ToString(u.SubType) {
 			case operationSubTypeMap:
-				if u.Action == types.OperationActionSucceed {
+				if u.Action == OperationActionSucceed {
 					mapRecord = aws.ToString(u.Payload)
 					mapReplayChildren = u.ContextOptions != nil && aws.ToBool(u.ContextOptions.ReplayChildren)
 				}
@@ -121,12 +120,12 @@ func TestMapReplayRecordAbandonedOverSizeLimit(t *testing.T) {
 					childOrder = append(childOrder, id)
 				}
 				switch u.Action {
-				case types.OperationActionStart:
+				case OperationActionStart:
 					childStatus[id] = "STARTED"
-				case types.OperationActionSucceed:
+				case OperationActionSucceed:
 					childStatus[id] = "SUCCEEDED"
 					childPayload[id] = aws.ToString(u.Payload)
-				case types.OperationActionFail:
+				case OperationActionFail:
 					childStatus[id] = "FAILED"
 				}
 			}

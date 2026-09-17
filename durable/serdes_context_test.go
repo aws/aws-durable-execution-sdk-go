@@ -65,7 +65,7 @@ func TestSerdesReceivesInvocationContext(t *testing.T) {
 	ctx := context.WithValue(context.Background(), key, wantVal)
 	payload := stepPayload(`"world"`)
 
-	_, err := h.Invoke(ctx, payload)
+	_, err := h(ctx, payload)
 	if err != nil {
 		t.Fatalf("Invoke: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestSerdesReceivesInvocationContext(t *testing.T) {
 		&wireStepDetails{Result: `"hello-world"`}))
 
 	ctx2 := context.WithValue(context.Background(), key, "req-replay-456")
-	_, err = h.Invoke(ctx2, replayPayload)
+	_, err = h(ctx2, replayPayload)
 	if err != nil {
 		t.Fatalf("Invoke (replay): %v", err)
 	}

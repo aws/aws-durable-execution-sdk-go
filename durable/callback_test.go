@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 )
 
 // callbackPayload builds an invocation payload with callback operations.
@@ -37,7 +36,7 @@ func checkpointedCallback(positionalID, status string, details *wireCallbackDeta
 }
 
 func TestCreateCallbackFirstInvocation(t *testing.T) {
-	fake := &fakeLambda{statePages: [][]types.Operation{{}}}
+	fake := &fakeLambda{statePages: [][]Operation{{}}}
 	payload := callbackPayload(`"test-name"`)
 
 	handler := func(ctx Context, event string) (string, error) {
@@ -55,7 +54,7 @@ func TestCreateCallbackFirstInvocation(t *testing.T) {
 	}
 
 	h := Wrap(handler, withLambdaAPI(fake))
-	got, err := h.Invoke(context.Background(), payload)
+	got, err := h(context.Background(), payload)
 	if err != nil {
 		t.Fatalf("Invoke error: %v", err)
 	}
@@ -73,13 +72,13 @@ func TestCreateCallbackFirstInvocation(t *testing.T) {
 		t.Fatalf("expected 1 update, got %d", len(updates))
 	}
 	u := updates[0]
-	if u.Type != types.OperationTypeCallback {
+	if u.Type != OperationTypeCallback {
 		t.Errorf("update Type = %q, want CALLBACK", u.Type)
 	}
 	if got := aws.ToString(u.SubType); got != "Callback" {
 		t.Errorf("update SubType = %q, want Callback", got)
 	}
-	if u.Action != types.OperationActionStart {
+	if u.Action != OperationActionStart {
 		t.Errorf("update Action = %q, want START", u.Action)
 	}
 	if got, want := aws.ToString(u.Name), "test-name"; got != want {
@@ -88,7 +87,7 @@ func TestCreateCallbackFirstInvocation(t *testing.T) {
 }
 
 func TestCreateCallbackWithTimeout(t *testing.T) {
-	fake := &fakeLambda{statePages: [][]types.Operation{{}}}
+	fake := &fakeLambda{statePages: [][]Operation{{}}}
 	payload := callbackPayload(`"timeout-test"`)
 
 	handler := func(ctx Context, event string) (string, error) {
@@ -103,7 +102,7 @@ func TestCreateCallbackWithTimeout(t *testing.T) {
 	}
 
 	h := Wrap(handler, withLambdaAPI(fake))
-	_, err := h.Invoke(context.Background(), payload)
+	_, err := h(context.Background(), payload)
 	if err != nil {
 		t.Fatalf("Invoke error: %v", err)
 	}
@@ -125,7 +124,7 @@ func TestCreateCallbackWithTimeout(t *testing.T) {
 }
 
 func TestCreateCallbackReplaySuccess(t *testing.T) {
-	fake := &fakeLambda{statePages: [][]types.Operation{{}}}
+	fake := &fakeLambda{statePages: [][]Operation{{}}}
 	payload := callbackPayload(`"test"`,
 		checkpointedCallback("1", "SUCCEEDED", &wireCallbackDetails{
 			CallbackId: "cb-123",
@@ -149,7 +148,7 @@ func TestCreateCallbackReplaySuccess(t *testing.T) {
 	}
 
 	h := Wrap(handler, withLambdaAPI(fake))
-	got, err := h.Invoke(context.Background(), payload)
+	got, err := h(context.Background(), payload)
 	if err != nil {
 		t.Fatalf("Invoke error: %v", err)
 	}
@@ -167,7 +166,7 @@ func TestCreateCallbackReplaySuccess(t *testing.T) {
 }
 
 func TestCreateCallbackReplayFailed(t *testing.T) {
-	fake := &fakeLambda{statePages: [][]types.Operation{{}}}
+	fake := &fakeLambda{statePages: [][]Operation{{}}}
 	payload := callbackPayload(`"test"`,
 		checkpointedCallback("1", "FAILED", &wireCallbackDetails{
 			CallbackId: "cb-456",
@@ -195,7 +194,7 @@ func TestCreateCallbackReplayFailed(t *testing.T) {
 	}
 
 	h := Wrap(handler, withLambdaAPI(fake))
-	got, err := h.Invoke(context.Background(), payload)
+	got, err := h(context.Background(), payload)
 	if err != nil {
 		t.Fatalf("Invoke error: %v", err)
 	}
@@ -210,7 +209,7 @@ func TestCreateCallbackReplayFailed(t *testing.T) {
 }
 
 func TestCreateCallbackReplayTimedOut(t *testing.T) {
-	fake := &fakeLambda{statePages: [][]types.Operation{{}}}
+	fake := &fakeLambda{statePages: [][]Operation{{}}}
 	payload := callbackPayload(`"test"`,
 		checkpointedCallback("1", "TIMED_OUT", &wireCallbackDetails{
 			CallbackId: "cb-789",
@@ -236,7 +235,7 @@ func TestCreateCallbackReplayTimedOut(t *testing.T) {
 	}
 
 	h := Wrap(handler, withLambdaAPI(fake))
-	got, err := h.Invoke(context.Background(), payload)
+	got, err := h(context.Background(), payload)
 	if err != nil {
 		t.Fatalf("Invoke error: %v", err)
 	}
@@ -251,7 +250,7 @@ func TestCreateCallbackReplayTimedOut(t *testing.T) {
 }
 
 func TestCreateCallbackReplayStarted(t *testing.T) {
-	fake := &fakeLambda{statePages: [][]types.Operation{{}}}
+	fake := &fakeLambda{statePages: [][]Operation{{}}}
 	payload := callbackPayload(`"test"`,
 		checkpointedCallback("1", "STARTED", &wireCallbackDetails{
 			CallbackId: "cb-wait",
@@ -272,7 +271,7 @@ func TestCreateCallbackReplayStarted(t *testing.T) {
 	}
 
 	h := Wrap(handler, withLambdaAPI(fake))
-	got, err := h.Invoke(context.Background(), payload)
+	got, err := h(context.Background(), payload)
 	if err != nil {
 		t.Fatalf("Invoke error: %v", err)
 	}
@@ -288,7 +287,7 @@ func TestCreateCallbackReplayStarted(t *testing.T) {
 
 func TestWaitForCallbackSuccess(t *testing.T) {
 	// Simulate the second invocation where the context is SUCCEEDED.
-	fake := &fakeLambda{statePages: [][]types.Operation{{}}}
+	fake := &fakeLambda{statePages: [][]Operation{{}}}
 
 	// The WaitForCallback context (id "1") is SUCCEEDED with result.
 	payload := callbackPayload(`"my-callback"`,
@@ -310,7 +309,7 @@ func TestWaitForCallbackSuccess(t *testing.T) {
 	}
 
 	h := Wrap(handler, withLambdaAPI(fake))
-	got, err := h.Invoke(context.Background(), payload)
+	got, err := h(context.Background(), payload)
 	if err != nil {
 		t.Fatalf("Invoke error: %v", err)
 	}
@@ -330,7 +329,7 @@ func TestWaitForCallbackSuccess(t *testing.T) {
 func TestWaitForCallbackFirstInvocation(t *testing.T) {
 	// First invocation: no checkpoint data — will START context + START
 	// callback + START+SUCCEED submitter step, then suspend.
-	fake := &fakeLambda{statePages: [][]types.Operation{{}}}
+	fake := &fakeLambda{statePages: [][]Operation{{}}}
 	payload := callbackPayload(`"first-cb"`)
 
 	handler := func(ctx Context, event string) (string, error) {
@@ -346,7 +345,7 @@ func TestWaitForCallbackFirstInvocation(t *testing.T) {
 	}
 
 	h := Wrap(handler, withLambdaAPI(fake))
-	got, err := h.Invoke(context.Background(), payload)
+	got, err := h(context.Background(), payload)
 	if err != nil {
 		t.Fatalf("Invoke error: %v", err)
 	}
@@ -368,44 +367,44 @@ func TestWaitForCallbackFirstInvocation(t *testing.T) {
 
 	// First update: ContextStarted for WaitForCallback.
 	u0 := updates[0]
-	if u0.Type != types.OperationTypeContext {
+	if u0.Type != OperationTypeContext {
 		t.Errorf("updates[0] Type = %q, want CONTEXT", u0.Type)
 	}
 	if got := aws.ToString(u0.SubType); got != "WaitForCallback" {
 		t.Errorf("updates[0] SubType = %q, want WaitForCallback", got)
 	}
-	if u0.Action != types.OperationActionStart {
+	if u0.Action != OperationActionStart {
 		t.Errorf("updates[0] Action = %q, want START", u0.Action)
 	}
 
 	// Second update: CallbackStarted.
 	u1 := updates[1]
-	if u1.Type != types.OperationTypeCallback {
+	if u1.Type != OperationTypeCallback {
 		t.Errorf("updates[1] Type = %q, want CALLBACK", u1.Type)
 	}
-	if u1.Action != types.OperationActionStart {
+	if u1.Action != OperationActionStart {
 		t.Errorf("updates[1] Action = %q, want START", u1.Action)
 	}
 
 	// Third: StepStarted. Fourth: StepSucceeded.
 	u2 := updates[2]
-	if u2.Type != types.OperationTypeStep {
+	if u2.Type != OperationTypeStep {
 		t.Errorf("updates[2] Type = %q, want STEP", u2.Type)
 	}
-	if u2.Action != types.OperationActionStart {
+	if u2.Action != OperationActionStart {
 		t.Errorf("updates[2] Action = %q, want START", u2.Action)
 	}
 	u3 := updates[3]
-	if u3.Type != types.OperationTypeStep {
+	if u3.Type != OperationTypeStep {
 		t.Errorf("updates[3] Type = %q, want STEP", u3.Type)
 	}
-	if u3.Action != types.OperationActionSucceed {
+	if u3.Action != OperationActionSucceed {
 		t.Errorf("updates[3] Action = %q, want SUCCEED", u3.Action)
 	}
 }
 
 func TestWaitForCallbackTimedOut(t *testing.T) {
-	fake := &fakeLambda{statePages: [][]types.Operation{{}}}
+	fake := &fakeLambda{statePages: [][]Operation{{}}}
 
 	// Context is FAILED with Callback.Timeout errType — this is the wire
 	// representation when a WaitForCallback times out.
@@ -442,7 +441,7 @@ func TestWaitForCallbackTimedOut(t *testing.T) {
 	}
 
 	h := Wrap(handler, withLambdaAPI(fake))
-	got, err := h.Invoke(context.Background(), payload)
+	got, err := h(context.Background(), payload)
 	if err != nil {
 		t.Fatalf("Invoke error: %v", err)
 	}
@@ -457,7 +456,7 @@ func TestWaitForCallbackTimedOut(t *testing.T) {
 }
 
 func TestWaitForCallbackHeartbeatTimedOut(t *testing.T) {
-	fake := &fakeLambda{statePages: [][]types.Operation{{}}}
+	fake := &fakeLambda{statePages: [][]Operation{{}}}
 
 	// Context is FAILED with Callback.Heartbeat errType — the wire
 	// representation when a WaitForCallback misses its heartbeat window.
@@ -493,7 +492,7 @@ func TestWaitForCallbackHeartbeatTimedOut(t *testing.T) {
 	}
 
 	h := Wrap(handler, withLambdaAPI(fake))
-	got, err := h.Invoke(context.Background(), payload)
+	got, err := h(context.Background(), payload)
 	if err != nil {
 		t.Fatalf("Invoke error: %v", err)
 	}
@@ -508,7 +507,7 @@ func TestWaitForCallbackHeartbeatTimedOut(t *testing.T) {
 }
 
 func TestWaitForCallbackFailed(t *testing.T) {
-	fake := &fakeLambda{statePages: [][]types.Operation{{}}}
+	fake := &fakeLambda{statePages: [][]Operation{{}}}
 
 	// Context is FAILED (callback failure propagated through).
 	payload := callbackPayload(`"fail-cb"`,
@@ -539,7 +538,7 @@ func TestWaitForCallbackFailed(t *testing.T) {
 	}
 
 	h := Wrap(handler, withLambdaAPI(fake))
-	got, err := h.Invoke(context.Background(), payload)
+	got, err := h(context.Background(), payload)
 	if err != nil {
 		t.Fatalf("Invoke error: %v", err)
 	}
@@ -557,7 +556,7 @@ func TestWaitForCallbackSubmitterRetryExhaustion(t *testing.T) {
 	// First invocation: the WaitForCallback context starts, creates a
 	// callback, and the submitter step starts and fails (attempt 1). The
 	// engine will checkpoint RETRY and suspend for the retry delay.
-	fake := &fakeLambda{statePages: [][]types.Operation{{}}}
+	fake := &fakeLambda{statePages: [][]Operation{{}}}
 	payload := callbackPayload(`"retry-test"`)
 
 	submitterCalls := 0
@@ -577,7 +576,7 @@ func TestWaitForCallbackSubmitterRetryExhaustion(t *testing.T) {
 	}
 
 	h := Wrap(handler, withLambdaAPI(fake))
-	got, err := h.Invoke(context.Background(), payload)
+	got, err := h(context.Background(), payload)
 	if err != nil {
 		t.Fatalf("Invoke error: %v", err)
 	}
@@ -596,7 +595,7 @@ func TestWaitForCallbackSubmitterRetryExhaustion(t *testing.T) {
 }
 
 func TestCreateCallbackNoName(t *testing.T) {
-	fake := &fakeLambda{statePages: [][]types.Operation{{}}}
+	fake := &fakeLambda{statePages: [][]Operation{{}}}
 	payload := callbackPayload(`""`)
 
 	handler := func(ctx Context, _ string) (string, error) {
@@ -608,7 +607,7 @@ func TestCreateCallbackNoName(t *testing.T) {
 	}
 
 	h := Wrap(handler, withLambdaAPI(fake))
-	_, err := h.Invoke(context.Background(), payload)
+	_, err := h(context.Background(), payload)
 	if err != nil {
 		t.Fatalf("Invoke error: %v", err)
 	}
@@ -626,7 +625,7 @@ func TestCreateCallbackParentId(t *testing.T) {
 	// When callback is created inside a child context, it gets a ParentId.
 	// Use a SUCCEEDED child context to avoid the handler-goroutine race
 	// with checkpoint writes that happens on suspension.
-	fake := &fakeLambda{statePages: [][]types.Operation{{}}}
+	fake := &fakeLambda{statePages: [][]Operation{{}}}
 
 	// Simulate state where child context "1" is already started (has
 	// first child operation checkpointed under "1-1"), but not yet terminal.
@@ -660,7 +659,7 @@ func TestCreateCallbackParentId(t *testing.T) {
 	}
 
 	h := Wrap(handler, withLambdaAPI(fake))
-	got, err := h.Invoke(context.Background(), payload)
+	got, err := h(context.Background(), payload)
 	if err != nil {
 		t.Fatalf("Invoke error: %v", err)
 	}

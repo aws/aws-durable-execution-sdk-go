@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 )
 
 // TestActiveBranchAccountingSiblingContinues verifies that when one branch
@@ -45,9 +44,9 @@ func TestActiveBranchAccountingSiblingContinues(t *testing.T) {
 	for _, u := range updates {
 		if aws.ToString(u.Name) == "fast-step" {
 			switch u.Action {
-			case types.OperationActionStart:
+			case OperationActionStart:
 				stepStart = true
-			case types.OperationActionSucceed:
+			case OperationActionSucceed:
 				stepSucceed = true
 			}
 		}
@@ -95,9 +94,9 @@ func TestPendingCallbackInGoChildSuspendsWithSiblingProgress(t *testing.T) {
 	for _, u := range updates {
 		if aws.ToString(u.Name) == "fast-step" {
 			switch u.Action {
-			case types.OperationActionStart:
+			case OperationActionStart:
 				stepStart = true
-			case types.OperationActionSucceed:
+			case OperationActionSucceed:
 				stepSucceed = true
 			}
 		}
@@ -191,7 +190,7 @@ func TestActiveBranchAccountingNoHang(t *testing.T) {
 			// Use a goroutine with a deadline to detect hangs.
 			done := make(chan string, 1)
 			go func() {
-				resp, err := h.Invoke(context.Background(), stepPayload(`""`))
+				resp, err := h(context.Background(), stepPayload(`""`))
 				if err != nil {
 					done <- "error: " + err.Error()
 					return
@@ -219,7 +218,7 @@ func TestActiveBranchAccountingHandlerSuccessNotBlocked(t *testing.T) {
 	resp := invokeStep(t, fake,
 		stepPayload(`""`, wireOperation{
 			Id:     hashID("1"),
-			Type:   string(types.OperationTypeWait),
+			Type:   string(OperationTypeWait),
 			Status: "SUCCEEDED",
 			Name:   "w",
 		}),
@@ -305,9 +304,9 @@ func TestAsyncOperationDoesNotBlockCaller(t *testing.T) {
 				continue
 			}
 			switch u.Action {
-			case types.OperationActionStart:
+			case OperationActionStart:
 				start = true
-			case types.OperationActionSucceed:
+			case OperationActionSucceed:
 				succeed = true
 			}
 		}
@@ -452,7 +451,7 @@ func TestAbandonedGoChildCheckpointRefused(t *testing.T) {
 	}
 	done := make(chan invokeResult, 1)
 	go func() {
-		resp, err := h.Invoke(context.Background(), stepPayload(`""`))
+		resp, err := h(context.Background(), stepPayload(`""`))
 		done <- invokeResult{resp: resp, err: err}
 	}()
 
@@ -488,7 +487,7 @@ func TestAbandonedGoChildCheckpointRefused(t *testing.T) {
 	// Verify no checkpoint was recorded for the orphan step: snapshot
 	// fakeLambda state under its mutex.
 	fake.mu.Lock()
-	batches := make([][]types.OperationUpdate, len(fake.gotUpdateBatches))
+	batches := make([][]OperationUpdate, len(fake.gotUpdateBatches))
 	copy(batches, fake.gotUpdateBatches)
 	fake.mu.Unlock()
 

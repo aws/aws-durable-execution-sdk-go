@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 )
 
 // operationSubTypeRunInChildContext is the wire subtype for child-context
@@ -60,7 +59,7 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 	}
 
 	op := ec.state.get(id)
-	if err := validateReplayConsistency(op, string(types.OperationTypeContext), operationSubTypeRunInChildContext, name); err != nil {
+	if err := validateReplayConsistency(op, string(OperationTypeContext), operationSubTypeRunInChildContext, name); err != nil {
 		return zero, err
 	}
 	if ec.unfinishedInSucceededContext(op) {
@@ -100,8 +99,8 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 	}
 
 	if op == nil {
-		update := childUpdate(ec, id, name, types.OperationActionStart)
-		if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+		update := childUpdate(ec, id, name, OperationActionStart)
+		if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
 			if errors.Is(err, errCheckpointTerminated) {
 				return zero, errSuspendExecution
 			}
@@ -119,7 +118,7 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 		ExecutionArn:   ec.executionArn,
 		ID:             id,
 		Name:           name,
-		Type:           string(types.OperationTypeContext),
+		Type:           string(OperationTypeContext),
 		SubType:        operationSubTypeRunInChildContext,
 		Status:         PluginOperationStarted,
 		IsReplay:       ec.IsReplaying(),
@@ -157,9 +156,9 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 		if errors.Is(fnErr, errSuspendExecution) || errors.Is(fnErr, errCheckpointTerminated) {
 			return zero, errSuspendExecution
 		}
-		update := childUpdate(ec, id, name, types.OperationActionFail)
+		update := childUpdate(ec, id, name, OperationActionFail)
 		update.Error = errorObject(fnErr)
-		if cerr := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); cerr != nil {
+		if cerr := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); cerr != nil {
 			if errors.Is(cerr, errCheckpointTerminated) {
 				return zero, errSuspendExecution
 			}
@@ -172,15 +171,15 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 	if err != nil {
 		return zero, newSerdesError(name, serdesDirectionMarshal, err)
 	}
-	update := childUpdate(ec, id, name, types.OperationActionSucceed)
+	update := childUpdate(ec, id, name, OperationActionSucceed)
 	if len(serialized) > checkpointSizeLimitBytes {
 		// Large payload: checkpoint with empty payload and ReplayChildren
 		// so the backend preserves child operations for reconstruction.
-		update.ContextOptions = &types.ContextOptions{ReplayChildren: aws.Bool(true)}
+		update.ContextOptions = &ContextOptions{ReplayChildren: aws.Bool(true)}
 	} else {
 		update.Payload = aws.String(string(serialized))
 	}
-	if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+	if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
 		if errors.Is(err, errCheckpointTerminated) {
 			return zero, errSuspendExecution
 		}
@@ -225,7 +224,7 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 
 	// Check if the operation is already checkpointed (terminal).
 	op := ec.state.get(id)
-	if err := validateReplayConsistency(op, string(types.OperationTypeContext), operationSubTypeRunInChildContext, name); err != nil {
+	if err := validateReplayConsistency(op, string(OperationTypeContext), operationSubTypeRunInChildContext, name); err != nil {
 		return newFailedFuture[O](err)
 	}
 	if ec.unfinishedInSucceededContext(op) {
@@ -237,8 +236,8 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 
 	// Checkpoint START if this is the first invocation of this child.
 	if op == nil {
-		update := childUpdate(ec, id, name, types.OperationActionStart)
-		if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+		update := childUpdate(ec, id, name, OperationActionStart)
+		if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
 			if errors.Is(err, errCheckpointTerminated) {
 				return newFailedFuture[O](errSuspendExecution)
 			}
@@ -291,9 +290,9 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 			}
 			// Checkpoint the failure. If checkpointing fails, the
 			// settle error is the checkpoint failure.
-			update := childUpdate(ec, id, name, types.OperationActionFail)
+			update := childUpdate(ec, id, name, OperationActionFail)
 			update.Error = errorObject(fnErr)
-			if cerr := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); cerr != nil {
+			if cerr := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); cerr != nil {
 				// Terminated checkpointer means the invocation is
 				// answering PENDING; treat as suspension.
 				if errors.Is(cerr, errCheckpointTerminated) {
@@ -314,13 +313,13 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 			fut.settle(result, newSerdesError(name, serdesDirectionMarshal, serr))
 			return
 		}
-		update := childUpdate(ec, id, name, types.OperationActionSucceed)
+		update := childUpdate(ec, id, name, OperationActionSucceed)
 		if len(serialized) > checkpointSizeLimitBytes {
-			update.ContextOptions = &types.ContextOptions{ReplayChildren: aws.Bool(true)}
+			update.ContextOptions = &ContextOptions{ReplayChildren: aws.Bool(true)}
 		} else {
 			update.Payload = aws.String(string(serialized))
 		}
-		if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+		if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
 			// Terminated checkpointer means the invocation is answering
 			// PENDING; treat as suspension.
 			if errors.Is(err, errCheckpointTerminated) {
@@ -412,10 +411,10 @@ func childReplayMode(ec *execContext, id string, op *operation) executionMode {
 
 // childUpdate assembles the shared fields of a child-context operation
 // update. IDs are hashed to their wire form.
-func childUpdate(ec *execContext, id, name string, action types.OperationAction) types.OperationUpdate {
-	update := types.OperationUpdate{
+func childUpdate(ec *execContext, id, name string, action OperationAction) OperationUpdate {
+	update := OperationUpdate{
 		Id:      aws.String(hashID(id)),
-		Type:    types.OperationTypeContext,
+		Type:    OperationTypeContext,
 		SubType: aws.String(operationSubTypeRunInChildContext),
 		Action:  action,
 	}

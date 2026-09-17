@@ -4,8 +4,6 @@ import (
 	"context"
 	"sync/atomic"
 	"time"
-
-	"github.com/aws/aws-lambda-go/lambdacontext"
 )
 
 // executionMode is the context's position in the checkpoint-replay
@@ -33,7 +31,7 @@ type execContext struct {
 	context.Context
 
 	executionArn string
-	lambdaCtx    *lambdacontext.LambdaContext
+	invocation   invocationInfo
 	logger       Logger
 
 	// mode tracks the execution's replay lifecycle position. Accessed
@@ -99,7 +97,7 @@ func (c *execContext) sealed() {}
 // newExecContext creates the root context for one invocation. The mode
 // starts in replay when checkpointed operations beyond the always-present
 // execution operation exist.
-func newExecContext(ctx context.Context, executionArn string, lambdaCtx *lambdacontext.LambdaContext, logger Logger, state *executionState) *execContext {
+func newExecContext(ctx context.Context, executionArn string, inv invocationInfo, logger Logger, state *executionState) *execContext {
 	mode := modeExecution
 	if state.numOperations() > 1 {
 		mode = modeReplay
@@ -111,7 +109,7 @@ func newExecContext(ctx context.Context, executionArn string, lambdaCtx *lambdac
 	ec := &execContext{
 		Context:      ctx,
 		executionArn: executionArn,
-		lambdaCtx:    lambdaCtx,
+		invocation:   inv,
 		logger:       logger,
 		ids:          &opIDs{},
 		owner:        currentGoroutineOwner(),
@@ -134,7 +132,9 @@ func (c *execContext) serdesCtx(operationID string) SerdesContext {
 	}
 }
 
-func (c *execContext) LambdaContext() *lambdacontext.LambdaContext { return c.lambdaCtx }
+func (c *execContext) RequestID() string { return c.invocation.requestID }
+
+func (c *execContext) InvokedFunctionARN() string { return c.invocation.invokedFunctionARN }
 
 func (c *execContext) Logger() Logger { return c.logger }
 
@@ -246,7 +246,7 @@ func (c *execContext) child(entityID string, owner goroutineOwner, mode executio
 	child := &execContext{
 		Context:              c.Context,
 		executionArn:         c.executionArn,
-		lambdaCtx:            c.lambdaCtx,
+		invocation:           c.invocation,
 		logger:               c.logger,
 		ids:                  c.ids.child(entityID),
 		owner:                owner,
@@ -277,7 +277,7 @@ func (c *execContext) branch(owner goroutineOwner) *execContext {
 	b := &execContext{
 		Context:              c.Context,
 		executionArn:         c.executionArn,
-		lambdaCtx:            c.lambdaCtx,
+		invocation:           c.invocation,
 		logger:               c.logger,
 		ids:                  c.ids,
 		owner:                owner,

@@ -9,12 +9,14 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/lambda"
-	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
-
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
 )
+
+// strptr returns a pointer to the given string.
+func strptr(s string) *string { return &s }
+
+// boolptr returns a pointer to the given bool.
+func boolptr(b bool) *bool { return &b }
 
 // Compile-time check that memoryClient satisfies ExecutionClient.
 var _ durable.ExecutionClient = (*memoryClient)(nil)
@@ -28,26 +30,26 @@ type memoryClient struct {
 	mu         sync.Mutex
 	token      string
 	tokenSeq   int
-	operations map[string]*types.Operation // keyed by operation ID
-	opOrder    []string                    // insertion-order tracking
+	operations map[string]*durable.Operation // keyed by operation ID
+	opOrder    []string                      // insertion-order tracking
 }
 
 func newMemoryClient() *memoryClient {
 	return &memoryClient{
 		token:      "test-token-0",
-		operations: make(map[string]*types.Operation),
+		operations: make(map[string]*durable.Operation),
 	}
 }
 
-// CheckpointDurableExecution applies operation updates, rotates the
-// checkpoint token, and returns the updated operations. Per the backend
-// contract, the token rotates on every successful checkpoint response.
-func (m *memoryClient) CheckpointDurableExecution(_ context.Context, in *lambda.CheckpointDurableExecutionInput, _ ...func(*lambda.Options)) (*lambda.CheckpointDurableExecutionOutput, error) {
+// Checkpoint applies operation updates, rotates the checkpoint token, and
+// returns the updated operations. Per the backend contract, the token
+// rotates on every successful checkpoint response.
+func (m *memoryClient) Checkpoint(_ context.Context, in durable.CheckpointInput) (durable.CheckpointOutput, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	// Apply each update.
-	var updated []types.Operation
+	var updated []durable.Operation
 	for _, u := range in.Updates {
 		op := m.applyUpdate(u)
 		updated = append(updated, op)
@@ -57,30 +59,28 @@ func (m *memoryClient) CheckpointDurableExecution(_ context.Context, in *lambda.
 	m.tokenSeq++
 	m.token = "test-token-" + strconv.Itoa(m.tokenSeq)
 
-	return &lambda.CheckpointDurableExecutionOutput{
-		CheckpointToken: aws.String(m.token),
-		NewExecutionState: &types.CheckpointUpdatedExecutionState{
-			Operations: updated,
-		},
+	return durable.CheckpointOutput{
+		CheckpointToken:   m.token,
+		NewExecutionState: updated,
 	}, nil
 }
 
-// GetDurableExecutionState returns all stored operations in a single page.
-// The local runner does not use pagination; this method exists to satisfy
-// the interface for the initial loadState pagination loop. Each returned
+// GetExecutionState returns all stored operations in a single page. The
+// local runner does not use pagination; this method exists to satisfy the
+// interface for the initial loadState pagination loop. Each returned
 // operation is a deep copy, independent of the memoryClient's internal
 // state.
-func (m *memoryClient) GetDurableExecutionState(_ context.Context, _ *lambda.GetDurableExecutionStateInput, _ ...func(*lambda.Options)) (*lambda.GetDurableExecutionStateOutput, error) {
+func (m *memoryClient) GetExecutionState(_ context.Context, _ durable.GetExecutionStateInput) (durable.GetExecutionStateOutput, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	ops := make([]types.Operation, 0, len(m.operations))
+	ops := make([]durable.Operation, 0, len(m.operations))
 	for _, id := range m.opOrder {
 		if op, ok := m.operations[id]; ok {
 			ops = append(ops, deepCopyOperation(*op))
 		}
 	}
-	return &lambda.GetDurableExecutionStateOutput{
+	return durable.GetExecutionStateOutput{
 		Operations: ops,
 	}, nil
 }
@@ -90,18 +90,18 @@ func (m *memoryClient) GetDurableExecutionState(_ context.Context, _ *lambda.Get
 // Operation is fully independent of the memoryClient's internal state,
 // preventing data races if the caller reads details while a concurrent
 // checkpoint mutates the store.
-func (m *memoryClient) allOperations() []types.Operation {
+func (m *memoryClient) allOperations() []durable.Operation {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	ops := make([]types.Operation, 0, len(m.operations))
+	ops := make([]durable.Operation, 0, len(m.operations))
 	for _, id := range m.opOrder {
 		op, ok := m.operations[id]
 		if !ok {
 			continue
 		}
 		// Skip the execution operation (type EXECUTION).
-		if op.Type == types.OperationTypeExecution {
+		if op.Type == durable.OperationTypeExecution {
 			continue
 		}
 		ops = append(ops, deepCopyOperation(*op))
@@ -121,11 +121,11 @@ func (m *memoryClient) currentToken() string {
 // builds type-specific details.
 //
 // Caller must hold m.mu.
-func (m *memoryClient) applyUpdate(u types.OperationUpdate) types.Operation {
-	id := aws.ToString(u.Id)
+func (m *memoryClient) applyUpdate(u durable.OperationUpdate) durable.Operation {
+	id := ptrStr(u.Id)
 
 	existing := m.operations[id]
-	op := types.Operation{
+	op := durable.Operation{
 		Id:       u.Id,
 		Name:     u.Name,
 		Type:     u.Type,
@@ -136,17 +136,17 @@ func (m *memoryClient) applyUpdate(u types.OperationUpdate) types.Operation {
 
 	// Build type-specific details.
 	switch u.Type {
-	case types.OperationTypeStep:
+	case durable.OperationTypeStep:
 		op.StepDetails = buildStepDetails(u, existing)
-	case types.OperationTypeWait:
+	case durable.OperationTypeWait:
 		op.WaitDetails = buildWaitDetails(u)
-	case types.OperationTypeCallback:
+	case durable.OperationTypeCallback:
 		op.CallbackDetails = buildCallbackDetails(u, existing)
-	case types.OperationTypeChainedInvoke:
+	case durable.OperationTypeChainedInvoke:
 		op.ChainedInvokeDetails = buildChainedInvokeDetails(u)
-	case types.OperationTypeContext:
+	case durable.OperationTypeContext:
 		op.ContextDetails = buildContextDetails(u)
-	case types.OperationTypeExecution:
+	case durable.OperationTypeExecution:
 		// Execution operations carry no updatable details.
 	default:
 		// Unknown types (including BATCH on the wire) carry no
@@ -162,48 +162,48 @@ func (m *memoryClient) applyUpdate(u types.OperationUpdate) types.Operation {
 }
 
 // deriveStatus maps an OperationAction to the resulting OperationStatus.
-func deriveStatus(action types.OperationAction) types.OperationStatus {
+func deriveStatus(action durable.OperationAction) durable.OperationStatus {
 	switch action {
-	case types.OperationActionStart:
-		return types.OperationStatusStarted
-	case types.OperationActionSucceed:
-		return types.OperationStatusSucceeded
-	case types.OperationActionFail:
-		return types.OperationStatusFailed
-	case types.OperationActionRetry:
-		return types.OperationStatusPending
-	case types.OperationActionCancel:
-		return types.OperationStatusCancelled
+	case durable.OperationActionStart:
+		return durable.OperationStatusStarted
+	case durable.OperationActionSucceed:
+		return durable.OperationStatusSucceeded
+	case durable.OperationActionFail:
+		return durable.OperationStatusFailed
+	case durable.OperationActionRetry:
+		return durable.OperationStatusPending
+	case durable.OperationActionCancel:
+		return durable.OperationStatusCancelled
 	default:
-		return types.OperationStatus(string(action))
+		return durable.OperationStatus(string(action))
 	}
 }
 
 // buildStepDetails constructs StepDetails for a checkpoint update, carrying
 // forward attempt count and applying the action semantics.
-func buildStepDetails(u types.OperationUpdate, existing *types.Operation) *types.StepDetails {
+func buildStepDetails(u durable.OperationUpdate, existing *durable.Operation) *durable.StepDetails {
 	var attempt int32
 	if existing != nil && existing.StepDetails != nil {
 		attempt = existing.StepDetails.Attempt
 	}
 
-	sd := &types.StepDetails{}
+	sd := &durable.StepDetails{}
 	switch u.Action {
-	case types.OperationActionStart:
+	case durable.OperationActionStart:
 		// START preserves existing attempt count (step re-entered after
 		// crash or retry timer). Only increment on RETRY/FAIL.
 		sd.Attempt = attempt
-	case types.OperationActionSucceed:
+	case durable.OperationActionSucceed:
 		sd.Attempt = attempt
 		if u.Payload != nil {
 			sd.Result = u.Payload
 		}
-	case types.OperationActionFail:
+	case durable.OperationActionFail:
 		sd.Attempt = attempt + 1
 		if u.Error != nil {
 			sd.Error = u.Error
 		}
-	case types.OperationActionRetry:
+	case durable.OperationActionRetry:
 		sd.Attempt = attempt + 1
 		if u.Error != nil {
 			sd.Error = u.Error
@@ -217,17 +217,17 @@ func buildStepDetails(u types.OperationUpdate, existing *types.Operation) *types
 // buildWaitDetails constructs WaitDetails for a wait checkpoint update.
 // The local runner does not track wait durations; all pending waits complete
 // unconditionally when [LocalRunner.CompletePendingTimers] is called.
-func buildWaitDetails(u types.OperationUpdate) *types.WaitDetails {
-	if u.Action != types.OperationActionStart {
+func buildWaitDetails(u durable.OperationUpdate) *durable.WaitDetails {
+	if u.Action != durable.OperationActionStart {
 		return nil
 	}
-	return &types.WaitDetails{}
+	return &durable.WaitDetails{}
 }
 
 // buildCallbackDetails constructs CallbackDetails, generating a callback ID
 // on START and preserving it on subsequent updates.
-func buildCallbackDetails(u types.OperationUpdate, existing *types.Operation) *types.CallbackDetails {
-	cd := &types.CallbackDetails{}
+func buildCallbackDetails(u durable.OperationUpdate, existing *durable.Operation) *durable.CallbackDetails {
+	cd := &durable.CallbackDetails{}
 
 	// Preserve or generate callback ID.
 	if existing != nil && existing.CallbackDetails != nil && existing.CallbackDetails.CallbackId != nil {
@@ -240,7 +240,7 @@ func buildCallbackDetails(u types.OperationUpdate, existing *types.Operation) *t
 	}
 
 	// On non-START actions, apply result/error.
-	if u.Action != types.OperationActionStart {
+	if u.Action != durable.OperationActionStart {
 		if u.Payload != nil {
 			cd.Result = u.Payload
 		}
@@ -252,24 +252,24 @@ func buildCallbackDetails(u types.OperationUpdate, existing *types.Operation) *t
 }
 
 // buildChainedInvokeDetails constructs ChainedInvokeDetails.
-func buildChainedInvokeDetails(u types.OperationUpdate) *types.ChainedInvokeDetails {
-	if u.Action == types.OperationActionStart {
-		return &types.ChainedInvokeDetails{}
+func buildChainedInvokeDetails(u durable.OperationUpdate) *durable.ChainedInvokeDetails {
+	if u.Action == durable.OperationActionStart {
+		return &durable.ChainedInvokeDetails{}
 	}
-	return &types.ChainedInvokeDetails{
+	return &durable.ChainedInvokeDetails{
 		Result: u.Payload,
 		Error:  u.Error,
 	}
 }
 
 // buildContextDetails constructs ContextDetails.
-func buildContextDetails(u types.OperationUpdate) *types.ContextDetails {
-	cd := &types.ContextDetails{
+func buildContextDetails(u durable.OperationUpdate) *durable.ContextDetails {
+	cd := &durable.ContextDetails{
 		Result: u.Payload,
 		Error:  u.Error,
 	}
 	if u.ContextOptions != nil && u.ContextOptions.ReplayChildren != nil && *u.ContextOptions.ReplayChildren {
-		cd.ReplayChildren = aws.Bool(true)
+		cd.ReplayChildren = boolptr(true)
 	}
 	return cd
 }
@@ -318,17 +318,17 @@ func (m *memoryClient) completePendingTimers() bool {
 		if op == nil {
 			continue
 		}
-		if op.Type == types.OperationTypeStep && op.Status == types.OperationStatusPending {
+		if op.Type == durable.OperationTypeStep && op.Status == durable.OperationStatusPending {
 			// PENDING → READY: retry timer elapsed.
 			updated := *op
-			updated.Status = types.OperationStatusReady
+			updated.Status = durable.OperationStatusReady
 			m.operations[id] = &updated
 			advanced = true
 		}
-		if op.Type == types.OperationTypeWait && op.Status == types.OperationStatusStarted {
+		if op.Type == durable.OperationTypeWait && op.Status == durable.OperationStatusStarted {
 			// STARTED → SUCCEEDED: wait elapsed.
 			updated := *op
-			updated.Status = types.OperationStatusSucceeded
+			updated.Status = durable.OperationStatusSucceeded
 			m.operations[id] = &updated
 			advanced = true
 		}
@@ -346,36 +346,36 @@ func (m *memoryClient) completeCallback(callbackID string, result operationResul
 	if op == nil {
 		return fmt.Errorf("durabletest: callback %q not found", callbackID)
 	}
-	if op.Status != types.OperationStatusStarted {
+	if op.Status != durable.OperationStatusStarted {
 		return fmt.Errorf("durabletest: callback %q is in %s status, expected STARTED", callbackID, op.Status)
 	}
 
 	updated := *op
 	switch result.status {
 	case statusSucceeded:
-		updated.Status = types.OperationStatusSucceeded
+		updated.Status = durable.OperationStatusSucceeded
 		if updated.CallbackDetails == nil {
-			updated.CallbackDetails = &types.CallbackDetails{}
+			updated.CallbackDetails = &durable.CallbackDetails{}
 		}
 		cd := *updated.CallbackDetails
-		cd.Result = aws.String(result.result)
+		cd.Result = strptr(result.result)
 		updated.CallbackDetails = &cd
 	case statusFailed:
-		updated.Status = types.OperationStatusFailed
+		updated.Status = durable.OperationStatusFailed
 		if updated.CallbackDetails == nil {
-			updated.CallbackDetails = &types.CallbackDetails{}
+			updated.CallbackDetails = &durable.CallbackDetails{}
 		}
 		cd := *updated.CallbackDetails
-		cd.Error = &types.ErrorObject{
-			ErrorType:    aws.String(result.errType),
-			ErrorMessage: aws.String(result.errMsg),
+		cd.Error = &durable.ErrorObject{
+			ErrorType:    strptr(result.errType),
+			ErrorMessage: strptr(result.errMsg),
 		}
 		updated.CallbackDetails = &cd
 	default:
 		return fmt.Errorf("durabletest: unsupported callback result status %q", result.status)
 	}
 
-	m.operations[aws.ToString(op.Id)] = &updated
+	m.operations[ptrStr(op.Id)] = &updated
 	return nil
 }
 
@@ -389,13 +389,13 @@ func (m *memoryClient) timeoutCallback(callbackID string) error {
 	if op == nil {
 		return fmt.Errorf("durabletest: callback %q not found", callbackID)
 	}
-	if op.Status != types.OperationStatusStarted {
+	if op.Status != durable.OperationStatusStarted {
 		return fmt.Errorf("durabletest: callback %q is in %s status, expected STARTED", callbackID, op.Status)
 	}
 
 	updated := *op
-	updated.Status = types.OperationStatusTimedOut
-	m.operations[aws.ToString(op.Id)] = &updated
+	updated.Status = durable.OperationStatusTimedOut
+	m.operations[ptrStr(op.Id)] = &updated
 	return nil
 }
 
@@ -409,7 +409,7 @@ func (m *memoryClient) heartbeatCallback(callbackID string) error {
 	if op == nil {
 		return fmt.Errorf("durabletest: callback %q not found", callbackID)
 	}
-	if op.Status != types.OperationStatusStarted {
+	if op.Status != durable.OperationStatusStarted {
 		return fmt.Errorf("durabletest: callback %q is in %s status, expected STARTED", callbackID, op.Status)
 	}
 	return nil
@@ -426,14 +426,14 @@ func (m *memoryClient) openCallbacks() []OpenCallback {
 		if op == nil {
 			continue
 		}
-		if op.Type == types.OperationTypeCallback && op.Status == types.OperationStatusStarted {
+		if op.Type == durable.OperationTypeCallback && op.Status == durable.OperationStatusStarted {
 			cbID := ""
 			if op.CallbackDetails != nil && op.CallbackDetails.CallbackId != nil {
 				cbID = *op.CallbackDetails.CallbackId
 			}
 			cbs = append(cbs, OpenCallback{
 				CallbackID: cbID,
-				Name:       aws.ToString(op.Name),
+				Name:       ptrStr(op.Name),
 			})
 		}
 	}
@@ -450,41 +450,41 @@ func (m *memoryClient) completeChainedInvoke(name string, result operationResult
 	if op == nil {
 		return fmt.Errorf("durabletest: chained-invoke operation %q not found", name)
 	}
-	if op.Type != types.OperationTypeChainedInvoke {
+	if op.Type != durable.OperationTypeChainedInvoke {
 		return fmt.Errorf("durabletest: operation %q is %s, not CHAINED_INVOKE", name, op.Type)
 	}
-	if op.Status != types.OperationStatusStarted {
+	if op.Status != durable.OperationStatusStarted {
 		return fmt.Errorf("durabletest: chained-invoke %q is in %s status, expected STARTED", name, op.Status)
 	}
 
 	updated := *op
 	switch result.status {
 	case statusSucceeded:
-		updated.Status = types.OperationStatusSucceeded
-		updated.ChainedInvokeDetails = &types.ChainedInvokeDetails{
-			Result: aws.String(result.result),
+		updated.Status = durable.OperationStatusSucceeded
+		updated.ChainedInvokeDetails = &durable.ChainedInvokeDetails{
+			Result: strptr(result.result),
 		}
 	case statusFailed:
-		updated.Status = types.OperationStatusFailed
-		updated.ChainedInvokeDetails = &types.ChainedInvokeDetails{
-			Error: &types.ErrorObject{
-				ErrorType:    aws.String(result.errType),
-				ErrorMessage: aws.String(result.errMsg),
+		updated.Status = durable.OperationStatusFailed
+		updated.ChainedInvokeDetails = &durable.ChainedInvokeDetails{
+			Error: &durable.ErrorObject{
+				ErrorType:    strptr(result.errType),
+				ErrorMessage: strptr(result.errMsg),
 			},
 		}
 	default:
 		return fmt.Errorf("durabletest: unsupported chained-invoke result status %q", result.status)
 	}
 
-	m.operations[aws.ToString(op.Id)] = &updated
+	m.operations[ptrStr(op.Id)] = &updated
 	return nil
 }
 
-// deepCopyOperation creates a fully independent copy of a types.Operation.
+// deepCopyOperation creates a fully independent copy of a durable.Operation.
 // All pointer fields and nested structs are cloned so the copy shares no
 // memory with the original.
-func deepCopyOperation(src types.Operation) types.Operation {
-	dst := types.Operation{
+func deepCopyOperation(src durable.Operation) durable.Operation {
+	dst := durable.Operation{
 		Id:       copyStringPtr(src.Id),
 		Status:   src.Status,
 		Type:     src.Type,
@@ -501,7 +501,7 @@ func deepCopyOperation(src types.Operation) types.Operation {
 		dst.EndTimestamp = &t
 	}
 	if sd := src.StepDetails; sd != nil {
-		dst.StepDetails = &types.StepDetails{
+		dst.StepDetails = &durable.StepDetails{
 			Attempt: sd.Attempt,
 			Result:  copyStringPtr(sd.Result),
 		}
@@ -514,7 +514,7 @@ func deepCopyOperation(src types.Operation) types.Operation {
 		}
 	}
 	if cd := src.CallbackDetails; cd != nil {
-		dst.CallbackDetails = &types.CallbackDetails{
+		dst.CallbackDetails = &durable.CallbackDetails{
 			CallbackId: copyStringPtr(cd.CallbackId),
 			Result:     copyStringPtr(cd.Result),
 		}
@@ -523,7 +523,7 @@ func deepCopyOperation(src types.Operation) types.Operation {
 		}
 	}
 	if id := src.ChainedInvokeDetails; id != nil {
-		dst.ChainedInvokeDetails = &types.ChainedInvokeDetails{
+		dst.ChainedInvokeDetails = &durable.ChainedInvokeDetails{
 			Result: copyStringPtr(id.Result),
 		}
 		if id.Error != nil {
@@ -531,7 +531,7 @@ func deepCopyOperation(src types.Operation) types.Operation {
 		}
 	}
 	if cd := src.ContextDetails; cd != nil {
-		dst.ContextDetails = &types.ContextDetails{
+		dst.ContextDetails = &durable.ContextDetails{
 			Result:         copyStringPtr(cd.Result),
 			ReplayChildren: copyBoolPtr(cd.ReplayChildren),
 		}
@@ -540,7 +540,7 @@ func deepCopyOperation(src types.Operation) types.Operation {
 		}
 	}
 	if src.WaitDetails != nil {
-		wd := &types.WaitDetails{}
+		wd := &durable.WaitDetails{}
 		if src.WaitDetails.ScheduledEndTimestamp != nil {
 			t := *src.WaitDetails.ScheduledEndTimestamp
 			wd.ScheduledEndTimestamp = &t
@@ -548,7 +548,7 @@ func deepCopyOperation(src types.Operation) types.Operation {
 		dst.WaitDetails = wd
 	}
 	if src.ExecutionDetails != nil {
-		dst.ExecutionDetails = &types.ExecutionDetails{
+		dst.ExecutionDetails = &durable.ExecutionDetails{
 			InputPayload: copyStringPtr(src.ExecutionDetails.InputPayload),
 		}
 	}
@@ -556,8 +556,8 @@ func deepCopyOperation(src types.Operation) types.Operation {
 }
 
 // copyErrorObject deep-copies an ErrorObject including its StackTrace slice.
-func copyErrorObject(src *types.ErrorObject) *types.ErrorObject {
-	dst := &types.ErrorObject{
+func copyErrorObject(src *durable.ErrorObject) *durable.ErrorObject {
+	dst := &durable.ErrorObject{
 		ErrorData:    copyStringPtr(src.ErrorData),
 		ErrorMessage: copyStringPtr(src.ErrorMessage),
 		ErrorType:    copyStringPtr(src.ErrorType),
@@ -589,14 +589,14 @@ func copyBoolPtr(p *bool) *bool {
 
 // findCallbackByID locates a callback operation by its callback ID.
 // Caller must hold m.mu.
-func (m *memoryClient) findCallbackByID(callbackID string) *types.Operation {
+func (m *memoryClient) findCallbackByID(callbackID string) *durable.Operation {
 	for _, id := range m.opOrder {
 		op := m.operations[id]
 		if op == nil {
 			continue
 		}
-		if op.Type == types.OperationTypeCallback && op.CallbackDetails != nil {
-			if aws.ToString(op.CallbackDetails.CallbackId) == callbackID {
+		if op.Type == durable.OperationTypeCallback && op.CallbackDetails != nil {
+			if ptrStr(op.CallbackDetails.CallbackId) == callbackID {
 				return op
 			}
 		}
@@ -606,13 +606,13 @@ func (m *memoryClient) findCallbackByID(callbackID string) *types.Operation {
 
 // findByName locates an operation by its user-supplied name.
 // Caller must hold m.mu.
-func (m *memoryClient) findByName(name string) *types.Operation {
+func (m *memoryClient) findByName(name string) *durable.Operation {
 	for _, id := range m.opOrder {
 		op := m.operations[id]
 		if op == nil {
 			continue
 		}
-		if aws.ToString(op.Name) == name {
+		if ptrStr(op.Name) == name {
 			return op
 		}
 	}

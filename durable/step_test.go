@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 )
 
 // stepPayload builds an invocation payload whose initial state contains the
@@ -44,7 +43,7 @@ func checkpointedStep(positionalID, status string, details *wireStepDetails) wir
 func invokeStep(t *testing.T, fake *fakeLambda, payload []byte, handler Handler[string, string]) string {
 	t.Helper()
 	h := Wrap(handler, withLambdaAPI(fake))
-	got, err := h.Invoke(context.Background(), payload)
+	got, err := h(context.Background(), payload)
 	if err != nil {
 		t.Fatalf("Invoke() error: %v", err)
 	}
@@ -52,21 +51,21 @@ func invokeStep(t *testing.T, fake *fakeLambda, payload []byte, handler Handler[
 }
 
 // updateBatch flattens the fake's recorded update batches for assertions.
-func updateBatch(t *testing.T, fake *fakeLambda) []types.OperationUpdate {
+func updateBatch(t *testing.T, fake *fakeLambda) []OperationUpdate {
 	t.Helper()
-	var updates []types.OperationUpdate
+	var updates []OperationUpdate
 	for _, batch := range fake.gotUpdateBatches {
 		updates = append(updates, batch...)
 	}
 	return updates
 }
 
-func assertStepUpdate(t *testing.T, u types.OperationUpdate, positionalID string, action types.OperationAction) {
+func assertStepUpdate(t *testing.T, u OperationUpdate, positionalID string, action OperationAction) {
 	t.Helper()
 	if got, want := aws.ToString(u.Id), hashID(positionalID); got != want {
 		t.Errorf("update Id = %q, want hash of %q (%q)", got, positionalID, want)
 	}
-	if u.Type != types.OperationTypeStep {
+	if u.Type != OperationTypeStep {
 		t.Errorf("update Type = %q, want STEP", u.Type)
 	}
 	if got := aws.ToString(u.SubType); got != "Step" {
@@ -92,14 +91,14 @@ func TestStepFirstRunSuccess(t *testing.T) {
 	if len(updates) != 2 {
 		t.Fatalf("received %d updates, want 2 (START, SUCCEED)", len(updates))
 	}
-	assertStepUpdate(t, updates[0], "1", types.OperationActionStart)
+	assertStepUpdate(t, updates[0], "1", OperationActionStart)
 	if got := aws.ToString(updates[0].Name); got != "greet" {
 		t.Errorf("START Name = %q, want greet", got)
 	}
 	if updates[0].ParentId != nil {
 		t.Errorf("root step ParentId = %q, want nil", aws.ToString(updates[0].ParentId))
 	}
-	assertStepUpdate(t, updates[1], "1", types.OperationActionSucceed)
+	assertStepUpdate(t, updates[1], "1", OperationActionSucceed)
 	if got := aws.ToString(updates[1].Payload); got != `"Hello, World!"` {
 		t.Errorf("SUCCEED Payload = %q, want %q", got, `"Hello, World!"`)
 	}
@@ -134,10 +133,10 @@ func TestStepSequentialIDs(t *testing.T) {
 	if len(updates) != 4 {
 		t.Fatalf("received %d updates, want 4", len(updates))
 	}
-	assertStepUpdate(t, updates[0], "1", types.OperationActionStart)
-	assertStepUpdate(t, updates[1], "1", types.OperationActionSucceed)
-	assertStepUpdate(t, updates[2], "2", types.OperationActionStart)
-	assertStepUpdate(t, updates[3], "2", types.OperationActionSucceed)
+	assertStepUpdate(t, updates[0], "1", OperationActionStart)
+	assertStepUpdate(t, updates[1], "1", OperationActionSucceed)
+	assertStepUpdate(t, updates[2], "2", OperationActionStart)
+	assertStepUpdate(t, updates[3], "2", OperationActionSucceed)
 }
 
 func TestStepReplaySucceededReturnsCachedResult(t *testing.T) {
@@ -216,7 +215,7 @@ func TestStepNoRetryFailure(t *testing.T) {
 	if len(updates) != 2 {
 		t.Fatalf("received %d updates, want 2 (START, FAIL)", len(updates))
 	}
-	assertStepUpdate(t, updates[1], "1", types.OperationActionFail)
+	assertStepUpdate(t, updates[1], "1", OperationActionFail)
 	if updates[1].Error == nil {
 		t.Fatal("FAIL update has no Error object")
 	}
@@ -243,7 +242,7 @@ func TestStepRetrySchedulesAndSuspends(t *testing.T) {
 	if len(updates) != 2 {
 		t.Fatalf("received %d updates, want 2 (START, RETRY)", len(updates))
 	}
-	assertStepUpdate(t, updates[1], "1", types.OperationActionRetry)
+	assertStepUpdate(t, updates[1], "1", OperationActionRetry)
 	if updates[1].StepOptions == nil {
 		t.Fatal("RETRY update has no StepOptions")
 	}
@@ -352,8 +351,8 @@ func TestStepReadyReexecutesWithNextAttempt(t *testing.T) {
 	if len(updates) != 2 {
 		t.Fatalf("received %d updates, want 2 (START, FAIL)", len(updates))
 	}
-	assertStepUpdate(t, updates[0], "1", types.OperationActionStart)
-	assertStepUpdate(t, updates[1], "1", types.OperationActionFail)
+	assertStepUpdate(t, updates[0], "1", OperationActionStart)
+	assertStepUpdate(t, updates[1], "1", OperationActionFail)
 }
 
 func TestStepStartedAtLeastOnceReexecutes(t *testing.T) {
@@ -380,7 +379,7 @@ func TestStepStartedAtLeastOnceReexecutes(t *testing.T) {
 	if len(updates) != 1 {
 		t.Fatalf("received %d updates, want 1 (SUCCEED only)", len(updates))
 	}
-	assertStepUpdate(t, updates[0], "1", types.OperationActionSucceed)
+	assertStepUpdate(t, updates[0], "1", OperationActionSucceed)
 }
 
 func TestStepStartedAtMostOnceInterrupted(t *testing.T) {
@@ -388,21 +387,21 @@ func TestStepStartedAtMostOnceInterrupted(t *testing.T) {
 		name        string
 		retry       RetryStrategy
 		wantStatus  string
-		wantAction  types.OperationAction
+		wantAction  OperationAction
 		wantUpdates int
 	}{
 		{
 			name:        "no retry fails permanently",
 			retry:       NoRetry(),
 			wantStatus:  `"Status":"FAILED"`,
-			wantAction:  types.OperationActionFail,
+			wantAction:  OperationActionFail,
 			wantUpdates: 1,
 		},
 		{
 			name:        "retry schedules next attempt",
 			retry:       MustLinearBackoff(time.Second),
 			wantStatus:  `"Status":"PENDING"`,
-			wantAction:  types.OperationActionRetry,
+			wantAction:  OperationActionRetry,
 			wantUpdates: 1,
 		},
 	}
@@ -433,7 +432,7 @@ func TestStepStartedAtMostOnceInterrupted(t *testing.T) {
 				t.Fatalf("received %d updates, want %d", len(updates), tt.wantUpdates)
 			}
 			assertStepUpdate(t, updates[0], "1", tt.wantAction)
-			if tt.wantAction == types.OperationActionFail {
+			if tt.wantAction == OperationActionFail {
 				var interrupted *StepInterruptedError
 				if !errors.As(gotErr, &interrupted) {
 					t.Errorf("step error = %v, want wrapping *StepInterruptedError", gotErr)
@@ -482,7 +481,7 @@ func TestStepNilResult(t *testing.T) {
 			return nil, nil
 		})
 	}, withLambdaAPI(fake))
-	got, err := h.Invoke(context.Background(), stepPayload(`""`))
+	got, err := h(context.Background(), stepPayload(`""`))
 	if err != nil {
 		t.Fatalf("Invoke() error: %v", err)
 	}

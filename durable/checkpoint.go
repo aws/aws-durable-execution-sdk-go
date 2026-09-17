@@ -10,8 +10,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/lambda"
-	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 )
 
 const (
@@ -25,17 +23,6 @@ const (
 	// checkpointMaxDelay caps the exponential backoff.
 	checkpointMaxDelay = 2 * time.Second
 )
-
-// ExecutionClient is the subset of the Lambda service client that the
-// durable execution engine consumes. It is satisfied by
-// [github.com/aws/aws-sdk-go-v2/service/lambda.Client] and by test fakes.
-//
-// The [durabletest] package implements an in-memory ExecutionClient for
-// local testing without AWS infrastructure.
-type ExecutionClient interface {
-	GetDurableExecutionState(ctx context.Context, in *lambda.GetDurableExecutionStateInput, opts ...func(*lambda.Options)) (*lambda.GetDurableExecutionStateOutput, error)
-	CheckpointDurableExecution(ctx context.Context, in *lambda.CheckpointDurableExecutionInput, opts ...func(*lambda.Options)) (*lambda.CheckpointDurableExecutionOutput, error)
-}
 
 // errCheckpointTerminated is returned by the checkpointer after the
 // invocation has committed to a PENDING response. Orphaned branches
@@ -96,15 +83,12 @@ func (cp *checkpointer) loadState(ctx context.Context) (*executionState, error) 
 // constraint as loadState applies.
 func (cp *checkpointer) loadStateFrom(ctx context.Context, marker string) ([]*operation, error) {
 	var ops []*operation
-	var next *string
-	if marker != "" {
-		next = &marker
-	}
+	next := marker
 	for {
-		out, err := cp.client.GetDurableExecutionState(ctx, &lambda.GetDurableExecutionStateInput{
-			DurableExecutionArn: aws.String(cp.executionArn),
-			CheckpointToken:     aws.String(cp.currentToken()),
-			Marker:              next,
+		out, err := cp.client.GetExecutionState(ctx, GetExecutionStateInput{
+			ExecutionArn:    cp.executionArn,
+			CheckpointToken: cp.currentToken(),
+			Marker:          next,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("durable: load execution state: %w", err)
@@ -112,7 +96,7 @@ func (cp *checkpointer) loadStateFrom(ctx context.Context, marker string) ([]*op
 		for _, op := range out.Operations {
 			ops = append(ops, operationFromAPI(op))
 		}
-		if out.NextMarker == nil || *out.NextMarker == "" {
+		if out.NextMarker == "" {
 			break
 		}
 		next = out.NextMarker
@@ -136,7 +120,7 @@ func (cp *checkpointer) terminate() {
 // checkpoint retries up to [checkpointMaxAttempts] with exponential
 // backoff. Non-retryable failures (client faults other than throttling)
 // fail immediately. On any failure the token remains unchanged.
-func (cp *checkpointer) checkpoint(ctx context.Context, updates []types.OperationUpdate) error {
+func (cp *checkpointer) checkpoint(ctx context.Context, updates []OperationUpdate) error {
 	// Fast-path refusal: no lock required.
 	if cp.terminated.Load() {
 		return errCheckpointTerminated
@@ -153,10 +137,10 @@ func (cp *checkpointer) checkpoint(ctx context.Context, updates []types.Operatio
 			return errCheckpointTerminated
 		}
 
-		out, err := cp.client.CheckpointDurableExecution(ctx, &lambda.CheckpointDurableExecutionInput{
-			DurableExecutionArn: aws.String(cp.executionArn),
-			CheckpointToken:     aws.String(cp.token),
-			Updates:             updates,
+		out, err := cp.client.Checkpoint(ctx, CheckpointInput{
+			ExecutionArn:    cp.executionArn,
+			CheckpointToken: cp.token,
+			Updates:         updates,
 		})
 		if err != nil {
 			classified := classifyCheckpointError(err)
@@ -182,17 +166,17 @@ func (cp *checkpointer) checkpoint(ctx context.Context, updates []types.Operatio
 			return errCheckpointTerminated
 		}
 
-		if out.CheckpointToken == nil {
+		if out.CheckpointToken == "" {
 			return errors.New("durable: checkpoint: backend returned no checkpoint token")
 		}
-		cp.token = *out.CheckpointToken
+		cp.token = out.CheckpointToken
 
 		// Merge updated operations into the execution state so that
 		// subsequent reads (e.g. reading CallbackId after START) see
 		// backend-assigned fields.
 		if cp.state != nil && out.NewExecutionState != nil {
-			ops := make([]*operation, 0, len(out.NewExecutionState.Operations))
-			for _, apiOp := range out.NewExecutionState.Operations {
+			ops := make([]*operation, 0, len(out.NewExecutionState))
+			for _, apiOp := range out.NewExecutionState {
 				ops = append(ops, operationFromAPI(apiOp))
 			}
 			cp.state.merge(ops)
@@ -218,8 +202,9 @@ func (cp *checkpointer) currentToken() string {
 	return cp.token
 }
 
-// operationFromAPI converts a wire operation into the engine's record.
-func operationFromAPI(op types.Operation) *operation {
+// operationFromAPI converts a client operation record into the engine's
+// internal record.
+func operationFromAPI(op Operation) *operation {
 	rec := &operation{
 		id:      aws.ToString(op.Id),
 		status:  operationStatus(op.Status),

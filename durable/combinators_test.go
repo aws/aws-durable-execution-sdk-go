@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 )
 
 // --- All tests ---
@@ -177,9 +176,9 @@ func TestAllCheckpoints(t *testing.T) {
 
 	// All creates a RunInChildContext: START + SUCCEED.
 	updates := updateBatch(t, fake)
-	var contextUpdates []types.OperationUpdate
+	var contextUpdates []OperationUpdate
 	for _, u := range updates {
-		if u.Type == types.OperationTypeContext {
+		if u.Type == OperationTypeContext {
 			contextUpdates = append(contextUpdates, u)
 		}
 	}
@@ -742,9 +741,9 @@ func assertStepCheckpointed(t *testing.T, fake *fakeLambda, name string) {
 	for _, u := range updateBatch(t, fake) {
 		if aws.ToString(u.Name) == name {
 			switch u.Action {
-			case types.OperationActionStart:
+			case OperationActionStart:
 				start = true
-			case types.OperationActionSucceed:
+			case OperationActionSucceed:
 				succeed = true
 			}
 		}

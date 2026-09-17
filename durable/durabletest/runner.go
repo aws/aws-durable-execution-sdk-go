@@ -9,9 +9,6 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/aws/aws-lambda-go/lambda"
-	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
-
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
 )
 
@@ -44,7 +41,7 @@ func WithMaxInvocations(n int) RunnerOption {
 // LocalRunner is safe for sequential use from a single test goroutine.
 // It is NOT safe for concurrent use from multiple goroutines.
 type LocalRunner[I, O any] struct {
-	handler lambda.Handler
+	handler func(context.Context, []byte) ([]byte, error)
 	client  *memoryClient
 	cfg     runnerConfig
 }
@@ -92,7 +89,7 @@ func (r *LocalRunner[I, O]) Run(t *testing.T, event I) *TestResult {
 		t.Fatalf("durabletest: build invocation payload: %v", err)
 	}
 
-	response, err := r.handler.Invoke(context.Background(), payload)
+	response, err := r.handler(context.Background(), payload)
 	if err != nil {
 		t.Fatalf("durabletest: handler.Invoke returned error: %v", err)
 	}
@@ -314,7 +311,7 @@ func (m *memoryClient) allOperationsRaw() []operationSnapshot {
 			continue
 		}
 		// Skip execution operations — we build those ourselves.
-		if op.Type == types.OperationTypeExecution {
+		if op.Type == durable.OperationTypeExecution {
 			continue
 		}
 		ops = append(ops, operationToSnapshot(*op))
@@ -401,7 +398,7 @@ type operationSnapshot struct {
 	ContextDetails       *contextDetailsWire
 }
 
-func operationToSnapshot(op types.Operation) operationSnapshot {
+func operationToSnapshot(op durable.Operation) operationSnapshot {
 	s := operationSnapshot{
 		ID:       ptrStr(op.Id),
 		Status:   string(op.Status),

@@ -39,11 +39,19 @@ var ErrExecutionStopped = errors.New("durable: execution stopped")
 // ErrExecutionCancelled indicates that a durable execution was cancelled.
 var ErrExecutionCancelled = errors.New("durable: execution cancelled")
 
-// OperationStatus represents the terminal status of a durable operation.
-// It is used in [InvokeError] to indicate why an invoked function failed.
+// OperationStatus is the status of a durable operation. It covers the
+// in-progress statuses (STARTED, PENDING, READY), the successful terminal
+// status (SUCCEEDED), and the failure terminal statuses (FAILED, TIMED_OUT,
+// STOPPED, CANCELLED).
+//
+// It appears in two places. [Operation.Status] carries it in checkpoint
+// records exchanged with the service. [InvokeError.Status] carries a failure
+// terminal status to indicate why an invoked function failed.
 type OperationStatus string
 
-// Terminal operation statuses.
+// Failure terminal operation statuses, reported by [InvokeError]. The
+// in-progress statuses and SUCCEEDED are declared in client.go alongside
+// [Operation].
 const (
 	// OperationStatusFailed indicates the operation's function returned an error.
 	OperationStatusFailed OperationStatus = "FAILED"

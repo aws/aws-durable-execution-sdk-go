@@ -7,9 +7,6 @@ import (
 	"math"
 	"testing"
 	"time"
-
-	"github.com/aws/aws-lambda-go/lambdacontext"
-	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 )
 
 // --- Item 1: ExecutionStartTime tests ---
@@ -45,7 +42,7 @@ func TestExecutionStartTimeReturnsCheckpointedTimestamp(t *testing.T) {
 		return "done", nil
 	}, withLambdaAPI(fake))
 
-	_, err = h.Invoke(context.Background(), payload)
+	_, err = h(context.Background(), payload)
 	if err != nil {
 		t.Fatalf("Invoke error: %v", err)
 	}
@@ -77,7 +74,7 @@ func TestExecutionStartTimeStableAcrossReplay(t *testing.T) {
 		// Add a checkpointed step so the context enters replay mode.
 		{
 			Id:          hashID("1"),
-			Type:        string(types.OperationTypeStep),
+			Type:        string(OperationTypeStep),
 			SubType:     "Step",
 			Status:      "SUCCEEDED",
 			StepDetails: &wireStepDetails{Result: `"ok"`, Attempt: 1},
@@ -103,7 +100,7 @@ func TestExecutionStartTimeStableAcrossReplay(t *testing.T) {
 		return "done", nil
 	}, withLambdaAPI(fake))
 
-	_, err = h.Invoke(context.Background(), payload)
+	_, err = h(context.Background(), payload)
 	if err != nil {
 		t.Fatalf("Invoke error: %v", err)
 	}
@@ -257,7 +254,7 @@ func TestStepAttemptSecondAttemptIs2(t *testing.T) {
 	payload := stepPayload(`"x"`, wireOperation{
 		Id:      hashID("1"),
 		Name:    "retry-step",
-		Type:    string(types.OperationTypeStep),
+		Type:    string(OperationTypeStep),
 		SubType: "Step",
 		Status:  "STARTED",
 		StepDetails: &wireStepDetails{
@@ -304,7 +301,7 @@ func TestExecutionStartTimePropagatedToChildContext(t *testing.T) {
 	ec := newExecContext(
 		context.Background(),
 		"arn:test",
-		&lambdacontext.LambdaContext{AwsRequestID: "req"},
+		invocationInfo{requestID: "req"},
 		nopLogger{},
 		newExecutionState(nil),
 	)

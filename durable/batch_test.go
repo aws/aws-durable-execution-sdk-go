@@ -11,7 +11,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 )
 
 // batchResp is a simplified response for test assertions.
@@ -25,7 +24,7 @@ type batchResp struct {
 func invokeBatch[I, O any](t *testing.T, fake *fakeLambda, payload []byte, handler Handler[I, O]) batchResp {
 	t.Helper()
 	h := Wrap(handler, withLambdaAPI(fake))
-	got, err := h.Invoke(context.Background(), payload)
+	got, err := h(context.Background(), payload)
 	if err != nil {
 		t.Fatalf("Invoke() error: %v", err)
 	}
@@ -757,7 +756,7 @@ func TestMapResultSerdesReplayStatusAndErr(t *testing.T) {
 	// Extract the Map parent SUCCEED payload written by the custom serdes.
 	var mapPayload string
 	for _, u := range updateBatch(t, fake) {
-		if aws.ToString(u.SubType) == "Map" && u.Action == types.OperationActionSucceed {
+		if aws.ToString(u.SubType) == "Map" && u.Action == OperationActionSucceed {
 			mapPayload = aws.ToString(u.Payload)
 		}
 	}
@@ -931,7 +930,7 @@ func TestMapLiveEqualsReplayShapeEarlyCompletion(t *testing.T) {
 	updates := updateBatch(t, fake)
 	var mapPayload string
 	for _, u := range updates {
-		if aws.ToString(u.SubType) == "Map" && u.Action == types.OperationActionSucceed {
+		if aws.ToString(u.SubType) == "Map" && u.Action == OperationActionSucceed {
 			mapPayload = aws.ToString(u.Payload)
 		}
 	}
@@ -1234,7 +1233,7 @@ func TestMapOperationLevelSerdes(t *testing.T) {
 	updates := updateBatch(t, fake)
 	var mapSucceedPayload string
 	for _, u := range updates {
-		if aws.ToString(u.SubType) == "Map" && u.Action == types.OperationActionSucceed {
+		if aws.ToString(u.SubType) == "Map" && u.Action == OperationActionSucceed {
 			mapSucceedPayload = aws.ToString(u.Payload)
 		}
 	}
@@ -2034,7 +2033,7 @@ func TestSuspendedBranchHoldsConcurrencySlot(t *testing.T) {
 	updates := updateBatch(t, fake)
 	childStarts := 0
 	for _, u := range updates {
-		if u.Type == types.OperationTypeContext && u.Action == types.OperationActionStart {
+		if u.Type == OperationTypeContext && u.Action == OperationActionStart {
 			if aws.ToString(u.SubType) == operationSubTypeMapIteration {
 				childStarts++
 			}
@@ -2107,7 +2106,7 @@ var wantWFCVerdict = wfcVerdict{
 
 // runWFCMapLive executes the live phase and returns the verdict plus the
 // recorded checkpoint updates.
-func runWFCMapLive(t *testing.T) (wfcVerdict, []types.OperationUpdate) {
+func runWFCMapLive(t *testing.T) (wfcVerdict, []OperationUpdate) {
 	t.Helper()
 	fake := &fakeLambda{}
 	resp := invokeBatch(t, fake, batchPayload(`null`), wfcMapHandler)
@@ -2131,7 +2130,7 @@ func TestMapWaitForConditionErrorLiveToReplayAggregate(t *testing.T) {
 
 	var mapPayload string
 	for _, u := range updates {
-		if aws.ToString(u.SubType) == "Map" && u.Action == types.OperationActionSucceed {
+		if aws.ToString(u.SubType) == "Map" && u.Action == OperationActionSucceed {
 			mapPayload = aws.ToString(u.Payload)
 		}
 	}
@@ -2172,7 +2171,7 @@ func TestMapWaitForConditionErrorLiveToReplayRouteB(t *testing.T) {
 	for _, u := range updates {
 		switch aws.ToString(u.SubType) {
 		case "Map":
-			if u.Action == types.OperationActionStart {
+			if u.Action == OperationActionStart {
 				ops = append(ops, wireOperation{
 					Id:      aws.ToString(u.Id),
 					Status:  "STARTED",
@@ -2190,10 +2189,10 @@ func TestMapWaitForConditionErrorLiveToReplayRouteB(t *testing.T) {
 				Name:     aws.ToString(u.Name),
 			}
 			switch u.Action {
-			case types.OperationActionSucceed:
+			case OperationActionSucceed:
 				op.Status = "SUCCEEDED"
 				op.ContextDetails = &wireContextDetails{Result: aws.ToString(u.Payload)}
-			case types.OperationActionFail:
+			case OperationActionFail:
 				op.Status = "FAILED"
 				op.ContextDetails = &wireContextDetails{Error: &wireFullError{
 					ErrorType:    aws.ToString(u.Error.ErrorType),
@@ -2305,7 +2304,7 @@ func TestParallelSerdesAndCallbackTaxonomyLiveToReplay(t *testing.T) {
 	// Phase 2: REPLAY from the parent's aggregate payload.
 	var parallelPayload string
 	for _, u := range updateBatch(t, fake) {
-		if aws.ToString(u.SubType) == "Parallel" && u.Action == types.OperationActionSucceed {
+		if aws.ToString(u.SubType) == "Parallel" && u.Action == OperationActionSucceed {
 			parallelPayload = aws.ToString(u.Payload)
 		}
 	}

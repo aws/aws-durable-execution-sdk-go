@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 )
 
 // operationSubTypeChainedInvoke is the wire subtype for invoke operations.
@@ -123,7 +122,7 @@ func runInvoke[O, I any](ec *execContext, id, name, functionID string, input I, 
 	var zero O
 
 	op := ec.state.get(id)
-	if err := validateReplayConsistency(op, string(types.OperationTypeChainedInvoke), operationSubTypeChainedInvoke, name); err != nil {
+	if err := validateReplayConsistency(op, string(OperationTypeChainedInvoke), operationSubTypeChainedInvoke, name); err != nil {
 		return zero, err
 	}
 	if ec.unfinishedInSucceededContext(op) {
@@ -162,13 +161,13 @@ func runInvoke[O, I any](ec *execContext, id, name, functionID string, input I, 
 		return zero, sizeErr
 	}
 
-	update := types.OperationUpdate{
+	update := OperationUpdate{
 		Id:      aws.String(hashID(id)),
-		Type:    types.OperationTypeChainedInvoke,
+		Type:    OperationTypeChainedInvoke,
 		SubType: aws.String(operationSubTypeChainedInvoke),
-		Action:  types.OperationActionStart,
+		Action:  OperationActionStart,
 		Payload: aws.String(string(payload)),
-		ChainedInvokeOptions: &types.ChainedInvokeOptions{
+		ChainedInvokeOptions: &ChainedInvokeOptions{
 			FunctionName: aws.String(functionID),
 		},
 	}
@@ -181,7 +180,7 @@ func runInvoke[O, I any](ec *execContext, id, name, functionID string, input I, 
 	if parent := ec.ids.prefix; parent != "" {
 		update.ParentId = aws.String(hashID(parent))
 	}
-	if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+	if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
 		if errors.Is(err, errCheckpointTerminated) {
 			return zero, errSuspendExecution
 		}

@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 )
 
 // failingSerdes fails Marshal and/or Unmarshal with a fixed cause and
@@ -72,9 +71,9 @@ func TestStepSerdesErrorLiveMarshal(t *testing.T) {
 		t.Fatalf("error = %v (%T), want *StepError wrapping the SerdesError", got, got)
 	}
 
-	var failUpdate *types.OperationUpdate
+	var failUpdate *OperationUpdate
 	for _, u := range updateBatch(t, fake) {
-		if u.Action == types.OperationActionFail {
+		if u.Action == OperationActionFail {
 			failUpdate = &u
 			break
 		}

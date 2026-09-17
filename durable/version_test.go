@@ -4,8 +4,6 @@ import (
 	"context"
 	"regexp"
 	"testing"
-
-	"github.com/aws/aws-sdk-go-v2/service/lambda"
 )
 
 func TestVersionIsSemver(t *testing.T) {
@@ -46,10 +44,10 @@ func TestUserAgentNotSetOnUserProvidedClient(t *testing.T) {
 // modification.
 type fakeExecClient struct{}
 
-func (f *fakeExecClient) GetDurableExecutionState(_ context.Context, _ *lambda.GetDurableExecutionStateInput, _ ...func(*lambda.Options)) (*lambda.GetDurableExecutionStateOutput, error) {
-	panic("fakeExecClient: unexpected GetDurableExecutionState call")
+func (f *fakeExecClient) GetExecutionState(_ context.Context, _ GetExecutionStateInput) (GetExecutionStateOutput, error) {
+	panic("fakeExecClient: unexpected GetExecutionState call")
 }
 
-func (f *fakeExecClient) CheckpointDurableExecution(_ context.Context, _ *lambda.CheckpointDurableExecutionInput, _ ...func(*lambda.Options)) (*lambda.CheckpointDurableExecutionOutput, error) {
-	panic("fakeExecClient: unexpected CheckpointDurableExecution call")
+func (f *fakeExecClient) Checkpoint(_ context.Context, _ CheckpointInput) (CheckpointOutput, error) {
+	panic("fakeExecClient: unexpected Checkpoint call")
 }

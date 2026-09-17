@@ -13,6 +13,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
+
+	"github.com/aws/aws-durable-execution-sdk-go/durable"
 )
 
 // DurableExecutionAPI is the subset of the Lambda service client that
@@ -275,7 +277,7 @@ func (r *CloudRunner) buildResult(ctx context.Context, arn string, execOut *lamb
 
 // fetchAllOperations retrieves the execution's full event history and
 // folds it into one record per operation.
-func (r *CloudRunner) fetchAllOperations(ctx context.Context, arn string) ([]types.Operation, error) {
+func (r *CloudRunner) fetchAllOperations(ctx context.Context, arn string) ([]durable.Operation, error) {
 	// GetDurableExecutionHistory pages through the execution's events;
 	// each event carries the ID of the operation it belongs to.
 	var events []types.Event

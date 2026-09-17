@@ -9,30 +9,26 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/aws/aws-lambda-go/lambda"
-	"github.com/aws/aws-lambda-go/lambdacontext"
 	"github.com/aws/aws-sdk-go-v2/aws"
-	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
-	"github.com/aws/aws-sdk-go-v2/config"
-	lambdaservice "github.com/aws/aws-sdk-go-v2/service/lambda"
-	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
-	smithymw "github.com/aws/smithy-go/middleware"
 )
 
 // Handler is a durable function handler. It receives the deserialized
 // invocation event and a [Context] in place of the standard Lambda context.
 type Handler[I, O any] func(ctx Context, event I) (O, error)
 
-// Start registers handler as the Lambda function handler and begins
-// processing invocations. It is the durable analogue of lambda.Start and
-// does not return.
-func Start[I, O any](handler Handler[I, O], opts ...HandlerOption) {
-	lambda.Start(Wrap(handler, opts...))
-}
-
-// Wrap adapts handler into a lambda.Handler for callers that compose their
-// own Lambda entry point. Most programs should use [Start].
-func Wrap[I, O any](handler Handler[I, O], opts ...HandlerOption) lambda.Handler {
+// Wrap adapts handler into a raw payload function for callers that compose
+// their own Lambda entry point. The returned function implements no
+// aws-lambda-go interface, but its signature matches the runtime's raw
+// byte handler method, so adapting it to an entry point is a one-method
+// wrapper. [Start] performs exactly that wrapping. Most programs should
+// use [Start].
+//
+// Do not pass the returned function to lambda.Start directly: the
+// reflective handler path JSON-decodes the payload into the parameter
+// type, and encoding/json expects base64 text for []byte, while the
+// durable invocation payload is a JSON object. Register it through the
+// runtime's raw byte interface instead, as [Start] does.
+func Wrap[I, O any](handler Handler[I, O], opts ...HandlerOption) func(context.Context, []byte) ([]byte, error) {
 	if handler == nil {
 		panic("durable: handler must not be nil")
 	}
@@ -43,7 +39,8 @@ func Wrap[I, O any](handler Handler[I, O], opts ...HandlerOption) lambda.Handler
 	if err := validateHandlerOptions(&options); err != nil {
 		panic(err.Error())
 	}
-	return &durableHandler[I, O]{handler: handler, options: options}
+	h := &durableHandler[I, O]{handler: handler, options: options}
+	return h.Invoke
 }
 
 // HandlerOption configures the durable execution handler at construction
@@ -89,8 +86,8 @@ type handlerOptions struct {
 }
 
 // WithExecutionClient sets the execution client for the durable handler.
-// The default client is a [github.com/aws/aws-sdk-go-v2/service/lambda.Client]
-// built lazily from the default AWS config.
+// The default client calls the AWS Lambda service and is built lazily from
+// the default AWS config.
 //
 // Use this option to inject a custom [ExecutionClient] implementation, such
 // as the in-memory client provided by the [durabletest] package for local
@@ -109,10 +106,10 @@ type handlerOptionFunc func(*handlerOptions)
 
 func (f handlerOptionFunc) applyHandler(o *handlerOptions) { f(o) }
 
-// durableHandler is the lambda.Handler that drives one durable invocation:
-// parse the durable payload, reconstruct execution state, run the user
-// handler under replay, and translate the outcome (result, failure, or
-// suspension) into the invocation response.
+// durableHandler drives one durable invocation: parse the durable payload,
+// reconstruct execution state, run the user handler under replay, and
+// translate the outcome (result, failure, or suspension) into the
+// invocation response.
 type durableHandler[I, O any] struct {
 	handler Handler[I, O]
 	options handlerOptions
@@ -120,8 +117,6 @@ type durableHandler[I, O any] struct {
 	clientMu sync.Mutex
 	client   ExecutionClient
 }
-
-var _ lambda.Handler = (*durableHandler[any, any])(nil)
 
 // lambdaResponseSizeLimit is the maximum serialized result size (in bytes)
 // that an invocation returns inline: the 6MB Lambda response limit minus 50
@@ -136,9 +131,9 @@ const lambdaResponseSizeLimit = 6*1024*1024 - 50
 // safe because the translation uses errors.Is, but adds no value.
 var errSuspendExecution = errors.New("durable: execution suspended")
 
-// Invoke implements lambda.Handler: parse the durable payload, reconstruct
-// execution state, run the user handler on its own goroutine under replay,
-// and translate the outcome into the invocation response.
+// Invoke handles one raw invocation payload: parse the durable payload,
+// reconstruct execution state, run the user handler on its own goroutine
+// under replay, and translate the outcome into the invocation response.
 func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]byte, error) {
 	var in invocationInput
 	if err := json.Unmarshal(payload, &in); err != nil {
@@ -166,7 +161,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		}
 	}
 
-	lambdaCtx, _ := lambdacontext.FromContext(ctx)
+	invMeta := invocationInfoFromContext(ctx)
 	logger := h.options.logger
 	if logger == nil {
 		logger = newDefaultLogger(in.DurableExecutionArn)
@@ -269,7 +264,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		result O
 		err    error
 	}
-	ec := newExecContext(ctx, in.DurableExecutionArn, lambdaCtx, logger, state)
+	ec := newExecContext(ctx, in.DurableExecutionArn, invMeta, logger, state)
 	ec.checkpointer = cp
 	ec.executionStartTime = execStartTimestamp
 	cp.state = state
@@ -412,13 +407,13 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 				failInvocationEnd(err)
 				return nil, err
 			}
-			update := types.OperationUpdate{
+			update := OperationUpdate{
 				Id:      &executionOpID,
-				Type:    types.OperationTypeExecution,
-				Action:  types.OperationActionSucceed,
+				Type:    OperationTypeExecution,
+				Action:  OperationActionSucceed,
 				Payload: aws.String(string(serialized)),
 			}
-			if cerr := cp.checkpoint(ctx, []types.OperationUpdate{update}); cerr != nil {
+			if cerr := cp.checkpoint(ctx, []OperationUpdate{update}); cerr != nil {
 				err := fmt.Errorf("durable: checkpoint oversized result: %w", cerr)
 				failInvocationEnd(err)
 				return nil, err
@@ -457,15 +452,11 @@ func (h *durableHandler[I, O]) lambdaClient(ctx context.Context) (ExecutionClien
 		h.client = h.options.client
 		return h.client, nil
 	}
-	cfg, err := config.LoadDefaultConfig(ctx,
-		config.WithAPIOptions([]func(*smithymw.Stack) error{
-			awsmiddleware.AddUserAgentKeyValue(userAgentKey, Version),
-		}),
-	)
+	client, err := defaultExecutionClient(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("durable: load AWS config: %w", err)
+		return nil, err
 	}
-	h.client = lambdaservice.NewFromConfig(cfg)
+	h.client = client
 	return h.client, nil
 }
 

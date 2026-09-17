@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 )
 
 func TestInvokeStartsAndSuspends(t *testing.T) {
@@ -27,13 +26,13 @@ func TestInvokeStartsAndSuspends(t *testing.T) {
 	if got, want := aws.ToString(u.Id), hashID("1"); got != want {
 		t.Errorf("update Id = %q, want %q", got, want)
 	}
-	if u.Type != types.OperationTypeChainedInvoke {
+	if u.Type != OperationTypeChainedInvoke {
 		t.Errorf("update Type = %q, want CHAINED_INVOKE", u.Type)
 	}
 	if got := aws.ToString(u.SubType); got != "ChainedInvoke" {
 		t.Errorf("update SubType = %q, want ChainedInvoke", got)
 	}
-	if u.Action != types.OperationActionStart {
+	if u.Action != OperationActionStart {
 		t.Errorf("update Action = %q, want START", u.Action)
 	}
 	if got := aws.ToString(u.Payload); got != `"order-1"` {
@@ -249,7 +248,7 @@ func TestChildContextFirstRun(t *testing.T) {
 	if len(updates) != 2 {
 		t.Fatalf("received %d updates, want 2 (context START, invoke START)", len(updates))
 	}
-	if updates[0].Type != types.OperationTypeContext {
+	if updates[0].Type != OperationTypeContext {
 		t.Errorf("first update Type = %q, want CONTEXT", updates[0].Type)
 	}
 	if got := aws.ToString(updates[0].SubType); got != "RunInChildContext" {
@@ -297,7 +296,7 @@ func TestChildContextReplayCompletes(t *testing.T) {
 	if len(updates) != 1 {
 		t.Fatalf("received %d updates, want 1 (context SUCCEED)", len(updates))
 	}
-	if updates[0].Action != types.OperationActionSucceed {
+	if updates[0].Action != OperationActionSucceed {
 		t.Errorf("update Action = %q, want SUCCEED", updates[0].Action)
 	}
 	if got := aws.ToString(updates[0].Payload); got != `"echoed"` {
@@ -354,7 +353,7 @@ func TestChildContextFnError(t *testing.T) {
 	if len(updates) != 2 {
 		t.Fatalf("received %d updates, want 2 (START, FAIL)", len(updates))
 	}
-	if updates[1].Action != types.OperationActionFail {
+	if updates[1].Action != OperationActionFail {
 		t.Errorf("second update Action = %q, want FAIL", updates[1].Action)
 	}
 }
@@ -371,7 +370,7 @@ func TestChildContextSuspensionIsNotFailure(t *testing.T) {
 	})
 
 	for _, u := range updateBatch(t, fake) {
-		if u.Action == types.OperationActionFail {
+		if u.Action == OperationActionFail {
 			t.Errorf("suspension inside child produced a FAIL update for %s", aws.ToString(u.Id))
 		}
 	}
@@ -403,7 +402,7 @@ func TestChildContextStepInside(t *testing.T) {
 	if got, want := aws.ToString(updates[1].ParentId), hashID("1"); got != want {
 		t.Errorf("inner step ParentId = %q, want %q", got, want)
 	}
-	if updates[3].Action != types.OperationActionSucceed || updates[3].Type != types.OperationTypeContext {
+	if updates[3].Action != OperationActionSucceed || updates[3].Type != OperationTypeContext {
 		t.Errorf("final update = %q %q, want context SUCCEED", updates[3].Type, updates[3].Action)
 	}
 }
@@ -435,7 +434,7 @@ func TestInvokeNilInput(t *testing.T) {
 	h := Wrap(func(ctx Context, _ string) (string, error) {
 		return Invoke[string, any](ctx, "", "target", nil)
 	}, withLambdaAPI(fake))
-	if _, err := h.Invoke(context.Background(), stepPayload(`""`)); err != nil {
+	if _, err := h(context.Background(), stepPayload(`""`)); err != nil {
 		t.Fatalf("Invoke() error: %v", err)
 	}
 	updates := updateBatch(t, fake)

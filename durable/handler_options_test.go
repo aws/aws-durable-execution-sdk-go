@@ -90,26 +90,24 @@ func TestWithSerdesOption(t *testing.T) {
 
 func TestHandlerOptionsConstructionTimeOnly(t *testing.T) {
 	// Verify that all three main options (Logger, Serdes,
-	// CallbackDeserializer) are captured at Wrap() time.
+	// CallbackDeserializer) are captured into handlerOptions, the state
+	// Wrap snapshots at construction time.
 	l := NopLogger{}
 	s := &testSerdes{}
 	d := DeserializerFunc(func([]byte, any) error { return nil })
 
-	h := Wrap(func(_ Context, _ string) (string, error) {
-		return "", nil
-	}, WithLogger(l), WithSerdes(s), WithCallbackDeserializer(d))
-
-	dh, ok := h.(*durableHandler[string, string])
-	if !ok {
-		t.Fatal("Wrap did not return *durableHandler")
+	options := handlerOptions{}
+	for _, o := range []HandlerOption{WithLogger(l), WithSerdes(s), WithCallbackDeserializer(d)} {
+		o.applyHandler(&options)
 	}
-	if dh.options.logger == nil {
+
+	if options.logger == nil {
 		t.Error("logger not captured")
 	}
-	if dh.options.serdes == nil {
+	if options.serdes == nil {
 		t.Error("serdes not captured")
 	}
-	if dh.options.callbackDeserializer == nil {
+	if options.callbackDeserializer == nil {
 		t.Error("callbackDeserializer not captured")
 	}
 }

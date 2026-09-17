@@ -4,8 +4,6 @@ import (
 	"context"
 	"strings"
 	"testing"
-
-	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 )
 
 func TestDurableHandlerInvokeLifecycle(t *testing.T) {
@@ -60,7 +58,7 @@ func TestDurableHandlerInvokeLifecycle(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			h := Wrap(tt.handler, withLambdaAPI(&fakeLambda{}))
-			got, err := h.Invoke(context.Background(), []byte(payload))
+			got, err := h(context.Background(), []byte(payload))
 			if err != nil {
 				t.Fatalf("Invoke() error: %v", err)
 			}
@@ -93,7 +91,7 @@ func TestDurableHandlerReceivesEventAndContext(t *testing.T) {
 			}]
 		}
 	}`
-	if _, err := h.Invoke(context.Background(), []byte(payload)); err != nil {
+	if _, err := h(context.Background(), []byte(payload)); err != nil {
 		t.Fatalf("Invoke() error: %v", err)
 	}
 	if gotEvent != "evt" {
@@ -111,9 +109,9 @@ func TestDurableHandlerAssemblesRemainingPages(t *testing.T) {
 	// The embedded page points at marker "1"; the fake serves page 1 with
 	// one more checkpointed operation, which must flip the context into
 	// replay mode.
-	fake := &fakeLambda{statePages: [][]types.Operation{
+	fake := &fakeLambda{statePages: [][]Operation{
 		{},
-		{opWire(hashID("1"), types.OperationStatusSucceeded)},
+		{opWire(hashID("1"), OperationStatusSucceeded)},
 	}}
 	var wasReplaying bool
 	h := Wrap(func(ctx Context, _ string) (string, error) {
@@ -133,7 +131,7 @@ func TestDurableHandlerAssemblesRemainingPages(t *testing.T) {
 			"NextMarker": "1"
 		}
 	}`
-	if _, err := h.Invoke(context.Background(), []byte(payload)); err != nil {
+	if _, err := h(context.Background(), []byte(payload)); err != nil {
 		t.Fatalf("Invoke() error: %v", err)
 	}
 	if !wasReplaying {
@@ -164,7 +162,7 @@ func TestDurableHandlerInvokeRejectsBadInput(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := h.Invoke(context.Background(), []byte(tt.payload))
+			_, err := h(context.Background(), []byte(tt.payload))
 			if err == nil || !strings.Contains(err.Error(), tt.wantIn) {
 				t.Errorf("Invoke(%s) error = %v, want containing %q", tt.name, err, tt.wantIn)
 			}

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 )
 
 // operationSubTypeStep is the wire subtype for step operations.
@@ -141,7 +140,7 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 	var zero O
 	op := ec.state.get(id)
 
-	if err := validateReplayConsistency(op, string(types.OperationTypeStep), operationSubTypeStep, name); err != nil {
+	if err := validateReplayConsistency(op, string(OperationTypeStep), operationSubTypeStep, name); err != nil {
 		return zero, err
 	}
 	if ec.unfinishedInSucceededContext(op) {
@@ -169,7 +168,7 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 						ExecutionArn:   ec.executionArn,
 						ID:             id,
 						Name:           name,
-						Type:           string(types.OperationTypeStep),
+						Type:           string(OperationTypeStep),
 						SubType:        operationSubTypeStep,
 						Status:         PluginOperationSucceeded,
 						Attempt:        op.step.attempt,
@@ -190,7 +189,7 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 						ExecutionArn:   ec.executionArn,
 						ID:             id,
 						Name:           name,
-						Type:           string(types.OperationTypeStep),
+						Type:           string(OperationTypeStep),
 						SubType:        operationSubTypeStep,
 						Status:         PluginOperationSucceeded,
 						Attempt:        op.step.attempt,
@@ -214,7 +213,7 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 						ExecutionArn:   ec.executionArn,
 						ID:             id,
 						Name:           name,
-						Type:           string(types.OperationTypeStep),
+						Type:           string(OperationTypeStep),
 						SubType:        operationSubTypeStep,
 						Status:         PluginOperationFailed,
 						Attempt:        op.step.attempt,
@@ -236,7 +235,7 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 						ExecutionArn:   ec.executionArn,
 						ID:             id,
 						Name:           name,
-						Type:           string(types.OperationTypeStep),
+						Type:           string(OperationTypeStep),
 						SubType:        operationSubTypeStep,
 						Status:         PluginOperationFailed,
 						Attempt:        op.step.attempt,
@@ -280,7 +279,7 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 				ExecutionArn:   ec.executionArn,
 				ID:             id,
 				Name:           name,
-				Type:           string(types.OperationTypeStep),
+				Type:           string(OperationTypeStep),
 				SubType:        operationSubTypeStep,
 				Status:         PluginOperationStarted,
 				Attempt:        attempt,
@@ -301,7 +300,7 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 					ExecutionArn:   ec.executionArn,
 					ID:             id,
 					Name:           name,
-					Type:           string(types.OperationTypeStep),
+					Type:           string(OperationTypeStep),
 					SubType:        operationSubTypeStep,
 					Status:         PluginOperationSucceeded,
 					Attempt:        attempt,
@@ -319,7 +318,7 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 					ExecutionArn:   ec.executionArn,
 					ID:             id,
 					Name:           name,
-					Type:           string(types.OperationTypeStep),
+					Type:           string(OperationTypeStep),
 					SubType:        operationSubTypeStep,
 					Status:         PluginOperationFailed,
 					Attempt:        attempt,
@@ -343,8 +342,8 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 	var zero O
 
 	if op == nil || op.status != statusStarted {
-		update := stepUpdate(ec, id, name, types.OperationActionStart)
-		if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+		update := stepUpdate(ec, id, name, OperationActionStart)
+		if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
 			if errors.Is(err, errCheckpointTerminated) {
 				return zero, errSuspendExecution
 			}
@@ -357,7 +356,7 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 			ExecutionArn:   ec.executionArn,
 			ID:             id,
 			Name:           name,
-			Type:           string(types.OperationTypeStep),
+			Type:           string(OperationTypeStep),
 			SubType:        operationSubTypeStep,
 			Status:         PluginOperationStarted,
 			Attempt:        attempt,
@@ -444,9 +443,9 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 		return settleStepFailure[O](ec, id, name, options, sizeErr, attempt)
 	}
 
-	update := stepUpdate(ec, id, name, types.OperationActionSucceed)
+	update := stepUpdate(ec, id, name, OperationActionSucceed)
 	update.Payload = aws.String(string(serialized))
-	if cerr := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); cerr != nil {
+	if cerr := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); cerr != nil {
 		if errors.Is(cerr, errCheckpointTerminated) {
 			return zero, errSuspendExecution
 		}
@@ -482,9 +481,9 @@ func settleStepFailure[O any](ec *execContext, id, name string, options stepOpti
 
 	decision := options.retry(cause, attempt)
 	if !decision.Retry {
-		update := stepUpdate(ec, id, name, types.OperationActionFail)
+		update := stepUpdate(ec, id, name, OperationActionFail)
 		update.Error = errorObject(cause)
-		if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+		if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
 			if errors.Is(err, errCheckpointTerminated) {
 				return zero, errSuspendExecution
 			}
@@ -493,16 +492,16 @@ func settleStepFailure[O any](ec *execContext, id, name string, options stepOpti
 		return zero, &StepError{Name: name, Attempts: attempt, Err: cause}
 	}
 
-	update := stepUpdate(ec, id, name, types.OperationActionRetry)
+	update := stepUpdate(ec, id, name, OperationActionRetry)
 	update.Error = errorObject(cause)
 	delaySec, delayErr := durationToSeconds(decision.Delay)
 	if delayErr != nil {
 		return zero, fmt.Errorf("durable: step %q: retry delay: %w", name, delayErr)
 	}
-	update.StepOptions = &types.StepOptions{
+	update.StepOptions = &StepOptions{
 		NextAttemptDelaySeconds: aws.Int32(delaySec),
 	}
-	if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+	if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
 		if errors.Is(err, errCheckpointTerminated) {
 			return zero, errSuspendExecution
 		}
@@ -529,10 +528,10 @@ func runStepFunc[O any](ec *execContext, fn func(StepContext) (O, error), attemp
 
 // stepUpdate assembles the shared fields of a step operation update. IDs
 // are hashed to their wire form.
-func stepUpdate(ec *execContext, id, name string, action types.OperationAction) types.OperationUpdate {
-	update := types.OperationUpdate{
+func stepUpdate(ec *execContext, id, name string, action OperationAction) OperationUpdate {
+	update := OperationUpdate{
 		Id:      aws.String(hashID(id)),
-		Type:    types.OperationTypeStep,
+		Type:    OperationTypeStep,
 		SubType: aws.String(operationSubTypeStep),
 		Action:  action,
 	}
@@ -561,8 +560,8 @@ func (c *stepContext) Attempt() int { return c.attempt }
 
 // errorObject converts a Go error into the wire error shape recorded with
 // FAIL and RETRY updates.
-func errorObject(err error) *types.ErrorObject {
-	return &types.ErrorObject{
+func errorObject(err error) *ErrorObject {
+	return &ErrorObject{
 		ErrorType:    aws.String(errorTypeName(err)),
 		ErrorMessage: aws.String(err.Error()),
 	}

@@ -9,15 +9,13 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/lambda"
-	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 )
 
 // fakeLambda is an in-memory ExecutionClient double recording calls and serving
 // canned pages. Checkpoint bookkeeping is mutex-guarded so the concurrency
 // test can hammer it from multiple goroutines.
 type fakeLambda struct {
-	statePages [][]types.Operation
+	statePages [][]Operation
 	stateErr   error
 
 	checkpointErr error
@@ -26,53 +24,57 @@ type fakeLambda struct {
 	nextToken        string
 	rotateTokens     bool
 	gotTokens        []string
-	gotUpdateBatches [][]types.OperationUpdate
+	gotUpdateBatches [][]OperationUpdate
 }
 
-func (f *fakeLambda) GetDurableExecutionState(_ context.Context, in *lambda.GetDurableExecutionStateInput, _ ...func(*lambda.Options)) (*lambda.GetDurableExecutionStateOutput, error) {
+func (f *fakeLambda) GetExecutionState(_ context.Context, in GetExecutionStateInput) (GetExecutionStateOutput, error) {
 	if f.stateErr != nil {
-		return nil, f.stateErr
+		return GetExecutionStateOutput{}, f.stateErr
 	}
 	page := 0
-	if in.Marker != nil {
+	if in.Marker != "" {
 		var err error
-		if page, err = strconv.Atoi(*in.Marker); err != nil {
-			return nil, fmt.Errorf("fake: bad marker %q: %w", *in.Marker, err)
+		if page, err = strconv.Atoi(in.Marker); err != nil {
+			return GetExecutionStateOutput{}, fmt.Errorf("fake: bad marker %q: %w", in.Marker, err)
 		}
 	}
-	out := &lambda.GetDurableExecutionStateOutput{Operations: f.statePages[page]}
+	out := GetExecutionStateOutput{Operations: f.statePages[page]}
 	if next := page + 1; next < len(f.statePages) {
-		marker := strconv.Itoa(next)
-		out.NextMarker = &marker
+		out.NextMarker = strconv.Itoa(next)
 	}
 	return out, nil
 }
 
-func (f *fakeLambda) CheckpointDurableExecution(_ context.Context, in *lambda.CheckpointDurableExecutionInput, _ ...func(*lambda.Options)) (*lambda.CheckpointDurableExecutionOutput, error) {
+func (f *fakeLambda) Checkpoint(_ context.Context, in CheckpointInput) (CheckpointOutput, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.gotTokens = append(f.gotTokens, aws.ToString(in.CheckpointToken))
+	f.gotTokens = append(f.gotTokens, in.CheckpointToken)
 	f.gotUpdateBatches = append(f.gotUpdateBatches, in.Updates)
 	if f.checkpointErr != nil {
-		return nil, f.checkpointErr
+		return CheckpointOutput{}, f.checkpointErr
 	}
 	if f.rotateTokens {
 		f.nextToken = "token-" + strconv.Itoa(len(f.gotTokens))
 	}
-	token := f.nextToken
-	return &lambda.CheckpointDurableExecutionOutput{CheckpointToken: &token}, nil
+	if f.nextToken == "" {
+		// An empty token means the backend returned none, which the
+		// checkpointer rejects. Default to a fixed valid token so tests
+		// that don't exercise rotation succeed.
+		f.nextToken = "token-fake"
+	}
+	return CheckpointOutput{CheckpointToken: f.nextToken}, nil
 }
 
-func opWire(id string, status types.OperationStatus) types.Operation {
-	return types.Operation{Id: aws.String(id), Status: status}
+func opWire(id string, status OperationStatus) Operation {
+	return Operation{Id: aws.String(id), Status: status}
 }
 
 func TestLoadStateFollowsPagination(t *testing.T) {
 	fake := &fakeLambda{
-		statePages: [][]types.Operation{
-			{opWire(hashID("1"), types.OperationStatusSucceeded)},
-			{opWire(hashID("2"), types.OperationStatusFailed)},
-			{opWire(hashID("2-1"), types.OperationStatusStarted)},
+		statePages: [][]Operation{
+			{opWire(hashID("1"), OperationStatusSucceeded)},
+			{opWire(hashID("2"), OperationStatusFailed)},
+			{opWire(hashID("2-1"), OperationStatusStarted)},
 		},
 	}
 	cp := newCheckpointer(fake, "arn:test", "token-0")
@@ -163,23 +165,23 @@ func TestCheckpointNilTokenOnSuccess(t *testing.T) {
 	}
 }
 
-// nilTokenLambda wraps fakeLambda and strips the checkpoint token from
+// nilTokenLambda wraps fakeLambda and clears the checkpoint token on
 // successful responses.
 type nilTokenLambda struct {
 	*fakeLambda
 }
 
-func (n *nilTokenLambda) CheckpointDurableExecution(ctx context.Context, in *lambda.CheckpointDurableExecutionInput, opts ...func(*lambda.Options)) (*lambda.CheckpointDurableExecutionOutput, error) {
-	out, err := n.fakeLambda.CheckpointDurableExecution(ctx, in, opts...)
+func (n *nilTokenLambda) Checkpoint(ctx context.Context, in CheckpointInput) (CheckpointOutput, error) {
+	out, err := n.fakeLambda.Checkpoint(ctx, in)
 	if err != nil {
-		return nil, err
+		return CheckpointOutput{}, err
 	}
-	out.CheckpointToken = nil
+	out.CheckpointToken = ""
 	return out, nil
 }
 
 func TestLoadStateEmptyExecution(t *testing.T) {
-	fake := &fakeLambda{statePages: [][]types.Operation{{}}}
+	fake := &fakeLambda{statePages: [][]Operation{{}}}
 	cp := newCheckpointer(fake, "arn:test", "token-0")
 
 	state, err := cp.loadState(context.Background())

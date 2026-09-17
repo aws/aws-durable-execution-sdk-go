@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 )
 
 func TestWaitForConditionBasic(t *testing.T) {
@@ -44,13 +43,13 @@ func TestWaitForConditionBasic(t *testing.T) {
 	if len(updates) != 2 {
 		t.Fatalf("got %d updates, want 2", len(updates))
 	}
-	if updates[0].Action != types.OperationActionStart {
+	if updates[0].Action != OperationActionStart {
 		t.Errorf("update[0].Action = %q, want START", updates[0].Action)
 	}
 	if aws.ToString(updates[0].SubType) != "WaitForCondition" {
 		t.Errorf("SubType = %q, want WaitForCondition", aws.ToString(updates[0].SubType))
 	}
-	if updates[1].Action != types.OperationActionRetry {
+	if updates[1].Action != OperationActionRetry {
 		t.Errorf("update[1].Action = %q, want RETRY", updates[1].Action)
 	}
 	if aws.ToString(updates[1].Payload) != "1" {
@@ -93,7 +92,7 @@ func TestWaitForConditionResumesFromCheckpointedState(t *testing.T) {
 	updates := updateBatch(t, fake)
 	found := false
 	for _, u := range updates {
-		if u.Action == types.OperationActionSucceed && aws.ToString(u.Payload) == "3" {
+		if u.Action == OperationActionSucceed && aws.ToString(u.Payload) == "3" {
 			found = true
 		}
 	}
@@ -243,7 +242,7 @@ func TestWaitForConditionCheckError(t *testing.T) {
 	updates := updateBatch(t, fake)
 	found := false
 	for _, u := range updates {
-		if u.Action == types.OperationActionFail && aws.ToString(u.SubType) == "WaitForCondition" {
+		if u.Action == OperationActionFail && aws.ToString(u.SubType) == "WaitForCondition" {
 			found = true
 			// The checkpointed ErrorType is the cause's concrete type
 			// name, not the SDK wrapper type. errors.New causes map to
@@ -295,7 +294,7 @@ func TestWaitForConditionCheckErrorTypePinned(t *testing.T) {
 	updates := updateBatch(t, fake)
 	found := false
 	for _, u := range updates {
-		if u.Action == types.OperationActionFail && aws.ToString(u.SubType) == "WaitForCondition" {
+		if u.Action == OperationActionFail && aws.ToString(u.SubType) == "WaitForCondition" {
 			found = true
 			if got := aws.ToString(u.Error.ErrorType); got != "conditionCheckError" {
 				t.Errorf("checkpointed ErrorType = %q, want %q", got, "conditionCheckError")
@@ -386,7 +385,7 @@ func TestWaitForConditionCustomSerdes(t *testing.T) {
 
 	updates := updateBatch(t, fake)
 	for _, u := range updates {
-		if u.Action == types.OperationActionRetry {
+		if u.Action == OperationActionRetry {
 			if aws.ToString(u.Payload) != `"X"` {
 				t.Errorf("payload = %q, want %q", aws.ToString(u.Payload), `"X"`)
 			}
@@ -497,7 +496,7 @@ func TestWaitForConditionFixedDelay(t *testing.T) {
 
 	updates := updateBatch(t, fake)
 	for _, u := range updates {
-		if u.Action == types.OperationActionRetry {
+		if u.Action == OperationActionRetry {
 			if aws.ToInt32(u.StepOptions.NextAttemptDelaySeconds) != 5 {
 				t.Errorf("delay = %d, want 5", aws.ToInt32(u.StepOptions.NextAttemptDelaySeconds))
 			}
@@ -567,7 +566,7 @@ func TestWaitForConditionMaxAttemptsTerminal(t *testing.T) {
 	updates := updateBatch(t, fake)
 	found := false
 	for _, u := range updates {
-		if u.Action == types.OperationActionFail {
+		if u.Action == OperationActionFail {
 			found = true
 			if aws.ToString(u.Error.ErrorMessage) != "max attempts exceeded" {
 				t.Errorf("error message = %q", aws.ToString(u.Error.ErrorMessage))
@@ -627,7 +626,7 @@ func TestWaitForConditionMultipleSequential(t *testing.T) {
 	updates := updateBatch(t, fake)
 	var startIDs []string
 	for _, u := range updates {
-		if u.Action == types.OperationActionStart {
+		if u.Action == OperationActionStart {
 			startIDs = append(startIDs, aws.ToString(u.Id))
 		}
 	}
@@ -659,7 +658,7 @@ func TestWaitForConditionDelayCeiling(t *testing.T) {
 
 	updates := updateBatch(t, fake)
 	for _, u := range updates {
-		if u.Action == types.OperationActionRetry {
+		if u.Action == OperationActionRetry {
 			if aws.ToInt32(u.StepOptions.NextAttemptDelaySeconds) != 1 {
 				t.Errorf("delay = %d, want 1 (minimum)", aws.ToInt32(u.StepOptions.NextAttemptDelaySeconds))
 			}
@@ -817,9 +816,9 @@ func TestWaitForConditionDefaultWaitStrategyInitial(t *testing.T) {
 	}
 
 	updates := updateBatch(t, fake)
-	var retry *types.OperationUpdate
+	var retry *OperationUpdate
 	for i, u := range updates {
-		if u.Action == types.OperationActionRetry {
+		if u.Action == OperationActionRetry {
 			retry = &updates[i]
 		}
 	}
@@ -859,9 +858,9 @@ func TestWaitForConditionDefaultWaitStrategyReplay(t *testing.T) {
 	}
 
 	updates := updateBatch(t, fake)
-	var retry *types.OperationUpdate
+	var retry *OperationUpdate
 	for i, u := range updates {
-		if u.Action == types.OperationActionRetry {
+		if u.Action == OperationActionRetry {
 			retry = &updates[i]
 		}
 	}
@@ -893,9 +892,9 @@ func TestWaitForConditionDefaultWaitStrategyDelayCap(t *testing.T) {
 	})
 
 	updates := updateBatch(t, fake)
-	var retry *types.OperationUpdate
+	var retry *OperationUpdate
 	for i, u := range updates {
-		if u.Action == types.OperationActionRetry {
+		if u.Action == OperationActionRetry {
 			retry = &updates[i]
 		}
 	}
@@ -938,7 +937,7 @@ func TestWaitForConditionDefaultWaitStrategyExhaustion(t *testing.T) {
 	updates := updateBatch(t, fake)
 	failed := false
 	for _, u := range updates {
-		if u.Action == types.OperationActionFail {
+		if u.Action == OperationActionFail {
 			failed = true
 		}
 	}
@@ -1073,9 +1072,9 @@ func TestWaitForConditionDefaultStrategyCheckpointDelay(t *testing.T) {
 		return "", err
 	})
 	updates := updateBatch(t, fake)
-	var retry *types.OperationUpdate
+	var retry *OperationUpdate
 	for i, u := range updates {
-		if u.Action == types.OperationActionRetry {
+		if u.Action == OperationActionRetry {
 			retry = &updates[i]
 		}
 	}
@@ -1102,7 +1101,7 @@ func TestWaitForConditionDefaultStrategyCheckpointDelay(t *testing.T) {
 	updates = updateBatch(t, fake)
 	retry = nil
 	for i, u := range updates {
-		if u.Action == types.OperationActionRetry {
+		if u.Action == OperationActionRetry {
 			retry = &updates[i]
 		}
 	}
@@ -1129,7 +1128,7 @@ func TestWaitForConditionDefaultStrategyCheckpointDelay(t *testing.T) {
 	updates = updateBatch(t, fake)
 	retry = nil
 	for i, u := range updates {
-		if u.Action == types.OperationActionRetry {
+		if u.Action == OperationActionRetry {
 			retry = &updates[i]
 		}
 	}

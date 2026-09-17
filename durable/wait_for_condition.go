@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 )
 
 // operationSubTypeWaitForCondition is the wire subtype for wait-for-condition
@@ -81,7 +80,7 @@ func WaitForCondition[S any](ctx Context, name string, check func(StepContext, S
 func runWaitForCondition[S any](ec *execContext, id, name string, check func(StepContext, S) (S, error), cfg ConditionConfig[S], serdes Serdes) (S, error) {
 	var zero S
 	op := ec.state.get(id)
-	if err := validateReplayConsistency(op, string(types.OperationTypeStep), operationSubTypeWaitForCondition, name); err != nil {
+	if err := validateReplayConsistency(op, string(OperationTypeStep), operationSubTypeWaitForCondition, name); err != nil {
 		return zero, err
 	}
 	if ec.unfinishedInSucceededContext(op) {
@@ -151,8 +150,8 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 	// Checkpoint START if this is a new attempt. If status is already
 	// STARTED the previous invocation already checkpointed it.
 	if op == nil || op.status != statusStarted {
-		update := waitForConditionUpdate(ec, id, name, types.OperationActionStart)
-		if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+		update := waitForConditionUpdate(ec, id, name, OperationActionStart)
+		if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
 			return zero, err
 		}
 	}
@@ -175,7 +174,7 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 			ExecutionArn:   ec.executionArn,
 			ID:             id,
 			Name:           name,
-			Type:           string(types.OperationTypeStep),
+			Type:           string(OperationTypeStep),
 			SubType:        operationSubTypeWaitForCondition,
 			Status:         PluginOperationStarted,
 			Attempt:        attempt,
@@ -233,9 +232,9 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 		// Check function failure: checkpoint FAIL and return error. The
 		// checkpointed ErrorType stays the cause's concrete type name;
 		// the wrapping applies only to the returned Go error.
-		update := waitForConditionUpdate(ec, id, name, types.OperationActionFail)
+		update := waitForConditionUpdate(ec, id, name, OperationActionFail)
 		update.Error = errorObject(checkErr)
-		if cerr := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); cerr != nil {
+		if cerr := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); cerr != nil {
 			return zero, cerr
 		}
 		return zero, &WaitForConditionError{Name: name, Attempts: attempt, Err: checkErr}
@@ -277,9 +276,9 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 		// Strategy signaled failure (e.g., max attempts exceeded):
 		// checkpoint FAIL and return error.
 		if decision.Err != nil {
-			update := waitForConditionUpdate(ec, id, name, types.OperationActionFail)
+			update := waitForConditionUpdate(ec, id, name, OperationActionFail)
 			update.Error = errorObject(decision.Err)
-			if cerr := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); cerr != nil {
+			if cerr := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); cerr != nil {
 				return zero, cerr
 			}
 			return zero, &WaitForConditionError{Name: name, Attempts: attempt, Err: decision.Err}
@@ -289,9 +288,9 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 		if err := checkResultSize(serialized, name); err != nil {
 			return zero, err
 		}
-		update := waitForConditionUpdate(ec, id, name, types.OperationActionSucceed)
+		update := waitForConditionUpdate(ec, id, name, OperationActionSucceed)
 		update.Payload = aws.String(string(serialized))
-		if cerr := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); cerr != nil {
+		if cerr := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); cerr != nil {
 			return zero, cerr
 		}
 		return deserialized, nil
@@ -303,12 +302,12 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 	if delayErr != nil {
 		return zero, fmt.Errorf("durable: WaitForCondition %q: retry delay: %w", name, delayErr)
 	}
-	update := waitForConditionUpdate(ec, id, name, types.OperationActionRetry)
+	update := waitForConditionUpdate(ec, id, name, OperationActionRetry)
 	update.Payload = aws.String(string(serialized))
-	update.StepOptions = &types.StepOptions{
+	update.StepOptions = &StepOptions{
 		NextAttemptDelaySeconds: aws.Int32(delaySec),
 	}
-	if cerr := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); cerr != nil {
+	if cerr := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); cerr != nil {
 		return zero, cerr
 	}
 
@@ -329,10 +328,10 @@ func runCheckFunc[S any](ec *execContext, check func(StepContext, S) (S, error),
 
 // waitForConditionUpdate assembles the shared fields of a
 // wait-for-condition operation update. IDs are hashed to their wire form.
-func waitForConditionUpdate(ec *execContext, id, name string, action types.OperationAction) types.OperationUpdate {
-	update := types.OperationUpdate{
+func waitForConditionUpdate(ec *execContext, id, name string, action OperationAction) OperationUpdate {
+	update := OperationUpdate{
 		Id:      aws.String(hashID(id)),
-		Type:    types.OperationTypeStep,
+		Type:    OperationTypeStep,
 		SubType: aws.String(operationSubTypeWaitForCondition),
 		Action:  action,
 	}

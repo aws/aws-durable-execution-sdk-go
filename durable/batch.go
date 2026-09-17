@@ -10,7 +10,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 )
 
 // Wire subtypes for batch operations.
@@ -48,7 +47,7 @@ func Map[I, O any](ctx Context, name string, items []I, fn func(ctx Context, ite
 
 	// Check if the batch is already checkpointed as a terminal operation.
 	op := ec.state.get(id)
-	if err := validateReplayConsistency(op, string(types.OperationTypeContext), operationSubTypeMap, name); err != nil {
+	if err := validateReplayConsistency(op, string(OperationTypeContext), operationSubTypeMap, name); err != nil {
 		return BatchResult[O]{}, err
 	}
 	if ec.unfinishedInSucceededContext(op) {
@@ -77,8 +76,8 @@ func Map[I, O any](ctx Context, name string, items []I, fn func(ctx Context, ite
 
 	// Checkpoint the parent Map context START.
 	if op == nil {
-		update := batchParentUpdate(ec, id, name, operationSubTypeMap, types.OperationActionStart)
-		if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+		update := batchParentUpdate(ec, id, name, operationSubTypeMap, OperationActionStart)
+		if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
 			return BatchResult[O]{}, err
 		}
 	}
@@ -136,7 +135,7 @@ func Parallel[O any](ctx Context, name string, branches []Branch[O], opts ...Bat
 
 	// Check if the batch is already checkpointed as a terminal operation.
 	op := ec.state.get(id)
-	if err := validateReplayConsistency(op, string(types.OperationTypeContext), operationSubTypeParallel, name); err != nil {
+	if err := validateReplayConsistency(op, string(OperationTypeContext), operationSubTypeParallel, name); err != nil {
 		return BatchResult[O]{}, err
 	}
 	if ec.unfinishedInSucceededContext(op) {
@@ -166,8 +165,8 @@ func Parallel[O any](ctx Context, name string, branches []Branch[O], opts ...Bat
 
 	// Checkpoint the parent Parallel context START.
 	if op == nil {
-		update := batchParentUpdate(ec, id, name, operationSubTypeParallel, types.OperationActionStart)
-		if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+		update := batchParentUpdate(ec, id, name, operationSubTypeParallel, OperationActionStart)
+		if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
 			return BatchResult[O]{}, err
 		}
 	}
@@ -684,8 +683,8 @@ func executeBatchItems[I, O any](
 				// index order. A branch that is never admitted (early
 				// completion) leaves no checkpoint and is omitted.
 				if options.nesting != NestingFlat && !pc.terminal && pc.op == nil {
-					update := batchChildUpdate(ec, pc.childID, pc.name, childSubType, parentID, types.OperationActionStart)
-					if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+					update := batchChildUpdate(ec, pc.childID, pc.name, childSubType, parentID, OperationActionStart)
+					if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
 						admitErr = err
 						return
 					}
@@ -850,7 +849,7 @@ func runPreClaimedBatchItem[O any](
 	abandon *atomic.Bool,
 	tok *branchToken,
 ) (BatchItem[O], error) {
-	if err := validateReplayConsistency(op, string(types.OperationTypeContext), childSubType, itemName); err != nil {
+	if err := validateReplayConsistency(op, string(OperationTypeContext), childSubType, itemName); err != nil {
 		return BatchItem[O]{}, err
 	}
 	if options.nesting == NestingFlat {
@@ -903,10 +902,10 @@ func runPreClaimedBatchItem[O any](
 		if errors.Is(fnErr, errSuspendExecution) {
 			return BatchItem[O]{}, fnErr
 		}
-		update := batchChildUpdate(ec, childID, itemName, childSubType, parentID, types.OperationActionFail)
+		update := batchChildUpdate(ec, childID, itemName, childSubType, parentID, OperationActionFail)
 		update.Error = errorObject(fnErr)
 		update.Error.ErrorData = encodeChildErrorData(fnErr)
-		if cerr := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); cerr != nil {
+		if cerr := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); cerr != nil {
 			return BatchItem[O]{}, cerr
 		}
 		return BatchItem[O]{
@@ -921,13 +920,13 @@ func runPreClaimedBatchItem[O any](
 	if serErr != nil {
 		return BatchItem[O]{}, newSerdesError(batchItemOpName(itemName, index), serdesDirectionMarshal, serErr)
 	}
-	update := batchChildUpdate(ec, childID, itemName, childSubType, parentID, types.OperationActionSucceed)
+	update := batchChildUpdate(ec, childID, itemName, childSubType, parentID, OperationActionSucceed)
 	if len(serialized) > checkpointSizeLimitBytes {
-		update.ContextOptions = &types.ContextOptions{ReplayChildren: aws.Bool(true)}
+		update.ContextOptions = &ContextOptions{ReplayChildren: aws.Bool(true)}
 	} else {
 		update.Payload = aws.String(string(serialized))
 	}
-	if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+	if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
 		return BatchItem[O]{}, err
 	}
 	var out O
@@ -1067,7 +1066,7 @@ func runNestedBatchItem[O any](
 	}
 
 	op := ec.state.get(childID)
-	if err := validateReplayConsistency(op, string(types.OperationTypeContext), childSubType, itemName); err != nil {
+	if err := validateReplayConsistency(op, string(OperationTypeContext), childSubType, itemName); err != nil {
 		return BatchItem[O]{}, err
 	}
 	if op != nil && op.status.terminal() {
@@ -1076,8 +1075,8 @@ func runNestedBatchItem[O any](
 
 	// Checkpoint child context START.
 	if op == nil {
-		update := batchChildUpdate(ec, childID, itemName, childSubType, parentID, types.OperationActionStart)
-		if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+		update := batchChildUpdate(ec, childID, itemName, childSubType, parentID, OperationActionStart)
+		if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
 			return BatchItem[O]{}, err
 		}
 	}
@@ -1103,10 +1102,10 @@ func runNestedBatchItem[O any](
 			return BatchItem[O]{}, fnErr
 		}
 		// Checkpoint the failure.
-		update := batchChildUpdate(ec, childID, itemName, childSubType, parentID, types.OperationActionFail)
+		update := batchChildUpdate(ec, childID, itemName, childSubType, parentID, OperationActionFail)
 		update.Error = errorObject(fnErr)
 		update.Error.ErrorData = encodeChildErrorData(fnErr)
-		if cerr := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); cerr != nil {
+		if cerr := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); cerr != nil {
 			return BatchItem[O]{}, cerr
 		}
 		return BatchItem[O]{
@@ -1123,13 +1122,13 @@ func runNestedBatchItem[O any](
 		return BatchItem[O]{}, newSerdesError(batchItemOpName(itemName, index), serdesDirectionMarshal, serErr)
 	}
 
-	update := batchChildUpdate(ec, childID, itemName, childSubType, parentID, types.OperationActionSucceed)
+	update := batchChildUpdate(ec, childID, itemName, childSubType, parentID, OperationActionSucceed)
 	if len(serialized) > checkpointSizeLimitBytes {
-		update.ContextOptions = &types.ContextOptions{ReplayChildren: aws.Bool(true)}
+		update.ContextOptions = &ContextOptions{ReplayChildren: aws.Bool(true)}
 	} else {
 		update.Payload = aws.String(string(serialized))
 	}
-	if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+	if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
 		return BatchItem[O]{}, err
 	}
 
@@ -1377,9 +1376,9 @@ func checkpointBatchSuccess[O any](
 		return BatchResult[O]{}, fmt.Errorf("durable: batch %q: serialize result: %w", name, serErr)
 	}
 
-	update := batchParentUpdate(ec, id, name, subType, types.OperationActionSucceed)
+	update := batchParentUpdate(ec, id, name, subType, OperationActionSucceed)
 	if len(serialized) > checkpointSizeLimitBytes {
-		update.ContextOptions = &types.ContextOptions{ReplayChildren: aws.Bool(true)}
+		update.ContextOptions = &ContextOptions{ReplayChildren: aws.Bool(true)}
 		// The full aggregate is too large to store, so record a
 		// size-independent decision record alongside ReplayChildren. It
 		// carries the completion reason and which admitted branches were
@@ -1397,7 +1396,7 @@ func checkpointBatchSuccess[O any](
 	} else {
 		update.Payload = aws.String(string(serialized))
 	}
-	if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+	if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
 		return BatchResult[O]{}, err
 	}
 
@@ -1816,10 +1815,10 @@ func replayBatchChildrenFromRecord[I, O any](
 }
 
 // batchParentUpdate builds an operation update for the parent batch context.
-func batchParentUpdate(ec *execContext, id, name, subType string, action types.OperationAction) types.OperationUpdate {
-	update := types.OperationUpdate{
+func batchParentUpdate(ec *execContext, id, name, subType string, action OperationAction) OperationUpdate {
+	update := OperationUpdate{
 		Id:      aws.String(hashID(id)),
-		Type:    types.OperationTypeContext,
+		Type:    OperationTypeContext,
 		SubType: aws.String(subType),
 		Action:  action,
 	}
@@ -1834,10 +1833,10 @@ func batchParentUpdate(ec *execContext, id, name, subType string, action types.O
 
 // batchChildUpdate builds an operation update for a batch child (iteration
 // or branch).
-func batchChildUpdate(ec *execContext, childID, childName, childSubType, parentID string, action types.OperationAction) types.OperationUpdate {
-	update := types.OperationUpdate{
+func batchChildUpdate(ec *execContext, childID, childName, childSubType, parentID string, action OperationAction) OperationUpdate {
+	update := OperationUpdate{
 		Id:       aws.String(hashID(childID)),
-		Type:     types.OperationTypeContext,
+		Type:     OperationTypeContext,
 		SubType:  aws.String(childSubType),
 		Action:   action,
 		ParentId: aws.String(hashID(parentID)),

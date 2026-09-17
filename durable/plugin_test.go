@@ -9,8 +9,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	lambdaSvc "github.com/aws/aws-sdk-go-v2/service/lambda"
 )
 
 // TestPluginFanOutJoinsBeforeProceeding verifies that notification hooks
@@ -258,7 +256,7 @@ func TestPluginIsReplayOnSecondRun(t *testing.T) {
 
 	// First invocation: live execution.
 	payload := makePluginPayload(t, "arn:test:exec", "tok1", nil)
-	resp1, err := handler.Invoke(makePluginContext(), payload)
+	resp1, err := handler(makePluginContext(), payload)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +277,7 @@ func TestPluginIsReplayOnSecondRun(t *testing.T) {
 		{Id: hashID("1"), Status: "SUCCEEDED", Type: "STEP", SubType: "Step", Name: "step1", StepDetails: &wireStepDetails{Attempt: 1, Result: `"done"`}},
 	}
 	payload2 := makePluginPayload(t, "arn:test:exec", "tok2", ops)
-	resp2, err := handler.Invoke(makePluginContext(), payload2)
+	resp2, err := handler(makePluginContext(), payload2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,7 +307,7 @@ func TestPluginPendingOnInvocationEnd(t *testing.T) {
 	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
 
 	payload := makePluginPayload(t, "arn:test:suspend", "tok1", nil)
-	resp, err := handler.Invoke(makePluginContext(), payload)
+	resp, err := handler(makePluginContext(), payload)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -426,7 +424,7 @@ func TestPluginOperationHooksNotFiredForPendingOps(t *testing.T) {
 		{Id: hashID("1"), Status: "STARTED", Type: "WAIT", SubType: "Wait", Name: ""},
 	}
 	payload := makePluginPayload(t, "arn:test:pending", "tok1", ops)
-	resp, err := handler.Invoke(makePluginContext(), payload)
+	resp, err := handler(makePluginContext(), payload)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -487,7 +485,7 @@ func TestPluginWrapChildContextFn(t *testing.T) {
 	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
 
 	payload := makePluginPayload(t, "arn:test:wrap-child", "tok1", nil)
-	_, err := handler.Invoke(makePluginContext(), payload)
+	_, err := handler(makePluginContext(), payload)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -532,7 +530,7 @@ func TestPluginAttemptHooksFire(t *testing.T) {
 	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
 
 	payload := makePluginPayload(t, "arn:test:attempt", "tok1", nil)
-	_, err := handler.Invoke(makePluginContext(), payload)
+	_, err := handler(makePluginContext(), payload)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -580,7 +578,7 @@ func TestPluginInvocationStartBeforeOperationChange(t *testing.T) {
 		{Id: hashID("1"), Status: "SUCCEEDED", Type: "STEP", SubType: "Step", Name: "s1", StepDetails: &wireStepDetails{Attempt: 1, Result: `"ok"`}},
 	}
 	payload := makePluginPayloadWithUpdated(t, "arn:test:order", "tok1", ops, []string{hashID("1")})
-	if _, err := handler.Invoke(makePluginContext(), payload); err != nil {
+	if _, err := handler(makePluginContext(), payload); err != nil {
 		t.Fatal(err)
 	}
 
@@ -629,7 +627,7 @@ func TestPluginUpdatedOperationsMapKeyedByID(t *testing.T) {
 		},
 	}
 	payload := makePluginPayloadWithUpdated(t, "arn:test:map", "tok1", ops, []string{stepID})
-	if _, err := handler.Invoke(makePluginContext(), payload); err != nil {
+	if _, err := handler(makePluginContext(), payload); err != nil {
 		t.Fatal(err)
 	}
 
@@ -688,7 +686,7 @@ func TestPluginInvocationInfoFieldsPopulated(t *testing.T) {
 		},
 	}
 	payload := makePluginPayload(t, "arn:test:fields", "tok1", ops)
-	if _, err := handler.Invoke(makePluginContext(), payload); err != nil {
+	if _, err := handler(makePluginContext(), payload); err != nil {
 		t.Fatal(err)
 	}
 
@@ -731,7 +729,7 @@ func TestPluginInvocationEndErrorPopulated(t *testing.T) {
 	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
 
 	payload := makePluginPayload(t, "arn:test:fail", "tok1", nil)
-	if _, err := handler.Invoke(makePluginContext(), payload); err != nil {
+	if _, err := handler(makePluginContext(), payload); err != nil {
 		t.Fatal(err)
 	}
 
@@ -768,7 +766,7 @@ func TestPluginContextThreadedToHooks(t *testing.T) {
 
 	ctx := context.WithValue(context.Background(), ctxKey{}, "threaded")
 	payload := makePluginPayload(t, "arn:test:ctx", "tok1", nil)
-	if _, err := handler.Invoke(ctx, payload); err != nil {
+	if _, err := handler(ctx, payload); err != nil {
 		t.Fatal(err)
 	}
 
@@ -798,7 +796,7 @@ func TestPluginOperationHookParentIDAndTimestamps(t *testing.T) {
 	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
 
 	payload := makePluginPayload(t, "arn:test:parent", "tok1", nil)
-	if _, err := handler.Invoke(makePluginContext(), payload); err != nil {
+	if _, err := handler(makePluginContext(), payload); err != nil {
 		t.Fatal(err)
 	}
 
@@ -853,14 +851,14 @@ type fakePluginClient struct {
 	mu sync.Mutex
 }
 
-func (c *fakePluginClient) GetDurableExecutionState(_ context.Context, _ *lambdaSvc.GetDurableExecutionStateInput, _ ...func(*lambdaSvc.Options)) (*lambdaSvc.GetDurableExecutionStateOutput, error) {
-	return &lambdaSvc.GetDurableExecutionStateOutput{}, nil
+func (c *fakePluginClient) GetExecutionState(_ context.Context, _ GetExecutionStateInput) (GetExecutionStateOutput, error) {
+	return GetExecutionStateOutput{}, nil
 }
 
-func (c *fakePluginClient) CheckpointDurableExecution(_ context.Context, in *lambdaSvc.CheckpointDurableExecutionInput, _ ...func(*lambdaSvc.Options)) (*lambdaSvc.CheckpointDurableExecutionOutput, error) {
+func (c *fakePluginClient) Checkpoint(_ context.Context, in CheckpointInput) (CheckpointOutput, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return &lambdaSvc.CheckpointDurableExecutionOutput{
+	return CheckpointOutput{
 		CheckpointToken: in.CheckpointToken,
 	}, nil
 }

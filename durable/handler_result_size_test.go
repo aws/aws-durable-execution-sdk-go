@@ -8,8 +8,6 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/lambda"
-	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 	"github.com/aws/smithy-go"
 )
 
@@ -40,7 +38,7 @@ func TestRootResultAtLimitReturnsInline(t *testing.T) {
 		t.Fatalf("inline Result missing or wrong size")
 	}
 	for _, u := range updateBatch(t, fake) {
-		if u.Type == types.OperationTypeExecution {
+		if u.Type == OperationTypeExecution {
 			t.Errorf("unexpected EXECUTION checkpoint for an at-limit result")
 		}
 	}
@@ -69,11 +67,11 @@ func TestRootResultOverLimitIsCheckpointed(t *testing.T) {
 
 	found := false
 	for _, u := range updateBatch(t, fake) {
-		if u.Type != types.OperationTypeExecution {
+		if u.Type != OperationTypeExecution {
 			continue
 		}
 		found = true
-		if u.Action != types.OperationActionSucceed {
+		if u.Action != OperationActionSucceed {
 			t.Errorf("EXECUTION update Action = %q, want SUCCEED", u.Action)
 		}
 		if got := aws.ToString(u.Id); got != "exec-op" {
@@ -100,21 +98,21 @@ func TestRootResultCheckpointCompletesBeforeResponse(t *testing.T) {
 	checkpointDone := false
 	fake := &fakeLambdaFunc{
 		getState: emptyGetState,
-		checkpoint: func(_ context.Context, in *lambda.CheckpointDurableExecutionInput, _ ...func(*lambda.Options)) (*lambda.CheckpointDurableExecutionOutput, error) {
+		checkpoint: func(_ context.Context, in CheckpointInput) (CheckpointOutput, error) {
 			for _, u := range in.Updates {
-				if u.Type == types.OperationTypeExecution {
+				if u.Type == OperationTypeExecution {
 					checkpointDone = true
 				}
 			}
 			tok := "token-1"
-			return &lambda.CheckpointDurableExecutionOutput{CheckpointToken: &tok}, nil
+			return CheckpointOutput{CheckpointToken: tok}, nil
 		},
 	}
 
 	h := Wrap(func(_ Context, _ string) (string, error) {
 		return large, nil
 	}, withLambdaAPI(fake))
-	got, err := h.Invoke(context.Background(), stepPayload(`""`))
+	got, err := h(context.Background(), stepPayload(`""`))
 	if err != nil {
 		t.Fatalf("Invoke error: %v", err)
 	}
@@ -137,8 +135,8 @@ func TestRootResultCheckpointFailureFailsInvocation(t *testing.T) {
 
 	fake := &fakeLambdaFunc{
 		getState: emptyGetState,
-		checkpoint: func(_ context.Context, _ *lambda.CheckpointDurableExecutionInput, _ ...func(*lambda.Options)) (*lambda.CheckpointDurableExecutionOutput, error) {
-			return nil, &smithy.GenericAPIError{
+		checkpoint: func(_ context.Context, _ CheckpointInput) (CheckpointOutput, error) {
+			return CheckpointOutput{}, &smithy.GenericAPIError{
 				Code:    "ValidationException",
 				Message: "rejected",
 				Fault:   smithy.FaultClient,
@@ -149,7 +147,7 @@ func TestRootResultCheckpointFailureFailsInvocation(t *testing.T) {
 	h := Wrap(func(_ Context, _ string) (string, error) {
 		return large, nil
 	}, withLambdaAPI(fake))
-	_, err := h.Invoke(context.Background(), stepPayload(`""`))
+	_, err := h(context.Background(), stepPayload(`""`))
 	if err == nil {
 		t.Fatal("Invoke succeeded despite the oversized-result checkpoint failing")
 	}
@@ -168,14 +166,14 @@ func TestRootResultOversizedCheckpointBeforePlugin(t *testing.T) {
 	var events []string
 	fake := &fakeLambdaFunc{
 		getState: emptyGetState,
-		checkpoint: func(_ context.Context, in *lambda.CheckpointDurableExecutionInput, _ ...func(*lambda.Options)) (*lambda.CheckpointDurableExecutionOutput, error) {
+		checkpoint: func(_ context.Context, in CheckpointInput) (CheckpointOutput, error) {
 			for _, u := range in.Updates {
-				if u.Type == types.OperationTypeExecution {
+				if u.Type == OperationTypeExecution {
 					events = append(events, "checkpoint")
 				}
 			}
 			tok := "token-1"
-			return &lambda.CheckpointDurableExecutionOutput{CheckpointToken: &tok}, nil
+			return CheckpointOutput{CheckpointToken: tok}, nil
 		},
 	}
 
@@ -189,7 +187,7 @@ func TestRootResultOversizedCheckpointBeforePlugin(t *testing.T) {
 		return large, nil
 	}, withLambdaAPI(fake), WithPlugins(plugin))
 
-	_, err := h.Invoke(context.Background(), stepPayload(`""`))
+	_, err := h(context.Background(), stepPayload(`""`))
 	if err != nil {
 		t.Fatalf("Invoke error: %v", err)
 	}
@@ -215,8 +213,8 @@ func TestRootResultCheckpointFailureNoSuccessPlugin(t *testing.T) {
 	var hooks []InvocationEndHookInfo
 	fake := &fakeLambdaFunc{
 		getState: emptyGetState,
-		checkpoint: func(_ context.Context, _ *lambda.CheckpointDurableExecutionInput, _ ...func(*lambda.Options)) (*lambda.CheckpointDurableExecutionOutput, error) {
-			return nil, &smithy.GenericAPIError{
+		checkpoint: func(_ context.Context, _ CheckpointInput) (CheckpointOutput, error) {
+			return CheckpointOutput{}, &smithy.GenericAPIError{
 				Code:    "ValidationException",
 				Message: "rejected",
 				Fault:   smithy.FaultClient,
@@ -234,7 +232,7 @@ func TestRootResultCheckpointFailureNoSuccessPlugin(t *testing.T) {
 		return large, nil
 	}, withLambdaAPI(fake), WithPlugins(plugin))
 
-	_, err := h.Invoke(context.Background(), stepPayload(`""`))
+	_, err := h(context.Background(), stepPayload(`""`))
 	if err == nil {
 		t.Fatal("Invoke succeeded despite checkpoint failure")
 	}
@@ -266,7 +264,7 @@ func TestRootResultSerializationFailureFiresFailedHook(t *testing.T) {
 		return make(chan int), nil // json.Marshal fails on channels
 	}, withLambdaAPI(fake), WithPlugins(plugin))
 
-	_, err := h.Invoke(context.Background(), stepPayload(`""`))
+	_, err := h(context.Background(), stepPayload(`""`))
 	if err == nil {
 		t.Fatal("Invoke succeeded despite unserializable result")
 	}
@@ -314,7 +312,7 @@ func TestRootResultOversizedNoExecutionOpFiresFailedHook(t *testing.T) {
 		return large, nil
 	}, withLambdaAPI(fake), WithPlugins(plugin))
 
-	_, err := h.Invoke(context.Background(), payload)
+	_, err := h(context.Background(), payload)
 	if err == nil {
 		t.Fatal("Invoke succeeded despite missing execution operation")
 	}

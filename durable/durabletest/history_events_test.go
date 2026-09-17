@@ -7,6 +7,8 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
+
+	"github.com/aws/aws-durable-execution-sdk-go/durable"
 )
 
 // TestOperationsFromEventsMergesLifecycle verifies that multiple events for
@@ -49,10 +51,10 @@ func TestOperationsFromEventsMergesLifecycle(t *testing.T) {
 	if aws.ToString(op.Name) != "approval" {
 		t.Errorf("Name = %q, want approval", aws.ToString(op.Name))
 	}
-	if op.Type != types.OperationTypeCallback {
+	if op.Type != durable.OperationTypeCallback {
 		t.Errorf("Type = %q, want CALLBACK", op.Type)
 	}
-	if op.Status != types.OperationStatusSucceeded {
+	if op.Status != durable.OperationStatusSucceeded {
 		t.Errorf("Status = %q, want SUCCEEDED", op.Status)
 	}
 	if op.CallbackDetails == nil {

@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"testing"
-
-	"github.com/aws/aws-lambda-go/lambdacontext"
 )
 
 func newTestContext(t *testing.T, ops []*operation) *execContext {
@@ -13,7 +11,7 @@ func newTestContext(t *testing.T, ops []*operation) *execContext {
 	return newExecContext(
 		context.Background(),
 		"arn:aws:lambda:us-west-2:123456789012:function:fn:1/durable-execution/test",
-		&lambdacontext.LambdaContext{AwsRequestID: "req-1"},
+		invocationInfo{requestID: "req-1"},
 		nopLogger{},
 		newExecutionState(ops),
 	)

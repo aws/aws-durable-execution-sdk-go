@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 )
 
 func TestBatchCompletionErrorTyped(t *testing.T) {
@@ -94,7 +93,7 @@ func TestBatchCompletionErrorSurfacesOnResultSerdesReplay(t *testing.T) {
 	// Extract the Map parent SUCCEED payload written by the custom serdes.
 	var mapPayload string
 	for _, u := range updateBatch(t, fake) {
-		if aws.ToString(u.SubType) == "Map" && u.Action == types.OperationActionSucceed {
+		if aws.ToString(u.SubType) == "Map" && u.Action == OperationActionSucceed {
 			mapPayload = aws.ToString(u.Payload)
 		}
 	}

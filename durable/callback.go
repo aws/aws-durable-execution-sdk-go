@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 )
 
 // operationSubTypeCallback is the wire subtype for callback operations.
@@ -63,7 +62,7 @@ func CreateCallback[O any](ctx Context, name string, opts ...CallbackOption) (*C
 	}
 
 	op := ec.state.get(id)
-	if err := validateReplayConsistency(op, string(types.OperationTypeCallback), operationSubTypeCallback, name); err != nil {
+	if err := validateReplayConsistency(op, string(OperationTypeCallback), operationSubTypeCallback, name); err != nil {
 		return nil, err
 	}
 	if ec.unfinishedInSucceededContext(op) {
@@ -108,13 +107,13 @@ func CreateCallback[O any](ctx Context, name string, opts ...CallbackOption) (*C
 	}
 
 	// First invocation: checkpoint START.
-	update := callbackUpdate(ec, id, name, types.OperationActionStart)
+	update := callbackUpdate(ec, id, name, OperationActionStart)
 	cbOpts, cbErr := buildCallbackOptions(options)
 	if cbErr != nil {
 		return nil, fmt.Errorf("durable: CreateCallback %q: %w", name, cbErr)
 	}
 	update.CallbackOptions = cbOpts
-	if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+	if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
 		if errors.Is(err, errCheckpointTerminated) {
 			return nil, errSuspendExecution
 		}
@@ -169,7 +168,7 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 	}
 
 	op := ec.state.get(id)
-	if err := validateReplayConsistency(op, string(types.OperationTypeContext), operationSubTypeWaitForCallback, name); err != nil {
+	if err := validateReplayConsistency(op, string(OperationTypeContext), operationSubTypeWaitForCallback, name); err != nil {
 		return zero, err
 	}
 	if ec.unfinishedInSucceededContext(op) {
@@ -201,8 +200,8 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 
 	// Checkpoint ContextStarted (SubType WaitForCallback) if first time.
 	if op == nil {
-		update := wfcbContextUpdate(ec, id, name, types.OperationActionStart)
-		if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+		update := wfcbContextUpdate(ec, id, name, OperationActionStart)
+		if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
 			if errors.Is(err, errCheckpointTerminated) {
 				return zero, errSuspendExecution
 			}
@@ -220,9 +219,9 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 			return zero, fnErr
 		}
 		// Checkpoint ContextFailed.
-		update := wfcbContextUpdate(ec, id, name, types.OperationActionFail)
+		update := wfcbContextUpdate(ec, id, name, OperationActionFail)
 		update.Error = errorObject(fnErr)
-		if cerr := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); cerr != nil {
+		if cerr := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); cerr != nil {
 			if errors.Is(cerr, errCheckpointTerminated) {
 				return zero, errSuspendExecution
 			}
@@ -236,9 +235,9 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 	if serr != nil {
 		return zero, newSerdesError(name, serdesDirectionMarshal, serr)
 	}
-	update := wfcbContextUpdate(ec, id, name, types.OperationActionSucceed)
+	update := wfcbContextUpdate(ec, id, name, OperationActionSucceed)
 	update.Payload = aws.String(string(serialized))
-	if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+	if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
 		if errors.Is(err, errCheckpointTerminated) {
 			return zero, errSuspendExecution
 		}
@@ -353,10 +352,10 @@ func resolveCallbackTimeout[O any](op *operation, name string) *Callback[O] {
 }
 
 // callbackUpdate assembles the shared fields of a callback operation update.
-func callbackUpdate(ec *execContext, id, name string, action types.OperationAction) types.OperationUpdate {
-	update := types.OperationUpdate{
+func callbackUpdate(ec *execContext, id, name string, action OperationAction) OperationUpdate {
+	update := OperationUpdate{
 		Id:      aws.String(hashID(id)),
-		Type:    types.OperationTypeCallback,
+		Type:    OperationTypeCallback,
 		SubType: aws.String(operationSubTypeCallback),
 		Action:  action,
 	}
@@ -370,10 +369,10 @@ func callbackUpdate(ec *execContext, id, name string, action types.OperationActi
 }
 
 // wfcbContextUpdate assembles a WaitForCallback context operation update.
-func wfcbContextUpdate(ec *execContext, id, name string, action types.OperationAction) types.OperationUpdate {
-	update := types.OperationUpdate{
+func wfcbContextUpdate(ec *execContext, id, name string, action OperationAction) OperationUpdate {
+	update := OperationUpdate{
 		Id:      aws.String(hashID(id)),
-		Type:    types.OperationTypeContext,
+		Type:    OperationTypeContext,
 		SubType: aws.String(operationSubTypeWaitForCallback),
 		Action:  action,
 	}
@@ -390,7 +389,7 @@ func wfcbContextUpdate(ec *execContext, id, name string, action types.OperationA
 // options. Returns a non-nil error if a timeout duration is negative or
 // exceeds the int32 seconds limit. Returns (nil, nil) when neither timeout
 // is set.
-func buildCallbackOptions(opts callbackOptions) (*types.CallbackOptions, error) {
+func buildCallbackOptions(opts callbackOptions) (*CallbackOptions, error) {
 	timeout := int32(0)
 	heartbeat := int32(0)
 	if opts.timeout > 0 {
@@ -416,7 +415,7 @@ func buildCallbackOptions(opts callbackOptions) (*types.CallbackOptions, error) 
 	if timeout == 0 && heartbeat == 0 {
 		return nil, nil
 	}
-	return &types.CallbackOptions{
+	return &CallbackOptions{
 		TimeoutSeconds:          timeout,
 		HeartbeatTimeoutSeconds: heartbeat,
 	}, nil

@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 )
 
 // --- Future tests ---
@@ -546,7 +545,7 @@ func TestRunInChildContextAsyncFnError(t *testing.T) {
 	updates := updateBatch(t, fake)
 	found := false
 	for _, u := range updates {
-		if u.Action == types.OperationActionFail && u.Type == types.OperationTypeContext {
+		if u.Action == OperationActionFail && u.Type == OperationTypeContext {
 			found = true
 			break
 		}
@@ -848,7 +847,7 @@ func TestInvokeAsyncStartsAndSuspends(t *testing.T) {
 	if len(updates) != 1 {
 		t.Fatalf("received %d updates, want 1", len(updates))
 	}
-	if updates[0].Type != types.OperationTypeChainedInvoke {
+	if updates[0].Type != OperationTypeChainedInvoke {
 		t.Errorf("Type = %q, want CHAINED_INVOKE", updates[0].Type)
 	}
 }
@@ -905,10 +904,10 @@ func TestStepAsyncAndGoInterleaved(t *testing.T) {
 	var stepStartID, ctxStartID string
 	for _, u := range updates {
 		// Root-level step: Type STEP, no ParentId.
-		if u.Type == types.OperationTypeStep && u.Action == types.OperationActionStart && u.ParentId == nil {
+		if u.Type == OperationTypeStep && u.Action == OperationActionStart && u.ParentId == nil {
 			stepStartID = aws.ToString(u.Id)
 		}
-		if u.Type == types.OperationTypeContext && u.Action == types.OperationActionStart {
+		if u.Type == OperationTypeContext && u.Action == OperationActionStart {
 			ctxStartID = aws.ToString(u.Id)
 		}
 	}
@@ -1017,9 +1016,9 @@ func TestRunInChildContextReplayChildrenTrigger(t *testing.T) {
 	}
 
 	updates := updateBatch(t, fake)
-	var ctxSucceed *types.OperationUpdate
+	var ctxSucceed *OperationUpdate
 	for i := range updates {
-		if updates[i].Type == types.OperationTypeContext && updates[i].Action == types.OperationActionSucceed {
+		if updates[i].Type == OperationTypeContext && updates[i].Action == OperationActionSucceed {
 			ctxSucceed = &updates[i]
 		}
 	}
@@ -1052,7 +1051,7 @@ func TestRunInChildContextReplayChildrenSmallPayload(t *testing.T) {
 
 	updates := updateBatch(t, fake)
 	for _, u := range updates {
-		if u.Type == types.OperationTypeContext && u.Action == types.OperationActionSucceed {
+		if u.Type == OperationTypeContext && u.Action == OperationActionSucceed {
 			if u.Payload == nil {
 				t.Error("small result should have Payload set")
 			}
@@ -1142,9 +1141,9 @@ func TestRunInChildContextAsyncReplayChildrenLargePayload(t *testing.T) {
 	})
 
 	updates := updateBatch(t, fake)
-	var ctxSucceed *types.OperationUpdate
+	var ctxSucceed *OperationUpdate
 	for i := range updates {
-		if updates[i].Type == types.OperationTypeContext && updates[i].Action == types.OperationActionSucceed {
+		if updates[i].Type == OperationTypeContext && updates[i].Action == OperationActionSucceed {
 			ctxSucceed = &updates[i]
 		}
 	}

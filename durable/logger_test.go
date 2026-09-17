@@ -136,7 +136,7 @@ func TestExecContextReplayToggle(t *testing.T) {
 		{id: hashID("1"), status: statusSucceeded},
 	})
 
-	ec := newExecContext(t.Context(), "arn:test", nil, logger, state)
+	ec := newExecContext(t.Context(), "arn:test", invocationInfo{}, logger, state)
 	// Should be in replay mode.
 	if !ec.IsReplaying() {
 		t.Fatal("expected replay mode")
@@ -172,7 +172,7 @@ func TestUserProvidedLoggerWrappedForReplaySuppression(t *testing.T) {
 		{id: hashID("exec"), status: statusStarted},
 		{id: hashID("1"), status: statusSucceeded},
 	})
-	ec := newExecContext(t.Context(), "arn:test:user-logger", nil, wrapped, state)
+	ec := newExecContext(t.Context(), "arn:test:user-logger", invocationInfo{}, wrapped, state)
 
 	// Context is in replay mode.
 	if !ec.IsReplaying() {

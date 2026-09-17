@@ -3,8 +3,6 @@ package durable
 import (
 	"context"
 	"time"
-
-	"github.com/aws/aws-lambda-go/lambdacontext"
 )
 
 // Context is the durable execution context passed to handler functions and
@@ -27,9 +25,21 @@ type Context interface {
 	// ExecutionArn returns the ARN of the current durable execution.
 	ExecutionArn() string
 
-	// LambdaContext returns the underlying Lambda invocation context for
-	// the current invocation.
-	LambdaContext() *lambdacontext.LambdaContext
+	// RequestID returns the AWS request ID of the current Lambda
+	// invocation. It is empty outside a Lambda invocation (such as under
+	// the [durabletest] local runner).
+	//
+	// The request ID varies across invocations of one execution, so using
+	// it in handler logic outside a [Step] introduces non-determinism on
+	// replay. If the raw aws-lambda-go invocation context is genuinely
+	// needed, it remains reachable from the embedded [context.Context] via
+	// lambdacontext.FromContext(ctx).
+	RequestID() string
+
+	// InvokedFunctionARN returns the ARN used to invoke the current
+	// Lambda function. It is empty outside a Lambda invocation (such as
+	// under the [durabletest] local runner).
+	InvokedFunctionARN() string
 
 	// Logger returns the logger for this context, enriched with durable
 	// execution metadata. During replay, log output is suppressed by

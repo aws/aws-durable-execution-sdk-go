@@ -10,9 +10,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/lambda"
-	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 	smithy "github.com/aws/smithy-go"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
@@ -172,16 +169,16 @@ func TestCheckpointRetryOnRetryableError(t *testing.T) {
 	var mu sync.Mutex
 	callCount := 0
 	fake := &fakeLambdaFunc{
-		checkpoint: func(_ context.Context, in *lambda.CheckpointDurableExecutionInput, _ ...func(*lambda.Options)) (*lambda.CheckpointDurableExecutionOutput, error) {
+		checkpoint: func(_ context.Context, in CheckpointInput) (CheckpointOutput, error) {
 			mu.Lock()
 			callCount++
 			n := callCount
 			mu.Unlock()
 			if n < 3 {
-				return nil, retryableErr
+				return CheckpointOutput{}, retryableErr
 			}
 			tok := "token-success"
-			return &lambda.CheckpointDurableExecutionOutput{CheckpointToken: &tok}, nil
+			return CheckpointOutput{CheckpointToken: tok}, nil
 		},
 		getState: emptyGetState,
 	}
@@ -211,11 +208,11 @@ func TestCheckpointImmediateFailOnNonRetryable(t *testing.T) {
 	var mu sync.Mutex
 	callCount := 0
 	fake := &fakeLambdaFunc{
-		checkpoint: func(_ context.Context, _ *lambda.CheckpointDurableExecutionInput, _ ...func(*lambda.Options)) (*lambda.CheckpointDurableExecutionOutput, error) {
+		checkpoint: func(_ context.Context, _ CheckpointInput) (CheckpointOutput, error) {
 			mu.Lock()
 			callCount++
 			mu.Unlock()
-			return nil, nonRetryableErr
+			return CheckpointOutput{}, nonRetryableErr
 		},
 		getState: emptyGetState,
 	}
@@ -252,11 +249,11 @@ func TestCheckpointExhaustsRetriesOnRetryable(t *testing.T) {
 	var mu sync.Mutex
 	callCount := 0
 	fake := &fakeLambdaFunc{
-		checkpoint: func(_ context.Context, _ *lambda.CheckpointDurableExecutionInput, _ ...func(*lambda.Options)) (*lambda.CheckpointDurableExecutionOutput, error) {
+		checkpoint: func(_ context.Context, _ CheckpointInput) (CheckpointOutput, error) {
 			mu.Lock()
 			callCount++
 			mu.Unlock()
-			return nil, serverErr
+			return CheckpointOutput{}, serverErr
 		},
 		getState: emptyGetState,
 	}
@@ -294,12 +291,12 @@ func TestCheckpointTokenPreservedOnFailure(t *testing.T) {
 	}
 
 	fake := &fakeLambdaFunc{
-		checkpoint: func(_ context.Context, in *lambda.CheckpointDurableExecutionInput, _ ...func(*lambda.Options)) (*lambda.CheckpointDurableExecutionOutput, error) {
+		checkpoint: func(_ context.Context, in CheckpointInput) (CheckpointOutput, error) {
 			// Verify the token being sent is always the initial one.
-			if aws.ToString(in.CheckpointToken) != "token-initial" {
-				t.Errorf("retry sent wrong token: %q", aws.ToString(in.CheckpointToken))
+			if in.CheckpointToken != "token-initial" {
+				t.Errorf("retry sent wrong token: %q", in.CheckpointToken)
 			}
-			return nil, throttleErr
+			return CheckpointOutput{}, throttleErr
 		},
 		getState: emptyGetState,
 	}
@@ -321,8 +318,8 @@ func TestCheckpointContextCancellation(t *testing.T) {
 	}
 
 	fake := &fakeLambdaFunc{
-		checkpoint: func(_ context.Context, _ *lambda.CheckpointDurableExecutionInput, _ ...func(*lambda.Options)) (*lambda.CheckpointDurableExecutionOutput, error) {
-			return nil, serverErr
+		checkpoint: func(_ context.Context, _ CheckpointInput) (CheckpointOutput, error) {
+			return CheckpointOutput{}, serverErr
 		},
 		getState: emptyGetState,
 	}
@@ -351,20 +348,20 @@ func TestCheckpointContextCancellation(t *testing.T) {
 // fakeLambdaFunc is a function-based ExecutionClient for fine-grained
 // control in retry tests.
 type fakeLambdaFunc struct {
-	checkpoint func(context.Context, *lambda.CheckpointDurableExecutionInput, ...func(*lambda.Options)) (*lambda.CheckpointDurableExecutionOutput, error)
-	getState   func(context.Context, *lambda.GetDurableExecutionStateInput, ...func(*lambda.Options)) (*lambda.GetDurableExecutionStateOutput, error)
+	checkpoint func(context.Context, CheckpointInput) (CheckpointOutput, error)
+	getState   func(context.Context, GetExecutionStateInput) (GetExecutionStateOutput, error)
 }
 
-func (f *fakeLambdaFunc) CheckpointDurableExecution(ctx context.Context, in *lambda.CheckpointDurableExecutionInput, opts ...func(*lambda.Options)) (*lambda.CheckpointDurableExecutionOutput, error) {
-	return f.checkpoint(ctx, in, opts...)
+func (f *fakeLambdaFunc) Checkpoint(ctx context.Context, in CheckpointInput) (CheckpointOutput, error) {
+	return f.checkpoint(ctx, in)
 }
 
-func (f *fakeLambdaFunc) GetDurableExecutionState(ctx context.Context, in *lambda.GetDurableExecutionStateInput, opts ...func(*lambda.Options)) (*lambda.GetDurableExecutionStateOutput, error) {
-	return f.getState(ctx, in, opts...)
+func (f *fakeLambdaFunc) GetExecutionState(ctx context.Context, in GetExecutionStateInput) (GetExecutionStateOutput, error) {
+	return f.getState(ctx, in)
 }
 
-func emptyGetState(_ context.Context, _ *lambda.GetDurableExecutionStateInput, _ ...func(*lambda.Options)) (*lambda.GetDurableExecutionStateOutput, error) {
-	return &lambda.GetDurableExecutionStateOutput{}, nil
+func emptyGetState(_ context.Context, _ GetExecutionStateInput) (GetExecutionStateOutput, error) {
+	return GetExecutionStateOutput{}, nil
 }
 
 // Verify the existing token rotation tests still exercise the old
@@ -378,18 +375,18 @@ func TestCheckpointRetryWithTokenRotation(t *testing.T) {
 	tokens := []string{}
 
 	fake := &fakeLambdaFunc{
-		checkpoint: func(_ context.Context, in *lambda.CheckpointDurableExecutionInput, _ ...func(*lambda.Options)) (*lambda.CheckpointDurableExecutionOutput, error) {
+		checkpoint: func(_ context.Context, in CheckpointInput) (CheckpointOutput, error) {
 			mu.Lock()
 			callCount++
 			n := callCount
-			tokens = append(tokens, aws.ToString(in.CheckpointToken))
+			tokens = append(tokens, in.CheckpointToken)
 			mu.Unlock()
 			if n == 1 {
-				return nil, &smithy.GenericAPIError{Code: "ServiceException", Fault: smithy.FaultServer}
+				return CheckpointOutput{}, &smithy.GenericAPIError{Code: "ServiceException", Fault: smithy.FaultServer}
 			}
 			tok := "token-" + strconv.Itoa(n)
-			return &lambda.CheckpointDurableExecutionOutput{
-				CheckpointToken: &tok,
+			return CheckpointOutput{
+				CheckpointToken: tok,
 			}, nil
 		},
 		getState: emptyGetState,
@@ -404,7 +401,7 @@ func TestCheckpointRetryWithTokenRotation(t *testing.T) {
 	}
 
 	// Second call should use the rotated token.
-	if err := cp.checkpoint(context.Background(), []types.OperationUpdate{}); err != nil {
+	if err := cp.checkpoint(context.Background(), []OperationUpdate{}); err != nil {
 		t.Fatalf("checkpoint() 2 = %v", err)
 	}
 	mu.Lock()

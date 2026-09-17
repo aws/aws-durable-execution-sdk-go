@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 )
 
 // operationSubTypeWait is the wire subtype for wait operations.
@@ -72,7 +71,7 @@ func WaitAsync(ctx Context, name string, d time.Duration) *Future[Void] {
 // the same core.
 func runWait(ec *execContext, id, name string, d time.Duration) error {
 	op := ec.state.get(id)
-	if err := validateReplayConsistency(op, string(types.OperationTypeWait), operationSubTypeWait, name); err != nil {
+	if err := validateReplayConsistency(op, string(OperationTypeWait), operationSubTypeWait, name); err != nil {
 		return err
 	}
 	if ec.unfinishedInSucceededContext(op) {
@@ -96,12 +95,12 @@ func runWait(ec *execContext, id, name string, d time.Duration) error {
 		return fmt.Errorf("durable: Wait %q: %w", name, err)
 	}
 
-	update := types.OperationUpdate{
+	update := OperationUpdate{
 		Id:      aws.String(hashID(id)),
-		Type:    types.OperationTypeWait,
+		Type:    OperationTypeWait,
 		SubType: aws.String(operationSubTypeWait),
-		Action:  types.OperationActionStart,
-		WaitOptions: &types.WaitOptions{
+		Action:  OperationActionStart,
+		WaitOptions: &WaitOptions{
 			WaitSeconds: aws.Int32(waitSec),
 		},
 	}
@@ -111,7 +110,7 @@ func runWait(ec *execContext, id, name string, d time.Duration) error {
 	if parent := ec.ids.prefix; parent != "" {
 		update.ParentId = aws.String(hashID(parent))
 	}
-	if err := ec.checkpointer.checkpoint(ec, []types.OperationUpdate{update}); err != nil {
+	if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
 		if errors.Is(err, errCheckpointTerminated) {
 			return errSuspendExecution
 		}

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 )
 
 func TestWaitStartsAndSuspends(t *testing.T) {
@@ -30,13 +29,13 @@ func TestWaitStartsAndSuspends(t *testing.T) {
 	if got, want := aws.ToString(u.Id), hashID("1"); got != want {
 		t.Errorf("update Id = %q, want %q", got, want)
 	}
-	if u.Type != types.OperationTypeWait {
+	if u.Type != OperationTypeWait {
 		t.Errorf("update Type = %q, want WAIT", u.Type)
 	}
 	if got := aws.ToString(u.SubType); got != "Wait" {
 		t.Errorf("update SubType = %q, want Wait", got)
 	}
-	if u.Action != types.OperationActionStart {
+	if u.Action != OperationActionStart {
 		t.Errorf("update Action = %q, want START", u.Action)
 	}
 	if u.WaitOptions == nil || aws.ToInt32(u.WaitOptions.WaitSeconds) != 2 {
@@ -125,7 +124,7 @@ func TestStepThenWaitSequence(t *testing.T) {
 		if len(updates) != 3 {
 			t.Fatalf("received %d updates, want 3 (step START, step SUCCEED, wait START)", len(updates))
 		}
-		if updates[2].Type != types.OperationTypeWait {
+		if updates[2].Type != OperationTypeWait {
 			t.Errorf("third update Type = %q, want WAIT", updates[2].Type)
 		}
 	})

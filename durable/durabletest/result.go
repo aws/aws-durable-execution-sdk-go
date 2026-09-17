@@ -7,8 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
+	"github.com/aws/aws-durable-execution-sdk-go/durable"
 )
 
 // ExecutionStatus represents the outcome of a durable execution invocation.
@@ -252,7 +251,7 @@ func ResultAs[O any](r *TestResult) (O, error) {
 
 // testResultFromResponse parses an invocation response and builds a
 // TestResult with the operation snapshot.
-func testResultFromResponse(response []byte, ops []types.Operation) (*TestResult, error) {
+func testResultFromResponse(response []byte, ops []durable.Operation) (*TestResult, error) {
 	var resp struct {
 		Status string  `json:"Status"`
 		Result *string `json:"Result,omitempty"`
@@ -282,57 +281,57 @@ func testResultFromResponse(response []byte, ops []types.Operation) (*TestResult
 }
 
 // toTestOperations converts SDK operation types to TestOperations.
-func toTestOperations(ops []types.Operation) []TestOperation {
+func toTestOperations(ops []durable.Operation) []TestOperation {
 	result := make([]TestOperation, 0, len(ops))
 	for _, op := range ops {
 		to := TestOperation{
-			ID:       aws.ToString(op.Id),
-			Name:     aws.ToString(op.Name),
+			ID:       ptrStr(op.Id),
+			Name:     ptrStr(op.Name),
 			Status:   string(op.Status),
 			Type:     string(op.Type),
-			SubType:  aws.ToString(op.SubType),
-			ParentID: aws.ToString(op.ParentId),
+			SubType:  ptrStr(op.SubType),
+			ParentID: ptrStr(op.ParentId),
 		}
 		if sd := op.StepDetails; sd != nil {
 			to.StepDetails = &TestStepDetails{
 				Attempt: sd.Attempt,
-				Result:  aws.ToString(sd.Result),
+				Result:  ptrStr(sd.Result),
 			}
 			if sd.Error != nil {
-				to.StepDetails.ErrorType = aws.ToString(sd.Error.ErrorType)
-				to.StepDetails.ErrorMessage = aws.ToString(sd.Error.ErrorMessage)
+				to.StepDetails.ErrorType = ptrStr(sd.Error.ErrorType)
+				to.StepDetails.ErrorMessage = ptrStr(sd.Error.ErrorMessage)
 			}
 		}
 		if cd := op.CallbackDetails; cd != nil {
 			to.CallbackDetails = &TestCallbackDetails{
-				CallbackID: aws.ToString(cd.CallbackId),
-				Result:     aws.ToString(cd.Result),
+				CallbackID: ptrStr(cd.CallbackId),
+				Result:     ptrStr(cd.Result),
 			}
 			if cd.Error != nil {
-				to.CallbackDetails.ErrorType = aws.ToString(cd.Error.ErrorType)
-				to.CallbackDetails.ErrorMessage = aws.ToString(cd.Error.ErrorMessage)
+				to.CallbackDetails.ErrorType = ptrStr(cd.Error.ErrorType)
+				to.CallbackDetails.ErrorMessage = ptrStr(cd.Error.ErrorMessage)
 			}
 		}
 		if id := op.ChainedInvokeDetails; id != nil {
 			to.InvokeDetails = &TestInvokeDetails{
-				Result: aws.ToString(id.Result),
+				Result: ptrStr(id.Result),
 			}
 			if id.Error != nil {
-				to.InvokeDetails.ErrorType = aws.ToString(id.Error.ErrorType)
-				to.InvokeDetails.ErrorMessage = aws.ToString(id.Error.ErrorMessage)
-				to.InvokeDetails.ErrorData = aws.ToString(id.Error.ErrorData)
+				to.InvokeDetails.ErrorType = ptrStr(id.Error.ErrorType)
+				to.InvokeDetails.ErrorMessage = ptrStr(id.Error.ErrorMessage)
+				to.InvokeDetails.ErrorData = ptrStr(id.Error.ErrorData)
 			}
 		}
 		if cd := op.ContextDetails; cd != nil {
 			to.ContextDetails = &TestContextDetails{
-				Result: aws.ToString(cd.Result),
+				Result: ptrStr(cd.Result),
 			}
 			if cd.ReplayChildren != nil && *cd.ReplayChildren {
 				to.ContextDetails.ReplayChildren = true
 			}
 			if cd.Error != nil {
-				to.ContextDetails.ErrorType = aws.ToString(cd.Error.ErrorType)
-				to.ContextDetails.ErrorMessage = aws.ToString(cd.Error.ErrorMessage)
+				to.ContextDetails.ErrorType = ptrStr(cd.Error.ErrorType)
+				to.ContextDetails.ErrorMessage = ptrStr(cd.Error.ErrorMessage)
 			}
 		}
 		if op.WaitDetails != nil {
