@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
 // Verify interface compliance for all error types.
@@ -494,12 +496,22 @@ func (e *StepError) As(target any) bool { return asOperationError(target, e.oper
 // re-executed. It is passed to the step's retry strategy as the failed
 // attempt's error. It records no cause, so the [OperationError] it reaches
 // has an empty ErrorType and a nil Err.
+//
+// A value rebuilt from a checkpoint record (see [ErrorFromObject]) keeps
+// the recorded Error() text; Name is empty.
 type StepInterruptedError struct {
 	// Name is the step's name, or the empty string for unnamed steps.
 	Name string
+
+	// recordedMessage is the Error() text of a value rebuilt from a
+	// checkpoint record. It is empty for a value the step produced.
+	recordedMessage string
 }
 
 func (e *StepInterruptedError) Error() string {
+	if e.recordedMessage != "" {
+		return e.recordedMessage
+	}
 	return fmt.Sprintf("durable: step %q interrupted before completing an attempt", e.Name)
 }
 
@@ -828,7 +840,7 @@ func reconstructSDKError(wireType string, op OperationError, sentinel error) err
 	case "StepError":
 		return &StepError{Name: op.Name, ErrorType: rec.errType, Message: rec.message, ErrorData: rec.data, StackTrace: rec.stackTrace, Err: inner}
 	case "StepInterruptedError":
-		return &StepInterruptedError{Name: op.Name}
+		return &StepInterruptedError{Name: op.Name, recordedMessage: rec.message}
 	case "InvokeError":
 		return &InvokeError{Name: op.Name, ErrorType: rec.errType, Message: rec.message, ErrorData: rec.data, StackTrace: rec.stackTrace, Err: inner}
 	case "CallbackError":
@@ -844,7 +856,7 @@ func reconstructSDKError(wireType string, op OperationError, sentinel error) err
 	case "WaitForConditionError":
 		return &WaitForConditionError{Name: op.Name, ErrorType: rec.errType, Message: rec.message, ErrorData: rec.data, StackTrace: rec.stackTrace, Err: inner}
 	case "PromiseCombinatorError":
-		return &CombinatorError{Name: op.Name, Errors: []error{inner}}
+		return &CombinatorError{Name: op.Name, Errors: []error{inner}, recordedMessage: rec.message}
 	case "BatchCompletionError":
 		return &BatchCompletionError{Reason: completionReasonOf(rec.message), recordedMessage: rec.message}
 	case "SerdesError":
@@ -867,6 +879,74 @@ func completionReasonOf(message string) CompletionReason {
 		}
 	}
 	return 0
+}
+
+// ErrorFromObject rebuilds the typed error a recorded failure represents.
+// obj is the wire error record the SDK writes for a failed operation, as
+// read back from checkpoint state ([Operation.Error], [StepDetails.Error],
+// and the other details types). Tooling that reads checkpoint state uses
+// it to match on Go types instead of on ErrorType strings:
+//
+//	err := durable.ErrorFromObject(op.Error)
+//	var stepErr *durable.StepError
+//	if errors.As(err, &stepErr) { ... }
+//
+// The result is determined by obj's ErrorType:
+//
+//   - The wire name of a typed operation error ([StepError], [InvokeError],
+//     [CallbackError] and its subtypes, [ChildContextError],
+//     [WaitForConditionError], [CombinatorError], [StepInterruptedError],
+//     [BatchCompletionError], [OperationError], [NonDeterministicReplayError],
+//     [ResultTooLargeError]) yields that type. Its ErrorType, Message,
+//     ErrorData, and StackTrace fields hold the record's values. The
+//     operation's Name and the fields the record does not carry (such as
+//     [StepError.Attempts]) are zero. Types whose Error() text is composed
+//     from those fields report the recorded message as their Error() text
+//     instead. A callback timeout, including one recorded under an older
+//     name, unwraps to [ErrCallbackTimedOut].
+//   - The wire name of [SerdesError] or [CheckpointError] yields an
+//     [OperationError] whose Err is that type rebuilt around a stand-in for
+//     the recorded message. Neither type is an operation error on its own,
+//     so the wrapper is what makes [errors.As] against *OperationError
+//     match, as it does for every other result. [errors.As] against the
+//     concrete type matches through the wrapper.
+//   - Any other name, including a handler's own error type name, "Error",
+//     and an empty name, yields an [OperationError] carrying the record's
+//     fields. Its Err is a stand-in whose Error() is "<ErrorType>: <Message>".
+//     An unknown name is not an error: it is the normal case for a failure
+//     the handler's own code produced.
+//
+// Every result satisfies [errors.As] against *OperationError, and the
+// OperationError reached that way reports the record's ErrorMessage as
+// Message. A nil obj yields nil: it records no failure.
+func ErrorFromObject(obj *ErrorObject) error {
+	if obj == nil {
+		return nil
+	}
+	rec := errorRecord{
+		errType:    aws.ToString(obj.ErrorType),
+		message:    aws.ToString(obj.ErrorMessage),
+		data:       aws.ToString(obj.ErrorData),
+		stackTrace: obj.StackTrace,
+	}
+	op := &OperationError{ErrorType: rec.errType, Message: rec.message, ErrorData: rec.data, StackTrace: rec.stackTrace}
+	if _, ok := sdkErrorsByWireType[rec.errType]; ok {
+		err := reconstructSDKError(rec.errType, *op, nil)
+		if _, ok := err.(interface{ operationError() *OperationError }); ok {
+			return err
+		}
+		// A SerdesError is rebuilt by name but is not an operation error.
+		op.Err = err
+		return op
+	}
+	if name, _ := sdkWireErrorType(&CheckpointError{}); rec.errType == name {
+		op.Err = &CheckpointError{Err: rec.standIn(nil)}
+		return op
+	}
+	if rec.errType != "" || rec.message != "" {
+		op.Err = rec.standIn(nil)
+	}
+	return op
 }
 
 // ChildContextError indicates that a child-context function failed.
@@ -980,15 +1060,25 @@ func (e *WaitForConditionError) As(target any) bool {
 // the recorded failure: Errors then holds one stand-in carrying the
 // recorded message, on the first invocation and on replay alike. Match on
 // the type and on [ChildContextError.ErrorType]. See [OperationError].
+//
+// A value rebuilt from a checkpoint record keeps the recorded Error()
+// text, so the count it reports is the count at the time of failure.
 type CombinatorError struct {
 	// Name is the combinator operation's name.
 	Name string
 
 	// Errors contains the individual future errors.
 	Errors []error
+
+	// recordedMessage is the Error() text of a value rebuilt from a
+	// checkpoint record. It is empty for a value the combinator produced.
+	recordedMessage string
 }
 
 func (e *CombinatorError) Error() string {
+	if e.recordedMessage != "" {
+		return e.recordedMessage
+	}
 	return fmt.Sprintf("durable: combinator %q: all futures failed (%d errors)", e.Name, len(e.Errors))
 }
 
