@@ -49,6 +49,29 @@ they reach the handler, per branch as before.
 The new example `logger-slog-handler` installs an application handler
 with snake_case field names and a service field.
 
+### Fixed: `Plugin.EnrichLogContext` fields now reach log records
+
+The hook was declared but never called. Fields a plugin returns from
+`EnrichLogContext` now become attributes of every record emitted through
+`Context.Logger()` and `StepContext.Logger()`, in handler bodies, child
+contexts, and step bodies alike. The hook runs once per emitted record,
+after replay suppression, and receives the record's context.
+
+Precedence, highest first: the SDK's own fields (`timestamp`, `level`,
+`message`, `requestId`, `executionArn`, `tenantId`, `operationId`,
+`operationName`, `attempt`), then attributes the user passed with the
+record or attached through `slog.Logger.With`, then plugin fields. A plugin
+field under a taken key is dropped. Keys are compared by qualified path:
+plugin fields land under the groups the logger has opened with
+`slog.Logger.WithGroup` and collide only with an attribute at that same
+path, with the children of an empty-key group counting at the enclosing
+path. A group opened after an attribute was attached at that same path is
+also taken, so no plugin field is added under it. When several plugins implement the
+hook, their maps are merged in registration order and a later plugin's
+value replaces an earlier one's under the same key. Fields are added in
+key order. A hook that panics contributes no fields and does not fail the
+invocation. When no plugin implements the hook, no per-record work is done.
+
 ### Added: `BuildPreview` and `FileSystemSerdesConfig.GeneratePreview`
 
 `BuildPreview(value, PreviewConfig)` returns a compact, redacted

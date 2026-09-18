@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -800,5 +801,531 @@ func TestOperationLogAttrsOmitEmptyName(t *testing.T) {
 	}
 	if strings.Join(keys, ",") != logKeyOperationID+","+logKeyAttempt {
 		t.Errorf("keys = %v, want operationId and attempt only", keys)
+	}
+}
+
+// runScopedLoggingWithPlugins runs a fresh execution that logs one record
+// from the handler body ("handler"), one from a child context ("child"),
+// and one from a step inside that child ("step"), with the given handler
+// and plugins installed. logAttrs are passed with every record.
+func runScopedLoggingWithPlugins(t *testing.T, handler slog.Handler, plugins []Plugin, logAttrs ...any) {
+	t.Helper()
+	fake := &fakeLambda{}
+	h := Wrap(func(ctx Context, _ string) (string, error) {
+		ctx.Logger().Info("handler", logAttrs...)
+		return RunInChildContext(ctx, "outer", func(c Context) (string, error) {
+			c.Logger().Info("child", logAttrs...)
+			return Step(c, "inner", func(sc StepContext) (string, error) {
+				sc.Logger().Info("step", logAttrs...)
+				return "s", nil
+			})
+		})
+	}, withLambdaAPI(fake), WithLogHandler(handler), WithPlugins(plugins...))
+	resp, err := h(lambdaCtx(t, "req-p", "tenant-p"), childPayload(`"x"`))
+	if err != nil {
+		t.Fatalf("Invoke() error: %v", err)
+	}
+	if !strings.Contains(string(resp), `"SUCCEEDED"`) {
+		t.Fatalf("response = %s, want SUCCEEDED", resp)
+	}
+}
+
+func TestPluginLogContextFieldsAppearInEveryScope(t *testing.T) {
+	// Fields a plugin returns from EnrichLogContext reach a supplied
+	// handler as attributes of every record: handler body, child context,
+	// and step body alike, alongside the SDK's own identifiers.
+	rec := newRecordingHandler()
+	plugin := Plugin{EnrichLogContext: func(context.Context) map[string]any {
+		return map[string]any{"function_name": "orders", "invocation_count": 3}
+	}}
+	runScopedLoggingWithPlugins(t, rec, []Plugin{plugin})
+
+	records := rec.all()
+	if len(records) != 3 {
+		t.Fatalf("got %d records %v, want 3", len(records), rec.messages())
+	}
+	for _, r := range records {
+		if r.attrs["function_name"] != "orders" || r.attrs["invocation_count"] != int64(3) {
+			t.Errorf("record %q attrs = %v, want plugin fields function_name=orders invocation_count=3", r.message, r.attrs)
+		}
+		if r.attrs[logKeyRequestID] != "req-p" || r.attrs[logKeyExecutionArn] != "arn:test" {
+			t.Errorf("record %q lost SDK identifiers: %v", r.message, r.attrs)
+		}
+	}
+	step := records[2]
+	if step.attrs[logKeyOperationName] != "inner" || step.attrs[logKeyAttempt] != int64(1) {
+		t.Errorf("step record attrs = %v, want the step's own scope alongside plugin fields", step.attrs)
+	}
+}
+
+func TestPluginLogContextFieldsInDefaultHandlerOutput(t *testing.T) {
+	// Through the default JSON handler, plugin fields are top-level keys of
+	// the record, each present once, in key order after the call site's
+	// attributes.
+	var out lockedBuffer
+	plugin := Plugin{EnrichLogContext: func(context.Context) map[string]any {
+		return map[string]any{"zeta": "z", "alpha": "a"}
+	}}
+	runScopedLoggingWithPlugins(t, newDefaultLogHandler(&out, slog.LevelInfo), []Plugin{plugin}, "custom", "value")
+
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("got %d lines, want 3:\n%s", len(lines), out.String())
+	}
+	for _, line := range lines {
+		if !strings.Contains(line, `"custom":"value","alpha":"a","zeta":"z"`) {
+			t.Errorf("plugin fields must follow the call site's attributes in key order, got %s", line)
+		}
+		for _, key := range []string{"alpha", "zeta", "custom", logKeyRequestID, logKeyExecutionArn} {
+			if n := strings.Count(line, `"`+key+`":`); n != 1 {
+				t.Errorf("key %s appears %d times in %s, want once", key, n, line)
+			}
+		}
+	}
+	for _, rec := range parseLogLines(t, out.String()) {
+		if rec["alpha"] != "a" || rec["zeta"] != "z" || rec["custom"] != "value" {
+			t.Errorf("record = %v, want alpha=a zeta=z custom=value", rec)
+		}
+	}
+}
+
+func TestPluginLogContextCannotOverwriteSDKOrUserFields(t *testing.T) {
+	// A plugin field under an SDK identifier, a built-in record key, a
+	// call-site attribute, or a key the user attached with Logger.With is
+	// dropped. The SDK's and the user's values stay, each key appears once
+	// in the JSON output, and the plugin's other fields still land.
+	var out lockedBuffer
+	plugin := Plugin{EnrichLogContext: func(context.Context) map[string]any {
+		return map[string]any{
+			logKeyRequestID:     "plugin-req",
+			logKeyExecutionArn:  "plugin-arn",
+			logKeyTenantID:      "plugin-tenant",
+			logKeyOperationID:   "plugin-op",
+			logKeyOperationName: "plugin-name",
+			logKeyAttempt:       99,
+			logKeyMessage:       "plugin-message",
+			slog.MessageKey:     "plugin-msg",
+			slog.TimeKey:        "plugin-time",
+			logKeyTimestamp:     "plugin-ts",
+			slog.LevelKey:       "plugin-level",
+			"custom":            "plugin-custom",
+			"attached":          "plugin-attached",
+			"extra":             "kept",
+		}
+	}}
+	fake := &fakeLambda{}
+	h := Wrap(func(ctx Context, _ string) (string, error) {
+		return Step(ctx, "greet", func(sc StepContext) (string, error) {
+			sc.Logger().With("attached", "user-attached").Info("step", "custom", "user-custom")
+			return "s", nil
+		})
+	}, withLambdaAPI(fake), WithLogHandler(newDefaultLogHandler(&out, slog.LevelInfo)), WithPlugins(plugin))
+	if _, err := h(lambdaCtx(t, "req-p", "tenant-p"), childPayload(`"x"`)); err != nil {
+		t.Fatalf("Invoke() error: %v", err)
+	}
+
+	line := strings.TrimSpace(out.String())
+	records := parseLogLines(t, line)
+	if len(records) != 1 {
+		t.Fatalf("got %d records, want 1:\n%s", len(records), line)
+	}
+	rec := records[0]
+	want := map[string]any{
+		logKeyRequestID:     "req-p",
+		logKeyExecutionArn:  "arn:test",
+		logKeyTenantID:      "tenant-p",
+		logKeyOperationID:   hashID("1"),
+		logKeyOperationName: "greet",
+		logKeyAttempt:       float64(1),
+		logKeyMessage:       "step",
+		"level":             "INFO",
+		"custom":            "user-custom",
+		"attached":          "user-attached",
+		"extra":             "kept",
+	}
+	for k, v := range want {
+		if rec[k] != v {
+			t.Errorf("%s = %v, want %v", k, rec[k], v)
+		}
+		if n := strings.Count(line, `"`+k+`":`); n != 1 {
+			t.Errorf("key %s appears %d times, want once: %s", k, n, line)
+		}
+	}
+	for _, absent := range []string{slog.MessageKey, slog.TimeKey} {
+		if _, ok := rec[absent]; ok {
+			t.Errorf("plugin must not introduce built-in key %q: %s", absent, line)
+		}
+	}
+	if len(rec) != len(want)+1 { // +1 for timestamp
+		t.Errorf("record has unexpected keys: %v", rec)
+	}
+}
+
+func TestPluginLogContextMergesPluginsInRegistrationOrder(t *testing.T) {
+	// Two plugins contribute fields. Keys only one plugin returns are all
+	// present; for a key both return, the later-registered plugin's value
+	// is the one emitted.
+	rec := newRecordingHandler()
+	first := Plugin{EnrichLogContext: func(context.Context) map[string]any {
+		return map[string]any{"only_first": 1, "shared": "first"}
+	}}
+	second := Plugin{EnrichLogContext: func(context.Context) map[string]any {
+		return map[string]any{"only_second": 2, "shared": "second"}
+	}}
+	runScopedLoggingWithPlugins(t, rec, []Plugin{first, second})
+
+	for _, r := range rec.all() {
+		if r.attrs["only_first"] != int64(1) || r.attrs["only_second"] != int64(2) {
+			t.Errorf("record %q attrs = %v, want fields from both plugins", r.message, r.attrs)
+		}
+		if r.attrs["shared"] != "second" {
+			t.Errorf("record %q shared = %v, want the later plugin's value", r.message, r.attrs["shared"])
+		}
+	}
+}
+
+func TestPluginLogContextPanicDoesNotFailInvocation(t *testing.T) {
+	// A hook that panics is skipped: the record is still emitted with the
+	// other plugin's fields, and the invocation succeeds.
+	rec := newRecordingHandler()
+	panicking := Plugin{EnrichLogContext: func(context.Context) map[string]any { panic("boom") }}
+	healthy := Plugin{EnrichLogContext: func(context.Context) map[string]any {
+		return map[string]any{"healthy": true}
+	}}
+	runScopedLoggingWithPlugins(t, rec, []Plugin{panicking, healthy})
+
+	records := rec.all()
+	if len(records) != 3 {
+		t.Fatalf("got %d records %v, want 3", len(records), rec.messages())
+	}
+	for _, r := range records {
+		if r.attrs["healthy"] != true {
+			t.Errorf("record %q attrs = %v, want healthy=true from the non-panicking plugin", r.message, r.attrs)
+		}
+	}
+}
+
+func TestPluginLogContextHookNotInstalledWithoutImplementer(t *testing.T) {
+	// The enrichment wrapper is installed only when a plugin implements
+	// the hook. With no plugins, or plugins implementing other hooks only,
+	// the supplied handler is used as is.
+	inner := newRecordingHandler()
+	if got := newEnrichLogHandler(inner, nil); got != slog.Handler(inner) {
+		t.Errorf("nil dispatcher: got %T, want the inner handler unchanged", got)
+	}
+	other := Plugin{OnInvocationStart: func(context.Context, InvocationHookInfo) {}}
+	if got := newEnrichLogHandler(inner, newPluginDispatcher([]Plugin{other})); got != slog.Handler(inner) {
+		t.Errorf("no implementer: got %T, want the inner handler unchanged", got)
+	}
+	withHook := Plugin{EnrichLogContext: func(context.Context) map[string]any { return nil }}
+	if _, ok := newEnrichLogHandler(inner, newPluginDispatcher([]Plugin{other, withHook})).(*enrichLogHandler); !ok {
+		t.Error("implementer present: want the enrichment wrapper installed")
+	}
+}
+
+func TestPluginLogContextHookCalledOncePerEmittedRecord(t *testing.T) {
+	// The hook runs once for each record that reaches the handler and not
+	// for a record suppressed during replay. The execution replays one
+	// checkpointed step whose body logs, runs a second step live, which
+	// moves the context out of replay, then logs live from the handler.
+	var calls atomic.Int32
+	rec := newRecordingHandler()
+	plugin := Plugin{EnrichLogContext: func(context.Context) map[string]any {
+		calls.Add(1)
+		return map[string]any{"n": 1}
+	}}
+	fake := &fakeLambda{}
+	payload := childPayload(`"x"`,
+		checkpointedStep("1", "SUCCEEDED", &wireStepDetails{Attempt: 1, Result: `"done"`}),
+	)
+	h := Wrap(func(ctx Context, _ string) (string, error) {
+		ctx.Logger().Info("replaying-root")
+		if _, err := Step(ctx, "s", func(sc StepContext) (string, error) {
+			sc.Logger().Info("replayed-step")
+			return "done", nil
+		}); err != nil {
+			return "", err
+		}
+		if _, err := Step(ctx, "t", func(StepContext) (string, error) { return "live", nil }); err != nil {
+			return "", err
+		}
+		ctx.Logger().Info("live-1")
+		ctx.Logger().Debug("live-2")
+		return "ok", nil
+	}, withLambdaAPI(fake), WithLogHandler(rec), WithPlugins(plugin))
+	if _, err := h(t.Context(), payload); err != nil {
+		t.Fatalf("Invoke() error: %v", err)
+	}
+
+	if got := rec.messages(); len(got) != 2 || got[0] != "live-1" || got[1] != "live-2" {
+		t.Fatalf("messages = %v, want only the live records [live-1 live-2]", got)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Errorf("hook called %d times, want 2 (once per emitted record, none for suppressed records)", got)
+	}
+}
+
+func TestPluginLogContextReceivesRecordContext(t *testing.T) {
+	// The hook receives the record's context: the one passed to a
+	// *Context logging method, so a plugin can read request-scoped values
+	// from it.
+	type ctxKey struct{}
+	rec := newRecordingHandler()
+	plugin := Plugin{EnrichLogContext: func(ctx context.Context) map[string]any {
+		v, _ := ctx.Value(ctxKey{}).(string)
+		return map[string]any{"from_ctx": v}
+	}}
+	fake := &fakeLambda{}
+	h := Wrap(func(ctx Context, _ string) (string, error) {
+		ctx.Logger().InfoContext(context.WithValue(ctx, ctxKey{}, "tagged"), "with-ctx")
+		ctx.Logger().Info("without-ctx")
+		return "ok", nil
+	}, withLambdaAPI(fake), WithLogHandler(rec), WithPlugins(plugin))
+	if _, err := h(t.Context(), childPayload(`"x"`)); err != nil {
+		t.Fatalf("Invoke() error: %v", err)
+	}
+	records := rec.all()
+	if len(records) != 2 {
+		t.Fatalf("got %d records, want 2", len(records))
+	}
+	if records[0].attrs["from_ctx"] != "tagged" {
+		t.Errorf("with-ctx from_ctx = %v, want tagged", records[0].attrs["from_ctx"])
+	}
+	if records[1].attrs["from_ctx"] != "" {
+		t.Errorf("without-ctx from_ctx = %v, want empty", records[1].attrs["from_ctx"])
+	}
+}
+
+// runStepLoggingWithPlugin runs a fresh execution whose single step calls
+// logFn with the step's logger, with the default JSON handler writing to
+// out and plugin installed. It returns the one decoded record and the raw
+// line.
+func runStepLoggingWithPlugin(t *testing.T, plugin Plugin, logFn func(*slog.Logger)) (map[string]any, string) {
+	t.Helper()
+	var out lockedBuffer
+	fake := &fakeLambda{}
+	h := Wrap(func(ctx Context, _ string) (string, error) {
+		return Step(ctx, "greet", func(sc StepContext) (string, error) {
+			logFn(sc.Logger())
+			return "s", nil
+		})
+	}, withLambdaAPI(fake), WithLogHandler(newDefaultLogHandler(&out, slog.LevelInfo)), WithPlugins(plugin))
+	if _, err := h(lambdaCtx(t, "req-p", "tenant-p"), childPayload(`"x"`)); err != nil {
+		t.Fatalf("Invoke() error: %v", err)
+	}
+	line := strings.TrimSpace(out.String())
+	records := parseLogLines(t, line)
+	if len(records) != 1 {
+		t.Fatalf("got %d records, want 1:\n%s", len(records), line)
+	}
+	return records[0], line
+}
+
+// countKey returns how many times key appears as a JSON object key in
+// line, at any depth.
+func countKey(line, key string) int {
+	return strings.Count(line, `"`+key+`":`)
+}
+
+func TestPluginLogContextUserKeyInAnotherGroupDoesNotBlockPluginField(t *testing.T) {
+	// Precedence is by qualified path. A user attribute "k" at the top
+	// level and a plugin field "k" under group g are different attributes,
+	// so both are emitted. Likewise the reserved names protect the SDK's
+	// top-level fields only: under a group, a plugin field named requestId
+	// lands at g.requestId and the top-level requestId is untouched.
+	plugin := Plugin{EnrichLogContext: func(context.Context) map[string]any {
+		return map[string]any{"k": "plugin", logKeyRequestID: "plugin-req"}
+	}}
+	rec, line := runStepLoggingWithPlugin(t, plugin, func(l *slog.Logger) {
+		l.With("k", "user").WithGroup("g").Info("step")
+	})
+
+	if rec["k"] != "user" {
+		t.Errorf("top-level k = %v, want the user's value", rec["k"])
+	}
+	if rec[logKeyRequestID] != "req-p" {
+		t.Errorf("top-level requestId = %v, want req-p", rec[logKeyRequestID])
+	}
+	g, _ := rec["g"].(map[string]any)
+	if g["k"] != "plugin" {
+		t.Errorf("g.k = %v, want the plugin's value; line %s", g["k"], line)
+	}
+	if g[logKeyRequestID] != "plugin-req" {
+		t.Errorf("g.requestId = %v, want the plugin's value; line %s", g[logKeyRequestID], line)
+	}
+	if n := countKey(line, "k"); n != 2 {
+		t.Errorf("key k appears %d times, want 2 (top level and under g): %s", n, line)
+	}
+}
+
+func TestPluginLogContextUserKeyUnderSameGroupBlocksPluginField(t *testing.T) {
+	// A user attribute attached after WithGroup lives under that group. A
+	// plugin field with the same key lands under the same group, so it is
+	// dropped; the plugin's other fields still land under the group. The
+	// same holds one group deeper.
+	plugin := Plugin{EnrichLogContext: func(context.Context) map[string]any {
+		return map[string]any{"k": "plugin", "n": "plugin", "extra": "kept"}
+	}}
+	rec, line := runStepLoggingWithPlugin(t, plugin, func(l *slog.Logger) {
+		l.WithGroup("g").With("k", "user").WithGroup("h").With("n", "user").Info("step", "k", "record")
+	})
+
+	g, _ := rec["g"].(map[string]any)
+	h, _ := g["h"].(map[string]any)
+	if g["k"] != "user" {
+		t.Errorf("g.k = %v, want the user's attached value; line %s", g["k"], line)
+	}
+	if h["k"] != "record" {
+		t.Errorf("g.h.k = %v, want the record's value; line %s", h["k"], line)
+	}
+	if h["n"] != "user" {
+		t.Errorf("g.h.n = %v, want the user's attached value; line %s", h["n"], line)
+	}
+	if h["extra"] != "kept" {
+		t.Errorf("g.h.extra = %v, want the plugin's field; line %s", h["extra"], line)
+	}
+	if n := countKey(line, "k"); n != 2 {
+		t.Errorf("key k appears %d times, want 2 (g.k and g.h.k): %s", n, line)
+	}
+	if n := countKey(line, "n"); n != 1 {
+		t.Errorf("key n appears %d times, want once: %s", n, line)
+	}
+}
+
+// inlineValuer is a [slog.LogValuer] that resolves to an empty-key group,
+// which conforming handlers inline into the enclosing object.
+type inlineValuer struct{ attrs []slog.Attr }
+
+func (v inlineValuer) LogValue() slog.Value { return slog.GroupValue(v.attrs...) }
+
+func TestPluginLogContextRespectsInlinedEmptyKeyGroups(t *testing.T) {
+	// An empty-key group is inlined, so its children are attributes at the
+	// enclosing path and block plugin fields of the same name. This holds
+	// for a group attached through With, one passed with the record, one
+	// nested inside another empty-key group, and one a LogValuer resolves
+	// to. Without it the JSON would carry the key twice.
+	plugin := Plugin{EnrichLogContext: func(context.Context) map[string]any {
+		return map[string]any{"a": "plugin", "b": "plugin", "c": "plugin", "d": "plugin", "extra": "kept"}
+	}}
+	rec, line := runStepLoggingWithPlugin(t, plugin, func(l *slog.Logger) {
+		l.With(slog.Group("", "a", "user")).
+			With(slog.Any("", inlineValuer{[]slog.Attr{slog.String("d", "user")}})).
+			Info("step", slog.Group("", "b", "user", slog.Group("", "c", "user")))
+	})
+
+	for _, key := range []string{"a", "b", "c", "d"} {
+		if rec[key] != "user" {
+			t.Errorf("%s = %v, want the user's value", key, rec[key])
+		}
+		if n := countKey(line, key); n != 1 {
+			t.Errorf("key %s appears %d times, want once: %s", key, n, line)
+		}
+	}
+	if rec["extra"] != "kept" {
+		t.Errorf("extra = %v, want the plugin's field", rec["extra"])
+	}
+}
+
+func TestPluginLogContextRespectsAttachedGroupOpenedLater(t *testing.T) {
+	// An attribute attached through With at path g, then WithGroup("g"),
+	// would put plugin fields in a second object under key g beside the
+	// attached one. The JSON would then carry key g twice and a consumer
+	// would keep one object at random. So no plugin field is added while
+	// an open group is an attached attribute, whatever the attribute's
+	// kind and however deep the group. A logger that opens a group the
+	// user did not attach still receives the plugin fields.
+	var calls atomic.Int32
+	plugin := Plugin{EnrichLogContext: func(context.Context) map[string]any {
+		calls.Add(1)
+		return map[string]any{"x": "plugin", "extra": "kept"}
+	}}
+
+	t.Run("attached group", func(t *testing.T) {
+		calls.Store(0)
+		rec, line := runStepLoggingWithPlugin(t, plugin, func(l *slog.Logger) {
+			l.With(slog.Group("g", "x", "user")).WithGroup("g").Info("step")
+		})
+		if n := countKey(line, "g"); n != 1 {
+			t.Fatalf("key g appears %d times, want once: %s", n, line)
+		}
+		g, ok := rec["g"].(map[string]any)
+		if !ok {
+			t.Fatalf("g = %#v, want an object: %s", rec["g"], line)
+		}
+		if len(g) != 1 || g["x"] != "user" {
+			t.Errorf("g = %v, want only the user's {x: user}: %s", g, line)
+		}
+		if strings.Contains(line, "extra") || strings.Contains(line, "plugin") {
+			t.Errorf("plugin fields must be dropped under a taken group: %s", line)
+		}
+		if got := calls.Load(); got != 0 {
+			t.Errorf("hook called %d times, want 0 when every field would be dropped", got)
+		}
+	})
+
+	t.Run("attached scalar", func(t *testing.T) {
+		rec, line := runStepLoggingWithPlugin(t, plugin, func(l *slog.Logger) {
+			l.With("g", "user").WithGroup("g").Info("step")
+		})
+		if n := countKey(line, "g"); n != 1 {
+			t.Fatalf("key g appears %d times, want once: %s", n, line)
+		}
+		if rec["g"] != "user" {
+			t.Errorf("g = %#v, want the user's scalar: %s", rec["g"], line)
+		}
+		if strings.Contains(line, "extra") {
+			t.Errorf("plugin fields must be dropped under a taken group: %s", line)
+		}
+	})
+
+	t.Run("attached ancestor two groups up", func(t *testing.T) {
+		rec, line := runStepLoggingWithPlugin(t, plugin, func(l *slog.Logger) {
+			l.WithGroup("a").With("b", "user").WithGroup("b").WithGroup("c").Info("step")
+		})
+		a, _ := rec["a"].(map[string]any)
+		if n := countKey(line, "b"); n != 1 {
+			t.Fatalf("key b appears %d times, want once: %s", n, line)
+		}
+		if a["b"] != "user" {
+			t.Errorf("a.b = %#v, want the user's scalar: %s", a["b"], line)
+		}
+		if strings.Contains(line, "extra") {
+			t.Errorf("plugin fields must be dropped under a taken ancestor: %s", line)
+		}
+	})
+
+	t.Run("group not attached keeps plugin fields", func(t *testing.T) {
+		rec, line := runStepLoggingWithPlugin(t, plugin, func(l *slog.Logger) {
+			l.With(slog.Group("g", "x", "user")).WithGroup("h").Info("step")
+		})
+		g, _ := rec["g"].(map[string]any)
+		h, _ := rec["h"].(map[string]any)
+		if g["x"] != "user" {
+			t.Errorf("g.x = %v, want the user's value: %s", g["x"], line)
+		}
+		if h["x"] != "plugin" || h["extra"] != "kept" {
+			t.Errorf("h = %v, want both plugin fields: %s", h, line)
+		}
+	})
+}
+
+func TestEnrichLogHandlerIgnoresEmptyGroupNameAndNoAttrs(t *testing.T) {
+	// WithGroup("") and WithAttrs(nil) return the receiver, as package
+	// slog specifies for handlers.
+	h := &enrichLogHandler{inner: slog.NewJSONHandler(&lockedBuffer{}, nil)}
+	if h.WithGroup("") != slog.Handler(h) {
+		t.Error("WithGroup(\"\") must return the receiver")
+	}
+	if h.WithAttrs(nil) != slog.Handler(h) {
+		t.Error("WithAttrs(nil) must return the receiver")
+	}
+}
+
+func TestQualifiedLogKeyDistinguishesDotsFromGroups(t *testing.T) {
+	if qualifiedLogKey(nil, "a.b") == qualifiedLogKey([]string{"a"}, "b") {
+		t.Error("key a.b at the top level must differ from key b under group a")
+	}
+	if qualifiedLogKey([]string{"g"}, "k") == qualifiedLogKey([]string{"g", "k"}, "") {
+		t.Error("key k under group g must differ from an empty key under group g.k")
 	}
 }

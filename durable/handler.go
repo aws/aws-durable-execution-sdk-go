@@ -74,7 +74,9 @@ type HandlerOption interface {
 // handler's WithAttrs method, so a supplied handler receives them as
 // structured attributes, and it wraps the handler with per-branch replay
 // suppression: while a context replays checkpointed operations, its
-// records are dropped before they reach the handler.
+// records are dropped before they reach the handler. Fields a plugin
+// returns from [Plugin.EnrichLogContext] arrive as attributes of the
+// record; that field documents their precedence.
 func WithLogHandler(h slog.Handler) HandlerOption {
 	return handlerOptionFunc(func(o *handlerOptions) { o.logHandler = h })
 }
@@ -333,7 +335,9 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		// is recorded in the FAILED response; nil otherwise.
 		trace []string
 	}
-	ec = newExecContext(ctx, in.DurableExecutionArn, invMeta, h.options.logHandler, state)
+	// Plugin log-context enrichment wraps the installed handler only when a
+	// plugin implements the hook; see enrichLogHandler.
+	ec = newExecContext(ctx, in.DurableExecutionArn, invMeta, newEnrichLogHandler(h.options.logHandler, pd), state)
 	ec.checkpointer = cp
 	ec.executionStartTime = execStartTimestamp
 	ec.noStackTraces = h.options.noStackTraces

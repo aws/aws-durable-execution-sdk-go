@@ -89,7 +89,34 @@ type Plugin struct {
 	WrapChildContextFn func(ctx context.Context, info OperationHookInfo, fn func() (any, error)) (any, error)
 
 	// EnrichLogContext returns additional key-value pairs to merge into
-	// every log line emitted through the durable context logger.
+	// every log record emitted through [Context.Logger] and
+	// [StepContext.Logger]. It is called once per record, after replay
+	// suppression, so a record dropped during replay does not invoke it.
+	// ctx is the record's context: the one passed to a *Context logging
+	// method such as [slog.Logger.InfoContext], else context.Background().
+	//
+	// Each returned entry becomes an attribute of the record unless its
+	// key is already taken. Precedence, highest first: the SDK's own
+	// fields (timestamp, level, message, requestId, executionArn,
+	// tenantId, operationId, operationName, attempt), then attributes the
+	// user supplied with the record or through [slog.Logger.With], then
+	// plugin fields. A plugin field under a taken key is dropped, so a
+	// plugin cannot overwrite the SDK's identifiers. Keys are compared by
+	// qualified path: a plugin field lands under the groups the logger has
+	// opened with [slog.Logger.WithGroup], and collides only with an
+	// attribute at that same path, with the children of an empty-key group
+	// counting at the enclosing path. The SDK's own fields are top-level,
+	// so under an open group a plugin field may use their names. A group
+	// the logger opens after an attribute was attached at that same path
+	// is also taken: the plugin fields would form a second object under
+	// that key beside the attached one, so none are added to records
+	// logged through that logger. When
+	// several plugins implement the hook, their maps are merged in
+	// registration order and a later plugin's value replaces an earlier
+	// one's under the same key. Fields are added in key order. A hook that
+	// panics contributes no fields and does not fail the log call or the
+	// invocation. When no plugin implements the hook, no per-record work
+	// is done.
 	//
 	// EXPERIMENTAL: this field is experimental and may be changed or
 	// removed in future releases.
@@ -386,8 +413,10 @@ func invokeWrapSafely(wrapFn func(func() (any, error)) (any, error), innerFn fun
 	return wrapFn(innerFn)
 }
 
-// enrichLogContext merges all plugins' log context enrichments. Returns nil
-// when d is nil or no plugins provide context.
+// enrichLogContext merges all plugins' log context enrichments in
+// registration order, a later plugin's value replacing an earlier one's
+// under the same key. Returns nil when d is nil or no plugin provides
+// context.
 func enrichLogContext(ctx context.Context, d *pluginDispatcher) map[string]any {
 	if d == nil {
 		return nil
@@ -412,10 +441,25 @@ func enrichLogContext(ctx context.Context, d *pluginDispatcher) map[string]any {
 	return merged
 }
 
-// safeEnrichLogContext calls fn with panic recovery.
+// safeEnrichLogContext calls fn with panic recovery. A panicking hook
+// contributes no fields and does not fail the log call or the invocation.
 func safeEnrichLogContext(ctx context.Context, fn func(context.Context) map[string]any) (result map[string]any) {
 	defer func() { _ = recover() }()
 	return fn(ctx)
+}
+
+// hasLogEnricher reports whether at least one registered plugin implements
+// EnrichLogContext. False for a nil dispatcher.
+func (d *pluginDispatcher) hasLogEnricher() bool {
+	if d == nil {
+		return false
+	}
+	for i := range d.plugins {
+		if d.plugins[i].EnrichLogContext != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // toPluginOperationStatus converts an internal operation status to the

@@ -4,7 +4,10 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"maps"
 	"os"
+	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -172,6 +175,227 @@ func (h *replayHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 
 func (h *replayHandler) WithGroup(name string) slog.Handler {
 	return &replayHandler{inner: h.inner.WithGroup(name), replaying: h.replaying}
+}
+
+// reservedLogKeys are the top-level keys a plugin's EnrichLogContext field
+// may not set: the record's own built-in keys and the SDK's execution and
+// operation identifiers. A plugin field under one of these keys is
+// dropped, so a plugin cannot overwrite the identifiers other tooling
+// correlates on. The SDK emits these keys only at the top level, so the
+// rule applies only while no group is open; under a group the same name
+// is a different attribute path and does not collide.
+var reservedLogKeys = map[string]struct{}{
+	slog.TimeKey:        {},
+	slog.LevelKey:       {},
+	slog.MessageKey:     {},
+	logKeyTimestamp:     {},
+	logKeyMessage:       {},
+	logKeyRequestID:     {},
+	logKeyExecutionArn:  {},
+	logKeyTenantID:      {},
+	logKeyOperationID:   {},
+	logKeyOperationName: {},
+	logKeyAttempt:       {},
+}
+
+// enrichLogHandler wraps an [slog.Handler] with plugin log-context
+// enrichment. On every record it calls enrich, which returns the merged
+// fields of every plugin's EnrichLogContext hook, and appends them to the
+// record as attributes before handing it to inner.
+//
+// Attributes are compared by qualified path, not by bare key. A record's
+// attributes, and so the plugin fields appended to it, land under the
+// groups opened through WithGroup; an attribute attached through WithAttrs
+// lands under the groups open at that time. Key "k" at the top level and
+// key "k" under group "g" are different attributes and do not collide.
+// An empty-key group is inlined by conforming handlers, so its children
+// count at the enclosing path.
+//
+// Precedence, highest first: the SDK's identifiers and the record's
+// built-in keys (see reservedLogKeys, top level only), then the attributes
+// the call site supplied, either with the record or earlier through
+// [slog.Logger.With], then plugin fields. A plugin field is added only
+// when its path is under neither of the first two. Among plugins, enrich
+// has already merged them in registration order with later plugins
+// overwriting earlier ones. Fields are appended in key order so the
+// output is stable across runs.
+//
+// The path check covers ancestors as well as the field's own path. When
+// an attribute was attached at path g and the logger then opens group g
+// through WithGroup, every plugin field would land inside a second object
+// under key g. Conforming handlers emit that object beside the attached
+// one, so the JSON would carry key g twice and a consumer would keep one
+// object at random. The handler therefore appends no plugin field while
+// any group on its open path is an attached attribute. The attached
+// attribute is emitted unchanged; the plugin fields are dropped for
+// records logged through that logger.
+//
+// The handler is installed only when at least one plugin implements the
+// hook, so the hook costs nothing otherwise. It sits inside the replay
+// wrapper: a record suppressed during replay never reaches it, and the
+// hook is not called for that record. The hook is also not called for a
+// record whose fields would all be dropped because an open group is
+// taken.
+type enrichLogHandler struct {
+	inner  slog.Handler
+	enrich func(ctx context.Context) map[string]any
+	// groups is the path of groups opened through WithGroup on this
+	// handler or an ancestor. Record attributes, and the plugin fields
+	// appended to a record, land under this path.
+	groups []string
+	// taken holds the qualified paths, as qualifiedLogKey encodes them, of
+	// the attributes attached through WithAttrs on this handler or an
+	// ancestor: the SDK's scope attributes and any the user added with
+	// [slog.Logger.With]. A plugin field whose path is taken is dropped.
+	// The map is shared by derived handlers and never written after
+	// construction.
+	taken map[string]struct{}
+	// groupTaken reports that some prefix of groups is itself a taken
+	// path: an attribute was attached at that path before the group was
+	// opened. Every plugin field would then land under a taken ancestor,
+	// so Handle appends none. It is decided when the group is opened.
+	// Attributes attached later land below the open path, never on it, so
+	// the decision does not go stale.
+	groupTaken bool
+}
+
+var _ slog.Handler = (*enrichLogHandler)(nil)
+
+// newEnrichLogHandler returns inner wrapped with plugin enrichment when d
+// has a plugin implementing EnrichLogContext, else inner unchanged.
+func newEnrichLogHandler(inner slog.Handler, d *pluginDispatcher) slog.Handler {
+	if !d.hasLogEnricher() {
+		return inner
+	}
+	return &enrichLogHandler{
+		inner:  inner,
+		enrich: func(ctx context.Context) map[string]any { return enrichLogContext(ctx, d) },
+	}
+}
+
+func (h *enrichLogHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	return h.inner.Enabled(ctx, level)
+}
+
+func (h *enrichLogHandler) Handle(ctx context.Context, r slog.Record) error {
+	if h.groupTaken {
+		return h.inner.Handle(ctx, r)
+	}
+	fields := h.enrich(ctx)
+	if len(fields) == 0 {
+		return h.inner.Handle(ctx, r)
+	}
+	// The record's own attributes win over plugin fields. Collect their
+	// paths before adding anything.
+	present := make(map[string]struct{}, r.NumAttrs())
+	r.Attrs(func(a slog.Attr) bool {
+		addLogKeyPaths(present, h.groups, a)
+		return true
+	})
+	keys := make([]string, 0, len(fields))
+	for k := range fields {
+		if _, reserved := reservedLogKeys[k]; reserved && len(h.groups) == 0 {
+			continue
+		}
+		path := qualifiedLogKey(h.groups, k)
+		if _, dup := present[path]; dup {
+			continue
+		}
+		if _, dup := h.taken[path]; dup {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	if len(keys) == 0 {
+		return h.inner.Handle(ctx, r)
+	}
+	slices.Sort(keys)
+	// Handle receives a copy that shares storage with the caller's
+	// record, so clone before appending.
+	r = r.Clone()
+	for _, k := range keys {
+		r.AddAttrs(slog.Any(k, fields[k]))
+	}
+	return h.inner.Handle(ctx, r)
+}
+
+func (h *enrichLogHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	if len(attrs) == 0 {
+		return h
+	}
+	taken := make(map[string]struct{}, len(h.taken)+len(attrs))
+	maps.Copy(taken, h.taken)
+	for _, a := range attrs {
+		addLogKeyPaths(taken, h.groups, a)
+	}
+	return &enrichLogHandler{
+		inner:      h.inner.WithAttrs(attrs),
+		enrich:     h.enrich,
+		groups:     h.groups,
+		taken:      taken,
+		groupTaken: h.groupTaken,
+	}
+}
+
+func (h *enrichLogHandler) WithGroup(name string) slog.Handler {
+	if name == "" {
+		return h
+	}
+	_, taken := h.taken[qualifiedLogKey(h.groups, name)]
+	// Slice to capacity so appending never writes into a sibling's path.
+	groups := append(h.groups[:len(h.groups):len(h.groups)], name)
+	return &enrichLogHandler{
+		inner:      h.inner.WithGroup(name),
+		enrich:     h.enrich,
+		groups:     groups,
+		taken:      h.taken,
+		groupTaken: h.groupTaken || taken,
+	}
+}
+
+// addLogKeyPaths records in set the qualified path of a, nested under
+// groups, and of every attribute inside it, following the handler rules
+// of package slog: a value is resolved first, an empty-key group is
+// inlined so its children count at the enclosing path, a non-empty group
+// takes its own path and nests its children under it, and an empty group
+// or a zero attribute is ignored.
+func addLogKeyPaths(set map[string]struct{}, groups []string, a slog.Attr) {
+	a.Value = a.Value.Resolve()
+	if a.Value.Kind() != slog.KindGroup {
+		if a.Equal(slog.Attr{}) {
+			return
+		}
+		set[qualifiedLogKey(groups, a.Key)] = struct{}{}
+		return
+	}
+	children := a.Value.Group()
+	if len(children) == 0 {
+		return
+	}
+	if a.Key != "" {
+		set[qualifiedLogKey(groups, a.Key)] = struct{}{}
+		groups = append(groups[:len(groups):len(groups)], a.Key)
+	}
+	for _, c := range children {
+		addLogKeyPaths(set, groups, c)
+	}
+}
+
+// qualifiedLogKey encodes the path of key nested under groups as one
+// string. Each segment is length-prefixed, so two paths are equal only
+// when their segments are: key "a.b" at the top level and key "b" under
+// group "a" encode differently.
+func qualifiedLogKey(groups []string, key string) string {
+	var b strings.Builder
+	for _, g := range groups {
+		b.WriteString(strconv.Itoa(len(g)))
+		b.WriteByte(':')
+		b.WriteString(g)
+	}
+	b.WriteString(strconv.Itoa(len(key)))
+	b.WriteByte(':')
+	b.WriteString(key)
+	return b.String()
 }
 
 // executionLogAttrs are the attributes every record of one invocation

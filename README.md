@@ -312,6 +312,35 @@ runner := durabletest.NewCloudRunner(api, functionName)
 result := runner.Run(t, event)
 ```
 
+## Logging
+
+`Context.Logger()` and `StepContext.Logger()` return a `*slog.Logger`. By
+default it writes one JSON object per record to stderr with the field names
+the other durable execution SDKs use, so one CloudWatch query works across
+languages:
+
+| Field | Present |
+| --- | --- |
+| `timestamp`, `level`, `message` | Always. |
+| `requestId`, `executionArn` | Always. |
+| `tenantId` | When the invocation has one. |
+| `operationId`, `operationName` | Inside a child context (`RunInChildContext`, `Go`, `Map`, `Parallel`, `WaitForCallback`) or an operation body. `operationName` only when the operation is named. |
+| `attempt` | Inside a step body, condition check, or callback submitter. |
+
+A field that does not apply in a scope is omitted, never emitted empty.
+Each scope carries its own identifiers only: a step inside a child context
+reports the step, not the child.
+
+To use your own logging library, pass its `slog.Handler` to
+`WithLogHandler`. The SDK attaches the fields above through the handler's
+`WithAttrs` method as structured attributes, wraps the handler with replay
+suppression, and adds the fields a plugin returns from
+`Plugin.EnrichLogContext` as record attributes. Plugin fields never
+overwrite the SDK's fields or the attributes you pass; keys are compared by
+qualified path, so a plugin field under an open `slog` group collides only
+with your attributes at that same path. See the `EnrichLogContext`
+documentation for the full precedence.
+
 ## Plugin API
 
 The plugin instrumentation API (`WithPlugins`) is EXPERIMENTAL. It provides lifecycle hooks for observability and tracing. The API may change in future releases.
