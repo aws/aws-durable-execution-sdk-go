@@ -54,6 +54,39 @@
 //	})
 //	result, err := fut.Result()
 //
+// # Awaiting Several Futures
+//
+// Await a set of futures with a combinator, not with a sequence of
+// [Future.Result] calls. [All], [AllSettled], [Any], and [Race] take futures
+// of one result type. [Join] takes futures of different result types
+// through the [Awaitable] interface, waits for all of them, and returns the
+// first error in argument order; the values are then read with Result.
+//
+//	fa := durable.StepAsync(ctx, "charge", chargeCard)
+//	fb := durable.Go(ctx, "notify", notifyWarehouse)
+//	if err := durable.Join(ctx, "settle", []durable.Awaitable{fa, fb}); err != nil {
+//		return err
+//	}
+//	receipt, _ := fa.Result()
+//	ok, _ := fb.Result()
+//
+// The hand-written form below looks equivalent but is not:
+//
+//	a, err := fa.Result()
+//	if err != nil {
+//		return err
+//	}
+//	b, err := fb.Result()
+//
+// When fa's branch suspends, fa.Result returns the suspension signal and
+// the handler returns before awaiting fb. fb's branch therefore never
+// reaches its blocking point in this invocation and its progress is not
+// checkpointed. The combinators drain instead: once one future reports a
+// suspension they await every remaining future, so each branch checkpoints
+// as far as it can, and only then propagate the suspension. The defect
+// appears only when a branch suspends, so it passes every test in which no
+// branch suspends.
+//
 // # Error Propagation
 //
 // Return an error from a durable operation immediately unless the handler

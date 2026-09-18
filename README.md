@@ -104,6 +104,7 @@ The `durable` package provides the following operations:
 | `AllSettled` | Wait for all futures to settle. Returns all outcomes. |
 | `Any` | Return the first future to succeed. Errors if all fail. |
 | `Race` | Return the result of the first future to settle. |
+| `Join` | Wait for futures of different result types to settle. Returns the first error in argument order. |
 | `Select` | Run named branches concurrently; return the first to settle along with its name. |
 
 ## A complete example

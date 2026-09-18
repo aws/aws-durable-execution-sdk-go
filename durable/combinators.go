@@ -22,29 +22,121 @@ import (
 // Empty input returns an empty slice immediately (matching Promise.all([])).
 func All[O any](ctx Context, name string, fs []*Future[O], opts ...ChildOption) ([]O, error) {
 	return RunInChildContext(ctx, name, func(_ Context) ([]O, error) {
-		results := make([]O, len(fs))
-		var sawSuspend bool
-		for i, f := range fs {
-			val, err := f.Result()
-			switch {
-			case err == nil:
-				results[i] = val
-			case errors.Is(err, errSuspendExecution):
-				sawSuspend = true
-			case !sawSuspend:
-				return nil, err
-			}
-			// A non-suspension error observed after a suspension is
-			// discarded: the loop keeps draining so every branch reaches
-			// a blocking point, and the suspension propagates below. On
-			// the resume invocation the futures replay and the error is
-			// returned then.
+		if err := awaitBarrier(asAwaitables(fs), true); err != nil {
+			return nil, err
 		}
-		if sawSuspend {
-			return nil, errSuspendExecution
+		// Every future settled successfully, so each Result call below
+		// returns immediately.
+		results := make([]O, len(fs))
+		for i, f := range fs {
+			results[i], _ = f.Result()
 		}
 		return results, nil
 	}, opts...)
+}
+
+// Awaitable is a future whose outcome can be awaited without naming its
+// result type. Every *[Future] satisfies it, so futures of different result
+// types can be passed to [Join] together.
+type Awaitable interface {
+	// await blocks until the future settles and returns its error, or nil
+	// on success. The method is unexported so only SDK futures implement
+	// the interface.
+	await() error
+}
+
+// await implements [Awaitable].
+func (f *Future[O]) await() error {
+	_, err := f.Result()
+	return err
+}
+
+// Join records a combinator operation and waits for every future to settle,
+// then returns the first non-nil error in argument order, or nil when all
+// succeeded. Values are read from each future afterwards with
+// [Future.Result], which returns immediately once Join has returned nil.
+// Join is the replacement for awaiting several futures by hand: a
+// hand-written sequence of Result calls that returns on the first error
+// leaves the remaining futures unawaited, so their branches never reach a
+// blocking point when the invocation suspends and their progress is not
+// checkpointed.
+//
+// Join never abandons a future: a durable branch has no cancellation, so an
+// error observed early does not stop the remaining futures from being
+// awaited. Once a suspension is observed, Join awaits all remaining futures
+// so their branches reach blocking points and checkpoint progress, then
+// propagates the suspension; suspension takes precedence over terminal
+// outcomes because the suspended branch completes only on a later
+// invocation. On the resume invocation the futures replay and the first
+// error is returned then. This matches the draining behaviour of [All].
+//
+// Join uses [RunInChildContext] internally, so its outcome is checkpointed:
+// on replay, the stored outcome is returned without re-awaiting the
+// futures, and a failure is returned as a [*ChildContextError] wrapping
+// the first error. opts configure that child-context operation.
+//
+// Empty input returns nil immediately.
+//
+//	fa := durable.StepAsync(ctx, "charge", chargeCard)
+//	fb := durable.Go(ctx, "notify", notifyWarehouse)
+//	if err := durable.Join(ctx, "settle", []durable.Awaitable{fa, fb}); err != nil {
+//		return err
+//	}
+//	receipt, _ := fa.Result()
+//	ok, _ := fb.Result()
+func Join(ctx Context, name string, fs []Awaitable, opts ...ChildOption) error {
+	_, err := RunInChildContext(ctx, name, func(_ Context) (Void, error) {
+		return Void{}, awaitBarrier(fs, false)
+	}, opts...)
+	return err
+}
+
+// awaitBarrier is the barrier shared by [All] and [Join]. It awaits fs in
+// order and reports the aggregate outcome.
+//
+// A suspension observed from any future is the decided outcome: the
+// barrier keeps awaiting the remaining futures so every branch reaches a
+// blocking point and checkpoints progress, and then returns the suspension
+// sentinel. Terminal outcomes observed after the suspension are discarded
+// because the suspended branch completes only on a later invocation, where
+// the futures replay and the terminal outcome is returned then.
+//
+// When no future suspends, the first non-suspension error in order is
+// returned. With failFast set, that error is returned as soon as it is
+// observed, without awaiting the remaining futures. Without failFast, the
+// remaining futures are awaited first.
+//
+// Deferred-suspension futures (pending callbacks) commit the invocation to
+// PENDING when first awaited, so awaiting one in order is the suspension
+// case above.
+func awaitBarrier(fs []Awaitable, failFast bool) error {
+	var firstErr error
+	var sawSuspend bool
+	for _, f := range fs {
+		err := f.await()
+		switch {
+		case err == nil:
+		case errors.Is(err, errSuspendExecution):
+			sawSuspend = true
+		case failFast && !sawSuspend:
+			return err
+		case firstErr == nil:
+			firstErr = err
+		}
+	}
+	if sawSuspend {
+		return errSuspendExecution
+	}
+	return firstErr
+}
+
+// asAwaitables widens a slice of futures to the [Awaitable] interface.
+func asAwaitables[O any](fs []*Future[O]) []Awaitable {
+	out := make([]Awaitable, len(fs))
+	for i, f := range fs {
+		out[i] = f
+	}
+	return out
 }
 
 // AllSettled records a combinator operation and waits for every future to

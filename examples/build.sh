@@ -117,6 +117,7 @@ EXAMPLES="
   future-race
   future-race-wait
   future-select
+  future-join
   future-combinators-mixed
   future-replay
   future-unhandled-error

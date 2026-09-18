@@ -1731,6 +1731,23 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 60
 
+  FutureJoinFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-future-join
+      CodeUri: .aws-sam/build-artifacts/future-join/
+      Handler: bootstrap
+      Description: Join combinator - barrier over futures of different result types
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
   FutureCombinatorsMixedFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -2578,6 +2595,9 @@ Outputs:
   FutureSelectFunction:
     Description: Future Select Function ARN
     Value: !GetAtt FutureSelectFunction.Arn
+  FutureJoinFunction:
+    Description: Future Join Function ARN
+    Value: !GetAtt FutureJoinFunction.Arn
   FutureCombinatorsMixedFunction:
     Description: Future Combinators Mixed Function ARN
     Value: !GetAtt FutureCombinatorsMixedFunction.Arn

@@ -135,6 +135,7 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [future-race](future-race/main.go) | Go, Race | SUCCEEDED |
 | [future-race-wait](future-race-wait/main.go) | Go, Race, WaitAsync | SUCCEEDED |
 | [future-select](future-select/main.go) | Select, branching on the winner's name | SUCCEEDED |
+| [future-join](future-join/main.go) | Join, StepAsync, Go, Wait: barrier over futures of different result types | SUCCEEDED |
 | [future-combinators-mixed](future-combinators-mixed/main.go) | Go, All, Any, Race | SUCCEEDED |
 | [future-replay](future-replay/main.go) | Go, Future replay determinism | SUCCEEDED |
 | [future-unhandled-error](future-unhandled-error/main.go) | Go, unhandled Future error | SUCCEEDED |

@@ -15,13 +15,14 @@ type Void struct{}
 // of times from any goroutine.
 //
 // The only ways to wait on a Future are [Future.Result] and the combinators
-// [All], [AllSettled], [Any], and [Race]. Each of these checkpoints its
-// outcome, so the value observed on first execution is the value observed
-// on replay. A Future deliberately exposes no channel: a select over
-// several futures picks whichever settles first in the current invocation,
-// and that choice is not checkpointed. On replay every future may already
-// be settled, so the select could pick a different case, and any code that
-// branches on the winner would diverge from the first execution.
+// [All], [AllSettled], [Any], [Race], and [Join]. Each of these checkpoints
+// its outcome, so the value observed on first execution is the value
+// observed on replay. A Future deliberately exposes no channel: a select
+// over several futures picks whichever settles first in the current
+// invocation, and that choice is not checkpointed. On replay every future
+// may already be settled, so the select could pick a different case, and
+// any code that branches on the winner would diverge from the first
+// execution.
 type Future[O any] struct {
 	once  sync.Once
 	done  chan struct{}
