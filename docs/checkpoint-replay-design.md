@@ -103,8 +103,8 @@ The `suspendSignal` coordinates suspension across the invocation. It has two
 independent mechanisms: a pending commitment, which decides the invocation
 result, and active-branch accounting, which decides when in-flight futures
 are settled. A third piece, checkpointer termination, takes over when the
-invocation responds: it bounds what an orphaned branch can record once the
-result is decided.
+handler's outcome is decided: it bounds what an orphaned branch can record
+once the result is decided.
 
 ### Pending commitment
 
@@ -151,10 +151,42 @@ The two mechanisms above decide the result and settle futures, but neither
 constrains a branch that is still running user code when the invocation
 responds. The handler never joins outstanding branches: when it observes a
 standing commitment (either the handler goroutine returned while
-`committed()` is true, or the suspend signal fired), it terminates the
-checkpointer and responds with `PENDING` immediately. Because no goroutine
-is joined, the `PENDING` response cannot stall behind a slow or blocked
-branch.
+`committed()` is true, or the suspend signal fired), it responds with
+`PENDING` immediately. Because no goroutine is joined, the `PENDING`
+response cannot stall behind a slow or blocked branch.
+
+The checkpointer is terminated on every exit from the handler, not only
+on suspension. A single `defer` in `runHandler` performs the termination,
+so a handler that returns a result, returns an error, or panics terminates
+the checkpointer exactly as a suspension does, and no exit path added later
+can miss it. Termination happens the moment the handler's outcome is
+decided. Result serialization, `WrapInvocation` post-processing, and the
+`OnInvocationEnd` hooks all run after it, so no branch can record state for
+this invocation once the handler has finished, whatever runs between that
+point and the response.
+
+One write follows termination: the invocation's own record of an oversized
+result. A result too large for the response envelope is persisted through
+a checkpoint on the root execution operation after the handler returns.
+That write goes through `checkpointFinal`, a path reserved for the
+invocation goroutine. Termination refuses branch checkpoints; it does not
+refuse the final write. The final write travels through the same flusher
+as every other request, so it is sent after any branch call already in
+flight and with the token that call rotated to. It is refused only when
+the service has stopped accepting this invocation's checkpoints (a response
+without a token, or a stale-token rejection), and then with the same error
+a branch checkpoint would receive.
+
+A deferred cleanup in `Invoke` releases the root handler's branch token
+once the response is decided. The handler goroutine releases that token
+itself only when it unwinds with `errSuspendExecution`, so a handler
+blocked on a pending operation counts as blocked while the outcome is
+undecided. On a successful, failed, or panicking return the token is held
+until the response is decided. A branch that commits to `PENDING` after the
+handler has returned therefore cannot fire the signal and change the
+outcome. Releasing the token afterwards lets the signal fire once the last
+orphaned branch deregisters, which settles any future a goroutine is still
+blocked on.
 
 Termination is a single atomic flag store on the checkpointer, so it never
 blocks behind an in-flight checkpoint API call holding the checkpointer's
@@ -164,17 +196,18 @@ mutex. The checkpoint method consults the flag at three points:
 2. After acquiring the mutex and again between retry attempts, in case
    termination arrived while the caller was waiting or backing off.
 3. After a successful API call returns, so a checkpoint that was in flight
-   when termination was signaled is refused before rotating the token.
+   when termination was signaled is refused to its callers.
 
 Point 3 means a checkpoint call that was already in flight at the moment of
-termination may still be recorded durably, even though the checkpointer
-refuses to commit its result locally. From the handler's perspective the
-branch was refused; the recorded execution state may nonetheless include
-the update. This is safe because the next invocation replays from the full
-recorded state, so an update recorded during termination is picked up on
-resume rather than lost. The guarantee is therefore that no subsequent
-checkpoint attempt succeeds locally after termination, not that an
-in-flight call cannot be recorded.
+termination may still be recorded durably, even though its callers are
+refused. From the branch's perspective the checkpoint was refused; the
+recorded execution state may nonetheless include the update. This is safe
+because the next invocation replays from the full recorded state, so an
+update recorded during termination is picked up on resume rather than lost.
+The token the call rotated to is kept locally, because the service holds
+it: the invocation's final write, if any, must carry that token. The
+guarantee is therefore that no branch checkpoint attempt succeeds after
+termination, not that an in-flight call cannot be recorded.
 
 #### Translation of the terminated error
 
@@ -336,9 +369,11 @@ deterministic IDs regardless of goroutine scheduling order.
 
 ### Orphaned child contexts after termination
 
-When the handler unwinds and the checkpointer is terminated, a
+When the invocation ends and the checkpointer is terminated, a
 `durable.Go` child context that is still mid-flight becomes an orphaned
-branch. At its next checkpoint attempt the checkpointer refuses with
+branch. This holds for every way the invocation can end: the handler
+suspended, returned a result, returned an error, or panicked. At its next
+checkpoint attempt the checkpointer refuses with
 `errCheckpointTerminated`. Operations that translate the error (`Step`,
 `Wait`, `Invoke`, callbacks, `RunInChildContext`) convert it to
 `errSuspendExecution`, which settles the child's future and releases its
@@ -351,11 +386,37 @@ future with `errSuspendExecution` rather than wrapping it in a
 orphaned branch stops, its future settles as a suspension, and its branch
 token is released.
 
+After a `PENDING` response, the orphan re-executes from its last committed
+checkpoint on the next invocation, so its progress is deferred, not lost.
+After a `SUCCEEDED` or `FAILED` response the execution is finished and the
+orphan is never replayed. Its recorded progress stays in the execution
+state; its unrecorded progress is never recorded.
+
+Termination stops the orphan at its next durable boundary, not inside user
+code. Termination refuses checkpoints; it does not preempt a goroutine. A
+`Step` whose `START` checkpoint completed before termination has already
+entered its user body. That body runs to completion. The step's next
+checkpoint, the `SUCCEED` or `FAIL` that would record the body's result, is
+the one refused. So an orphan's already-started user code may continue
+after the invocation has responded, until it reaches its next checkpoint.
+Any side effect that user code performs happens even though the result is
+never recorded. A handler that needs a branch's work to complete, or needs
+its side effects confined to the invocation, must await the branch's future
+before returning.
+
+Termination matters most in a reused execution environment. The
+environment is frozen when the invocation responds and thawed for a later
+invocation, so an orphan that was blocked when the handler returned resumes
+during that unrelated invocation. If it was blocked before a checkpoint,
+that checkpoint is refused locally and the goroutine exits without a
+network call. If it was blocked inside a step body, the body continues and
+the checkpoint after it is refused. In neither case does the orphan write
+to the execution with a token the service no longer accepts.
+
 Progress the orphan recorded before termination (checkpoints whose API
-calls completed and whose tokens rotated before the flag was set) is
-preserved in the recorded execution state. Progress it would have recorded
-after termination is deferred: the branch re-executes from its last
-committed checkpoint on the next invocation.
+calls completed before the flag was set) is preserved in the recorded
+execution state. Progress it would have recorded after termination is not
+recorded in this invocation.
 
 ## Determinism Contract
 

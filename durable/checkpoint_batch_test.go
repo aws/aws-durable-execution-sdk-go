@@ -415,9 +415,89 @@ func TestCheckpointTerminatedWhileQueuedIsRefused(t *testing.T) {
 	if len(batches) != 1 {
 		t.Fatalf("backend received %d calls, want 1 (queued request must not be sent)", len(batches))
 	}
-	if got := cp.currentToken(); got != "token-0" {
-		t.Errorf("currentToken() after terminate = %q, want unchanged token-0", got)
+	// The in-flight call succeeded, so the service rotated the token. The
+	// local token follows the service even though the call's requests were
+	// refused: the invocation's final write, if any, must carry it.
+	if got := cp.currentToken(); got != "token-1" {
+		t.Errorf("currentToken() after terminate = %q, want token-1 (rotated by the in-flight call)", got)
 	}
+}
+
+// TestCheckpointFinalIsSentAfterTerminate asserts that the invocation's
+// final write is sent after termination, with the token rotated by the
+// branch call that was in flight when termination happened, while a branch
+// request queued at the same time is refused without a call.
+func TestCheckpointFinalIsSentAfterTerminate(t *testing.T) {
+	fake := newGateLambda()
+	cp := newCheckpointer(fake, "arn:test", "token-0")
+	first := startInFlight(t, cp, fake, "branch-in-flight")
+
+	cp.terminate()
+	branch := make(chan error, 1)
+	go func() { branch <- cp.checkpoint(context.Background(), []OperationUpdate{idUpdate("branch-late")}) }()
+	if err := <-branch; !errors.Is(err, errCheckpointTerminated) {
+		t.Fatalf("branch checkpoint after terminate = %v, want errCheckpointTerminated", err)
+	}
+
+	final := make(chan error, 1)
+	go func() { final <- cp.checkpointFinal(context.Background(), []OperationUpdate{idUpdate("final")}) }()
+	waitFor(t, "final request queued", func() bool { return cp.queueLen() == 1 })
+
+	fake.release <- struct{}{}
+	if err := <-first; !errors.Is(err, errCheckpointTerminated) {
+		t.Fatalf("in-flight branch checkpoint after terminate = %v, want errCheckpointTerminated", err)
+	}
+	waitFor(t, "final call in flight", func() bool { return fake.inFlight.Load() == 1 })
+	fake.release <- struct{}{}
+	if err := <-final; err != nil {
+		t.Fatalf("checkpointFinal after terminate = %v, want nil", err)
+	}
+
+	batches, tokens, _ := fake.snapshot()
+	if len(batches) != 2 {
+		t.Fatalf("backend received %d calls, want 2 (in-flight branch, then final)", len(batches))
+	}
+	if got := aws.ToString(batches[1][0].Id); got != "final" {
+		t.Errorf("second call carried %q, want the final write", got)
+	}
+	if tokens[1] != "token-1" {
+		t.Errorf("final write sent with token %q, want token-1 (rotated by the in-flight call)", tokens[1])
+	}
+	if got := cp.currentToken(); got != "token-2" {
+		t.Errorf("currentToken() after final write = %q, want token-2", got)
+	}
+}
+
+// TestCheckpointFinalRefusedAfterHalt asserts that the final write is
+// refused once the service has stopped accepting this invocation's
+// checkpoints: with errCheckpointTerminated after a response without a
+// token, and with the stale-token rejection after one.
+func TestCheckpointFinalRefusedAfterHalt(t *testing.T) {
+	t.Run("missing token", func(t *testing.T) {
+		fake := newGateLambda()
+		cp := newCheckpointer(fake, "arn:test", "token-0")
+		cp.halt(errSuspendExecution)
+		err := cp.checkpointFinal(context.Background(), []OperationUpdate{idUpdate("final")})
+		if !errors.Is(err, errCheckpointTerminated) {
+			t.Fatalf("checkpointFinal after missing-token halt = %v, want errCheckpointTerminated", err)
+		}
+		if batches, _, _ := fake.snapshot(); len(batches) != 0 {
+			t.Errorf("backend received %d calls, want 0", len(batches))
+		}
+	})
+	t.Run("stale token", func(t *testing.T) {
+		fake := newGateLambda()
+		cp := newCheckpointer(fake, "arn:test", "token-0")
+		stale := &CheckpointError{Err: errors.New("stale"), scope: ErrorScopeInvocation, staleToken: true}
+		cp.halt(stale)
+		err := cp.checkpointFinal(context.Background(), []OperationUpdate{idUpdate("final")})
+		if !errors.Is(err, stale) {
+			t.Fatalf("checkpointFinal after stale-token halt = %v, want the halt cause", err)
+		}
+		if batches, _, _ := fake.snapshot(); len(batches) != 0 {
+			t.Errorf("backend received %d calls, want 0", len(batches))
+		}
+	})
 }
 
 func TestCheckpointFailedBatchReportsErrorToEveryRequest(t *testing.T) {

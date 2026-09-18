@@ -156,6 +156,23 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	}
 	cp := newCheckpointer(client, in.DurableExecutionArn, in.CheckpointToken)
 
+	// The root branch token is released when the response is decided. The
+	// handler goroutine releases it itself only when it unwinds with
+	// errSuspendExecution, so that a handler blocked on a pending operation
+	// counts as blocked while the outcome is decided. On every other exit,
+	// including a panic, the token is held until here, so a branch that
+	// commits to PENDING after the handler returned cannot change the
+	// outcome. Releasing it lets the suspend signal fire once the last
+	// orphaned branch deregisters, which settles any future a goroutine is
+	// still blocked on. The checkpointer itself is terminated earlier, in
+	// runHandler, the moment the handler's outcome is decided.
+	var ec *execContext
+	defer func() {
+		if ec != nil {
+			ec.branchTok.release()
+		}
+	}()
+
 	state, err := assembleState(ctx, cp, &in.InitialExecutionState)
 	if err != nil {
 		// Loading state is a client call outside the handler, so a failure
@@ -284,7 +301,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		// is recorded in the FAILED response; nil otherwise.
 		trace []string
 	}
-	ec := newExecContext(ctx, in.DurableExecutionArn, invMeta, logger, state)
+	ec = newExecContext(ctx, in.DurableExecutionArn, invMeta, logger, state)
 	ec.checkpointer = cp
 	ec.executionStartTime = execStartTimestamp
 	ec.noStackTraces = h.options.noStackTraces
@@ -303,11 +320,27 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 
 	// WrapInvocation: compose around the handler execution.
 	runHandler := func() (any, error) {
-		// Register the root handler goroutine as an active branch.
-		// Deregistration happens only when the handler unwinds with
-		// errSuspendExecution (blocked on a pending operation). A
-		// successful or failed handler return does not deregister:
-		// the invocation completes with that outcome immediately.
+		// Every exit from runHandler terminates the checkpointer:
+		// suspension, success, handler error, and handler panic (which
+		// runUserFunc converts into an error). One defer covers them all,
+		// so no exit path added later can miss it. Termination happens
+		// the moment the handler's outcome is decided, before result
+		// serialization, WrapInvocation post-processing, and the
+		// OnInvocationEnd hooks run. A durable.Go branch still mid-flight
+		// is refused at its next checkpoint attempt with
+		// errCheckpointTerminated; it settles its future and releases its
+		// branch token without recording further state. The invocation's
+		// own record of an oversized result is written afterwards through
+		// checkpointFinal, which termination does not refuse.
+		defer cp.terminate()
+
+		// Register the root handler goroutine as an active branch. The
+		// goroutine deregisters itself only when the handler unwinds
+		// with errSuspendExecution (blocked on a pending operation), so
+		// the suspend signal can fire while the outcome is undecided. On
+		// a successful, failed, or panicking return the token is held
+		// until the invocation has decided its response; the deferred
+		// cleanup in Invoke releases it then.
 		ec.branchTok = ec.suspend.registerBranchToken()
 		go func() {
 			// The root context is owned by this goroutine, not the one
@@ -339,13 +372,11 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 			}
 			if ec.suspend.fired() || ec.suspend.committed() {
 				// The handler returned while a pending commitment
-				// stands. Terminate the checkpointer so orphaned
-				// branches (durable.Go children still mid-flight)
-				// cannot record further state; they will settle their
-				// futures with errSuspendExecution and release their
-				// branch tokens. This does not wait for the branches
-				// to finish, so the PENDING response is immediate.
-				cp.terminate()
+				// stands: the invocation responds PENDING. Orphaned
+				// branches (durable.Go children still mid-flight) are
+				// not joined, so the response is immediate; the
+				// checkpointer termination deferred above stops them
+				// recording further state.
 				return nil, errSuspendExecution
 			}
 			if out.err != nil {
@@ -353,7 +384,6 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 			}
 			return out.result, nil
 		case <-ec.suspend.done():
-			cp.terminate()
 			if halt := cp.haltCause(); halt != nil {
 				// Same override as above: a stale-token rejection ends
 				// the invocation with an error even when every branch
@@ -446,7 +476,10 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 			// inline. Persist it through a checkpoint on the root
 			// execution operation and return an empty Result. The
 			// checkpoint must complete before responding: it is the only
-			// durable copy of the result.
+			// durable copy of the result. The checkpointer was terminated
+			// when the handler's outcome was decided, so this write goes
+			// through checkpointFinal, the one path termination leaves
+			// open to the invocation itself.
 			executionOpID := ""
 			if len(in.InitialExecutionState.Operations) > 0 {
 				executionOpID = in.InitialExecutionState.Operations[0].Id
@@ -462,7 +495,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 				Action:  OperationActionSucceed,
 				Payload: aws.String(string(serialized)),
 			}
-			if cerr := cp.checkpoint(ctx, []OperationUpdate{update}); cerr != nil {
+			if cerr := cp.checkpointFinal(ctx, []OperationUpdate{update}); cerr != nil {
 				if errors.Is(cerr, errCheckpointTerminated) {
 					// The response carried no token: the service will
 					// accept no further checkpoints from this
