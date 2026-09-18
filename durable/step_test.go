@@ -255,6 +255,74 @@ func TestStepRetrySchedulesAndSuspends(t *testing.T) {
 	}
 }
 
+func TestStepRetryDelaySentForDecision(t *testing.T) {
+	// The RETRY update carries the strategy's delay as whole seconds: a
+	// zero delay selects DefaultRetryDelay, a fractional delay rounds up,
+	// and a whole-second delay is sent unchanged.
+	tests := []struct {
+		name  string
+		delay time.Duration
+		want  int32
+	}{
+		{"omitted delay defaults to one second", 0, 1},
+		{"sub-second delay rounds up to one second", 250 * time.Millisecond, 1},
+		{"fractional delay rounds up", 2500 * time.Millisecond, 3},
+		{"whole seconds unchanged", 7 * time.Second, 7},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := &fakeLambda{}
+			strategy := func(RetryAttempt) RetryDecision {
+				return RetryDecision{Retry: true, Delay: tt.delay}
+			}
+			resp := invokeStep(t, fake, stepPayload(`""`), func(ctx Context, _ string) (string, error) {
+				return Step(ctx, "s", func(StepContext) (string, error) {
+					return "", errors.New("transient")
+				}, WithRetry(strategy))
+			})
+
+			if want := `{"Status":"PENDING"}`; resp != want {
+				t.Errorf("response = %s, want %s", resp, want)
+			}
+			updates := updateBatch(t, fake)
+			if len(updates) != 2 {
+				t.Fatalf("received %d updates, want 2 (START, RETRY)", len(updates))
+			}
+			assertStepUpdate(t, updates[1], "1", OperationActionRetry)
+			if updates[1].StepOptions == nil {
+				t.Fatal("RETRY update has no StepOptions")
+			}
+			if got := aws.ToInt32(updates[1].StepOptions.NextAttemptDelaySeconds); got != tt.want {
+				t.Errorf("NextAttemptDelaySeconds = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStepRetryNegativeDelayFails(t *testing.T) {
+	// A negative delay is a programming error in the strategy; the step
+	// reports it rather than scheduling a retry.
+	fake := &fakeLambda{}
+	var gotErr error
+	invokeStep(t, fake, stepPayload(`""`), func(ctx Context, _ string) (string, error) {
+		out, err := Step(ctx, "s", func(StepContext) (string, error) {
+			return "", errors.New("transient")
+		}, WithRetry(func(RetryAttempt) RetryDecision {
+			return RetryDecision{Retry: true, Delay: -time.Second}
+		}))
+		gotErr = err
+		return out, err
+	})
+
+	if gotErr == nil || !strings.Contains(gotErr.Error(), "retry delay") {
+		t.Errorf("step error = %v, want retry delay error", gotErr)
+	}
+	updates := updateBatch(t, fake)
+	if len(updates) != 1 {
+		t.Fatalf("received %d updates, want 1 (START only)", len(updates))
+	}
+}
+
 func TestStepRetryStrategyReceivesAttempt(t *testing.T) {
 	// The strategy sees the failing error and the 1-based attempt number
 	// in the RetryAttempt it receives. Elapsed is not tracked yet, so it
@@ -297,7 +365,7 @@ func TestStepSuspensionWinsOverUserOutcome(t *testing.T) {
 	resp := invokeStep(t, fake, stepPayload(`""`), func(ctx Context, _ string) (string, error) {
 		_, _ = Step(ctx, "s", func(StepContext) (string, error) {
 			return "", errors.New("transient")
-		}, WithRetry(MustLinearBackoff(time.Second)))
+		}, WithRetry(MustLinearBackoff(LinearRetryConfig{})))
 		return "swallowed", nil
 	})
 
@@ -317,7 +385,7 @@ func TestStepAfterSuspensionFailsFast(t *testing.T) {
 		defer close(handlerDone)
 		_, _ = Step(ctx, "s", func(StepContext) (string, error) {
 			return "", errors.New("transient")
-		}, WithRetry(MustLinearBackoff(time.Second)))
+		}, WithRetry(MustLinearBackoff(LinearRetryConfig{})))
 		_, secondErr = Step(ctx, "after", func(StepContext) (string, error) {
 			t.Error("step body ran after suspension")
 			return "", nil
@@ -435,7 +503,7 @@ func TestStepStartedAtMostOnceInterrupted(t *testing.T) {
 		},
 		{
 			name:        "retry schedules next attempt",
-			retry:       MustLinearBackoff(time.Second),
+			retry:       MustLinearBackoff(LinearRetryConfig{}),
 			wantStatus:  `"Status":"PENDING"`,
 			wantAction:  OperationActionRetry,
 			wantUpdates: 1,

@@ -311,17 +311,42 @@ func TestExponentialBackoffPreset(t *testing.T) {
 	}
 }
 
-func TestLinearBackoffFixedDelay(t *testing.T) {
-	strategy, err := LinearBackoff(3 * time.Second)
-	if err != nil {
-		t.Fatalf("LinearBackoff(3s) error = %v, want nil", err)
-	}
+func TestLinearBackoffDefaultSequence(t *testing.T) {
+	// The zero-value config is the documented default: 6 total attempts,
+	// delays 1s, 2s, 3s, 4s, 5s, no jitter.
+	strategy := MustLinearBackoff(LinearRetryConfig{})
 	cause := errors.New("x")
 
 	for attempt := 1; attempt <= 5; attempt++ {
 		d := strategy(RetryAttempt{Err: cause, Attempt: attempt})
-		if !d.Retry || d.Delay != 3*time.Second {
-			t.Errorf("attempt %d = %+v, want retry with fixed 3s delay", attempt, d)
+		if want := time.Duration(attempt) * time.Second; !d.Retry || d.Delay != want {
+			t.Errorf("attempt %d = %+v, want retry with %v delay", attempt, d, want)
+		}
+	}
+	for _, attempt := range []int{6, 7} {
+		if d := strategy(RetryAttempt{Err: cause, Attempt: attempt}); d.Retry {
+			t.Errorf("attempt %d = %+v, want retries exhausted", attempt, d)
+		}
+	}
+}
+
+func TestLinearBackoffIncrementAndCap(t *testing.T) {
+	// The worked example from the LinearBackoff documentation: delay
+	// before retry n is InitialDelay + Increment × (n-1), capped at
+	// MaxDelay, so 2s, 5s, 8s, then 11s and 14s capped to 10s.
+	strategy := MustLinearBackoff(LinearRetryConfig{
+		InitialDelay: 2 * time.Second,
+		Increment:    3 * time.Second,
+		MaxDelay:     10 * time.Second,
+	})
+	cause := errors.New("x")
+
+	want := []time.Duration{2 * time.Second, 5 * time.Second, 8 * time.Second, 10 * time.Second, 10 * time.Second}
+	for i, wantDelay := range want {
+		attempt := i + 1
+		d := strategy(RetryAttempt{Err: cause, Attempt: attempt})
+		if !d.Retry || d.Delay != wantDelay {
+			t.Errorf("attempt %d = %+v, want retry with %v delay", attempt, d, wantDelay)
 		}
 	}
 	if d := strategy(RetryAttempt{Err: cause, Attempt: 6}); d.Retry {
@@ -329,34 +354,91 @@ func TestLinearBackoffFixedDelay(t *testing.T) {
 	}
 }
 
-func TestLinearBackoffZeroDelayDefault(t *testing.T) {
-	// A zero delay selects the 5 second default.
-	strategy, err := LinearBackoff(0)
-	if err != nil {
-		t.Fatalf("LinearBackoff(0) error = %v, want nil", err)
+func TestLinearBackoffMaxAttempts(t *testing.T) {
+	strategy := MustLinearBackoff(LinearRetryConfig{MaxAttempts: 3})
+	cause := errors.New("x")
+
+	if d := strategy(RetryAttempt{Err: cause, Attempt: 2}); !d.Retry || d.Delay != 2*time.Second {
+		t.Errorf("attempt 2 = %+v, want retry with 2s delay", d)
 	}
-	if d := strategy(RetryAttempt{Err: errors.New("x"), Attempt: 1}); !d.Retry || d.Delay != 5*time.Second {
-		t.Errorf("attempt 1 = %+v, want retry with default 5s delay", d)
+	if d := strategy(RetryAttempt{Err: cause, Attempt: 3}); d.Retry {
+		t.Errorf("attempt 3 = %+v, want retries exhausted", d)
 	}
 }
 
-func TestLinearBackoffInvalidDelay(t *testing.T) {
-	for _, delay := range []time.Duration{-time.Second, time.Millisecond, 999 * time.Millisecond} {
-		strategy, err := LinearBackoff(delay)
-		if err == nil {
-			t.Errorf("LinearBackoff(%v) error = nil, want error", delay)
-		}
-		if strategy != nil {
-			t.Errorf("LinearBackoff(%v) strategy is non-nil, want nil", delay)
+func TestLinearBackoffFullJitterBounds(t *testing.T) {
+	// Full jitter draws from [0, base]; the result is still rounded to a
+	// whole second no less than one.
+	strategy := MustLinearBackoff(LinearRetryConfig{
+		InitialDelay: 10 * time.Second,
+		Increment:    10 * time.Second,
+		Jitter:       JitterFull,
+	})
+	cause := errors.New("x")
+
+	for attempt := 1; attempt <= 5; attempt++ {
+		base := time.Duration(10*attempt) * time.Second
+		for range 50 {
+			d := strategy(RetryAttempt{Err: cause, Attempt: attempt})
+			if !d.Retry {
+				t.Fatalf("attempt %d: want retry", attempt)
+			}
+			if d.Delay < time.Second || d.Delay > base {
+				t.Errorf("attempt %d: Delay = %v, want within [1s, %v]", attempt, d.Delay, base)
+			}
+			if d.Delay%time.Second != 0 {
+				t.Errorf("attempt %d: Delay = %v, want whole seconds", attempt, d.Delay)
+			}
 		}
 	}
 }
 
-func TestMustLinearBackoffPanicsOnInvalidDelay(t *testing.T) {
+func TestLinearBackoffInvalidConfig(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  LinearRetryConfig
+		want string
+	}{
+		{"negative MaxAttempts", LinearRetryConfig{MaxAttempts: -1}, "MaxAttempts must not be negative"},
+		{"sub-second InitialDelay", LinearRetryConfig{InitialDelay: 999 * time.Millisecond}, "InitialDelay must be at least 1 second"},
+		{"negative InitialDelay", LinearRetryConfig{InitialDelay: -time.Second}, "InitialDelay must be at least 1 second"},
+		{"negative Increment", LinearRetryConfig{Increment: -time.Second}, "Increment must not be negative"},
+		{"sub-second MaxDelay", LinearRetryConfig{MaxDelay: time.Millisecond}, "MaxDelay must be at least 1 second"},
+		{"unknown Jitter", LinearRetryConfig{Jitter: "SOME"}, "Jitter must be a defined JitterStrategy"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			strategy, err := LinearBackoff(tt.cfg)
+			if err == nil {
+				t.Fatalf("LinearBackoff(%+v) error = nil, want error", tt.cfg)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error = %q, want containing %q", err, tt.want)
+			}
+			if strategy != nil {
+				t.Errorf("LinearBackoff(%+v) strategy is non-nil, want nil", tt.cfg)
+			}
+		})
+	}
+}
+
+func TestLinearBackoffInvalidConfigJoinsErrors(t *testing.T) {
+	_, err := LinearBackoff(LinearRetryConfig{MaxAttempts: -1, Increment: -time.Second})
+	if err == nil {
+		t.Fatal("error = nil, want joined errors")
+	}
+	for _, want := range []string{"MaxAttempts", "Increment"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want mention of %s", err, want)
+		}
+	}
+}
+
+func TestMustLinearBackoffPanicsOnInvalidConfig(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
-			t.Fatal("MustLinearBackoff did not panic on invalid delay")
+			t.Fatal("MustLinearBackoff did not panic on invalid config")
 		}
 	}()
-	MustLinearBackoff(-time.Second)
+	MustLinearBackoff(LinearRetryConfig{InitialDelay: -time.Second})
 }

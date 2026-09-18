@@ -27,11 +27,13 @@ const unkeyedLiteralFixture = `package main
 import "github.com/aws/aws-durable-execution-sdk-go/durable"
 
 func main() {
-	_ = durable.Branch[string]{[0]func(){}, "name", nil}   // want "implicit assignment to unexported field _ in struct literal"
-	_ = durable.RetryConfig{[0]func(){}, 3, 0, 0, 0, ""}   // want "implicit assignment to unexported field _ in struct literal"
-	_ = durable.RetryAttempt{[0]func(){}, nil, 1, 0}       // want "implicit assignment to unexported field _ in struct literal"
+	_ = durable.Branch[string]{[0]func(){}, "name", nil}       // want "implicit assignment to unexported field _ in struct literal"
+	_ = durable.RetryConfig{[0]func(){}, 3, 0, 0, 0, ""}       // want "implicit assignment to unexported field _ in struct literal"
+	_ = durable.LinearRetryConfig{[0]func(){}, 6, 0, 0, 0, ""} // want "implicit assignment to unexported field _ in struct literal"
+	_ = durable.RetryAttempt{[0]func(){}, nil, 1, 0}           // want "implicit assignment to unexported field _ in struct literal"
 	_ = durable.Branch[string]{Name: "name"}
 	_ = durable.RetryConfig{MaxAttempts: 3}
+	_ = durable.LinearRetryConfig{MaxAttempts: 6}
 	_ = durable.RetryAttempt{Attempt: 1}
 }
 `
@@ -153,6 +155,7 @@ func parseDiagnosticLines(out []byte) map[int]string {
 func TestGuardedStructsHaveLeadingBlankField(t *testing.T) {
 	types := []reflect.Type{
 		reflect.TypeFor[durable.RetryConfig](),
+		reflect.TypeFor[durable.LinearRetryConfig](),
 		reflect.TypeFor[durable.RetryDecision](),
 		reflect.TypeFor[durable.RetryAttempt](),
 		reflect.TypeFor[durable.CompletionConfig](),

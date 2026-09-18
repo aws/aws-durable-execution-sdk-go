@@ -503,7 +503,13 @@ func settleStepFailure[O any](ec *execContext, id, name string, options stepOpti
 
 	update := stepUpdate(ec, id, name, OperationActionRetry)
 	update.Error = errorObjectFromRecord(rec)
-	delaySec, delayErr := durationToSeconds(decision.Delay)
+	// A strategy that retries without choosing a delay gets the documented
+	// default rather than a zero delay, whose scheduling is unspecified.
+	delay := decision.Delay
+	if delay == 0 {
+		delay = DefaultRetryDelay
+	}
+	delaySec, delayErr := durationToSeconds(delay)
 	if delayErr != nil {
 		return zero, fmt.Errorf("durable: step %q: retry delay: %w", name, delayErr)
 	}

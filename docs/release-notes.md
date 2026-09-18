@@ -2,6 +2,51 @@
 
 ## Unreleased
 
+### Fixed: a retry decision without a delay waits one second
+
+A `RetryStrategy` that returned `RetryDecision{Retry: true}` without
+setting `Delay` scheduled the next attempt with a delay of zero seconds,
+whose scheduling is unspecified. A zero `Delay` now selects the new
+`DefaultRetryDelay` constant (one second). Explicit delays are sent as
+before: a positive fractional delay rounds up to the next whole second, a
+whole-second delay is sent unchanged, and a negative delay fails the step.
+
+### Breaking: `LinearBackoff` grows linearly and takes a `LinearRetryConfig`
+
+`LinearBackoff` and `MustLinearBackoff` produced a fixed delay between
+attempts, with the attempt count fixed at 6 and jitter disabled. They now
+implement linear growth, matching the other SDKs: the delay before retry n
+is `InitialDelay + Increment × (n-1)`, capped at `MaxDelay`, with the
+configured jitter applied and rounded to whole seconds no less than one.
+
+Both take a `LinearRetryConfig` instead of a `time.Duration`. Its fields
+are `MaxAttempts` (default 6), `InitialDelay` (default 1 s), `Increment`
+(default 1 s), `MaxDelay` (default 5 min), and `Jitter` (default
+`JitterNone`). The zero value produces 6 total attempts with delays of
+1 s, 2 s, 3 s, 4 s, and 5 s. Replace
+
+```go
+durable.MustLinearBackoff(5 * time.Second)
+```
+
+with `durable.MustLinearBackoff(durable.LinearRetryConfig{InitialDelay: 5 *
+time.Second})` for a sequence that starts at 5 s and grows by 1 s, or with
+
+```go
+durable.MustNewRetryStrategy(durable.RetryConfig{
+	MaxAttempts:  6,
+	InitialDelay: 5 * time.Second,
+	BackoffRate:  1,
+	Jitter:       durable.JitterNone,
+})
+```
+
+to keep the former fixed 5 s interval.
+
+`RetryConfig` now documents that its zero value is not
+`ExponentialBackoff()`: `RetryConfig{}` is 3 attempts capped at 5 minutes,
+`ExponentialBackoff()` is 6 attempts capped at 60 seconds. Neither changed.
+
 ### Fixed: suspension waits for a running asynchronous step
 
 When the handler blocked on a pending operation (a `Wait`, a callback, an
