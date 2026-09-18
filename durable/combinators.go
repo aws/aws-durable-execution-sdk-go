@@ -4,12 +4,6 @@ import (
 	"errors"
 )
 
-// combinatorObserve, when non-nil, is called by the Any and Race receive
-// loops after each future outcome is observed. Tests use it to release a
-// sibling future only after a specific outcome has been seen, making
-// interleavings deterministic. It is nil in production.
-var combinatorObserve func(err error)
-
 // All records a combinator operation and waits for every future to succeed,
 // returning the values in input order. A non-suspension error observed
 // before any suspension fails All immediately with that error, without
@@ -106,7 +100,7 @@ func AllSettled[O any](ctx Context, name string, fs []*Future[O], opts ...ChildO
 // Empty input fails immediately with a [*CombinatorError] (no futures can
 // succeed), matching Promise.any([]).
 func Any[O any](ctx Context, name string, fs []*Future[O], opts ...ChildOption) (O, error) {
-	return RunInChildContext(ctx, name, func(_ Context) (O, error) {
+	return RunInChildContext(ctx, name, func(childCtx Context) (O, error) {
 		var zero O
 		if len(fs) == 0 {
 			return zero, &CombinatorError{Name: name, Errors: nil}
@@ -116,6 +110,12 @@ func Any[O any](ctx Context, name string, fs []*Future[O], opts ...ChildOption) 
 		// All futures are already durable (their operations were
 		// claimed before the combinator), so this is a pure in-process
 		// join — no new durable operations are created.
+		//
+		// stop is closed when Any returns. A receive goroutine whose
+		// future has not settled by then exits instead of waiting for
+		// it: a losing future may never settle in this invocation, and
+		// the goroutine must not outlive the combinator that started
+		// it.
 		//
 		// Deferred-suspension futures (pending callbacks) cannot settle
 		// with a terminal outcome in this invocation, so they cannot
@@ -129,6 +129,8 @@ func Any[O any](ctx Context, name string, fs []*Future[O], opts ...ChildOption) 
 			idx int
 		}
 		ch := make(chan result, len(fs))
+		stop := make(chan struct{})
+		defer close(stop)
 		var deferred []*Future[O]
 		joined := 0
 		for i, f := range fs {
@@ -138,18 +140,21 @@ func Any[O any](ctx Context, name string, fs []*Future[O], opts ...ChildOption) 
 			}
 			joined++
 			go func(idx int, fut *Future[O]) {
-				val, err := fut.Result()
+				val, err, ok := fut.resultOrStop(stop)
+				if !ok {
+					return
+				}
+				// ch has room for every future, so this never blocks.
 				ch <- result{val: val, err: err, idx: idx}
 			}(i, f)
 		}
 
+		observe := combinatorObserver(childCtx)
 		errs := make([]error, len(fs))
 		var sawSuspend bool
 		for range joined {
 			r := <-ch
-			if combinatorObserve != nil {
-				combinatorObserve(r.err)
-			}
+			observe(r.err)
 			switch {
 			case r.err == nil:
 				if !sawSuspend {
@@ -211,6 +216,10 @@ func Race[O any](ctx Context, name string, fs []*Future[O], opts ...ChildOption)
 		}
 
 		// Use a goroutine per future to detect the first settlement.
+		// stop is closed when Race returns so a receive goroutine whose
+		// future has not settled by then exits instead of waiting for
+		// it (see Any).
+		//
 		// Deferred-suspension futures (pending callbacks) cannot settle
 		// with a terminal outcome in this invocation, so they cannot
 		// win; awaiting one commits the invocation to PENDING. They are
@@ -222,6 +231,8 @@ func Race[O any](ctx Context, name string, fs []*Future[O], opts ...ChildOption)
 			err error
 		}
 		ch := make(chan result, len(fs))
+		stop := make(chan struct{})
+		defer close(stop)
 		var deferred []*Future[O]
 		joined := 0
 		for _, f := range fs {
@@ -231,17 +242,20 @@ func Race[O any](ctx Context, name string, fs []*Future[O], opts ...ChildOption)
 			}
 			joined++
 			go func(fut *Future[O]) {
-				val, err := fut.Result()
+				val, err, ok := fut.resultOrStop(stop)
+				if !ok {
+					return
+				}
+				// ch has room for every future, so this never blocks.
 				ch <- result{val: val, err: err}
 			}(f)
 		}
 
+		observe := combinatorObserver(childCtx)
 		var sawSuspend bool
 		for range joined {
 			r := <-ch
-			if combinatorObserve != nil {
-				combinatorObserve(r.err)
-			}
+			observe(r.err)
 			if r.err != nil && errors.Is(r.err, errSuspendExecution) {
 				sawSuspend = true
 				continue
@@ -263,6 +277,17 @@ func Race[O any](ctx Context, name string, fs []*Future[O], opts ...ChildOption)
 		awaitDeferred(deferred)
 		return zero, errSuspendExecution
 	}, opts...)
+}
+
+// combinatorObserver returns the outcome observer installed on ctx by a
+// test, or a no-op when none is set. Reading the observer once per
+// combinator call, from the child context that inherited it at creation,
+// means the receive loop never reads shared mutable state.
+func combinatorObserver(ctx Context) func(err error) {
+	if ec, ok := ctx.(*execContext); ok && ec.combinatorObserve != nil {
+		return ec.combinatorObserve
+	}
+	return func(error) {}
 }
 
 // awaitDeferred awaits deferred-suspension futures (pending callbacks) on

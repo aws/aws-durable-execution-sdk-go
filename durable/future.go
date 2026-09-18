@@ -55,6 +55,26 @@ func (f *Future[O]) Result() (O, error) {
 	return f.value, f.err
 }
 
+// resultOrStop is Result with an exit condition. It runs the pre-result
+// hook exactly as Result does, then waits until either the future settles
+// or stop is closed. When the future settles first it returns the outcome
+// with ok true. When stop is closed first it returns ok false; the future
+// is left untouched and may settle later. The combinators use it so a
+// receive goroutine waiting on a losing future exits when the combinator
+// returns instead of blocking until that future settles.
+func (f *Future[O]) resultOrStop(stop <-chan struct{}) (value O, err error, ok bool) {
+	if f.preResult != nil {
+		f.preResultOnce.Do(f.preResult)
+	}
+	select {
+	case <-f.done:
+		return f.value, f.err, true
+	case <-stop:
+		var zero O
+		return zero, nil, false
+	}
+}
+
 // settled reports whether the future has settled, without blocking and
 // without running the pre-result hook. It exists for internal tests that
 // must observe a future's state without awaiting it.

@@ -3,6 +3,7 @@ package durable
 import (
 	"encoding/json"
 	"errors"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -666,10 +667,10 @@ func TestRacePreSettledError(t *testing.T) {
 
 // --- Suspension drain tests ---
 
-// observeRecorder captures every outcome passed to combinatorObserve. It
-// lets tests both release sibling futures once a suspension has been
-// observed and prove, at the moment the combinator returns, exactly how
-// many outcomes the receive loop had observed.
+// observeRecorder captures every outcome passed to the combinator
+// observer. It lets tests both release sibling futures once a suspension
+// has been observed and prove, at the moment the combinator returns,
+// exactly how many outcomes the receive loop had observed.
 type observeRecorder struct {
 	mu       sync.Mutex
 	outcomes []error
@@ -683,19 +684,24 @@ func (o *observeRecorder) snapshot() []error {
 }
 
 // setCombinatorObserve installs an observation hook for the Any and Race
-// receive loops and restores the previous hook on test cleanup. The
-// returned channel is closed the first time a suspension outcome is
-// observed, letting tests release sibling futures only after the
-// combinator has seen the suspension. The returned recorder accumulates
-// every observed outcome so tests can assert the combinator drained all
-// futures before returning.
-func setCombinatorObserve(t *testing.T) (<-chan struct{}, *observeRecorder) {
+// receive loops on ctx. It must be called on the handler's context before
+// the combinator runs, because the combinator's child context inherits
+// the hook at creation. The hook is per-instance, so parallel tests never
+// share it. The returned channel is closed the first time a suspension
+// outcome is observed, letting tests release sibling futures only after
+// the combinator has seen the suspension. The returned recorder
+// accumulates every observed outcome so tests can assert the combinator
+// drained all futures before returning.
+func setCombinatorObserve(t *testing.T, ctx Context) (<-chan struct{}, *observeRecorder) {
 	t.Helper()
-	prev := combinatorObserve
+	ec, ok := ctx.(*execContext)
+	if !ok {
+		t.Fatalf("setCombinatorObserve: ctx is %T, want *execContext", ctx)
+	}
 	suspendObserved := make(chan struct{})
 	rec := &observeRecorder{}
 	var once sync.Once
-	combinatorObserve = func(err error) {
+	ec.combinatorObserve = func(err error) {
 		rec.mu.Lock()
 		rec.outcomes = append(rec.outcomes, err)
 		rec.mu.Unlock()
@@ -703,7 +709,6 @@ func setCombinatorObserve(t *testing.T) (<-chan struct{}, *observeRecorder) {
 			once.Do(func() { close(suspendObserved) })
 		}
 	}
-	t.Cleanup(func() { combinatorObserve = prev })
 	return suspendObserved, rec
 }
 
@@ -995,7 +1000,9 @@ func TestAnyEarlyWinnerNoSuspension(t *testing.T) {
 		f2 := newSettledFuture("won", nil)
 
 		val, err := Any(ctx, "any-early", []*Future[string]{f1, f2})
-		// Settle f1 so the join goroutine awaiting it unwinds.
+		// f1 is settled late only to show it played no part in the outcome;
+		// the receive goroutine that awaited it exited when the combinator
+		// returned.
 		f1.settle("late", nil)
 		if err != nil {
 			return "", err
@@ -1019,7 +1026,9 @@ func TestRaceEarlyTerminalNoSuspension(t *testing.T) {
 		f2 := newFailedFuture[string](errors.New("race-loser"))
 
 		_, err := Race(ctx, "race-early", []*Future[string]{f1, f2})
-		// Settle f1 so the join goroutine awaiting it unwinds.
+		// f1 is settled late only to show it played no part in the outcome;
+		// the receive goroutine that awaited it exited when the combinator
+		// returned.
 		f1.settle("late", nil)
 		errCh <- err
 		return "caught", nil
@@ -1037,6 +1046,97 @@ func TestRaceEarlyTerminalNoSuspension(t *testing.T) {
 	}
 }
 
+// --- Goroutine leak tests ---
+
+// waitForGoroutines polls until the process goroutine count is at most
+// baseline or the bounded wait expires, and returns the final count. The
+// receive goroutines a combinator starts exit asynchronously after it
+// returns, so a single immediate reading would race with their exit.
+func waitForGoroutines(baseline int) int {
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		n := runtime.NumGoroutine()
+		if n <= baseline || time.Now().After(deadline) {
+			return n
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// TestAnyReleasesLosingGoroutines verifies that the receive goroutine Any
+// starts for a losing future exits once Any returns. The loser is an
+// unfinished-replay future: it settles only if the invocation suspends, so
+// before the fix its goroutine stayed blocked past the end of an invocation
+// that completed normally. The goroutine count is sampled inside the
+// handler, before Any and after it returns, so the checkpointer and
+// handler goroutines are the same in both readings.
+func TestAnyReleasesLosingGoroutines(t *testing.T) {
+	fake := &fakeLambda{}
+	countsCh := make(chan [2]int, 1)
+
+	resp := invokeStep(t, fake, stepPayload(`"x"`), func(ctx Context, _ string) (string, error) {
+		ec, ok := ctx.(*execContext)
+		if !ok {
+			t.Fatalf("ctx is %T, want *execContext", ctx)
+		}
+		loser := newUnfinishedReplayFuture[string](ec.suspend)
+		winner := newSettledFuture("won", nil)
+
+		before := runtime.NumGoroutine()
+		val, err := Any(ctx, "any-leak", []*Future[string]{loser, winner})
+		if err != nil {
+			return "", err
+		}
+		after := waitForGoroutines(before)
+		countsCh <- [2]int{before, after}
+		return val, nil
+	})
+
+	if want := `{"Status":"SUCCEEDED","Result":"\"won\""}`; resp != want {
+		t.Fatalf("response = %s, want %s", resp, want)
+	}
+	counts := <-countsCh
+	if counts[1] > counts[0] {
+		t.Errorf("goroutines after Any = %d, want at most the %d before it: the loser's receive goroutine is still blocked",
+			counts[1], counts[0])
+	}
+}
+
+// TestRaceReleasesLosingGoroutines is the [Race] counterpart of
+// TestAnyReleasesLosingGoroutines: the receive goroutine started for an
+// unfinished-replay loser exits once Race returns the settled winner.
+func TestRaceReleasesLosingGoroutines(t *testing.T) {
+	fake := &fakeLambda{}
+	countsCh := make(chan [2]int, 1)
+
+	resp := invokeStep(t, fake, stepPayload(`"x"`), func(ctx Context, _ string) (string, error) {
+		ec, ok := ctx.(*execContext)
+		if !ok {
+			t.Fatalf("ctx is %T, want *execContext", ctx)
+		}
+		loser := newUnfinishedReplayFuture[string](ec.suspend)
+		winner := newSettledFuture("won", nil)
+
+		before := runtime.NumGoroutine()
+		val, err := Race(ctx, "race-leak", []*Future[string]{loser, winner})
+		if err != nil {
+			return "", err
+		}
+		after := waitForGoroutines(before)
+		countsCh <- [2]int{before, after}
+		return val, nil
+	})
+
+	if want := `{"Status":"SUCCEEDED","Result":"\"won\""}`; resp != want {
+		t.Fatalf("response = %s, want %s", resp, want)
+	}
+	counts := <-countsCh
+	if counts[1] > counts[0] {
+		t.Errorf("goroutines after Race = %d, want at most the %d before it: the loser's receive goroutine is still blocked",
+			counts[1], counts[0])
+	}
+}
+
 // TestAnySuspendThenWinnerPropagatesSuspension verifies that with three
 // futures, Any keeps draining once a suspension is observed and propagates
 // it even when a success and a real error follow. The interleaving is
@@ -1047,11 +1147,12 @@ func TestRaceEarlyTerminalNoSuspension(t *testing.T) {
 // suspension.
 func TestAnySuspendThenWinnerPropagatesSuspension(t *testing.T) {
 	fake := &fakeLambda{}
-	suspendObserved, rec := setCombinatorObserve(t)
 	errCh := make(chan error, 1)
 	outcomesCh := make(chan []error, 1)
 
 	resp := invokeStep(t, fake, stepPayload(`"x"`), func(ctx Context, _ string) (string, error) {
+		suspendObserved, rec := setCombinatorObserve(t, ctx)
+
 		// f1: creates a pending callback and awaits it, suspending.
 		f1 := Go(ctx, "suspender", func(childCtx Context) (string, error) {
 			cb, err := CreateCallback[string](childCtx, "cb")
@@ -1135,11 +1236,12 @@ func TestAnyThreeFutureSuspendThenFail(t *testing.T) {
 // suspension.
 func TestRaceSuspendThenTerminalPropagatesSuspension(t *testing.T) {
 	fake := &fakeLambda{}
-	suspendObserved, rec := setCombinatorObserve(t)
 	errCh := make(chan error, 1)
 	outcomesCh := make(chan []error, 1)
 
 	resp := invokeStep(t, fake, stepPayload(`"x"`), func(ctx Context, _ string) (string, error) {
+		suspendObserved, rec := setCombinatorObserve(t, ctx)
+
 		// f1: creates a pending callback and awaits it, suspending.
 		f1 := Go(ctx, "suspender", func(childCtx Context) (string, error) {
 			cb, err := CreateCallback[string](childCtx, "cb")

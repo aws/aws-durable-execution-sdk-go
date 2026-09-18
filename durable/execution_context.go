@@ -114,6 +114,15 @@ type execContext struct {
 	// user code. Set from [WithStackTraces]; the zero value keeps capture
 	// enabled. Shared by the root and all child contexts.
 	noStackTraces bool
+
+	// combinatorObserve, when non-nil, is called by the [Any] and [Race]
+	// receive loops after each future outcome is observed. It is set only
+	// by tests, on one context before its combinators run, so that a
+	// sibling future can be released after a specific outcome has been
+	// seen. Child and branch contexts inherit it at creation, so a value
+	// set on a context before it derives children reaches every
+	// combinator under it without any later write. Nil in production.
+	combinatorObserve func(err error)
 }
 
 var _ Context = (*execContext)(nil)
@@ -393,6 +402,7 @@ func (c *execContext) child(entityID string, owner goroutineOwner, mode executio
 		noStackTraces:        c.noStackTraces,
 		abandon:              c.abandon,
 		branchTok:            c.branchTok,
+		combinatorObserve:    c.combinatorObserve,
 	}
 	child.mode.Store(int32(mode))
 	return child
@@ -440,6 +450,7 @@ func (c *execContext) branch(owner goroutineOwner) *execContext {
 		noStackTraces:        c.noStackTraces,
 		abandon:              c.abandon,
 		branchTok:            c.branchTok,
+		combinatorObserve:    c.combinatorObserve,
 	}
 	b.mode.Store(c.mode.Load())
 	return b
