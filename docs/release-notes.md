@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### Fixed: a stale checkpoint token no longer fails the execution
+
+The service rejects a checkpoint whose token a newer invocation has
+superseded (`InvalidParameterValueException` with a message starting
+`Invalid checkpoint token`). The SDK previously classified this as an
+execution-scoped failure and responded FAILED. It now classifies it as
+invocation-scoped, stops checkpointing at once, and ends the invocation
+with an error. The execution continues in the invocation that holds the
+fresh token.
+
+`CheckpointError.Retryable()` is false for this rejection even though
+`Scope()` is `ErrorScopeInvocation`: the token never becomes valid again,
+so the SDK does not retry the call. For every other invocation-scoped
+failure `Retryable()` is still true.
+
+The invocation ends with the error even when handler code ignores the
+step's error and returns a value.
+
+### New: a checkpoint response without a token ends the invocation PENDING
+
+A checkpoint response that carries no `CheckpointToken` means the service
+will accept no further checkpoints from the current invocation. The SDK
+previously treated it as a plain error, which failed the execution. It now
+stops checkpointing and ends the invocation with `Status: PENDING`, as for
+any other suspension; operations that had not checkpointed replay on the
+next invocation. The invocation responds PENDING even when handler code
+ignores the step's error and returns a value.
+
+`durabletest.LocalRunner.OmitTokenOnCheckpoint(n)` makes the n-th
+checkpoint call return no token, so a handler's behavior on this path can
+be tested locally.
+
 ### Breaking: operation errors expose the recorded failure; the cause is a stand-in
 
 Every typed operation error (`StepError`, `InvokeError`, `CallbackError`,
@@ -137,8 +169,8 @@ A failed `ExecutionClient` call now has a scope. `ErrorScopeInvocation`
 means the current invocation cannot continue but the execution can resume
 in a later one; `ErrorScopeExecution` means the execution must fail.
 `CheckpointError.Scope()` exposes it. `Retryable()` and
-`IsCheckpointRetryable` are unchanged: `Retryable()` is true exactly when
-the scope is `ErrorScopeInvocation`.
+`IsCheckpointRetryable` are unchanged: `Retryable()` is true when the scope
+is `ErrorScopeInvocation`, except for a stale checkpoint token (see above).
 
 A custom `ExecutionClient` states the scope by returning a
 `*durable.ClientError` (from `Checkpoint` or `GetExecutionState`). The

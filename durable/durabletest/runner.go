@@ -258,6 +258,38 @@ func (r *LocalRunner[I, O]) FailChainedInvoke(name, errorType, errorMessage stri
 	})
 }
 
+// OmitTokenOnCheckpoint makes the n-th checkpoint call from now (1-based)
+// return a response without a checkpoint token. It simulates the service
+// signaling that it will accept no further checkpoints from the current
+// invocation.
+//
+// The handler observes this the way it would in production: the SDK stops
+// checkpointing, and the invocation ends with [Pending]. Operations whose
+// checkpoint was in the tokenless response are recorded; operations that
+// had not yet checkpointed replay on the next invocation.
+// [LocalRunner.RunUntilComplete] returns that PENDING result, since no
+// timer or external action is needed to continue; a further Run or
+// RunUntilComplete resumes from the recorded state. Use it to test that a
+// handler tolerates an invocation ending mid-flight:
+//
+//	runner.OmitTokenOnCheckpoint(1)
+//	result := runner.RunUntilComplete(t, input) // PENDING after the first checkpoint
+//	result = runner.RunUntilComplete(t, input)  // resumes from the recorded state
+//
+// Count calls, not operations: a step checkpoints twice, once when it
+// starts and once when it settles, so OmitTokenOnCheckpoint(2) withholds
+// the token on the first step's result. Calls are counted from the moment
+// of scheduling.
+//
+// A later call replaces a schedule that has not fired yet. n must be at
+// least 1; OmitTokenOnCheckpoint panics otherwise.
+func (r *LocalRunner[I, O]) OmitTokenOnCheckpoint(n int) {
+	if n < 1 {
+		panic("durabletest: OmitTokenOnCheckpoint: n must be at least 1")
+	}
+	r.client.omitTokenOnCheckpoint(n)
+}
+
 // buildPayload constructs the durable invocation input from the current
 // in-memory state. The payload shape matches what the Lambda durable
 // execution service delivers to a handler.

@@ -325,6 +325,18 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		select {
 		case out := <-outcomeCh:
 			handlerTrace = out.trace
+			if halt := cp.haltCause(); halt != nil {
+				// The service stopped accepting this invocation's
+				// checkpoints before the handler returned. Whatever the
+				// handler returned cannot be reported: a result or an
+				// ordinary error would claim an outcome for an
+				// invocation the service no longer follows. End with
+				// the cause the checkpointer recorded instead:
+				// errSuspendExecution (PENDING) when a response carried
+				// no token, or the stale-token error (an invocation
+				// failure) when a newer invocation superseded this one.
+				return nil, halt
+			}
 			if ec.suspend.fired() || ec.suspend.committed() {
 				// The handler returned while a pending commitment
 				// stands. Terminate the checkpointer so orphaned
@@ -342,6 +354,12 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 			return out.result, nil
 		case <-ec.suspend.done():
 			cp.terminate()
+			if halt := cp.haltCause(); halt != nil {
+				// Same override as above: a stale-token rejection ends
+				// the invocation with an error even when every branch
+				// has since blocked.
+				return nil, halt
+			}
 			return nil, errSuspendExecution
 		}
 	}
@@ -445,6 +463,24 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 				Payload: aws.String(string(serialized)),
 			}
 			if cerr := cp.checkpoint(ctx, []OperationUpdate{update}); cerr != nil {
+				if errors.Is(cerr, errCheckpointTerminated) {
+					// The response carried no token: the service will
+					// accept no further checkpoints from this
+					// invocation. The result may or may not have been
+					// recorded, so the invocation must not claim the
+					// execution finished. Respond PENDING, as for any
+					// suspension; the next invocation replays and
+					// reports the result.
+					dispatchNotification(pd, func(p *Plugin) {
+						if p.OnInvocationEnd != nil {
+							p.OnInvocationEnd(ctx, InvocationEndHookInfo{
+								ExecutionArn: in.DurableExecutionArn,
+								Status:       PluginInvocationPending,
+							})
+						}
+					})
+					return respond(wire.InvocationResponse{Status: wire.StatusPending})
+				}
 				err := fmt.Errorf("durable: checkpoint oversized result: %w", cerr)
 				failInvocationEnd(err)
 				// The checkpoint is a client call outside the handler, so

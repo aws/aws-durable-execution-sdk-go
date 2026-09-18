@@ -32,6 +32,10 @@ type memoryClient struct {
 	tokenSeq   int
 	operations map[string]*durable.Operation // keyed by operation ID
 	opOrder    []string                      // insertion-order tracking
+
+	// omitTokenIn counts the Checkpoint calls remaining until one returns
+	// a response without a token. Zero means no omission is scheduled.
+	omitTokenIn int
 }
 
 func newMemoryClient() *memoryClient {
@@ -59,10 +63,29 @@ func (m *memoryClient) Checkpoint(_ context.Context, in durable.CheckpointInput)
 	m.tokenSeq++
 	m.token = "test-token-" + strconv.Itoa(m.tokenSeq)
 
-	return durable.CheckpointOutput{
+	out := durable.CheckpointOutput{
 		CheckpointToken:   m.token,
 		NewExecutionState: updated,
-	}, nil
+	}
+	if m.omitTokenIn > 0 {
+		m.omitTokenIn--
+		if m.omitTokenIn == 0 {
+			// The updates are applied and the internal token rotates
+			// as usual; only the response withholds the token. The next
+			// invocation starts from the rotated token.
+			out.CheckpointToken = ""
+		}
+	}
+	return out, nil
+}
+
+// omitTokenOnCheckpoint schedules the n-th Checkpoint call from now
+// (1-based) to return a response without a token. It replaces any earlier
+// schedule that has not fired yet.
+func (m *memoryClient) omitTokenOnCheckpoint(n int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.omitTokenIn = n
 }
 
 // GetExecutionState returns all stored operations in a single page. The

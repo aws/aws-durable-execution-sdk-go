@@ -15,14 +15,97 @@ import (
 )
 
 func TestClassifyCheckpointError(t *testing.T) {
-	// Retryable is derived from the scope: true exactly for the invocation
-	// scope. Each case asserts both so the relationship stays fixed.
+	// Retryable is derived from the scope: true for the invocation scope,
+	// except for a stale checkpoint token, which is invocation-scoped but
+	// never retryable. Each case asserts scope, retryability, and the
+	// stale-token mark so the relationship stays fixed.
 	tests := []struct {
 		name      string
 		err       error
 		scope     ErrorScope
 		retryable bool
+		stale     bool
 	}{
+		{
+			// The service's exact message for a superseded token.
+			name: "stale checkpoint token",
+			err: &smithy.GenericAPIError{
+				Code:    "InvalidParameterValueException",
+				Message: "Invalid checkpoint token",
+				Fault:   smithy.FaultClient,
+			},
+			scope:     ErrorScopeInvocation,
+			retryable: false,
+			stale:     true,
+		},
+		{
+			name: "stale checkpoint token with trailing detail",
+			err: &smithy.GenericAPIError{
+				Code:    "InvalidParameterValueException",
+				Message: "Invalid checkpoint token: superseded",
+				Fault:   smithy.FaultClient,
+			},
+			scope:     ErrorScopeInvocation,
+			retryable: false,
+			stale:     true,
+		},
+		{
+			// The prefix is compared without regard to case so a change
+			// in the service's capitalization does not fail executions.
+			name: "stale checkpoint token in another case",
+			err: &smithy.GenericAPIError{
+				Code:    "InvalidParameterValueException",
+				Message: "Invalid Checkpoint Token",
+				Fault:   smithy.FaultClient,
+			},
+			scope:     ErrorScopeInvocation,
+			retryable: false,
+			stale:     true,
+		},
+		{
+			name: "wrapped stale checkpoint token",
+			err: fmt.Errorf("operation error Lambda: CheckpointDurableExecution: %w", &smithy.GenericAPIError{
+				Code:    "InvalidParameterValueException",
+				Message: "Invalid checkpoint token",
+				Fault:   smithy.FaultClient,
+			}),
+			scope:     ErrorScopeInvocation,
+			retryable: false,
+			stale:     true,
+		},
+		{
+			// Same code, different message: an ordinary invalid request.
+			name: "InvalidParameterValueException with another message",
+			err: &smithy.GenericAPIError{
+				Code:    "InvalidParameterValueException",
+				Message: "Invalid execution ARN",
+				Fault:   smithy.FaultClient,
+			},
+			scope:     ErrorScopeExecution,
+			retryable: false,
+		},
+		{
+			// Same message, different code: not the stale-token rejection.
+			name: "stale-token message under another code",
+			err: &smithy.GenericAPIError{
+				Code:    "ValidationException",
+				Message: "Invalid checkpoint token",
+				Fault:   smithy.FaultClient,
+			},
+			scope:     ErrorScopeExecution,
+			retryable: false,
+		},
+		{
+			// The client's statement wins over a stale-token-shaped cause.
+			name: "client-stated execution scope over a stale-token cause",
+			err: &ClientError{Scope: ErrorScopeExecution, Err: &smithy.GenericAPIError{
+				Code:    "InvalidParameterValueException",
+				Message: "Invalid checkpoint token",
+				Fault:   smithy.FaultClient,
+			}},
+			scope:     ErrorScopeExecution,
+			retryable: false,
+		},
 		{
 			name:      "nil error",
 			err:       nil,
@@ -186,6 +269,9 @@ func TestClassifyCheckpointError(t *testing.T) {
 			}
 			if classified.Retryable() != tc.retryable {
 				t.Errorf("Retryable() = %v, want %v", classified.Retryable(), tc.retryable)
+			}
+			if classified.isStaleToken() != tc.stale {
+				t.Errorf("isStaleToken() = %v, want %v", classified.isStaleToken(), tc.stale)
 			}
 			if !errors.Is(classified, tc.err) {
 				t.Error("classified error should wrap original via errors.Is")

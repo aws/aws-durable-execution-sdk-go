@@ -2,6 +2,7 @@ package durable
 
 import (
 	"errors"
+	"strings"
 
 	smithy "github.com/aws/smithy-go"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
@@ -22,7 +23,8 @@ const (
 	// the execution can resume in a new one. It fits transient conditions:
 	// timeouts, throttling, connection failures, and server-side errors.
 	// The SDK retries a checkpoint call that fails with this scope before
-	// giving up on the invocation.
+	// giving up on the invocation, except for a stale checkpoint token,
+	// which a newer invocation has superseded and no retry can revive.
 	ErrorScopeInvocation ErrorScope = "INVOCATION"
 
 	// ErrorScopeExecution means the execution cannot proceed and must fail.
@@ -100,10 +102,18 @@ func (e *ClientError) effectiveScope() ErrorScope {
 //
 // # Retryability and scope
 //
-// Retryable is derived from the scope: it is true exactly when Scope is
-// [ErrorScopeInvocation]. An invocation-scoped failure is transient, so the
-// SDK retries the checkpoint call before giving up on the invocation. An
-// execution-scoped failure is permanent, so the SDK does not retry it.
+// Retryable is derived from the scope: it is true when Scope is
+// [ErrorScopeInvocation], with one exception. An invocation-scoped failure
+// is transient, so the SDK retries the checkpoint call before giving up on
+// the invocation. An execution-scoped failure is permanent, so the SDK does
+// not retry it.
+//
+// The exception is a stale checkpoint token. The service rejects a
+// checkpoint whose token a newer invocation has superseded. The failure is
+// invocation-scoped: the execution continues in the newer invocation, so
+// the current one ends with an error and nothing is lost. But the token
+// never becomes valid again, so Retryable is false and the SDK does not
+// retry the call.
 //
 // # How the SDK acts on the scope
 //
@@ -113,6 +123,11 @@ func (e *ClientError) effectiveScope() ErrorScope {
 // execution-scoped error ends the execution with a FAILED response. Handler
 // code that wants an ordinary failure should return its own error rather
 // than pass a CheckpointError through.
+//
+// A stale-token rejection ends the invocation with an error even when the
+// handler does not pass it through. The SDK stops checkpointing the moment
+// the rejection arrives, and the invocation's outcome cannot be reported
+// with a token the service no longer accepts.
 //
 // The same rule applies to the checkpoint the SDK makes on the handler's
 // behalf when a result is too large to return inline: an invocation-scoped
@@ -127,6 +142,9 @@ type CheckpointError struct {
 	Err error
 	// scope states how far the failure reaches.
 	scope ErrorScope
+	// staleToken is set when the service rejected the checkpoint token as
+	// superseded. The failure is invocation-scoped but not retryable.
+	staleToken bool
 }
 
 func (e *CheckpointError) Error() string {
@@ -143,9 +161,16 @@ func (e *CheckpointError) Unwrap() error { return e.Err }
 func (e *CheckpointError) Scope() ErrorScope { return e.scope }
 
 // Retryable reports whether the checkpoint failure is transient and the
-// caller should retry the request. It is true exactly when [Scope] is
-// [ErrorScopeInvocation].
-func (e *CheckpointError) Retryable() bool { return e.scope == ErrorScopeInvocation }
+// caller should retry the request. It is true when [Scope] is
+// [ErrorScopeInvocation], except for a stale checkpoint token, which no
+// retry can make valid again.
+func (e *CheckpointError) Retryable() bool {
+	return e.scope == ErrorScopeInvocation && !e.staleToken
+}
+
+// isStaleToken reports whether the failure is the service's rejection of a
+// superseded checkpoint token.
+func (e *CheckpointError) isStaleToken() bool { return e.staleToken }
 
 // IsCheckpointRetryable reports whether err (or any error in its chain)
 // is a retryable checkpoint failure. Returns false for nil.
@@ -166,6 +191,12 @@ func IsCheckpointRetryable(err error) bool {
 //     imitate the AWS SDK's error shape. See [ClientError] for how an
 //     unknown scope value is read.
 //  2. smithy.APIError in the chain:
+//     - ErrorCode is "InvalidParameterValueException" and the message
+//     starts with "Invalid checkpoint token" (compared without regard to
+//     case) → invocation scope, marked as a stale token. A newer
+//     invocation has superseded this one, so the execution continues
+//     there. The token never becomes valid again, so the error is not
+//     retryable.
 //     - ErrorCode is "TooManyRequestsException" → invocation scope
 //     (throttling is FaultClient in the generated code but is the
 //     canonical retry case).
@@ -183,7 +214,40 @@ func classifyCheckpointError(err error) *CheckpointError {
 	if err == nil {
 		return nil
 	}
+	if isStaleTokenRejection(err) {
+		return &CheckpointError{Err: err, scope: ErrorScopeInvocation, staleToken: true}
+	}
 	return &CheckpointError{Err: err, scope: clientErrorScope(err)}
+}
+
+// staleTokenErrorCode and staleTokenMessagePrefix identify the service's
+// rejection of a checkpoint token that a newer invocation has superseded.
+const (
+	staleTokenErrorCode     = "InvalidParameterValueException"
+	staleTokenMessagePrefix = "invalid checkpoint token"
+)
+
+// isStaleTokenRejection reports whether err is the service's rejection of
+// a superseded checkpoint token: a smithy.APIError with code
+// [staleTokenErrorCode] whose message starts with
+// [staleTokenMessagePrefix], compared without regard to case. A
+// *ClientError in the chain takes precedence: the client stated the scope
+// itself, so the shape of its cause is not inspected.
+func isStaleTokenRejection(err error) bool {
+	var clientErr *ClientError
+	if errors.As(err, &clientErr) {
+		return false
+	}
+	var apiErr smithy.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	if apiErr.ErrorCode() != staleTokenErrorCode {
+		return false
+	}
+	msg := apiErr.ErrorMessage()
+	return len(msg) >= len(staleTokenMessagePrefix) &&
+		strings.EqualFold(msg[:len(staleTokenMessagePrefix)], staleTokenMessagePrefix)
 }
 
 // clientErrorScope derives the [ErrorScope] of a failed [ExecutionClient]

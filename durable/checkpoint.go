@@ -36,12 +36,14 @@ const (
 	checkpointBatchOverheadBytes = 100
 )
 
-// errCheckpointTerminated is returned by the checkpointer after the
-// invocation has committed to a PENDING response. Orphaned branches
-// (durable.Go children still mid-flight when the handler unwinds) receive
-// this error at their next checkpoint attempt and treat it as suspension:
-// they settle their future with errSuspendExecution and release their
-// branch token without recording any further state.
+// errCheckpointTerminated is returned by the checkpointer once no further
+// checkpoints can be made in this invocation: after the invocation has
+// committed to a PENDING response, or after a checkpoint response arrived
+// without a token. Orphaned branches (durable.Go children still mid-flight
+// when the handler unwinds) receive this error at their next checkpoint
+// attempt and treat it as suspension: they settle their future with
+// errSuspendExecution and release their branch token without recording any
+// further state.
 var errCheckpointTerminated = errors.New("durable: checkpoint refused: invocation terminated")
 
 // pendingCheckpoint is one caller's checkpoint request waiting in the queue.
@@ -89,6 +91,14 @@ type checkpointer struct {
 	// in-flight checkpoint API call. An in-flight checkpoint discovers
 	// termination after its API call returns and refuses to rotate the token.
 	terminated atomic.Bool
+
+	// haltErr is set when the checkpointer terminates itself because the
+	// service will accept no further checkpoints from this invocation. It
+	// is the error the invocation must end with, whatever the handler
+	// returns: errSuspendExecution when a checkpoint response carried no
+	// token, or the stale-token *CheckpointError when the service rejected
+	// the token as superseded. The first cause recorded wins. Guarded by mu.
+	haltErr error
 
 	// state is the shared execution state. When non-nil, the checkpointer
 	// merges backend-returned operations into it so that subsequent reads
@@ -153,6 +163,32 @@ func (cp *checkpointer) terminate() {
 	cp.terminated.Store(true)
 }
 
+// halt terminates the checkpointer because the service will accept no
+// further checkpoints from this invocation, and records end as the error
+// the invocation must end with. The first recorded cause wins: a later
+// failure cannot change how the invocation ends. halt runs before the
+// requests in the failed call learn of the failure, so the handler always
+// sees the cause when it reads haltCause after the user function returns.
+func (cp *checkpointer) halt(end error) {
+	cp.mu.Lock()
+	if cp.haltErr == nil {
+		cp.haltErr = end
+	}
+	cp.mu.Unlock()
+	cp.terminate()
+}
+
+// haltCause returns the error the invocation must end with after the
+// checkpointer halted itself, or nil when it has not. The handler reads it
+// once the user function returns and lets it override the returned
+// outcome: a result or ordinary error cannot be reported once the service
+// has stopped accepting this invocation's checkpoints.
+func (cp *checkpointer) haltCause() error {
+	cp.mu.Lock()
+	defer cp.mu.Unlock()
+	return cp.haltErr
+}
+
 // checkpoint applies updates atomically and rotates the checkpoint token.
 // It queues the updates, starts the flusher if none is running, and waits
 // for the call that carries them. Updates from other goroutines that are
@@ -163,6 +199,12 @@ func (cp *checkpointer) terminate() {
 // exponential backoff. Non-retryable failures (client faults other than
 // throttling) fail immediately. On any failure the token remains unchanged
 // and every request in the failed call receives the error.
+//
+// Two outcomes halt the checkpointer for the rest of the invocation. A
+// stale-token rejection (see [CheckpointError]) returns the classified
+// error and ends the invocation with it. A response without a token
+// returns errCheckpointTerminated and ends the invocation with PENDING.
+// Every later call returns errCheckpointTerminated.
 //
 // If ctx is done before the updates are sent, checkpoint returns ctx.Err()
 // and the updates are dropped from the queue.
@@ -290,6 +332,15 @@ func (cp *checkpointer) send(batch []*pendingCheckpoint, token string) error {
 		})
 		if err != nil {
 			classified := classifyCheckpointError(err)
+			if classified.isStaleToken() {
+				// A newer invocation has superseded this one. The token
+				// never becomes valid again, so a retry cannot succeed.
+				// Halt: later checkpoint calls are refused, and the
+				// invocation ends with this error, so the execution
+				// continues in the invocation that holds the fresh token.
+				cp.halt(classified)
+				return classified
+			}
 			if !classified.Retryable() {
 				return classified
 			}
@@ -313,7 +364,18 @@ func (cp *checkpointer) send(batch []*pendingCheckpoint, token string) error {
 		}
 
 		if out.CheckpointToken == "" {
-			return errors.New("durable: checkpoint: backend returned no checkpoint token")
+			// A response without a token means the service will accept no
+			// further checkpoints from this invocation. The execution is
+			// not finished; this invocation just cannot make further
+			// progress. Halt so the invocation ends with PENDING, as for
+			// any other suspension: the requests in this call receive
+			// errCheckpointTerminated, which every operation translates
+			// into errSuspendExecution, and the handler ends the
+			// invocation with errSuspendExecution even if user code
+			// swallows that error. Abandoned work replays on the next
+			// invocation.
+			cp.halt(errSuspendExecution)
+			return errCheckpointTerminated
 		}
 
 		cp.mu.Lock()
