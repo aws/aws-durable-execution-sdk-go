@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+### Added: `FileSystemSerdesConfig.PathEncoding`; the default file layout is now readable
+
+`FileSystemSerdesConfig` gains `PathEncoding`, which chooses where the
+filesystem serdes writes each offloaded value under the base path.
+
+`FileSystemPathEncodingURI` is the new default. Files go under
+`<functionName>/<executionName>/<invocationId>/<operationID>.json`, taken
+from the execution ARN, so a stored payload can be found by browsing the
+mount. Every segment is percent-encoded: characters outside letters,
+digits, `-`, `_`, `.`, and `~` become `%XX`, and a segment that would be
+`.` or `..` has its dots encoded, so no identifier can name a path outside
+its directory. An ARN without the durable-execution shape is encoded whole
+into a single directory segment.
+
+`FileSystemPathEncodingHash` is the layout earlier releases always used,
+unchanged: the directory is the hex encoding of the first 16 bytes of the
+ARN's SHA-256 digest and the file is `<operationID>.json`.
+
+Effect on files written by earlier releases: they remain readable. The
+checkpoint envelope stores the full path of each file, so `Unmarshal`
+reads a file back whatever layout was in effect when it was written and
+whatever layout the serdes is configured with now. Only the location of
+new files changes. A file that an earlier release wrote for an execution
+that is still running is not moved; a later write of the same operation
+under the new default lands at the new location and the old file is left
+in place. To keep writing new files at the earlier locations, set
+`PathEncoding: durable.FileSystemPathEncodingHash`.
+
+```go
+serdes := durable.NewFileSystemSerdes("/mnt/efs", durable.FileSystemSerdesConfig{
+	PathEncoding: durable.FileSystemPathEncodingHash,
+})
+```
+
+When the `SerdesContext` carries no execution ARN or operation ID, the path
+is derived from a hash of the value bytes under both layouts, as before.
+
 ### Added: `JSONSerdes` exports the default serializer
 
 `JSONSerdes` is the `Serdes` the SDK uses when no serializer option is

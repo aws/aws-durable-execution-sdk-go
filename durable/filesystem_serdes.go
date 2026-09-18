@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 )
 
 // FileSystemSerdesMode controls when data is written to the filesystem.
@@ -29,6 +31,38 @@ const (
 // headroom for the envelope wrapper).
 const fileSystemSerdesOverflowThreshold = 255 * 1024
 
+// FileSystemPathEncoding controls how the durable execution ARN and the
+// operation ID are turned into the directory and file names of an offloaded
+// value under the base path.
+type FileSystemPathEncoding int
+
+const (
+	// FileSystemPathEncodingURI is the readable layout and the default. The
+	// per-execution directory is
+	// <functionName>/<executionName>/<invocationId>, taken from the
+	// execution ARN, and the file name is the operation ID followed by
+	// ".json". Every segment is percent-encoded: bytes outside the
+	// unreserved set (letters, digits, "-", "_", ".", "~") become %XX, and
+	// a segment that would be "." or ".." has its dots encoded. So no
+	// identifier can name a path outside its directory or produce a
+	// filename with a separator in it. An ARN that does not have the
+	// durable-execution shape is percent-encoded whole into a single
+	// directory segment. A very long operation ID can exceed the
+	// filesystem's per-name limit (commonly 255 bytes); use
+	// FileSystemPathEncodingHash when that is a risk.
+	FileSystemPathEncodingURI FileSystemPathEncoding = iota
+
+	// FileSystemPathEncodingHash is the hashed layout. The directory is the
+	// hex encoding of the first 16 bytes of the SHA-256 digest of the
+	// execution ARN, and the file name is the operation ID followed by
+	// ".json". The directory name has a fixed length and is filesystem-safe
+	// whatever the ARN contains, but it cannot be read back to an execution
+	// by browsing the mount. This is the layout earlier releases always
+	// used, unchanged, so files written by them sit where this layout puts
+	// them.
+	FileSystemPathEncodingHash
+)
+
 // FileSystemSerdesConfig configures a [FileSystemSerdes].
 type FileSystemSerdesConfig struct {
 	_ [0]func() // blocks unkeyed literals; keeps fields addable
@@ -36,6 +70,15 @@ type FileSystemSerdesConfig struct {
 	// Mode controls when data is written to the filesystem. Default is
 	// FileSystemSerdesModeAlways.
 	Mode FileSystemSerdesMode
+
+	// PathEncoding controls the directory and file names of offloaded
+	// values. Default is FileSystemPathEncodingURI, the readable layout.
+	//
+	// The checkpoint envelope stores the full path of each file, so a
+	// value is read back correctly whatever layout was in effect when it
+	// was written. Changing this setting affects only where new files are
+	// written.
+	PathEncoding FileSystemPathEncoding
 }
 
 // fileSystemSerdes stores serialized values on a durable filesystem (EFS,
@@ -58,6 +101,13 @@ var _ Serdes = (*fileSystemSerdes)(nil)
 // Lambda's /tmp. On replay, a different execution environment may service
 // the invocation, so /tmp files from a prior invocation are unavailable.
 //
+// By default files are laid out under basePath as
+// <functionName>/<executionName>/<invocationId>/<operationID>.json, with
+// each segment percent-encoded ([FileSystemPathEncodingURI]). Set
+// [FileSystemSerdesConfig.PathEncoding] to [FileSystemPathEncodingHash] for
+// the hashed layout instead. The envelope records the full file path, so
+// either layout reads back files written under the other.
+//
 // File writes are atomic from a reader's perspective: each value is written
 // to a temporary file in the target directory, synced, and renamed over the
 // final path, so a concurrent reader sees either the previous complete file
@@ -71,7 +121,9 @@ func NewFileSystemSerdes(basePath string, cfg ...FileSystemSerdesConfig) Serdes 
 	return &fileSystemSerdes{basePath: basePath, config: config}
 }
 
-// fsEnvelope is the JSON envelope stored in the checkpoint.
+// fsEnvelope is the JSON envelope stored in the checkpoint. File is the
+// full path of the offloaded value, so reading it back needs neither the
+// base path nor the path encoding that was in effect when it was written.
 type fsEnvelope struct {
 	Data *string `json:"data,omitempty"`
 	File string  `json:"file,omitempty"`
@@ -140,27 +192,9 @@ func (s *fileSystemSerdes) Unmarshal(_ context.Context, _ SerdesContext, data []
 }
 
 // writeFile writes valueJSON to a file under basePath and returns the
-// absolute file path. When the SerdesContext carries an execution ARN and
-// operation ID, those are used to organize files by execution and operation.
-// Otherwise, a content-addressable scheme is used: the file path is derived
-// from a hash of the value bytes, making it safe for concurrent writes of
-// the same value.
+// file path. The location comes from resolvePath.
 func (s *fileSystemSerdes) writeFile(meta SerdesContext, valueJSON []byte) (string, error) {
-	// Use the execution ARN and operation ID for directory structure when
-	// available, falling back to content-addressable hashing.
-	var dir, fileName string
-	if meta.DurableExecutionArn != "" && meta.OperationID != "" {
-		// Organize by ARN hash and operation ID for deterministic paths.
-		arnHash := sha256.Sum256([]byte(meta.DurableExecutionArn))
-		dir = filepath.Join(s.basePath, hex.EncodeToString(arnHash[:16]))
-		fileName = meta.OperationID + ".json"
-	} else {
-		// Content-addressable fallback.
-		hash := sha256.Sum256(valueJSON)
-		dir = filepath.Join(s.basePath, hex.EncodeToString(hash[:16]))
-		fileName = hex.EncodeToString(hash[16:]) + ".json"
-	}
-
+	dir, fileName := s.resolvePath(meta, valueJSON)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("durable: filesystem serdes: create dir: %w", err)
 	}
@@ -169,6 +203,91 @@ func (s *fileSystemSerdes) writeFile(meta SerdesContext, valueJSON []byte) (stri
 		return "", fmt.Errorf("durable: filesystem serdes: write file: %w", err)
 	}
 	return filePath, nil
+}
+
+// resolvePath returns the directory and file name for a value. When the
+// SerdesContext carries both an execution ARN and an operation ID, the
+// configured PathEncoding decides the layout. Otherwise the path is
+// content-addressable: derived from a hash of the value bytes, so
+// concurrent writes of the same value target the same file, whatever the
+// PathEncoding.
+func (s *fileSystemSerdes) resolvePath(meta SerdesContext, valueJSON []byte) (dir, fileName string) {
+	if meta.DurableExecutionArn == "" || meta.OperationID == "" {
+		hash := sha256.Sum256(valueJSON)
+		dir = filepath.Join(s.basePath, hex.EncodeToString(hash[:16]))
+		return dir, hex.EncodeToString(hash[16:]) + ".json"
+	}
+	if s.config.PathEncoding == FileSystemPathEncodingHash {
+		arnHash := sha256.Sum256([]byte(meta.DurableExecutionArn))
+		dir = filepath.Join(s.basePath, hex.EncodeToString(arnHash[:16]))
+		return dir, meta.OperationID + ".json"
+	}
+	return readableExecutionDir(s.basePath, meta.DurableExecutionArn),
+		escapePathSegment(meta.OperationID) + ".json"
+}
+
+// durableExecutionArnPattern matches an ARN of the form
+//
+//	arn:<partition>:lambda:<region>:<account>:function:<functionName>:<qualifier>/durable-execution/<executionName>/<invocationId>
+//
+// and captures the function name, execution name, and invocation ID.
+var durableExecutionArnPattern = regexp.MustCompile(
+	`^arn:[^:]*:lambda:[^:]*:[^:]*:function:([^:/]+):[^:/]+/durable-execution/([^/]+)/([^/]+)$`)
+
+// readableExecutionDir returns the per-execution directory for the
+// readable layout. An ARN of the durable-execution shape yields
+// basePath/<functionName>/<executionName>/<invocationId>; any other ARN is
+// escaped whole into a single segment. Each segment passes through
+// escapePathSegment, so a name such as ".." cannot leave basePath.
+func readableExecutionDir(basePath, arn string) string {
+	m := durableExecutionArnPattern.FindStringSubmatch(arn)
+	if m == nil {
+		return filepath.Join(basePath, escapePathSegment(arn))
+	}
+	return filepath.Join(basePath,
+		escapePathSegment(m[1]), escapePathSegment(m[2]), escapePathSegment(m[3]))
+}
+
+// escapePathSegment percent-encodes s into a single path segment. Bytes in
+// the RFC 3986 unreserved set (letters, digits, "-", "_", ".", "~") pass
+// through; every other byte, including "/", "\", ":" and "%", becomes %XX.
+// A result of "." or ".." would still be a directory reference, so those
+// two have their dots encoded as well. The output therefore never contains
+// a path separator and never names the current or parent directory.
+func escapePathSegment(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if isUnreservedByte(c) {
+			b.WriteByte(c)
+			continue
+		}
+		b.WriteByte('%')
+		b.WriteByte(upperHex[c>>4])
+		b.WriteByte(upperHex[c&0x0f])
+	}
+	switch out := b.String(); out {
+	case ".":
+		return "%2E"
+	case "..":
+		return "%2E%2E"
+	default:
+		return out
+	}
+}
+
+const upperHex = "0123456789ABCDEF"
+
+// isUnreservedByte reports whether c is in the RFC 3986 unreserved set.
+func isUnreservedByte(c byte) bool {
+	switch {
+	case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9':
+		return true
+	case c == '-', c == '_', c == '.', c == '~':
+		return true
+	}
+	return false
 }
 
 // fileSystemSerdesTempSuffix is the suffix of the temporary file that

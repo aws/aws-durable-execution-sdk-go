@@ -2,6 +2,8 @@ package durable
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -187,31 +189,275 @@ func TestFileSystemSerdesRoundTrip(t *testing.T) {
 	}
 }
 
-func TestFileSystemSerdesHashPathEncoding(t *testing.T) {
-	dir := t.TempDir()
-	s := NewFileSystemSerdes(dir, FileSystemSerdesConfig{})
+// Without an execution ARN and operation ID the path is content-addressable
+// whatever the configured layout.
+func TestFileSystemSerdesContentAddressableFallback(t *testing.T) {
+	for _, enc := range []FileSystemPathEncoding{FileSystemPathEncodingURI, FileSystemPathEncodingHash} {
+		dir := t.TempDir()
+		s := NewFileSystemSerdes(dir, FileSystemSerdesConfig{PathEncoding: enc})
 
-	data, err := s.Marshal(context.Background(), SerdesContext{}, "test-value")
+		data, err := s.Marshal(context.Background(), SerdesContext{}, "test-value")
+		if err != nil {
+			t.Fatalf("Marshal: %v", err)
+		}
+
+		var env fsEnvelope
+		if err := json.Unmarshal(data, &env); err != nil {
+			t.Fatalf("unmarshal envelope: %v", err)
+		}
+		// File path should use hex-encoded segments.
+		rel, _ := filepath.Rel(dir, env.File)
+		parts := strings.Split(rel, string(filepath.Separator))
+		if len(parts) != 2 {
+			t.Fatalf("encoding %d: expected 2 path segments, got %d: %v", enc, len(parts), parts)
+		}
+		// Both segments should be hex strings (32 hex chars each from 16 bytes).
+		for _, p := range parts {
+			p = strings.TrimSuffix(p, ".json")
+			if len(p) != 32 {
+				t.Errorf("encoding %d: path segment %q has length %d, want 32", enc, p, len(p))
+			}
+		}
+	}
+}
+
+const testExecutionArn = "arn:aws:lambda:us-east-1:000:function:orders:$LATEST/durable-execution/order-42/0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0"
+
+func TestFileSystemSerdesReadableLayoutIsDefault(t *testing.T) {
+	dir := t.TempDir()
+	s := NewFileSystemSerdes(dir)
+	meta := SerdesContext{DurableExecutionArn: testExecutionArn, OperationID: "1-2-3"}
+
+	data, err := s.Marshal(context.Background(), meta, "v")
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
-
 	var env fsEnvelope
 	if err := json.Unmarshal(data, &env); err != nil {
 		t.Fatalf("unmarshal envelope: %v", err)
 	}
-	// File path should use hex-encoded segments.
-	rel, _ := filepath.Rel(dir, env.File)
-	parts := strings.Split(rel, string(filepath.Separator))
-	if len(parts) != 2 {
-		t.Fatalf("expected 2 path segments, got %d: %v", len(parts), parts)
+	want := filepath.Join(dir, "orders", "order-42", "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0", "1-2-3.json")
+	if env.File != want {
+		t.Errorf("file = %q, want %q", env.File, want)
 	}
-	// Both segments should be hex strings (32 hex chars each from 16 bytes).
-	for _, p := range parts {
-		p = strings.TrimSuffix(p, ".json")
-		if len(p) != 32 {
-			t.Errorf("path segment %q has length %d, want 32", p, len(p))
+	var out string
+	if err := s.Unmarshal(context.Background(), meta, data, &out); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if out != "v" {
+		t.Errorf("out = %q, want %q", out, "v")
+	}
+}
+
+func TestFileSystemSerdesReadableLayoutUnrecognizedArn(t *testing.T) {
+	dir := t.TempDir()
+	s := NewFileSystemSerdes(dir, FileSystemSerdesConfig{PathEncoding: FileSystemPathEncodingURI})
+	meta := SerdesContext{DurableExecutionArn: "arn:test/exec", OperationID: "op-1"}
+
+	data, err := s.Marshal(context.Background(), meta, "v")
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var env fsEnvelope
+	if err := json.Unmarshal(data, &env); err != nil {
+		t.Fatalf("unmarshal envelope: %v", err)
+	}
+	// The whole ARN becomes one escaped segment.
+	want := filepath.Join(dir, "arn%3Atest%2Fexec", "op-1.json")
+	if env.File != want {
+		t.Errorf("file = %q, want %q", env.File, want)
+	}
+}
+
+// Identifiers that need escaping stay inside basePath and produce a valid
+// filename in the readable layout.
+func TestFileSystemSerdesReadableLayoutEscapesIdentifiers(t *testing.T) {
+	tests := []struct {
+		name string
+		arn  string
+		op   string
+	}{
+		{"slash in op", "arn:x", "a/b"},
+		{"parent dir op", "arn:x", ".."},
+		{"current dir op", "arn:x", "."},
+		{"parent dir arn", "..", "op"},
+		{"nested traversal arn", "../../etc", "op"},
+		{"backslash and percent", `a\b%2F`, `c\d%`},
+		{"space and unicode", "arn with space", "opé"},
+		{"parent dir execution name", "arn:aws:lambda:us-east-1:000:function:fn:1/durable-execution/../x", "op"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			base := filepath.Join(root, "base")
+			s := NewFileSystemSerdes(base)
+			meta := SerdesContext{DurableExecutionArn: tt.arn, OperationID: tt.op}
+
+			data, err := s.Marshal(context.Background(), meta, tt.name)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			var env fsEnvelope
+			if err := json.Unmarshal(data, &env); err != nil {
+				t.Fatalf("unmarshal envelope: %v", err)
+			}
+			// The written path stays under base once cleaned. A relative
+			// path that is ".." or starts with "../" points outside; a
+			// segment merely beginning with ".." (such as "..%2Fetc") is a
+			// plain directory name.
+			rel, err := filepath.Rel(base, filepath.Clean(env.File))
+			if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				t.Fatalf("file %q escaped base %q (rel %q, err %v)", env.File, base, rel, err)
+			}
+			// Nothing was created outside base.
+			entries, err := os.ReadDir(root)
+			if err != nil {
+				t.Fatalf("read root: %v", err)
+			}
+			if len(entries) != 1 || entries[0].Name() != "base" {
+				t.Errorf("root contains %v, want only base", entries)
+			}
+			// No segment is a directory reference or contains a separator.
+			for _, seg := range strings.Split(rel, string(filepath.Separator)) {
+				if seg == "." || seg == ".." || strings.ContainsAny(seg, `/\`) {
+					t.Errorf("segment %q of %q is not a plain name", seg, rel)
+				}
+			}
+			var out string
+			if err := s.Unmarshal(context.Background(), meta, data, &out); err != nil {
+				t.Fatalf("Unmarshal: %v", err)
+			}
+			if out != tt.name {
+				t.Errorf("out = %q, want %q", out, tt.name)
+			}
+		})
+	}
+}
+
+func TestEscapePathSegment(t *testing.T) {
+	tests := map[string]string{
+		"abc-XYZ_0.9~":    "abc-XYZ_0.9~",
+		"a/b":             "a%2Fb",
+		`a\b`:             "a%5Cb",
+		"a:b":             "a%3Ab",
+		"100%":            "100%25",
+		"a b":             "a%20b",
+		"é":               "%C3%A9",
+		".":               "%2E",
+		"..":              "%2E%2E",
+		"...":             "...",
+		"":                "",
+		"arn:x/y":         "arn%3Ax%2Fy",
+		"$LATEST":         "%24LATEST",
+		"!*'()":           "%21%2A%27%28%29",
+		"1-2-3":           "1-2-3",
+		"order-42":        "order-42",
+		"f0e1d2c3-4b5a-6": "f0e1d2c3-4b5a-6",
+	}
+	for in, want := range tests {
+		if got := escapePathSegment(in); got != want {
+			t.Errorf("escapePathSegment(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// The hashed layout is the layout earlier releases used, so a file written
+// by an earlier release is found at the same path.
+func TestFileSystemSerdesHashLayout(t *testing.T) {
+	dir := t.TempDir()
+	s := NewFileSystemSerdes(dir, FileSystemSerdesConfig{PathEncoding: FileSystemPathEncodingHash})
+	meta := SerdesContext{DurableExecutionArn: testExecutionArn, OperationID: "1-2-3"}
+
+	data, err := s.Marshal(context.Background(), meta, "v")
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var env fsEnvelope
+	if err := json.Unmarshal(data, &env); err != nil {
+		t.Fatalf("unmarshal envelope: %v", err)
+	}
+	arnHash := sha256.Sum256([]byte(testExecutionArn))
+	want := filepath.Join(dir, hex.EncodeToString(arnHash[:16]), "1-2-3.json")
+	if env.File != want {
+		t.Errorf("file = %q, want %q", env.File, want)
+	}
+	var out string
+	if err := s.Unmarshal(context.Background(), meta, data, &out); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if out != "v" {
+		t.Errorf("out = %q, want %q", out, "v")
+	}
+}
+
+// Both layouts apply in OVERFLOW mode once a value is too large to inline.
+func TestFileSystemSerdesOverflowUsesConfiguredLayout(t *testing.T) {
+	dir := t.TempDir()
+	meta := SerdesContext{DurableExecutionArn: testExecutionArn, OperationID: "7"}
+	large := strings.Repeat("x", 300*1024)
+
+	uri := NewFileSystemSerdes(dir, FileSystemSerdesConfig{Mode: FileSystemSerdesModeOverflow})
+	data, err := uri.Marshal(context.Background(), meta, large)
+	if err != nil {
+		t.Fatalf("Marshal uri: %v", err)
+	}
+	var env fsEnvelope
+	if err := json.Unmarshal(data, &env); err != nil {
+		t.Fatalf("unmarshal envelope: %v", err)
+	}
+	if want := filepath.Join(dir, "orders", "order-42", "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0", "7.json"); env.File != want {
+		t.Errorf("uri file = %q, want %q", env.File, want)
+	}
+
+	hashed := NewFileSystemSerdes(dir, FileSystemSerdesConfig{
+		Mode:         FileSystemSerdesModeOverflow,
+		PathEncoding: FileSystemPathEncodingHash,
+	})
+	data, err = hashed.Marshal(context.Background(), meta, large)
+	if err != nil {
+		t.Fatalf("Marshal hash: %v", err)
+	}
+	if err := json.Unmarshal(data, &env); err != nil {
+		t.Fatalf("unmarshal envelope: %v", err)
+	}
+	arnHash := sha256.Sum256([]byte(testExecutionArn))
+	if want := filepath.Join(dir, hex.EncodeToString(arnHash[:16]), "7.json"); env.File != want {
+		t.Errorf("hash file = %q, want %q", env.File, want)
+	}
+}
+
+// The envelope holds the full file path, so a serdes configured with one
+// layout reads back a value written under the other.
+func TestFileSystemSerdesEnvelopeReadableAcrossLayouts(t *testing.T) {
+	dir := t.TempDir()
+	meta := SerdesContext{DurableExecutionArn: testExecutionArn, OperationID: "3"}
+	uri := NewFileSystemSerdes(dir, FileSystemSerdesConfig{PathEncoding: FileSystemPathEncodingURI})
+	hashed := NewFileSystemSerdes(dir, FileSystemSerdesConfig{PathEncoding: FileSystemPathEncodingHash})
+
+	fromURI, err := uri.Marshal(context.Background(), meta, "written-by-uri")
+	if err != nil {
+		t.Fatalf("Marshal uri: %v", err)
+	}
+	fromHash, err := hashed.Marshal(context.Background(), meta, "written-by-hash")
+	if err != nil {
+		t.Fatalf("Marshal hash: %v", err)
+	}
+	if string(fromURI) == string(fromHash) {
+		t.Fatal("expected the two layouts to produce different envelopes")
+	}
+
+	var out string
+	if err := hashed.Unmarshal(context.Background(), meta, fromURI, &out); err != nil {
+		t.Fatalf("hash serdes reading uri envelope: %v", err)
+	}
+	if out != "written-by-uri" {
+		t.Errorf("out = %q, want %q", out, "written-by-uri")
+	}
+	if err := uri.Unmarshal(context.Background(), meta, fromHash, &out); err != nil {
+		t.Fatalf("uri serdes reading hash envelope: %v", err)
+	}
+	if out != "written-by-hash" {
+		t.Errorf("out = %q, want %q", out, "written-by-hash")
 	}
 }
 
