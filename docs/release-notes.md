@@ -2,6 +2,71 @@
 
 ## Unreleased
 
+### Breaking: `Map` and `Parallel` are fail-fast by default and return a `BatchError`
+
+Two behavioural changes to batch completion.
+
+**The default completion policy is fail-fast.** A `Map` or `Parallel`
+without `WithCompletion`, or with a zero `CompletionConfig{}`, ran every
+item and reported success however many failed. It now completes on the
+first item failure with `CompletionFailureToleranceExceeded`, and the
+items not yet started are omitted from the result. This matches the other
+SDKs. To keep the former behaviour, set a tolerance explicitly, for
+example `CompletionConfig{ToleratedFailureCount: aws.Int(len(items))}`.
+A config that sets only `MinSuccessful` tolerates every failure, as
+before.
+
+**Failed items are returned as `err`.** `Map` and `Parallel` returned a
+non-nil error only for SDK-level failures; the item failures lived in
+`BatchResult.Err()`, which the caller had to check separately. When at
+least one item failed, they now return a `*BatchError` as `err` and still
+return the populated `BatchResult`, so partial results remain available
+for compensation. `BatchError` has `Name`, `Reason` (the batch's
+`CompletionReason`), and `Errors` (the per-item errors in input order);
+it unwraps to the item errors for `errors.Is` and `errors.As`, and matches
+`*OperationError`. `BatchResult.Err()` and `BatchCompletionError` are
+removed. A `BatchError` is returned whenever an item failed, so a failure
+within a configured tolerance also produces one; its `Reason` is then
+`CompletionAllCompleted` or `CompletionMinSuccessfulReached` rather than
+`CompletionFailureToleranceExceeded`. Replace
+
+```go
+result, err := durable.Map(ctx, "reserve", items, fn, opts...)
+if err != nil {
+	return err
+}
+if err := result.Err(); err != nil {
+	return err
+}
+```
+
+with `if err != nil { return err }` alone, or, to keep using the partial
+result:
+
+```go
+result, err := durable.Map(ctx, "reserve", items, fn, opts...)
+var berr *durable.BatchError
+switch {
+case err == nil:
+	// use result
+case errors.As(err, &berr):
+	// items failed; result is populated for compensation
+default:
+	return err // suspension or SDK failure: propagate unchanged
+}
+```
+
+The batch's checkpoint is unchanged: the batch operation is recorded as
+SUCCEEDED whether or not items failed, as in the other SDKs. Only the Go
+return value changed.
+
+Two smaller changes to `CompletionConfig`. `ToleratedFailurePercentage`
+is now `*int`, like `ToleratedFailureCount`, so an explicit `0` (fail on
+the first failure) is distinguishable from unset; replace
+`ToleratedFailurePercentage: 25` with `aws.Int(25)`. The percentage
+comparison is exact instead of rounding down through integer division:
+one failure in three (33.3%) now exceeds a threshold of 33.
+
 ### Fixed: a retry decision without a delay waits one second
 
 A `RetryStrategy` that returned `RetryDecision{Retry: true}` without
@@ -169,7 +234,7 @@ older message-only form still deserialize. Detail fields outside
 `OperationError` (such as `StepError.Attempts` or
 `ResultTooLargeError.SizeBytes`) are zero after the round trip; a rebuilt
 `NonDeterministicReplayError` or `ResultTooLargeError` keeps the recorded
-text as its `Error()`, and a rebuilt `BatchCompletionError` recovers its
+text as its `Error()`, and a rebuilt `BatchError` recovers its
 `Reason`.
 
 Checkpoints that record a callback timeout under the older

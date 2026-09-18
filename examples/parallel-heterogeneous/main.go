@@ -4,10 +4,12 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
+	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
 // Output collects the parallel branch results and metadata.
@@ -34,8 +36,15 @@ func handler(ctx durable.Context, _ any) (Output, error) {
 			}
 			return result, nil
 		}},
-	})
-	if err != nil {
+	},
+		// Tolerate a failed branch so every branch runs; the default
+		// completion policy would stop the batch at the first failure.
+		durable.WithCompletion(durable.CompletionConfig{ToleratedFailureCount: aws.Int(3)}))
+	// Failed branches are reported as a *durable.BatchError alongside the
+	// populated result; this handler reports the result. Any other error is
+	// an SDK failure and propagates.
+	var berr *durable.BatchError
+	if err != nil && !errors.As(err, &berr) {
 		return Output{}, err
 	}
 

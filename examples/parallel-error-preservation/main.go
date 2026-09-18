@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
+	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
 type ErrorInfo struct {
@@ -34,8 +35,15 @@ func handler(ctx durable.Context, _ any) (Output, error) {
 				MaxAttempts: 1,
 			})))
 		}},
-	})
-	if err != nil {
+	},
+		// Tolerate the one failing branch so every branch runs; the default
+		// completion policy would stop the batch at the first failure.
+		durable.WithCompletion(durable.CompletionConfig{ToleratedFailureCount: aws.Int(1)}))
+	// Failed items are reported as a *durable.BatchError alongside the
+	// populated result; this handler reports the result. Any other error is
+	// an SDK failure and propagates.
+	var berr *durable.BatchError
+	if err != nil && !errors.As(err, &berr) {
 		return Output{}, err
 	}
 

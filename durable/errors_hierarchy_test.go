@@ -69,7 +69,7 @@ func TestCallbackSubtypesMatchBaseTypes(t *testing.T) {
 		newChildContextError("c", rec),
 		newWaitForConditionError("w", 1, rec),
 		&CombinatorError{Name: "any"},
-		&BatchCompletionError{Reason: CompletionAllCompleted},
+		&BatchError{Name: "b", Reason: CompletionAllCompleted},
 		&NonDeterministicReplayError{Name: "n"},
 		&ResultTooLargeError{Name: "r"},
 	}
@@ -257,12 +257,12 @@ func TestSettledRoundTripsErrorType(t *testing.T) {
 		}
 	})
 
-	t.Run("batch completion error", func(t *testing.T) {
-		in := Settled[string]{Err: &BatchCompletionError{Reason: CompletionFailureToleranceExceeded}}
+	t.Run("batch error", func(t *testing.T) {
+		in := Settled[string]{Err: &BatchError{Name: "b", Reason: CompletionFailureToleranceExceeded, Errors: []error{errors.New("x")}}}
 		out := roundTrip(t, in)
-		var batchErr *BatchCompletionError
+		var batchErr *BatchError
 		if !errors.As(out.Err, &batchErr) {
-			t.Fatalf("deserialized error = %T, want *BatchCompletionError", out.Err)
+			t.Fatalf("deserialized error = %T, want *BatchError", out.Err)
 		}
 		if batchErr.Reason != CompletionFailureToleranceExceeded {
 			t.Errorf("Reason = %v, want %v", batchErr.Reason, CompletionFailureToleranceExceeded)
@@ -322,7 +322,7 @@ func TestSettledRoundTripsErrorType(t *testing.T) {
 			newChildContextError("c", errorRecord{errType: "E", message: "m"}),
 			newWaitForConditionError("w", 1, errorRecord{errType: "E", message: "m"}),
 			&CombinatorError{Name: "any", Errors: []error{errors.New("m")}},
-			&BatchCompletionError{Reason: CompletionAllCompleted},
+			&BatchError{Name: "b", Reason: CompletionAllCompleted, Errors: []error{errors.New("m")}},
 			&OperationError{Name: "o", ErrorType: "E", Message: "m", Err: errors.New("m")},
 			&NonDeterministicReplayError{Name: "n"},
 			&ResultTooLargeError{Name: "r"},

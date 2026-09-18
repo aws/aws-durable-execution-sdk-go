@@ -4,10 +4,12 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
+	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
 type Output struct {
@@ -38,11 +40,15 @@ func handler(ctx durable.Context, _ any) (Output, error) {
 			)
 		},
 		durable.WithCompletion(durable.CompletionConfig{
-			ToleratedFailurePercentage: 25,
+			ToleratedFailurePercentage: aws.Int(25),
 		}),
 		durable.WithMaxConcurrency(1),
 	)
-	if err != nil {
+	// Failed items are reported as a *durable.BatchError alongside the
+	// populated result; this handler reports the result. Any other error is
+	// an SDK failure and propagates.
+	var berr *durable.BatchError
+	if err != nil && !errors.As(err, &berr) {
 		return Output{}, err
 	}
 

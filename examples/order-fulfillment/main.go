@@ -96,14 +96,10 @@ func handler(ctx durable.Context, order Order) (FulfillmentResult, error) {
 			},
 		},
 	)
+	// A failed branch is returned as a *durable.BatchError; every other
+	// error is an SDK failure. Both fail the order here.
 	if err != nil {
 		return FulfillmentResult{}, fmt.Errorf("shipment prep failed: %w", err)
-	}
-
-	// Check for branch failures before accessing results. Parallel
-	// exposes branch failures through BatchResult.Err().
-	if err := shipment.Err(); err != nil {
-		return FulfillmentResult{}, fmt.Errorf("shipment prep branch failed: %w", err)
 	}
 
 	// Look up branch results by name rather than by index: completion

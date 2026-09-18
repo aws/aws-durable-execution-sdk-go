@@ -25,8 +25,43 @@ const (
 //
 // Each item runs in a MapIteration child context. Items are identified by
 // their zero-based index; use [WithItemNamer] to assign display names from
-// item values. MaxConcurrency bounds in-flight items; completion config may
-// stop scheduling early.
+// item values. MaxConcurrency bounds in-flight items.
+//
+// # Completion and failure
+//
+// The default completion policy is fail-fast: with no [WithCompletion]
+// option, the first item failure completes the batch with
+// [CompletionFailureToleranceExceeded] and the items not yet started are
+// omitted from the result. [CompletionConfig] documents the thresholds
+// that tolerate failures or complete the batch early, and the
+// [CompletionReason] each one produces.
+//
+// When at least one item failed, Map returns a [BatchError] as err and
+// still returns the populated [BatchResult], so the partial results remain
+// available for compensation. The error's Reason is the batch's completion
+// reason and its Errors are the per-item errors in input order. This holds
+// whether or not the failures were within a configured tolerance; check
+// [BatchError.Reason] to distinguish an exceeded tolerance from tolerated
+// failures. Every other non-nil err (invalid options, suspension, replay
+// divergence, a checkpoint failure) is returned with a zero result and
+// must be propagated unchanged:
+//
+//	result, err := durable.Map(ctx, "reserve", items, fn, durable.WithCompletion(cfg))
+//	var berr *durable.BatchError
+//	switch {
+//	case err == nil:
+//		// use result
+//	case errors.As(err, &berr):
+//		// items failed; result is populated for compensation
+//	default:
+//		return err // suspension or SDK failure: propagate unchanged
+//	}
+//
+// The batch's own checkpoint records the batch operation as SUCCEEDED
+// regardless: the batch operation completed, and the failure of its items
+// is recorded in the result it stores. Only the Go return value reports
+// the failure. Replaying a checkpointed batch returns the same result and
+// the same [BatchError], rebuilt from the stored items and reason.
 func Map[I, O any](ctx Context, name string, items []I, fn func(ctx Context, item I, index int) (O, error), opts ...BatchOption) (BatchResult[O], error) {
 	ec, ok := ctx.(*execContext)
 	if !ok {
@@ -59,7 +94,7 @@ func Map[I, O any](ctx Context, name string, items []I, fn func(ctx Context, ite
 			return BatchResult[O]{}, err
 		}
 		ec.ids.advance(batchReplayAdvance(options, len(items), len(result.Items)))
-		return result, nil
+		return batchOutcome(name, result)
 	}
 
 	// Checkpoint the parent Map context START.
@@ -81,11 +116,15 @@ func Map[I, O any](ctx Context, name string, items []I, fn func(ctx Context, ite
 	}
 
 	// Execute items with bounded concurrency and completion checking.
-	return executeBatchItems[I, O](ec, id, name, totalItems, options, operationSubTypeMap, operationSubTypeMapIteration, func(childCtx Context, index int) (O, []string, error) {
+	result, err := executeBatchItems[I, O](ec, id, name, totalItems, options, operationSubTypeMap, operationSubTypeMapIteration, func(childCtx Context, index int) (O, []string, error) {
 		return runBatchItemFunc(childCtx, index, fn, func() (O, error) {
 			return fn(childCtx, items[index], index)
 		})
 	})
+	if err != nil {
+		return BatchResult[O]{}, err
+	}
+	return batchOutcome(name, result)
 }
 
 // Parallel executes branches concurrently, each in its own child context,
@@ -94,8 +133,14 @@ func Map[I, O any](ctx Context, name string, items []I, fn func(ctx Context, ite
 // types.
 //
 // Each branch runs in a ParallelBranch child context named by [Branch].Name.
-// MaxConcurrency bounds in-flight branches; completion config may stop
-// scheduling early.
+// MaxConcurrency bounds in-flight branches.
+//
+// Completion and failure follow the same rules as [Map]: the default policy
+// is fail-fast, [CompletionConfig] documents the thresholds and the
+// [CompletionReason] each produces, and when at least one branch failed
+// Parallel returns a [BatchError] as err together with the populated
+// [BatchResult]. The batch's checkpoint records the operation as SUCCEEDED
+// regardless, and replay returns the same error.
 func Parallel[O any](ctx Context, name string, branches []Branch[O], opts ...BatchOption) (BatchResult[O], error) {
 	ec, ok := ctx.(*execContext)
 	if !ok {
@@ -141,7 +186,7 @@ func Parallel[O any](ctx Context, name string, branches []Branch[O], opts ...Bat
 			return BatchResult[O]{}, err
 		}
 		ec.ids.advance(batchReplayAdvance(options, len(branches), len(result.Items)))
-		return result, nil
+		return batchOutcome(name, result)
 	}
 
 	// Checkpoint the parent Parallel context START.
@@ -161,11 +206,15 @@ func Parallel[O any](ctx Context, name string, branches []Branch[O], opts ...Bat
 		return checkpointBatchSuccess(ec, id, name, operationSubTypeParallel, result, options)
 	}
 
-	return executeBatchItems[struct{}, O](ec, id, name, totalItems, options, operationSubTypeParallel, operationSubTypeParallelBranch, func(childCtx Context, index int) (O, []string, error) {
+	result, err := executeBatchItems[struct{}, O](ec, id, name, totalItems, options, operationSubTypeParallel, operationSubTypeParallelBranch, func(childCtx Context, index int) (O, []string, error) {
 		return runBatchItemFunc(childCtx, index, branches[index].Func, func() (O, error) {
 			return branches[index].Func(childCtx)
 		})
 	})
+	if err != nil {
+		return BatchResult[O]{}, err
+	}
+	return batchOutcome(name, result)
 }
 
 // Branch is one branch of a [Parallel] operation.
@@ -309,22 +358,16 @@ func (r BatchResult[O]) HasFailure() bool {
 	return false
 }
 
-// Err returns the error that should fail the batch, or nil if the batch
-// succeeded. When any item failed with a non-nil error, it returns the
-// first such item's error. Otherwise, when [BatchResult.Status] is
-// [BatchItemFailed], it returns a [BatchCompletionError] carrying the
-// completion reason. Callers propagate the returned error to fail the
-// execution.
-func (r BatchResult[O]) Err() error {
-	for i := range r.Items {
-		if r.Items[i].Status == BatchItemFailed && r.Items[i].Err != nil {
-			return r.Items[i].Err
-		}
+// batchOutcome is the return value of [Map] and [Parallel] for a
+// completed batch: the populated result and, when at least one item
+// failed, a [BatchError] describing the failure. It is derived from the
+// result's Items and Reason alone, so the first invocation and every replay
+// return the same error for the same checkpointed batch.
+func batchOutcome[O any](name string, result BatchResult[O]) (BatchResult[O], error) {
+	if result.Status() != BatchItemFailed {
+		return result, nil
 	}
-	if r.Status() == BatchItemFailed {
-		return &BatchCompletionError{Reason: r.Reason}
-	}
-	return nil
+	return result, &BatchError{Name: name, Reason: result.Reason, Errors: result.Errors()}
 }
 
 // SuccessCount returns the number of items that succeeded.
@@ -449,10 +492,11 @@ type BatchOption interface {
 // IDs for every n, so changing n never affects the operations that follow
 // it. A [NestingNormal] batch consumes one enclosing-context ID per item
 // that starts: with n == 1 only the items that actually start, with n > 1
-// every item. Those counts differ only when a [WithCompletion] policy stops
-// the batch early. For a [NestingNormal] batch with such a policy, changing
-// n shifts the IDs of the operations after the batch for executions that
-// are in flight; treat that combination as a breaking change for in-flight
+// every item. Those counts differ only when the completion policy (the
+// fail-fast default or a [WithCompletion] policy) stops the batch early.
+// For a [NestingNormal] batch that can stop early, changing n shifts the
+// IDs of the operations after the batch for executions that are in
+// flight; treat that combination as a breaking change for in-flight
 // executions.
 func WithMaxConcurrency(n int) BatchOption {
 	return batchOptionFunc(func(o *batchOptions) {
@@ -461,7 +505,8 @@ func WithMaxConcurrency(n int) BatchOption {
 	})
 }
 
-// WithCompletion sets the batch's early-completion policy.
+// WithCompletion sets the batch's completion policy. Without it the batch
+// is fail-fast; see [CompletionConfig].
 func WithCompletion(c CompletionConfig) BatchOption {
 	return batchOptionFunc(func(o *batchOptions) { o.completion = c })
 }
@@ -500,24 +545,49 @@ func WithNesting(m NestingMode) BatchOption {
 	return batchOptionFunc(func(o *batchOptions) { o.nesting = m })
 }
 
-// CompletionConfig is a batch early-completion policy. Zero values leave
-// the corresponding threshold unset. Thresholds may be combined — when
-// multiple are set, the first threshold to fire wins.
+// CompletionConfig is a batch completion policy for [Map] and [Parallel].
+//
+// The default is fail-fast. When no threshold is set (no [WithCompletion]
+// option, or a zero CompletionConfig), the first item failure completes
+// the batch with [CompletionFailureToleranceExceeded]; items not yet
+// started are omitted from the result. Tolerating failures requires
+// setting ToleratedFailureCount or ToleratedFailurePercentage explicitly.
+// Setting only MinSuccessful also disables fail-fast: every item runs
+// unless the MinSuccessful threshold completes the batch first.
+//
+// Thresholds may be combined. The first threshold to fire decides the
+// [CompletionReason]:
+//
+//   - No threshold fires: [CompletionAllCompleted].
+//   - MinSuccessful items have succeeded: [CompletionMinSuccessfulReached].
+//     Items not yet started are omitted.
+//   - More items failed than the tolerance allows (or, with no tolerance
+//     set, one item failed): [CompletionFailureToleranceExceeded]. Items
+//     not yet started are omitted.
+//
+// The completion reason describes why scheduling stopped. Whether the
+// batch is returned as an error is decided separately: Map and Parallel
+// return a [BatchError] whenever at least one item failed, whatever the
+// reason. See [Map].
 type CompletionConfig struct {
 	_ [0]func() // blocks unkeyed literals; keeps fields addable
 
 	// MinSuccessful completes the batch early once this many items
-	// succeed.
+	// succeed. Zero leaves the threshold unset.
 	MinSuccessful int
 
 	// ToleratedFailureCount fails the batch once more than this many
-	// items fail. Nil disables count-based tolerance; an explicit zero
-	// fails the batch on the first failure.
+	// items fail. Nil leaves the threshold unset; an explicit zero fails
+	// the batch on the first failure.
 	ToleratedFailureCount *int
 
 	// ToleratedFailurePercentage fails the batch once the failure
-	// percentage strictly exceeds this threshold.
-	ToleratedFailurePercentage int
+	// percentage, computed against the total item count, strictly
+	// exceeds this value. Nil leaves the threshold unset; an explicit
+	// zero fails the batch on the first failure. The comparison is
+	// exact: with three items and a threshold of 33, one failure
+	// (33.3%) exceeds the threshold.
+	ToleratedFailurePercentage *int
 }
 
 type batchOptions struct {
@@ -2054,16 +2124,30 @@ func shouldStopMin(cfg CompletionConfig, successCount int) bool {
 	return successCount >= cfg.MinSuccessful
 }
 
+// hasThreshold reports whether any completion threshold is set. A config
+// with no threshold is the fail-fast default.
+func (c CompletionConfig) hasThreshold() bool {
+	return c.MinSuccessful > 0 || c.ToleratedFailureCount != nil || c.ToleratedFailurePercentage != nil
+}
+
 // shouldStopFailure checks if the failure tolerance has been exceeded.
+//
+// With no threshold set the policy is fail-fast: the first failure
+// exceeds it. Otherwise only the tolerances that are set are checked, so a
+// config that sets only MinSuccessful tolerates every failure.
 func shouldStopFailure(cfg CompletionConfig, failureCount, totalItems int) bool {
-	// Check count-based tolerance.
+	if !cfg.hasThreshold() {
+		return failureCount > 0
+	}
 	if cfg.ToleratedFailureCount != nil && failureCount > *cfg.ToleratedFailureCount {
 		return true
 	}
-	// Check percentage-based tolerance.
-	if cfg.ToleratedFailurePercentage > 0 && totalItems > 0 {
-		pct := (failureCount * 100) / totalItems
-		if pct > cfg.ToleratedFailurePercentage {
+	// The percentage comparison is exact. Comparing failureCount*100
+	// against pct*totalItems is the same test as failureCount/totalItems
+	// > pct/100 without dividing, so 1 of 3 failures (33.3%) exceeds a
+	// threshold of 33.
+	if cfg.ToleratedFailurePercentage != nil && totalItems > 0 {
+		if failureCount*100 > *cfg.ToleratedFailurePercentage*totalItems {
 			return true
 		}
 	}

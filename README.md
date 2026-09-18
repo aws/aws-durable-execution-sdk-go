@@ -127,8 +127,10 @@ func handler(ctx durable.Context, event OrderEvent) (OrderResult, error) {
 		return OrderResult{}, err
 	}
 
-	// Parallel: run named branches concurrently.
-	checks, err := durable.Parallel(ctx, "pre-flight", []durable.Branch[string]{
+	// Parallel: run named branches concurrently. The default completion
+	// policy is fail-fast: a failed branch is returned as a *BatchError
+	// together with the partial result.
+	_, err = durable.Parallel(ctx, "pre-flight", []durable.Branch[string]{
 		{Name: "payment", Func: func(c durable.Context) (string, error) {
 			return authorizePayment(orderID)
 		}},
@@ -139,20 +141,14 @@ func handler(ctx durable.Context, event OrderEvent) (OrderResult, error) {
 	if err != nil {
 		return OrderResult{}, err
 	}
-	if err := checks.Err(); err != nil {
-		return OrderResult{}, err
-	}
 
 	// Map: fan a function out over the line items with bounded concurrency.
-	reservations, err := durable.Map(ctx, "reserve-items", event.Items,
+	_, err = durable.Map(ctx, "reserve-items", event.Items,
 		func(c durable.Context, item LineItem, index int) (string, error) {
 			return reserveInventory(item.SKU, item.Quantity)
 		},
 		durable.WithMaxConcurrency(3))
 	if err != nil {
-		return OrderResult{}, err
-	}
-	if err := reservations.Err(); err != nil {
 		return OrderResult{}, err
 	}
 

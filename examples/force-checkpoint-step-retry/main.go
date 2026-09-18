@@ -7,10 +7,12 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
+	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
 func handler(ctx durable.Context, _ any) (string, error) {
@@ -39,8 +41,16 @@ func handler(ctx durable.Context, _ any) (string, error) {
 				return durable.RetryDecision{Retry: true, Delay: 1 * time.Second}
 			}))
 		}},
-	})
-	if err != nil {
+	},
+		// Tolerate a failed branch so the long-running branch still runs to
+		// completion; the default completion policy would stop the batch at
+		// the first failure.
+		durable.WithCompletion(durable.CompletionConfig{ToleratedFailureCount: aws.Int(1)}))
+	// A failed branch is reported as a *durable.BatchError alongside the
+	// populated result; this handler reports the result. Any other error is
+	// an SDK failure and propagates.
+	var berr *durable.BatchError
+	if err != nil && !errors.As(err, &berr) {
 		return "", err
 	}
 

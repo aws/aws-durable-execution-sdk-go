@@ -491,7 +491,7 @@ func TestMapItemFailureRecordsStackTrace(t *testing.T) {
 	var itemErr error
 	invokeStep(t, fake, stepPayload(`""`), func(ctx Context, _ string) (string, error) {
 		res, err := Map(ctx, "m", []int{1}, mapItemFails)
-		if err != nil {
+		if err := batchOnly(err); err != nil {
 			return "", err
 		}
 		if len(res.Items) != 1 || res.Items[0].Status != BatchItemFailed {
@@ -531,7 +531,7 @@ func TestFlatMapItemFailureKeepsStackTrace(t *testing.T) {
 	var itemErr error
 	resp := invokeStep(t, fake, stepPayload(`""`), func(ctx Context, _ string) (string, error) {
 		res, err := Map(ctx, "m", []int{1}, mapItemFails, WithNesting(NestingFlat))
-		if err != nil {
+		if err := batchOnly(err); err != nil {
 			return "", err
 		}
 		if len(res.Items) != 1 || res.Items[0].Status != BatchItemFailed {
@@ -592,7 +592,7 @@ func TestFlatMapItemFailureKeepsStackTrace(t *testing.T) {
 	var replayErr error
 	invokeStep(t, &fakeLambda{}, stepPayload(`""`, parentOp), func(ctx Context, _ string) (string, error) {
 		res, err := Map(ctx, "m", []int{1}, mapItemFails, WithNesting(NestingFlat))
-		if err != nil {
+		if err := batchOnly(err); err != nil {
 			return "", err
 		}
 		replayErr = res.Items[0].Err
@@ -634,7 +634,7 @@ func flatMapAggregateItems(t *testing.T, item func(Context, int, int) (string, e
 	var itemErr error
 	h := Wrap(func(ctx Context, _ string) (string, error) {
 		res, err := Map(ctx, "m", []int{1}, item, WithNesting(NestingFlat))
-		if err != nil {
+		if err := batchOnly(err); err != nil {
 			return "", err
 		}
 		if len(res.Items) != 1 || res.Items[0].Status != BatchItemFailed {
@@ -718,7 +718,7 @@ func TestFlatMapItemWithStackTracesFalseRecordsNone(t *testing.T) {
 func TestMapFailedItemReplayKeepsRecordedStackTrace(t *testing.T) {
 	fake := &fakeLambda{}
 	invokeStep(t, fake, stepPayload(`""`), func(ctx Context, _ string) (string, error) {
-		if _, err := Map(ctx, "m", []int{1}, mapItemFails); err != nil {
+		if _, err := Map(ctx, "m", []int{1}, mapItemFails); batchOnly(err) != nil {
 			return "", err
 		}
 		return "done", nil
@@ -782,7 +782,7 @@ func assertReplayedItemTrace(t *testing.T, ops []wireOperation, want []string) {
 	var itemErr error
 	invokeStep(t, &fakeLambda{}, stepPayload(`""`, ops...), func(ctx Context, _ string) (string, error) {
 		res, err := Map(ctx, "m", []int{1}, mapItemFails)
-		if err != nil {
+		if err := batchOnly(err); err != nil {
 			return "", err
 		}
 		if len(res.Items) != 1 || res.Items[0].Status != BatchItemFailed {

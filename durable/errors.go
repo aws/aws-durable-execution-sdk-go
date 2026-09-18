@@ -21,7 +21,7 @@ var (
 	_ error = (*ChildContextError)(nil)
 	_ error = (*WaitForConditionError)(nil)
 	_ error = (*CombinatorError)(nil)
-	_ error = (*BatchCompletionError)(nil)
+	_ error = (*BatchError)(nil)
 	_ error = (*OperationError)(nil)
 	_ error = (*NonDeterministicReplayError)(nil)
 	_ error = (*ResultTooLargeError)(nil)
@@ -104,8 +104,8 @@ func sdkWireErrorType(err error) (string, bool) {
 		return "WaitForConditionError", true
 	case *CombinatorError:
 		return "PromiseCombinatorError", true
-	case *BatchCompletionError:
-		return "BatchCompletionError", true
+	case *BatchError:
+		return "BatchError", true
 	case *OperationError:
 		return "OperationError", true
 	case *SerdesError:
@@ -222,7 +222,7 @@ const (
 //
 // Every typed operation error ([StepError], [InvokeError], [CallbackError]
 // and its subtypes, [ChildContextError], [WaitForConditionError],
-// [CombinatorError], [StepInterruptedError], [BatchCompletionError],
+// [CombinatorError], [StepInterruptedError], [BatchError],
 // [NonDeterministicReplayError], [ResultTooLargeError]) is matchable this
 // way. The typed errors that wrap a recorded failure expose the same
 // fields directly.
@@ -783,7 +783,7 @@ var sdkErrorsByWireType = func() map[string]struct{} {
 		&StepError{}, &StepInterruptedError{}, &InvokeError{},
 		&CallbackError{}, &CallbackExternalError{}, &CallbackTimeoutError{}, &CallbackSubmitterError{},
 		&ChildContextError{}, &WaitForConditionError{}, &CombinatorError{}, &SerdesError{},
-		&OperationError{}, &BatchCompletionError{}, &NonDeterministicReplayError{}, &ResultTooLargeError{},
+		&OperationError{}, &BatchError{}, &NonDeterministicReplayError{}, &ResultTooLargeError{},
 	} {
 		name, _ := sdkWireErrorType(err)
 		m[name] = struct{}{}
@@ -810,7 +810,7 @@ var sdkErrorsByWireType = func() map[string]struct{} {
 // FunctionID, CallbackID, Status, Direction, and the detail fields of
 // [NonDeterministicReplayError] and [ResultTooLargeError]) are zero, with
 // two exceptions: a callback timeout derives Heartbeat from the record and
-// unwraps to [ErrCallbackTimedOut], and a [BatchCompletionError] recovers
+// unwraps to [ErrCallbackTimedOut], and a [BatchError] recovers
 // its Reason from the message. The types whose Error() text is composed
 // from detail fields keep the recorded message as their Error() text
 // instead.
@@ -857,8 +857,8 @@ func reconstructSDKError(wireType string, op OperationError, sentinel error) err
 		return &WaitForConditionError{Name: op.Name, ErrorType: rec.errType, Message: rec.message, ErrorData: rec.data, StackTrace: rec.stackTrace, Err: inner}
 	case "PromiseCombinatorError":
 		return &CombinatorError{Name: op.Name, Errors: []error{inner}, recordedMessage: rec.message}
-	case "BatchCompletionError":
-		return &BatchCompletionError{Reason: completionReasonOf(rec.message), recordedMessage: rec.message}
+	case "BatchError":
+		return &BatchError{Name: op.Name, Reason: completionReasonOf(rec.message), Errors: []error{inner}, recordedMessage: rec.message}
 	case "SerdesError":
 		return &SerdesError{Operation: op.Name, Err: leaf}
 	case "NonDeterministicReplayError":
@@ -870,11 +870,11 @@ func reconstructSDKError(wireType string, op OperationError, sentinel error) err
 }
 
 // completionReasonOf recovers the [CompletionReason] named in a recorded
-// [BatchCompletionError] message. It returns zero when the message names
-// no known reason.
+// [BatchError] message. It returns zero when the message names no known
+// reason.
 func completionReasonOf(message string) CompletionReason {
 	for _, r := range []CompletionReason{CompletionAllCompleted, CompletionMinSuccessfulReached, CompletionFailureToleranceExceeded} {
-		if message == (&BatchCompletionError{Reason: r}).Error() {
+		if strings.Contains(message, r.String()) {
 			return r
 		}
 	}
@@ -896,7 +896,7 @@ func completionReasonOf(message string) CompletionReason {
 //   - The wire name of a typed operation error ([StepError], [InvokeError],
 //     [CallbackError] and its subtypes, [ChildContextError],
 //     [WaitForConditionError], [CombinatorError], [StepInterruptedError],
-//     [BatchCompletionError], [OperationError], [NonDeterministicReplayError],
+//     [BatchError], [OperationError], [NonDeterministicReplayError],
 //     [ResultTooLargeError]) yields that type. Its ErrorType, Message,
 //     ErrorData, and StackTrace fields hold the record's values. The
 //     operation's Name and the fields the record does not carry (such as
@@ -1095,37 +1095,65 @@ func (e *CombinatorError) As(target any) bool {
 	return asOperationError(target, e.operationError())
 }
 
-// BatchCompletionError is returned by [BatchResult.Err] when a batch
-// completed as failed at the batch level without any item carrying its own
-// error — for example, a [BatchResult] reconstructed from public state
-// (where item errors do not survive serialization) whose status indicates
-// failure.
+// BatchError is returned as err by [Map] and [Parallel] when at least one
+// item of the batch failed. The batch result is returned alongside it,
+// populated, so the caller can inspect and compensate the partial outcome.
+//
+// Reason is the batch's [CompletionReason]. It is
+// [CompletionFailureToleranceExceeded] when the completion policy stopped
+// the batch (the fail-fast default, or an exceeded tolerance);
+// [CompletionAllCompleted] or [CompletionMinSuccessfulReached] when the
+// failures were within a configured tolerance and the batch ran on.
+//
+// Errors holds the per-item errors in input order. [errors.Is] and
+// [errors.As] reach them through Unwrap, so a caller can match an item's
+// error type or a sentinel it carries. errors.As against
+// [*OperationError] also matches the BatchError itself.
 //
 // A value rebuilt from a checkpoint record (for example the Err of a
-// rejected [Settled]) recovers Reason from the recorded message; an
-// unrecognized message leaves Reason zero and is kept as the Error() text.
-type BatchCompletionError struct {
+// rejected [Settled]) recovers Reason from the recorded message, holds one
+// stand-in in Errors carrying that message, and keeps the recorded text as
+// its Error() text.
+type BatchError struct {
+	// Name is the batch operation's name.
+	Name string
+
 	// Reason is the completion reason of the failed batch.
 	Reason CompletionReason
+
+	// Errors contains the per-item errors, in input order.
+	Errors []error
 
 	// recordedMessage is the Error() text of a value rebuilt from a
 	// checkpoint record. It is empty for a value the batch produced.
 	recordedMessage string
 }
 
-func (e *BatchCompletionError) Error() string {
+func (e *BatchError) Error() string {
 	if e.recordedMessage != "" {
 		return e.recordedMessage
 	}
-	return fmt.Sprintf("durable: batch failed: %s", e.Reason)
+	noun := "items"
+	if len(e.Errors) == 1 {
+		noun = "item"
+	}
+	msg := fmt.Sprintf("durable: batch %q failed: %s: %d %s failed", e.Name, e.Reason, len(e.Errors), noun)
+	if len(e.Errors) > 0 {
+		msg += ", first: " + e.Errors[0].Error()
+	}
+	return msg
 }
 
-func (e *BatchCompletionError) operationError() *OperationError {
-	return &OperationError{Message: e.Error()}
+// Unwrap returns the per-item errors for use with [errors.Is] and
+// [errors.As].
+func (e *BatchError) Unwrap() []error { return e.Errors }
+
+func (e *BatchError) operationError() *OperationError {
+	return &OperationError{Name: e.Name, Message: e.Error()}
 }
 
 // As supports [errors.As] matching against [*OperationError].
-func (e *BatchCompletionError) As(target any) bool {
+func (e *BatchError) As(target any) bool {
 	return asOperationError(target, e.operationError())
 }
 

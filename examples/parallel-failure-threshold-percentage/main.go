@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
+	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
 type Output struct {
@@ -45,16 +46,12 @@ func handler(ctx durable.Context, _ any) (Output, error) {
 				MaxAttempts: 1,
 			})))
 		}},
-	}, durable.WithCompletion(durable.CompletionConfig{ToleratedFailurePercentage: 25}),
+	}, durable.WithCompletion(durable.CompletionConfig{ToleratedFailurePercentage: aws.Int(25)}),
 		durable.WithMaxConcurrency(1))
+	// The exceeded tolerance is returned as a *durable.BatchError; returning
+	// it propagates the failure and the execution ends FAILED.
 	if err != nil {
 		return Output{}, err
-	}
-
-	// Propagate the failure when tolerance is exceeded.
-	if results.Reason == durable.CompletionFailureToleranceExceeded {
-		return Output{}, fmt.Errorf("batch failed: tolerance exceeded (failures=%d, total=%d)",
-			results.FailureCount(), results.TotalCount())
 	}
 
 	return Output{

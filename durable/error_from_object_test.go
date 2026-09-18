@@ -25,7 +25,7 @@ func publicErrorTypeSamples() []error {
 		newChildContextError("child", cause),
 		&WaitForConditionError{Name: "w", Attempts: 2, ErrorType: "Error", Message: "boom", Err: cause.standIn(nil)},
 		&CombinatorError{Name: "any", Errors: []error{errors.New("a"), errors.New("b")}},
-		&BatchCompletionError{Reason: CompletionFailureToleranceExceeded},
+		&BatchError{Name: "b", Reason: CompletionFailureToleranceExceeded, Errors: []error{errors.New("a")}},
 		&OperationError{Name: "op", ErrorType: "Error", Message: "boom", Err: cause.standIn(nil)},
 		&NonDeterministicReplayError{Name: "n", StepID: "1", ExpectedType: "STEP", ActualType: "WAIT"},
 		&ResultTooLargeError{Name: "r", SizeBytes: 900, LimitBytes: 100},
@@ -117,7 +117,7 @@ func TestErrorFromObjectKeepsRecordedMessageAsErrorText(t *testing.T) {
 	for _, orig := range []error{
 		&StepInterruptedError{Name: "s"},
 		&CombinatorError{Name: "any", Errors: []error{errors.New("a"), errors.New("b")}},
-		&BatchCompletionError{Reason: CompletionMinSuccessfulReached},
+		&BatchError{Name: "b", Reason: CompletionMinSuccessfulReached, Errors: []error{errors.New("a"), errors.New("b")}},
 		&NonDeterministicReplayError{Name: "n", StepID: "1", ExpectedType: "STEP", ActualType: "WAIT"},
 		&ResultTooLargeError{Name: "r", SizeBytes: 900, LimitBytes: 100},
 	} {

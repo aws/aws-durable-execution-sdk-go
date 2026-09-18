@@ -17,7 +17,11 @@ func handler(ctx durable.Context, _ any) (map[string]any, error) {
 		}
 		return item, nil
 	}, durable.WithMaxConcurrency(1), durable.WithCompletion(durable.CompletionConfig{ToleratedFailureCount: aws.Int(1)}))
-	if err != nil {
+	// Failed items are reported as a *durable.BatchError alongside the
+	// populated result; this handler reports the result. Any other error is
+	// an SDK failure and propagates.
+	var berr *durable.BatchError
+	if err != nil && !errors.As(err, &berr) {
 		return nil, err
 	}
 	return map[string]any{

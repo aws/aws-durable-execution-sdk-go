@@ -39,14 +39,10 @@ func handler(ctx durable.Context, _ any) (Output, error) {
 		}},
 	}, durable.WithCompletion(durable.CompletionConfig{ToleratedFailureCount: aws.Int(0)}),
 		durable.WithMaxConcurrency(1))
+	// The exceeded tolerance is returned as a *durable.BatchError; returning
+	// it propagates the failure and the execution ends FAILED.
 	if err != nil {
 		return Output{}, err
-	}
-
-	// Propagate the failure when tolerance is exceeded.
-	if results.Reason == durable.CompletionFailureToleranceExceeded {
-		return Output{}, fmt.Errorf("batch failed: tolerance exceeded (failures=%d, total=%d)",
-			results.FailureCount(), results.TotalCount())
 	}
 
 	return Output{

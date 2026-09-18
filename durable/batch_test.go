@@ -63,6 +63,17 @@ func batchPayload(event string, ops ...wireOperation) []byte {
 // [SerdesContext].
 func noItemSctx(int) SerdesContext { return SerdesContext{} }
 
+// batchOnly returns nil for a *BatchError and err otherwise. Tests that
+// inspect the result of a batch with failed items use it to keep the
+// result-populated path while still propagating SDK failures.
+func batchOnly(err error) error {
+	var berr *BatchError
+	if errors.As(err, &berr) {
+		return nil
+	}
+	return err
+}
+
 func assertSucceeded(t *testing.T, resp batchResp) {
 	t.Helper()
 	if resp.Status != "SUCCEEDED" {
@@ -158,7 +169,7 @@ func TestMapFailFast(t *testing.T) {
 			}
 			return item, nil
 		}, WithMaxConcurrency(1), WithCompletion(CompletionConfig{ToleratedFailureCount: aws.Int(0)}))
-		if err != nil {
+		if err := batchOnly(err); err != nil {
 			return result{}, err
 		}
 		return result{
@@ -214,8 +225,8 @@ func TestMapToleratedPercentage(t *testing.T) {
 				return 0, errors.New("fail")
 			}
 			return item, nil
-		}, WithMaxConcurrency(1), WithCompletion(CompletionConfig{ToleratedFailurePercentage: 25}))
-		if err != nil {
+		}, WithMaxConcurrency(1), WithCompletion(CompletionConfig{ToleratedFailurePercentage: aws.Int(25)}))
+		if err := batchOnly(err); err != nil {
 			return result{}, err
 		}
 		return result{Reason: br.Reason.String()}, nil
@@ -262,10 +273,7 @@ func TestMapErr(t *testing.T) {
 		if err != nil {
 			return "", err
 		}
-		if throwErr := br.Err(); throwErr != nil {
-			return "", throwErr
-		}
-		return "should not reach", nil
+		return "should not reach: " + br.Reason.String(), nil
 	})
 	assertFailed(t, resp)
 }
@@ -455,7 +463,7 @@ func TestParallelFailFast(t *testing.T) {
 			{Func: func(_ Context) (string, error) { return "", errors.New("fail") }},
 			{Func: func(_ Context) (string, error) { return "never", nil }},
 		}, WithMaxConcurrency(1), WithCompletion(CompletionConfig{ToleratedFailureCount: aws.Int(0)}))
-		if err != nil {
+		if err := batchOnly(err); err != nil {
 			return result{}, err
 		}
 		return result{
@@ -546,76 +554,78 @@ func TestParallelErr(t *testing.T) {
 		if err != nil {
 			return "", err
 		}
-		if throwErr := br.Err(); throwErr != nil {
-			return "", throwErr
-		}
-		return "should not reach", nil
+		return "should not reach: " + br.Reason.String(), nil
 	})
 	assertFailed(t, resp)
 }
 
-// --- Err() three-branch coverage tests ---
-
-// TestErrBranch1_FirstFailedItem verifies Err() returns the first failed
-// item's error when at least one item has failed. The result is built
-// through public fields only, as an external consumer would.
-func TestErrBranch1_FirstFailedItem(t *testing.T) {
+// TestBatchOutcome covers the three outcomes of a completed batch: items
+// failed (a *BatchError carrying the item errors in input order), a
+// batch-level failure without item errors (a *BatchError with no Errors),
+// and success (nil). Results are built through public fields only, as an
+// external consumer would.
+func TestBatchOutcome(t *testing.T) {
 	err1 := errors.New("first failure")
 	err2 := errors.New("second failure")
-	result := BatchResult[string]{
-		Items: []BatchItem[string]{
-			{Index: 0, Status: BatchItemSucceeded, Result: "ok"},
-			{Index: 1, Status: BatchItemFailed, Err: err1},
-			{Index: 2, Status: BatchItemFailed, Err: err2},
-		},
-		Reason: CompletionFailureToleranceExceeded,
-	}
 
-	got := result.Err()
-	if got != err1 {
-		t.Fatalf("Err() = %v, want first failure %v", got, err1)
-	}
-}
+	t.Run("failed items", func(t *testing.T) {
+		result := BatchResult[string]{
+			Items: []BatchItem[string]{
+				{Index: 0, Status: BatchItemSucceeded, Result: "ok"},
+				{Index: 1, Status: BatchItemFailed, Err: err1},
+				{Index: 2, Status: BatchItemFailed, Err: err2},
+			},
+			Reason: CompletionFailureToleranceExceeded,
+		}
+		got, err := batchOutcome("b", result)
+		var berr *BatchError
+		if !errors.As(err, &berr) {
+			t.Fatalf("err = %v (%T), want *BatchError", err, err)
+		}
+		if berr.Name != "b" || berr.Reason != CompletionFailureToleranceExceeded {
+			t.Errorf("BatchError = %+v, want name b and FAILURE_TOLERANCE_EXCEEDED", berr)
+		}
+		if len(berr.Errors) != 2 || berr.Errors[0] != err1 || berr.Errors[1] != err2 {
+			t.Errorf("Errors = %v, want [%v %v] in input order", berr.Errors, err1, err2)
+		}
+		if len(got.Items) != 3 {
+			t.Errorf("result returned alongside the error has %d items, want 3", len(got.Items))
+		}
+	})
 
-// TestErrBranch2_BatchLevelFailure verifies Err() returns a batch-level
-// error when no individual item failed but the batch status is failed
-// (a completion policy that marks the batch failed without any item error).
-func TestErrBranch2_BatchLevelFailure(t *testing.T) {
-	result := BatchResult[string]{
-		Items: []BatchItem[string]{
-			{Index: 0, Status: BatchItemSucceeded, Result: "ok"},
-			{Index: 1, Status: BatchItemStarted},
-		},
-		Reason: CompletionFailureToleranceExceeded,
-	}
+	t.Run("batch-level failure without item errors", func(t *testing.T) {
+		result := BatchResult[string]{
+			Items: []BatchItem[string]{
+				{Index: 0, Status: BatchItemSucceeded, Result: "ok"},
+				{Index: 1, Status: BatchItemStarted},
+			},
+			Reason: CompletionFailureToleranceExceeded,
+		}
+		_, err := batchOutcome("b", result)
+		var berr *BatchError
+		if !errors.As(err, &berr) {
+			t.Fatalf("err = %v (%T), want *BatchError", err, err)
+		}
+		if len(berr.Errors) != 0 {
+			t.Errorf("Errors = %v, want none", berr.Errors)
+		}
+		if !strings.Contains(err.Error(), "FAILURE_TOLERANCE_EXCEEDED") {
+			t.Errorf("Error() = %q, want reason in message", err.Error())
+		}
+	})
 
-	got := result.Err()
-	if got == nil {
-		t.Fatal("Err() = nil, want batch-level error")
-	}
-	if !strings.Contains(got.Error(), "batch failed") {
-		t.Fatalf("Err() = %q, want message containing 'batch failed'", got.Error())
-	}
-	if !strings.Contains(got.Error(), "FAILURE_TOLERANCE_EXCEEDED") {
-		t.Fatalf("Err() = %q, want reason in message", got.Error())
-	}
-}
-
-// TestErrBranch3_Success verifies Err() returns nil for a fully succeeded
-// batch.
-func TestErrBranch3_Success(t *testing.T) {
-	result := BatchResult[string]{
-		Items: []BatchItem[string]{
-			{Index: 0, Status: BatchItemSucceeded, Result: "a"},
-			{Index: 1, Status: BatchItemSucceeded, Result: "b"},
-		},
-		Reason: CompletionAllCompleted,
-	}
-
-	got := result.Err()
-	if got != nil {
-		t.Fatalf("Err() = %v, want nil for success", got)
-	}
+	t.Run("success", func(t *testing.T) {
+		result := BatchResult[string]{
+			Items: []BatchItem[string]{
+				{Index: 0, Status: BatchItemSucceeded, Result: "a"},
+				{Index: 1, Status: BatchItemSucceeded, Result: "b"},
+			},
+			Reason: CompletionAllCompleted,
+		}
+		if _, err := batchOutcome("b", result); err != nil {
+			t.Fatalf("err = %v, want nil for success", err)
+		}
+	})
 }
 
 // TestStatusReflectsCompletionReason verifies that Status() returns
@@ -636,10 +646,10 @@ func TestStatusReflectsCompletionReason(t *testing.T) {
 }
 
 // TestStatusDerivedAfterPublicJSONRoundTrip verifies that Status() and
-// Err() stay authoritative for a BatchResult reconstructed purely from its
+// the batch outcome stay authoritative for a BatchResult reconstructed purely from its
 // exported fields — the shape an ordinary JSON/Serdes round trip or an
 // external construction produces. Item Err values do not survive
-// serialization, so Err() must fall back to the batch-level error.
+// serialization, so the outcome is a *BatchError without item errors.
 func TestStatusDerivedAfterPublicJSONRoundTrip(t *testing.T) {
 	raw := `{"Items":[{"Index":0,"Status":1,"Result":"ok"},{"Index":1,"Name":"boom","Status":2}],"Reason":1}`
 	var rt BatchResult[string]
@@ -650,12 +660,12 @@ func TestStatusDerivedAfterPublicJSONRoundTrip(t *testing.T) {
 	if rt.Status() != BatchItemFailed {
 		t.Errorf("Status() = %v, want BatchItemFailed (derived from Items)", rt.Status())
 	}
-	got := rt.Err()
+	_, got := batchOutcome("b", rt)
 	if got == nil {
-		t.Fatal("Err() = nil, want non-nil for public state that indicates failure")
+		t.Fatal("outcome = nil, want non-nil for public state that indicates failure")
 	}
-	if !strings.Contains(got.Error(), "batch failed") {
-		t.Errorf("Err() = %q, want batch-level error message", got.Error())
+	if !strings.Contains(got.Error(), `batch "b" failed`) {
+		t.Errorf("outcome = %q, want batch-level error message", got.Error())
 	}
 
 	// Mutating the public Items after construction must be reflected too.
@@ -664,8 +674,8 @@ func TestStatusDerivedAfterPublicJSONRoundTrip(t *testing.T) {
 	if rt.Status() != BatchItemSucceeded {
 		t.Errorf("Status() after mutation = %v, want BatchItemSucceeded", rt.Status())
 	}
-	if rt.Err() != nil {
-		t.Errorf("Err() after mutation = %v, want nil", rt.Err())
+	if _, err := batchOutcome("b", rt); err != nil {
+		t.Errorf("outcome after mutation = %v, want nil", err)
 	}
 }
 
@@ -721,8 +731,8 @@ func (jsonProjectionSerdes) Unmarshal(_ context.Context, _ SerdesContext, data [
 
 // TestMapResultSerdesReplayStatusAndErr runs a Map with a failing item and
 // a custom operation-level result serdes through the real live and replay
-// invocation paths, asserting that Status() and Err() report the failure
-// identically on both. This is the public serialization path: the replayed
+// invocation paths, asserting that Status() and the returned *BatchError
+// report the failure identically on both. This is the public serialization path: the replayed
 // BatchResult is reconstructed entirely by the user serdes from exported
 // state, with no access to unexported fields.
 func TestMapResultSerdesReplayStatusAndErr(t *testing.T) {
@@ -740,10 +750,11 @@ func TestMapResultSerdesReplayStatusAndErr(t *testing.T) {
 			}
 			return item, nil
 		}, WithMaxConcurrency(1), WithBatchResultSerdes(jsonProjectionSerdes{}))
-		if err != nil {
+		var berr *BatchError
+		if err != nil && !errors.As(err, &berr) {
 			return verdict{}, err
 		}
-		return verdict{Status: br.Status().String(), HasErr: br.Err() != nil, Reason: br.Reason.String()}, nil
+		return verdict{Status: br.Status().String(), HasErr: berr != nil, Reason: br.Reason.String()}, nil
 	}
 
 	// Phase 1: LIVE.
@@ -847,7 +858,7 @@ func TestParallelAccessors(t *testing.T) {
 		}, WithMaxConcurrency(1), WithCompletion(CompletionConfig{
 			ToleratedFailureCount: aws.Int(1),
 		}))
-		if err != nil {
+		if err := batchOnly(err); err != nil {
 			return result{}, err
 		}
 		return result{
@@ -1142,7 +1153,7 @@ func TestMapPanicInItemDoesNotHangCoordinator(t *testing.T) {
 		}, WithMaxConcurrency(1), WithCompletion(CompletionConfig{
 			ToleratedFailureCount: aws.Int(1),
 		}))
-		if err != nil {
+		if err := batchOnly(err); err != nil {
 			return result{}, err
 		}
 		return result{
@@ -1300,7 +1311,7 @@ func TestMapToleratedWithinAllComplete(t *testing.T) {
 		}, WithMaxConcurrency(1), WithCompletion(CompletionConfig{
 			ToleratedFailureCount: aws.Int(1),
 		}))
-		if err != nil {
+		if err := batchOnly(err); err != nil {
 			return result{}, err
 		}
 		return result{
@@ -2332,14 +2343,15 @@ func wfcMapHandler(ctx Context, _ any) (wfcVerdict, error) {
 		}
 		return item, nil
 	}, WithMaxConcurrency(1))
-	if err != nil {
+	var berr *BatchError
+	if err != nil && !errors.As(err, &berr) {
 		return wfcVerdict{}, err
 	}
-	v := wfcVerdict{BatchStatus: br.Status().String(), ErrNonNil: br.Err() != nil}
+	v := wfcVerdict{BatchStatus: br.Status().String(), ErrNonNil: err != nil}
 	var childErr *ChildContextError
-	v.AsChildCtx = errors.As(br.Err(), &childErr)
+	v.AsChildCtx = errors.As(err, &childErr)
 	var wfcErr *WaitForConditionError
-	if errors.As(br.Err(), &wfcErr) {
+	if errors.As(err, &wfcErr) {
 		v.AsWFC = true
 		v.WFCName = wfcErr.Name
 		v.WFCAttempts = wfcErr.Attempts
@@ -2502,15 +2514,17 @@ func taxParallelHandler(ctx Context, _ any) (taxVerdict, error) {
 		{Name: "await", Func: func(_ Context) (string, error) {
 			return "", &CallbackError{Name: "ext", CallbackID: "cb-123", Err: ErrCallbackTimedOut}
 		}},
-	}, WithMaxConcurrency(1))
-	if err != nil {
+	}, WithMaxConcurrency(1), WithCompletion(CompletionConfig{ToleratedFailureCount: aws.Int(2)}))
+	var berr *BatchError
+	if err != nil && !errors.As(err, &berr) {
 		return taxVerdict{}, err
 	}
 	v := taxVerdict{BatchStatus: br.Status().String()}
 
-	// Err() returns the first failed item's error (the serdes branch).
+	// The returned *BatchError unwraps to the item errors, the serdes
+	// branch first.
 	var errSerdes *SerdesError
-	v.ErrAsSerdes = errors.As(br.Err(), &errSerdes)
+	v.ErrAsSerdes = errors.As(err, &errSerdes)
 
 	var serdesErr *SerdesError
 	if errors.As(br.Items[0].Err, &serdesErr) {

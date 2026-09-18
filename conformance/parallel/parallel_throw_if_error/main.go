@@ -13,11 +13,10 @@ func handler(ctx durable.Context, _ any) ([]string, error) {
 		{Func: func(_ durable.Context) (string, error) { return "", errors.New("branch failed") }},
 		{Func: func(_ durable.Context) (string, error) { return "never", nil }},
 	}, durable.WithMaxConcurrency(1), durable.WithCompletion(durable.CompletionConfig{ToleratedFailureCount: aws.Int(0)}))
+	// The item failure is returned as a *durable.BatchError; returning it
+	// fails the execution.
 	if err != nil {
 		return nil, err
-	}
-	if throwErr := result.Err(); throwErr != nil {
-		return nil, throwErr
 	}
 	return result.Results(), nil
 }

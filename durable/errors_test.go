@@ -189,7 +189,7 @@ var wireErrorTypeCases = []struct {
 	{"ChildContextError", &ChildContextError{Name: "cc", Err: fmt.Errorf("x")}, "ChildContextError"},
 	{"WaitForConditionError", &WaitForConditionError{Name: "w", Err: fmt.Errorf("x")}, "WaitForConditionError"},
 	{"CombinatorError", &CombinatorError{Name: "any", Errors: []error{fmt.Errorf("x")}}, "PromiseCombinatorError"},
-	{"BatchCompletionError", &BatchCompletionError{Reason: CompletionFailureToleranceExceeded}, "BatchCompletionError"},
+	{"BatchError", &BatchError{Name: "b", Reason: CompletionFailureToleranceExceeded, Errors: []error{fmt.Errorf("x")}}, "BatchError"},
 	{"OperationError", &OperationError{Name: "op", Err: fmt.Errorf("x")}, "OperationError"},
 	{"SerdesError", &SerdesError{Operation: "op", Direction: "marshal", Err: fmt.Errorf("x")}, "SerdesError"},
 	{"NonDeterministicReplayError", &NonDeterministicReplayError{Name: "n"}, "NonDeterministicReplayError"},

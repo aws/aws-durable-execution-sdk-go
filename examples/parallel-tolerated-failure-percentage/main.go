@@ -7,9 +7,11 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
+	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
 // Output captures the batch outcome, including the preserved results
@@ -52,8 +54,12 @@ func handler(ctx durable.Context, _ any) (Output, error) {
 				MaxAttempts: 1,
 			})))
 		}},
-	}, durable.WithCompletion(durable.CompletionConfig{ToleratedFailurePercentage: 25}))
-	if err != nil {
+	}, durable.WithCompletion(durable.CompletionConfig{ToleratedFailurePercentage: aws.Int(25)}))
+	// Failed items are reported as a *durable.BatchError alongside the
+	// populated result; this handler reports the result. Any other error is
+	// an SDK failure and propagates.
+	var berr *durable.BatchError
+	if err != nil && !errors.As(err, &berr) {
 		return Output{}, err
 	}
 
