@@ -48,16 +48,18 @@ type Context interface {
 	// Logger returns the logger for this context. Its records carry the
 	// request ID and execution ARN as structured attributes, and the
 	// tenant ID when the invocation has one, whichever [slog.Handler] is
-	// installed with [WithLogHandler]. Inside a child context (from
-	// [RunInChildContext], [Go], [Map], [Parallel], or [WaitForCallback])
-	// the records also carry the child operation's ID as operationId and
-	// its name as operationName. While this context is replaying, log
-	// output is suppressed so that replayed code does not duplicate log
-	// lines. Suppression is decided per branch: each context (root, child
-	// context, and each concurrent branch from [Go], [Map], or [Parallel])
-	// consults its own replay state, so a branch that is still replaying
-	// stays suppressed even after a sibling branch has reached live
-	// execution.
+	// installed with [WithLogHandler] or [ConfigureLogging]. Inside a child
+	// context (from [RunInChildContext], [Go], [Map], [Parallel], or
+	// [WaitForCallback]) the records also carry the child operation's ID
+	// as operationId and its name as operationName. While this context is
+	// replaying, log output is suppressed so that replayed code does not
+	// duplicate log lines, unless [ReplayLogModeEmit] is in effect, in
+	// which case replayed records are emitted with the attribute
+	// replay=true. Suppression is decided per branch: each context (root,
+	// child context, and each concurrent branch from [Go], [Map], or
+	// [Parallel]) consults its own replay state, so a branch that is still
+	// replaying stays suppressed even after a sibling branch has reached
+	// live execution.
 	Logger() *slog.Logger
 
 	// IsReplaying reports whether the execution is currently replaying
@@ -245,4 +247,115 @@ func ConfigureSerdes(ctx Context, cfg SerdesConfig) error {
 		return errors.New("durable: ConfigureSerdes: Context was not created by the SDK")
 	}
 	return ec.configureSerdes(cfg)
+}
+
+// ReplayLogMode selects what happens to a log record emitted while the
+// emitting context is replaying checkpointed operations. Set it for the
+// whole handler with [WithReplayLogMode] or for the rest of an invocation
+// with [ConfigureLogging].
+type ReplayLogMode int
+
+const (
+	// ReplayLogModeUnchanged keeps the mode currently in effect. It is the
+	// zero value, so a [LogConfig] that leaves the field unset does not
+	// change the mode. [WithReplayLogMode] treats it as
+	// [ReplayLogModeSuppress].
+	ReplayLogModeUnchanged ReplayLogMode = iota
+
+	// ReplayLogModeSuppress drops every record a context emits while it is
+	// replaying, before the record is built, so replayed code does not
+	// duplicate the lines it wrote when it first ran. This is the default.
+	ReplayLogModeSuppress
+
+	// ReplayLogModeEmit emits the records a context writes while it is
+	// replaying, each with the attribute replay=true; a live record carries
+	// no replay attribute. The mode is for diagnosing a replay problem: the
+	// output shows what the replayed code did up to the point where the
+	// problem appeared. Every line written before the execution suspended
+	// appears again on each later invocation, once per invocation that
+	// replays it, so expect duplicate lines. Records emitted in this mode
+	// still pass through the handler's level filter and, for the default
+	// handler, AWS_LAMBDA_LOG_LEVEL.
+	//
+	// The top-level replay key belongs to the SDK in every mode. An
+	// attribute named replay that a handler body adds at the top level,
+	// through [slog.Logger.With] or with a record, is dropped so the key
+	// stays single-valued; the same name inside a group the logger opened
+	// with [slog.Logger.WithGroup] is kept.
+	ReplayLogModeEmit
+)
+
+// LogConfig names the logging settings that [ConfigureLogging] replaces. A
+// zero field keeps the value currently in effect, so a config that sets
+// only one field leaves the other unchanged.
+type LogConfig struct {
+	_ [0]func() // blocks unkeyed literals; keeps fields addable
+
+	// Handler replaces the [slog.Handler] behind [Context.Logger] and
+	// [StepContext.Logger]. It has the same role as [WithLogHandler]. The
+	// SDK attaches the execution attributes (requestId, executionArn, and
+	// tenantId when present) and each scope's operation attributes to the
+	// new handler through its WithAttrs method, wraps it with replay
+	// suppression, and adds the fields plugins return from
+	// [Plugin.EnrichLogContext], exactly as it does for the handler given
+	// at construction. nil keeps the current handler.
+	Handler slog.Handler
+
+	// ReplayLogMode replaces the treatment of records emitted during
+	// replay. It has the same role as [WithReplayLogMode].
+	// [ReplayLogModeUnchanged], the zero value, keeps the current mode.
+	ReplayLogMode ReplayLogMode
+}
+
+// ConfigureLogging replaces the logging settings for the rest of the
+// invocation. It is the in-handler counterpart of [WithLogHandler] and
+// [WithReplayLogMode], for a handler that must choose its logger from the
+// event payload or from runtime configuration rather than at construction
+// time, or that wants replayed log output only for one execution.
+//
+// The new settings apply to ctx and to every child context and concurrent
+// branch derived from ctx after the call. A context derived before the
+// call, such as a branch already started with [Go], keeps the settings it
+// was derived with. A new handler reaches loggers obtained from
+// [Context.Logger] or [StepContext.Logger] after the call; a logger
+// obtained before the call keeps the previous handler. A new
+// [ReplayLogMode] reaches every logger of ctx and of contexts derived from
+// it after the call, including loggers obtained before the call, because
+// the mode is read on every record.
+//
+// The settings last for the current invocation only. The next invocation
+// of the execution starts from the construction-time options again. The
+// handler body runs from its start on every invocation, so a call placed
+// before the first durable operation re-applies the settings each time.
+//
+// ConfigureLogging does not affect determinism. It claims no operation ID,
+// writes no checkpoint, and changes no operation's ordering or result, so
+// it may be called conditionally and at different points on different
+// invocations without causing a non-deterministic replay. This differs
+// from [ConfigureSerdes], whose settings are baked into checkpoint content.
+//
+// ConfigureLogging must be called on the goroutine that owns ctx, like
+// every durable operation; from any other goroutine it fails with
+// [ErrWrongGoroutine]. It returns an error only for that case and for a
+// Context not created by the SDK.
+//
+//	func handler(ctx durable.Context, event OrderEvent) (OrderResult, error) {
+//		if event.Debug {
+//			if err := durable.ConfigureLogging(ctx, durable.LogConfig{
+//				Handler:       slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}),
+//				ReplayLogMode: durable.ReplayLogModeEmit,
+//			}); err != nil {
+//				return OrderResult{}, err
+//			}
+//		}
+//		// Records from here on, including from replayed steps, reach the
+//		// text handler; replayed records carry replay=true.
+//		...
+//	}
+func ConfigureLogging(ctx Context, cfg LogConfig) error {
+	ec, ok := ctx.(*execContext)
+	if !ok {
+		return errors.New("durable: ConfigureLogging: Context was not created by the SDK")
+	}
+	return ec.configureLogging(cfg)
 }

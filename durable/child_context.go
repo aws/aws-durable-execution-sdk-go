@@ -417,9 +417,10 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 	// It deregisters (via defer) after settling the future on all paths.
 	tok := ec.suspend.registerBranchToken()
 
-	// Snapshot the serializer defaults on the owning goroutine: the owner
-	// may call ConfigureSerdes before the goroutine below runs.
-	defaults := ec.serdesDefaults()
+	// Snapshot the serializer and logging defaults on the owning goroutine:
+	// the owner may call ConfigureSerdes or ConfigureLogging before the
+	// goroutine below runs.
+	defaults := ec.inheritedDefaults()
 
 	go func() {
 		defer tok.release()
@@ -572,9 +573,10 @@ func replayChildAsync[O any](ec *execContext, id, name string, options childOpti
 	fut := newFuture[O]()
 	registerFuture(ec.suspend, fut)
 
-	// Snapshot the serializer defaults on the owning goroutine: the owner
-	// may call ConfigureSerdes before the goroutine below runs.
-	defaults := ec.serdesDefaults()
+	// Snapshot the serializer and logging defaults on the owning goroutine:
+	// the owner may call ConfigureSerdes or ConfigureLogging before the
+	// goroutine below runs.
+	defaults := ec.inheritedDefaults()
 	tok := ec.suspend.registerBranchToken()
 	go func() {
 		defer tok.release()

@@ -121,9 +121,10 @@ func StepAsync[O any](ctx Context, name string, fn func(StepContext) (O, error),
 	fut := newFuture[O]()
 	registerFuture(ec.suspend, fut)
 
-	// Snapshot the serializer defaults on the owning goroutine: the owner
-	// may call ConfigureSerdes before the goroutine below runs.
-	defaults := ec.serdesDefaults()
+	// Snapshot the serializer and logging defaults on the owning goroutine:
+	// the owner may call ConfigureSerdes or ConfigureLogging before the
+	// goroutine below runs.
+	defaults := ec.inheritedDefaults()
 	tok := ec.suspend.registerBranchToken()
 	go func() {
 		defer tok.release()

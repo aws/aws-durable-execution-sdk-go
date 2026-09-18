@@ -74,11 +74,25 @@ type HandlerOption interface {
 // handler's WithAttrs method, so a supplied handler receives them as
 // structured attributes, and it wraps the handler with per-branch replay
 // suppression: while a context replays checkpointed operations, its
-// records are dropped before they reach the handler. Fields a plugin
+// records are dropped before they reach the handler, unless
+// [WithReplayLogMode] selects [ReplayLogModeEmit]. Fields a plugin
 // returns from [Plugin.EnrichLogContext] arrive as attributes of the
-// record; that field documents their precedence.
+// record; that field documents their precedence. To replace the handler
+// from inside the handler body, see [ConfigureLogging].
 func WithLogHandler(h slog.Handler) HandlerOption {
 	return handlerOptionFunc(func(o *handlerOptions) { o.logHandler = h })
+}
+
+// WithReplayLogMode sets what happens to log records emitted while a
+// context replays checkpointed operations. The default,
+// [ReplayLogModeSuppress], drops them so replayed code does not duplicate
+// the lines it wrote when it first ran. [ReplayLogModeEmit] emits them
+// with the attribute replay=true, for diagnosing a replay problem; expect
+// every line written before a suspension to appear again on each later
+// invocation. [ReplayLogModeUnchanged] selects the default. To change the
+// mode from inside the handler body, see [ConfigureLogging].
+func WithReplayLogMode(mode ReplayLogMode) HandlerOption {
+	return handlerOptionFunc(func(o *handlerOptions) { o.replayLogMode = mode })
 }
 
 // WithSerdes sets the default serializer for operation results. It applies
@@ -102,6 +116,7 @@ func WithCallbackDeserializer(d Deserializer) HandlerOption {
 
 type handlerOptions struct {
 	logHandler           slog.Handler
+	replayLogMode        ReplayLogMode
 	serdes               Serdes
 	callbackDeserializer Deserializer
 
@@ -351,6 +366,11 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		ec.setSerdesDefaults(d)
 	}
 	ec.pluginDispatcher = pd
+	if h.options.replayLogMode == ReplayLogModeEmit {
+		l := ec.logDefaults()
+		l.emitReplayed = true
+		ec.setLogDefaults(l)
+	}
 	outcomeCh := make(chan outcome, 1)
 	// handlerTrace is the stack trace of the handler's failure, copied out
 	// of the outcome on this goroutine once the handler has returned.

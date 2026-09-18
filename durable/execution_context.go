@@ -36,21 +36,26 @@ type execContext struct {
 	executionArn string
 	invocation   invocationInfo
 
-	// logHandler is the invocation's handler with the execution attributes
-	// (request ID, execution ARN, tenant ID) already attached; every
-	// context of the invocation shares it. It carries no operation
-	// attributes, so every operation scope (a child context, a step body)
-	// adds its own to this one handler and never inherits another scope's.
-	// That keeps operationId and operationName single-valued in a record.
+	// logCfg holds the logging settings in effect on this context: the
+	// invocation's handler with the execution attributes (request ID,
+	// execution ARN, tenant ID) already attached, and the replay log mode.
+	// The handler carries no operation attributes, so every operation
+	// scope (a child context, a step body) adds its own to it and never
+	// inherits another scope's. That keeps operationId and operationName
+	// single-valued in a record. Every read goes through logDefaults and
+	// every write through setLogDefaults, so a ConfigureLogging call on
+	// the owning goroutine never races with a read from another
+	// goroutine. It is always non-nil once the context is constructed.
 	//
 	// logScope is this context's own operation attributes: empty for the
 	// root context, the child operation's ID and name for a child context,
-	// and the parent's scope for a branch. ctxLogger is logHandler plus
+	// and the parent's scope for a branch. ctxLogger is the handler plus
 	// logScope, wrapped with replay suppression driven by this context's
-	// own mode, so suppression is decided per branch. See attachLogger.
-	logHandler slog.Handler
-	logScope   []slog.Attr
-	ctxLogger  *slog.Logger
+	// own mode, so suppression is decided per branch. It is rebuilt by
+	// attachLogger when the handler changes; Logger loads it atomically.
+	logCfg    atomic.Pointer[logDefaults]
+	logScope  []slog.Attr
+	ctxLogger atomic.Pointer[slog.Logger]
 
 	// mode tracks the execution's replay lifecycle position. Accessed
 	// atomically because child goroutines read it concurrently with the
@@ -156,37 +161,40 @@ func newExecContext(ctx context.Context, executionArn string, inv invocationInfo
 		Context:      ctx,
 		executionArn: executionArn,
 		invocation:   inv,
-		logHandler:   handler.WithAttrs(executionLogAttrs(executionArn, inv)),
 		ids:          &opIDs{},
 		owner:        currentGoroutineOwner(),
 		state:        state,
 		suspend:      newSuspendSignal(),
 	}
 	ec.setSerdesDefaults(serdesDefaults{serdes: JSONSerdes})
+	ec.setLogDefaults(logDefaults{handler: handler.WithAttrs(executionLogAttrs(executionArn, inv))})
 	ec.mode.Store(int32(mode))
 	ec.attachLogger()
 	return ec
 }
 
-// attachLogger builds this context's replay-aware logger: the shared
-// execution handler with this context's own operation scope added. The
-// wrapper reads this context's mode on every call, so a still-replaying
-// branch stays suppressed regardless of what sibling contexts are doing.
-// Every constructor (newExecContext, child, branch) calls attachLogger
-// after storing the initial mode and logScope.
+// attachLogger builds this context's replay-aware logger: the execution
+// handler in effect with this context's own operation scope added. The
+// wrapper reads this context's mode and replay log mode on every call, so
+// a still-replaying branch stays suppressed regardless of what sibling
+// contexts are doing, and a mode change reaches loggers already handed
+// out. Every constructor (newExecContext, child, branch) calls
+// attachLogger after storing the initial mode, logScope, and log
+// defaults; configureLogging calls it again after replacing the handler.
 func (c *execContext) attachLogger() {
-	c.ctxLogger = newReplayLogger(c.scopedLogHandler(c.logScope), c.IsReplaying)
+	c.ctxLogger.Store(newReplayLogger(c.scopedLogHandler(c.logScope), c.IsReplaying, c.emitReplayedLogs))
 }
 
-// scopedLogHandler returns the shared execution handler with attrs added,
-// or the handler itself when attrs is empty. The handler is the
+// scopedLogHandler returns the execution handler in effect with attrs
+// added, or the handler itself when attrs is empty. The handler is the
 // execution-scoped one, never a context's already-scoped handler, so a
 // nested operation's attributes do not repeat an enclosing scope's keys.
 func (c *execContext) scopedLogHandler(attrs []slog.Attr) slog.Handler {
+	h := c.logDefaults().handler
 	if len(attrs) == 0 {
-		return c.logHandler
+		return h
 	}
-	return c.logHandler.WithAttrs(attrs)
+	return h.WithAttrs(attrs)
 }
 
 // operationLogger returns the logger handed to a step body, condition
@@ -194,7 +202,98 @@ func (c *execContext) scopedLogHandler(attrs []slog.Attr) slog.Handler {
 // execution handler with the operation's own attributes added, in place of
 // this context's scope, under this context's replay suppression.
 func (c *execContext) operationLogger(id, name string, attempt int) *slog.Logger {
-	return newReplayLogger(c.scopedLogHandler(operationLogAttrs(id, name, attempt)), c.IsReplaying)
+	return newReplayLogger(c.scopedLogHandler(operationLogAttrs(id, name, attempt)), c.IsReplaying, c.emitReplayedLogs)
+}
+
+// emitReplayedLogs reports whether records this context emits while
+// replaying are emitted rather than dropped; see [ReplayLogModeEmit]. It
+// is the emitReplayed func of every replayHandler built for this context.
+func (c *execContext) emitReplayedLogs() bool {
+	return c.logDefaults().emitReplayed
+}
+
+// logDefaults is the pair of logging settings in effect on one context. A
+// context stores it behind an atomic pointer and never mutates a stored
+// value: configureLogging builds a new value and swaps the pointer, so a
+// copy taken before the call still describes the settings from before it.
+type logDefaults struct {
+	// handler is the installed handler, wrapped with plugin enrichment
+	// when a plugin implements EnrichLogContext, with the execution
+	// attributes attached. Operation scopes add their own attributes to
+	// it; see scopedLogHandler.
+	handler slog.Handler
+
+	// emitReplayed is true under [ReplayLogModeEmit]: records emitted
+	// while replaying are passed on with the replay attribute instead of
+	// being dropped.
+	emitReplayed bool
+}
+
+// logDefaults reads c's current logging settings. It is safe to call from
+// any goroutine: the load is atomic, so a concurrent configureLogging on
+// the owner yields either the old snapshot or the new one.
+func (c *execContext) logDefaults() logDefaults {
+	return *c.logCfg.Load()
+}
+
+// setLogDefaults installs l as c's logging settings. The pointer store is
+// atomic, so readers on other goroutines never observe a torn pair; every
+// caller other than the constructors runs on c's owning goroutine.
+func (c *execContext) setLogDefaults(l logDefaults) {
+	c.logCfg.Store(&l)
+}
+
+// configureLogging implements [ConfigureLogging]. The owner check keeps the
+// documented rule that logging settings change only from the goroutine
+// that owns the context, the same guard claimOperation applies to
+// operations. A new handler is wrapped exactly as the construction-time
+// handler was: plugin enrichment first, then the execution attributes;
+// the context's logger is then rebuilt so Logger returns one over the new
+// handler. The replay log mode is stored only; every replayHandler of
+// this context reads it through emitReplayedLogs on each record.
+//
+// The owner may keep running after it launches an asynchronous operation,
+// and may then call configureLogging while that operation's goroutine is
+// still starting. So an asynchronous operation takes an inheritedDefaults
+// snapshot on the owning goroutine before the go statement and derives its
+// context through childWith or branchWith. That keeps the documented rule:
+// a context derived before the call keeps the settings it was derived with.
+func (c *execContext) configureLogging(cfg LogConfig) error {
+	if err := c.owner.check(); err != nil {
+		return fmt.Errorf("durable: ConfigureLogging: %w", err)
+	}
+	l := c.logDefaults()
+	switch cfg.ReplayLogMode {
+	case ReplayLogModeSuppress:
+		l.emitReplayed = false
+	case ReplayLogModeEmit:
+		l.emitReplayed = true
+	case ReplayLogModeUnchanged:
+	}
+	if cfg.Handler != nil {
+		h := newEnrichLogHandler(cfg.Handler, c.pluginDispatcher)
+		l.handler = h.WithAttrs(executionLogAttrs(c.executionArn, c.invocation))
+	}
+	c.setLogDefaults(l)
+	if cfg.Handler != nil {
+		c.attachLogger()
+	}
+	return nil
+}
+
+// inheritedDefaults is the configuration a derived context copies from its
+// parent at derivation: the serializer defaults and the logging settings.
+// An asynchronous operation snapshots it on the owning goroutine before
+// the go statement; see configureSerdes and configureLogging.
+type inheritedDefaults struct {
+	serdes serdesDefaults
+	log    logDefaults
+}
+
+// inheritedDefaults reads c's current serializer defaults and logging
+// settings as one snapshot.
+func (c *execContext) inheritedDefaults() inheritedDefaults {
+	return inheritedDefaults{serdes: c.serdesDefaults(), log: c.logDefaults()}
 }
 
 func (c *execContext) ExecutionArn() string { return c.executionArn }
@@ -274,7 +373,7 @@ func (c *execContext) RequestID() string { return c.invocation.requestID }
 
 func (c *execContext) InvokedFunctionARN() string { return c.invocation.invokedFunctionARN }
 
-func (c *execContext) Logger() *slog.Logger { return c.ctxLogger }
+func (c *execContext) Logger() *slog.Logger { return c.ctxLogger.Load() }
 
 func (c *execContext) IsReplaying() bool {
 	m := executionMode(c.mode.Load())
@@ -485,23 +584,23 @@ func (c *execContext) adoptBranchToken(tok *branchToken) {
 // that runs the child on a freshly registered goroutine replaces the token
 // through adoptBranchToken.
 //
-// child copies c's serializer defaults as they are at the call. A goroutine
-// launched while the owner keeps running uses childWith with a snapshot
-// taken before the go statement, so that a ConfigureSerdes call between the
-// go statement and the child's construction does not reach the child; see
-// configureSerdes.
+// child copies c's serializer defaults and logging settings as they are at
+// the call. A goroutine launched while the owner keeps running uses
+// childWith with a snapshot taken before the go statement, so that a
+// ConfigureSerdes or ConfigureLogging call between the go statement and
+// the child's construction does not reach the child; see configureSerdes
+// and configureLogging.
 func (c *execContext) child(entityID, name string, owner goroutineOwner, mode executionMode) *execContext {
-	return c.childWith(entityID, name, owner, mode, c.serdesDefaults())
+	return c.childWith(entityID, name, owner, mode, c.inheritedDefaults())
 }
 
-// childWith is child with the serializer defaults supplied by the caller
+// childWith is child with the inherited defaults supplied by the caller
 // instead of read from c.
-func (c *execContext) childWith(entityID, name string, owner goroutineOwner, mode executionMode, d serdesDefaults) *execContext {
+func (c *execContext) childWith(entityID, name string, owner goroutineOwner, mode executionMode, d inheritedDefaults) *execContext {
 	child := &execContext{
 		Context:            c.Context,
 		executionArn:       c.executionArn,
 		invocation:         c.invocation,
-		logHandler:         c.logHandler,
 		logScope:           contextLogAttrs(entityID, name),
 		ids:                c.ids.child(entityID),
 		owner:              owner,
@@ -516,7 +615,8 @@ func (c *execContext) childWith(entityID, name string, owner goroutineOwner, mod
 		branchTok:          c.branchTok,
 		combinatorObserve:  c.combinatorObserve,
 	}
-	child.setSerdesDefaults(d)
+	child.setSerdesDefaults(d.serdes)
+	child.setLogDefaults(d.log)
 	child.mode.Store(int32(mode))
 	child.attachLogger()
 	return child
@@ -548,24 +648,23 @@ func (c *execContext) virtualChild(entityID, name, parentID string, owner gorout
 // without owning it; every caller registers the goroutine's own token and
 // adopts it through adoptBranchToken.
 //
-// branch copies c's serializer defaults as they are at the call. The
-// asynchronous operations launch their goroutine while the owner keeps
-// running, so they use branchWith with a snapshot taken before the go
-// statement; a ConfigureSerdes call between the go statement and the
-// branch's construction then does not reach the branch. See
-// configureSerdes.
+// branch copies c's serializer defaults and logging settings as they are at
+// the call. The asynchronous operations launch their goroutine while the
+// owner keeps running, so they use branchWith with a snapshot taken before
+// the go statement; a ConfigureSerdes or ConfigureLogging call between the
+// go statement and the branch's construction then does not reach the
+// branch. See configureSerdes and configureLogging.
 func (c *execContext) branch(owner goroutineOwner) *execContext {
-	return c.branchWith(owner, c.serdesDefaults())
+	return c.branchWith(owner, c.inheritedDefaults())
 }
 
-// branchWith is branch with the serializer defaults supplied by the caller
+// branchWith is branch with the inherited defaults supplied by the caller
 // instead of read from c.
-func (c *execContext) branchWith(owner goroutineOwner, d serdesDefaults) *execContext {
+func (c *execContext) branchWith(owner goroutineOwner, d inheritedDefaults) *execContext {
 	b := &execContext{
 		Context:            c.Context,
 		executionArn:       c.executionArn,
 		invocation:         c.invocation,
-		logHandler:         c.logHandler,
 		logScope:           c.logScope,
 		ids:                c.ids,
 		owner:              owner,
@@ -580,7 +679,8 @@ func (c *execContext) branchWith(owner goroutineOwner, d serdesDefaults) *execCo
 		branchTok:          c.branchTok,
 		combinatorObserve:  c.combinatorObserve,
 	}
-	b.setSerdesDefaults(d)
+	b.setSerdesDefaults(d.serdes)
+	b.setLogDefaults(d.log)
 	b.mode.Store(c.mode.Load())
 	b.attachLogger()
 	return b

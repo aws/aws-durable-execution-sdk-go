@@ -326,6 +326,7 @@ languages:
 | `tenantId` | When the invocation has one. |
 | `operationId`, `operationName` | Inside a child context (`RunInChildContext`, `Go`, `Map`, `Parallel`, `WaitForCallback`) or an operation body. `operationName` only when the operation is named. |
 | `attempt` | Inside a step body, condition check, or callback submitter. |
+| `replay` | Only on a record emitted while its context replays, and only under `ReplayLogModeEmit` (see below). Always `true` when present. |
 
 A field that does not apply in a scope is omitted, never emitted empty.
 Each scope carries its own identifiers only: a step inside a child context
@@ -340,6 +341,47 @@ overwrite the SDK's fields or the attributes you pass; keys are compared by
 qualified path, so a plugin field under an open `slog` group collides only
 with your attributes at that same path. See the `EnrichLogContext`
 documentation for the full precedence.
+
+To choose the handler from inside the handler body, for example from the
+event payload, call `ConfigureLogging`. It replaces the handler for the
+rest of the invocation, on the calling context and on every child context
+and branch derived from it after the call; the SDK attaches the same fields
+to the new handler. The change lasts for the current invocation only and
+does not affect checkpoints or operation ordering, so it is safe to call
+conditionally.
+
+```go
+if event.Debug {
+	if err := durable.ConfigureLogging(ctx, durable.LogConfig{
+		Handler: slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}),
+	}); err != nil {
+		return OrderResult{}, err
+	}
+}
+```
+
+### Replayed log records
+
+While a context replays checkpointed operations, its log records are
+dropped, so replayed code does not duplicate the lines it wrote when it
+first ran. Suppression is decided per branch: a `Go` branch that is still
+replaying stays quiet while a sibling that has reached live execution logs
+normally.
+
+To see the records of the replayed portion when diagnosing a replay
+problem, select `ReplayLogModeEmit` with `WithReplayLogMode` at
+construction or with `ConfigureLogging` inside the handler. Replayed
+records are then emitted with the field `replay` set to `true`; live
+records carry no `replay` field. Expect duplicate lines: every line written
+before a suspension appears again on each later invocation that replays
+it. `ReplayLogModeSuppress` is the default. The top-level `replay` key
+belongs to the SDK in every mode: a value you attach under that name with
+`Logger.With` or pass with a record is dropped, while the same name inside a
+group opened with `WithGroup` is kept.
+
+```go
+durable.Start(handler, durable.WithReplayLogMode(durable.ReplayLogModeEmit))
+```
 
 ## Plugin API
 

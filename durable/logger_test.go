@@ -134,7 +134,7 @@ var isoMillisUTC = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{
 func TestReplayHandlerSuppressesWhileReplaying(t *testing.T) {
 	rec := newRecordingHandler()
 	replaying := false
-	logger := newReplayLogger(rec, func() bool { return replaying })
+	logger := newReplayLogger(rec, func() bool { return replaying }, func() bool { return false })
 
 	// Not replaying: emit.
 	logger.Info("visible")
@@ -161,6 +161,36 @@ func TestReplayHandlerSuppressesWhileReplaying(t *testing.T) {
 	logger.With("k", "v").WithGroup("g").Warn("back")
 	if got := rec.messages(); len(got) != 2 || got[1] != "back" {
 		t.Fatalf("messages = %v, want [visible back]", got)
+	}
+}
+
+func TestReplayHandlerEmitModeMarksReplayedRecords(t *testing.T) {
+	// With emitReplayed reporting true, a record written during replay is
+	// emitted with replay=true and Enabled reports the inner handler's
+	// answer; a live record carries no replay attribute. Flipping
+	// emitReplayed back restores suppression on the same logger.
+	rec := newRecordingHandler()
+	replaying, emit := true, true
+	logger := newReplayLogger(rec, func() bool { return replaying }, func() bool { return emit })
+
+	if !logger.Enabled(t.Context(), slog.LevelInfo) {
+		t.Error("Enabled(INFO) = false in emit mode during replay, want the inner handler's true")
+	}
+	logger.Info("replayed")
+	replaying = false
+	logger.Info("live")
+	replaying, emit = true, false
+	logger.Info("hidden")
+
+	records := rec.all()
+	if len(records) != 2 || records[0].message != "replayed" || records[1].message != "live" {
+		t.Fatalf("messages = %v, want [replayed live]", rec.messages())
+	}
+	if records[0].attrs[logKeyReplay] != true {
+		t.Errorf("replayed record attrs = %v, want %s=true", records[0].attrs, logKeyReplay)
+	}
+	if _, ok := records[1].attrs[logKeyReplay]; ok {
+		t.Errorf("live record attrs = %v, want no %s attribute", records[1].attrs, logKeyReplay)
 	}
 }
 

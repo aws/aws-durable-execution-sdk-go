@@ -23,6 +23,7 @@ const (
 	logKeyOperationID   = "operationId"
 	logKeyOperationName = "operationName"
 	logKeyAttempt       = "attempt"
+	logKeyReplay        = "replay"
 	logKeyErrorType     = "errorType"
 	logKeyErrorMessage  = "errorMessage"
 	logKeyStackTrace    = "stackTrace"
@@ -132,58 +133,184 @@ func defaultLogHandler() slog.Handler {
 }
 
 // replayHandler wraps an [slog.Handler] with per-context replay
-// suppression. It reports every level disabled, and drops every record,
-// while replaying reports true. Because Enabled is consulted before a
-// record is built, a suppressed call incurs no formatting cost.
+// suppression. While replaying reports true and emitReplayed reports
+// false, it reports every level disabled and drops every record. Because
+// Enabled is consulted before a record is built, a suppressed call incurs
+// no formatting cost. While replaying reports true and emitReplayed
+// reports true, the record is passed to replayInner, which is inner with
+// the replay attribute attached, so a replayed record is distinguishable
+// from a live one; see [ReplayLogModeEmit].
 //
 // Suppression is decided per emitting context, not per invocation. Each
 // context (root, child, and branch) owns one replayHandler whose replaying
 // func reads that context's own mode. A branch that is still replaying
 // therefore stays suppressed while a sibling branch that has reached live
 // execution logs normally. The wrapper applies to whichever handler the
-// user supplied, not only the default.
+// user supplied, not only the default. emitReplayed reads the owning
+// context's current [ReplayLogMode] on every call, so a change made with
+// [ConfigureLogging] reaches a logger obtained before the change.
+//
+// replayInner is derived alongside inner by WithAttrs and WithGroup, so
+// the replay attribute always sits at the level the handler was created
+// at, beside the execution and operation attributes, and never under a
+// group the user opened later. Enabled asks whichever of the two would
+// receive the record, because a handler may answer differently once the
+// replay attribute is attached.
+//
+// The top-level replay key belongs to the SDK. A user attribute under that
+// key, attached through [slog.Logger.With] or passed with a record, is
+// dropped while no group is open, so the key is single-valued in the
+// output and a consumer never reads a user value as the SDK's marker. An
+// empty-key group is inlined by conforming handlers, so the rule descends
+// into one. Under a group the user opened the same name is a different
+// attribute path and is kept.
 type replayHandler struct {
-	inner     slog.Handler
-	replaying func() bool
+	inner        slog.Handler
+	replayInner  slog.Handler
+	replaying    func() bool
+	emitReplayed func() bool
+	// grouped reports that WithGroup opened a group on this handler or an
+	// ancestor. Attributes then land under the user's group, where the
+	// replay key does not collide with the SDK's.
+	grouped bool
 }
 
 var _ slog.Handler = (*replayHandler)(nil)
 
 // newReplayLogger returns a logger over inner whose records are dropped
-// while replaying reports true.
-func newReplayLogger(inner slog.Handler, replaying func() bool) *slog.Logger {
-	return slog.New(&replayHandler{inner: inner, replaying: replaying})
+// while replaying reports true, unless emitReplayed reports true, in
+// which case they are emitted with the replay attribute set.
+func newReplayLogger(inner slog.Handler, replaying, emitReplayed func() bool) *slog.Logger {
+	return slog.New(&replayHandler{
+		inner:        inner,
+		replayInner:  inner.WithAttrs([]slog.Attr{slog.Bool(logKeyReplay, true)}),
+		replaying:    replaying,
+		emitReplayed: emitReplayed,
+	})
+}
+
+// target returns the handler a record emitted now would reach, or nil
+// when the record is suppressed: replayInner while replaying with
+// emission on, inner while live.
+func (h *replayHandler) target() slog.Handler {
+	if h.replaying() {
+		if !h.emitReplayed() {
+			return nil
+		}
+		return h.replayInner
+	}
+	return h.inner
 }
 
 func (h *replayHandler) Enabled(ctx context.Context, level slog.Level) bool {
-	if h.replaying() {
+	t := h.target()
+	if t == nil {
 		return false
 	}
-	return h.inner.Enabled(ctx, level)
+	return t.Enabled(ctx, level)
 }
 
 func (h *replayHandler) Handle(ctx context.Context, r slog.Record) error {
-	if h.replaying() {
+	t := h.target()
+	if t == nil {
 		return nil
 	}
-	return h.inner.Handle(ctx, r)
+	if !h.grouped {
+		r = withoutReplayAttr(r)
+	}
+	return t.Handle(ctx, r)
 }
 
 func (h *replayHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return &replayHandler{inner: h.inner.WithAttrs(attrs), replaying: h.replaying}
+	if !h.grouped {
+		attrs, _ = withoutReplayAttrs(attrs)
+	}
+	if len(attrs) == 0 {
+		return h
+	}
+	return &replayHandler{
+		inner:        h.inner.WithAttrs(attrs),
+		replayInner:  h.replayInner.WithAttrs(attrs),
+		replaying:    h.replaying,
+		emitReplayed: h.emitReplayed,
+		grouped:      h.grouped,
+	}
 }
 
 func (h *replayHandler) WithGroup(name string) slog.Handler {
-	return &replayHandler{inner: h.inner.WithGroup(name), replaying: h.replaying}
+	if name == "" {
+		return h
+	}
+	return &replayHandler{
+		inner:        h.inner.WithGroup(name),
+		replayInner:  h.replayInner.WithGroup(name),
+		replaying:    h.replaying,
+		emitReplayed: h.emitReplayed,
+		grouped:      true,
+	}
+}
+
+// withoutReplayAttr returns r without any top-level attribute under the
+// replay key, or r itself when it has none. A record's attributes cannot
+// be removed in place, so a filtered record is rebuilt with the same
+// time, level, message, and source.
+func withoutReplayAttr(r slog.Record) slog.Record {
+	if r.NumAttrs() == 0 {
+		return r
+	}
+	attrs := make([]slog.Attr, 0, r.NumAttrs())
+	r.Attrs(func(a slog.Attr) bool {
+		attrs = append(attrs, a)
+		return true
+	})
+	kept, changed := withoutReplayAttrs(attrs)
+	if !changed {
+		return r
+	}
+	out := slog.NewRecord(r.Time, r.Level, r.Message, r.PC)
+	out.AddAttrs(kept...)
+	return out
+}
+
+// withoutReplayAttrs returns attrs without any attribute under the replay
+// key, and whether anything was removed. It descends into empty-key
+// groups, which conforming handlers inline at the enclosing level, and
+// leaves every other attribute as it is.
+func withoutReplayAttrs(attrs []slog.Attr) ([]slog.Attr, bool) {
+	// out stays nil until the first removal, so an unchanged slice is
+	// returned as is without a copy.
+	var out []slog.Attr
+	for i, a := range attrs {
+		keep, changed := a, false
+		if a.Key == logKeyReplay {
+			changed = true
+		} else if v := a.Value.Resolve(); a.Key == "" && v.Kind() == slog.KindGroup {
+			if children, c := withoutReplayAttrs(v.Group()); c {
+				keep = slog.Attr{Key: "", Value: slog.GroupValue(children...)}
+				changed = true
+			}
+		}
+		if changed && out == nil {
+			out = make([]slog.Attr, 0, len(attrs)-1)
+			out = append(out, attrs[:i]...)
+		}
+		if out != nil && keep.Key != logKeyReplay {
+			out = append(out, keep)
+		}
+	}
+	if out == nil {
+		return attrs, false
+	}
+	return out, true
 }
 
 // reservedLogKeys are the top-level keys a plugin's EnrichLogContext field
-// may not set: the record's own built-in keys and the SDK's execution and
-// operation identifiers. A plugin field under one of these keys is
-// dropped, so a plugin cannot overwrite the identifiers other tooling
-// correlates on. The SDK emits these keys only at the top level, so the
-// rule applies only while no group is open; under a group the same name
-// is a different attribute path and does not collide.
+// may not set: the record's own built-in keys, the SDK's execution and
+// operation identifiers, and the replay marker. A plugin field under one
+// of these keys is dropped, so a plugin cannot overwrite the identifiers
+// other tooling correlates on. The SDK emits these keys only at the top
+// level, so the rule applies only while no group is open; under a group
+// the same name is a different attribute path and does not collide.
 var reservedLogKeys = map[string]struct{}{
 	slog.TimeKey:        {},
 	slog.LevelKey:       {},
@@ -196,6 +323,7 @@ var reservedLogKeys = map[string]struct{}{
 	logKeyOperationID:   {},
 	logKeyOperationName: {},
 	logKeyAttempt:       {},
+	logKeyReplay:        {},
 }
 
 // enrichLogHandler wraps an [slog.Handler] with plugin log-context

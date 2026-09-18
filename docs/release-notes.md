@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### Added: `ConfigureLogging` reconfigures the logger inside the handler
+
+`ConfigureLogging(ctx, LogConfig{...})` replaces the `slog.Handler` behind
+`Context.Logger()` and `StepContext.Logger()` for the rest of the
+invocation, for a handler that must choose its logger from the event
+payload or runtime configuration rather than at construction time. The
+SDK attaches the same fields to the new handler as to the construction
+time one: `requestId`, `executionArn`, `tenantId`, the operation scope
+fields, and plugin fields from `EnrichLogContext`, and it wraps the new
+handler with replay suppression.
+
+Scope: the new settings apply to the calling context and to every child
+context and branch derived from it after the call. A context derived
+before the call keeps the settings it was derived with. Settings last for
+the current invocation only; the next invocation starts from the
+construction-time options again. The call claims no operation and writes
+no checkpoint, so it may be made conditionally without affecting replay.
+Like `ConfigureSerdes`, it must run on the goroutine that owns the context.
+
+### Added: `ReplayLogMode` and `WithReplayLogMode` control replay suppression
+
+Log records emitted while a context replays checkpointed operations are
+dropped by default (`ReplayLogModeSuppress`). `ReplayLogModeEmit`,
+selected with the `WithReplayLogMode` handler option or the
+`LogConfig.ReplayLogMode` field of `ConfigureLogging`, emits them instead,
+each with the field `replay: true`; live records carry no `replay` field.
+The mode is for diagnosing a replay problem: expect every line written
+before a suspension to appear again on each later invocation that replays
+it. The top-level `replay` key is reserved in every mode: a plugin field or a
+user attribute (from `Logger.With` or a record) under that name is dropped,
+like the other SDK fields; the same name inside a user group is kept.
+
 ### Breaking: `Context.Logger()` returns `*slog.Logger`; `WithLogHandler` replaces `WithLogger`
 
 The SDK logs through the standard library's `log/slog`. `Context.Logger()`
