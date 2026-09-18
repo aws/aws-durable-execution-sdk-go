@@ -256,17 +256,17 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		}
 	}
 
+	// The root EXECUTION operation is located once, by type, and shared by
+	// every path that needs it: the execution start timestamp below and
+	// the oversized-result checkpoint at the end of the invocation. nil
+	// when the state holds no such operation.
+	execOp := state.executionOperation()
+
 	// ExecutionStartTimestamp: sourced from the root EXECUTION operation's
-	// own StartTimestamp in the wire payload (the first operation).
+	// own StartTimestamp in the wire payload.
 	var execStartTimestamp time.Time
-	if state.numOperations() > 0 {
-		state.rangeOperations(func(op *operation) bool {
-			if op.opType == "EXECUTION" {
-				execStartTimestamp = op.startTimestamp
-				return false
-			}
-			return true
-		})
+	if execOp != nil {
+		execStartTimestamp = execOp.startTimestamp
 	}
 
 	// ExecutionInput: the raw unmarshaled customer event. We pass the
@@ -522,16 +522,15 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 			// durable copy of the result. The checkpointer was terminated
 			// when the handler's outcome was decided, so this write goes
 			// through checkpointFinal, the one path termination leaves
-			// open to the invocation itself.
-			executionOpID := ""
-			if len(in.InitialExecutionState.Operations) > 0 {
-				executionOpID = in.InitialExecutionState.Operations[0].Id
-			}
-			if executionOpID == "" {
+			// open to the invocation itself. The target is the EXECUTION
+			// operation located by type above; its ID is already in wire
+			// form, so it is passed through unhashed.
+			if execOp == nil || execOp.id == "" {
 				err := errors.New("durable: result exceeds response size limit and no execution operation is available to checkpoint it")
 				failInvocationEnd(err)
 				return nil, err
 			}
+			executionOpID := execOp.id
 			update := OperationUpdate{
 				Id:      &executionOpID,
 				Type:    OperationTypeExecution,

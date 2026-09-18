@@ -18,6 +18,7 @@ func stepPayload(event string, steps ...wireOperation) []byte {
 	ops := append([]wireOperation{{
 		Id:               "exec-op",
 		Status:           "STARTED",
+		Type:             "EXECUTION",
 		ExecutionDetails: &wireExecutionDetails{InputPayload: event},
 	}}, steps...)
 	in := invocationInput{

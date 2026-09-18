@@ -90,6 +90,97 @@ func TestRootResultOverLimitIsCheckpointed(t *testing.T) {
 	}
 }
 
+func TestRootResultOverLimitTargetsExecutionOpByType(t *testing.T) {
+	// The execution operation is located by type, not by position. With
+	// a STEP operation at index 0 and the EXECUTION operation after it,
+	// the oversized-result checkpoint must still mark the EXECUTION
+	// operation SUCCEEDED.
+	fake := &fakeLambda{}
+	large := resultOfSerializedSize(lambdaResponseSizeLimit + 1)
+
+	ops := []wireOperation{
+		checkpointedStep("1", "SUCCEEDED", &wireStepDetails{Attempt: 1, Result: `"done"`}),
+		{Id: "exec-op", Status: "STARTED", Type: "EXECUTION", ExecutionDetails: &wireExecutionDetails{InputPayload: `""`}},
+	}
+	in := invocationInput{
+		DurableExecutionArn:   "arn:test",
+		CheckpointToken:       "token-0",
+		InitialExecutionState: initialExecutionState{Operations: ops},
+	}
+	payload, err := json.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp := invokeStep(t, fake, payload, func(_ Context, _ string) (string, error) {
+		return large, nil
+	})
+
+	var parsed invocationResponse
+	if err := json.Unmarshal([]byte(resp), &parsed); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if parsed.Status != invocationSucceeded || parsed.Result == nil || *parsed.Result != "" {
+		t.Fatalf("response = %s, want SUCCEEDED with empty Result", resp)
+	}
+
+	var execUpdates []OperationUpdate
+	for _, u := range updateBatch(t, fake) {
+		if aws.ToString(u.Id) == hashID("1") {
+			t.Errorf("STEP operation at index 0 received an update: %+v", u)
+		}
+		if u.Type == OperationTypeExecution {
+			execUpdates = append(execUpdates, u)
+		}
+	}
+	if len(execUpdates) != 1 {
+		t.Fatalf("EXECUTION updates = %d, want exactly 1", len(execUpdates))
+	}
+	u := execUpdates[0]
+	if got := aws.ToString(u.Id); got != "exec-op" {
+		t.Errorf("EXECUTION update Id = %q, want %q", got, "exec-op")
+	}
+	if u.Action != OperationActionSucceed {
+		t.Errorf("EXECUTION update Action = %q, want SUCCEED", u.Action)
+	}
+}
+
+func TestRootResultOverLimitWithoutExecutionOpFails(t *testing.T) {
+	// The initial state holds operations, but none of type EXECUTION.
+	// The oversized result cannot be checkpointed, so the invocation
+	// fails with a clear error instead of marking another operation
+	// SUCCEEDED.
+	fake := &fakeLambda{}
+	large := resultOfSerializedSize(lambdaResponseSizeLimit + 1)
+
+	ops := []wireOperation{
+		checkpointedStep("1", "SUCCEEDED", &wireStepDetails{Attempt: 1, Result: `"done"`}),
+	}
+	in := invocationInput{
+		DurableExecutionArn:   "arn:test",
+		CheckpointToken:       "token-0",
+		InitialExecutionState: initialExecutionState{Operations: ops},
+	}
+	payload, err := json.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	h := Wrap(func(_ Context, _ string) (string, error) {
+		return large, nil
+	}, withLambdaAPI(fake))
+	_, err = h(context.Background(), payload)
+	if err == nil {
+		t.Fatal("Invoke succeeded despite missing execution operation")
+	}
+	if !strings.Contains(err.Error(), "no execution operation") {
+		t.Fatalf("error = %v, want the no-execution-operation guard", err)
+	}
+	if updates := updateBatch(t, fake); len(updates) != 0 {
+		t.Fatalf("unexpected checkpoint updates: %+v", updates)
+	}
+}
+
 func TestRootResultCheckpointCompletesBeforeResponse(t *testing.T) {
 	// The invocation must not respond until the oversized-result
 	// checkpoint has completed: the checkpoint is the only durable copy.

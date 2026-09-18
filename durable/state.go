@@ -215,6 +215,23 @@ func (s *executionState) rangeOperations(fn func(*operation) bool) {
 	}
 }
 
+// executionOperation returns the root EXECUTION operation, or nil when the
+// state holds none. The operation is found by its type, not by its
+// position: the order of operations in the invocation payload is not
+// part of the contract, so the first entry is not assumed to be the
+// execution operation.
+func (s *executionState) executionOperation() *operation {
+	var found *operation
+	s.rangeOperations(func(op *operation) bool {
+		if op.opType == string(OperationTypeExecution) {
+			found = op
+			return false
+		}
+		return true
+	})
+	return found
+}
+
 // hashID converts a positional operation ID to its wire form: the first 16
 // hex characters of its MD5 digest. MD5 is an identifier encoding here, not
 // a security mechanism; 16 hex characters carry 64 bits, so collisions are
