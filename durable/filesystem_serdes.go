@@ -79,6 +79,30 @@ type FileSystemSerdesConfig struct {
 	// was written. Changing this setting affects only where new files are
 	// written.
 	PathEncoding FileSystemPathEncoding
+
+	// GeneratePreview, when set, is called with each value that is written
+	// to a file, and its non-nil result is stored in the checkpoint
+	// envelope next to the file reference as the "preview" member. The
+	// operation log then shows the preview without reading the file. It is
+	// not called for a value stored inline in
+	// [FileSystemSerdesModeOverflow], since that value is already visible.
+	//
+	// Use [BuildPreview] with a [PreviewConfig] to select and mask fields:
+	//
+	//	GeneratePreview: func(v any) map[string]any {
+	//		return durable.BuildPreview(v, durable.PreviewConfig{
+	//			Mode:    durable.PreviewExcludeAll,
+	//			Include: []durable.PreviewField{{Name: "id"}},
+	//			Mask:    []durable.PreviewField{{Name: "email"}},
+	//		})
+	//	}
+	//
+	// The preview is advisory metadata. Masking a field in the preview does
+	// not redact it from the file, which holds the value in full. An
+	// envelope written without a preview reads back unchanged, so this
+	// setting can be added to or removed from a deployed function without
+	// affecting executions that are already running.
+	GeneratePreview func(value any) map[string]any
 }
 
 // fileSystemSerdes stores serialized values on a durable filesystem (EFS,
@@ -124,9 +148,13 @@ func NewFileSystemSerdes(basePath string, cfg ...FileSystemSerdesConfig) Serdes 
 // fsEnvelope is the JSON envelope stored in the checkpoint. File is the
 // full path of the offloaded value, so reading it back needs neither the
 // base path nor the path encoding that was in effect when it was written.
+// Preview is present only when the value was written to a file and
+// [FileSystemSerdesConfig.GeneratePreview] returned a non-nil map; Unmarshal
+// ignores it.
 type fsEnvelope struct {
-	Data *string `json:"data,omitempty"`
-	File string  `json:"file,omitempty"`
+	Data    *string        `json:"data,omitempty"`
+	File    string         `json:"file,omitempty"`
+	Preview map[string]any `json:"preview,omitempty"`
 }
 
 func (s *fileSystemSerdes) Marshal(_ context.Context, meta SerdesContext, v any) ([]byte, error) {
@@ -161,6 +189,9 @@ func (s *fileSystemSerdes) Marshal(_ context.Context, meta SerdesContext, v any)
 		return nil, err
 	}
 	env := fsEnvelope{File: filePath}
+	if s.config.GeneratePreview != nil {
+		env.Preview = s.config.GeneratePreview(v)
+	}
 	return json.Marshal(env)
 }
 

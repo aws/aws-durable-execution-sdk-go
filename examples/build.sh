@@ -133,6 +133,8 @@ EXAMPLES="
   serde-basic
   serde-callback-deserializer
   serde-custom-config
+  serde-preview-truncation
+  serde-preview-field-selection
   context-validation-child
   context-validation-step
   context-validation-wait-condition

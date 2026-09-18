@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+### Added: `BuildPreview` and `FileSystemSerdesConfig.GeneratePreview`
+
+`BuildPreview(value, PreviewConfig)` returns a compact, redacted
+`map[string]any` view of a value. `FileSystemSerdesConfig` gains
+`GeneratePreview`, a hook the filesystem serdes calls for each value it
+writes to a file; a non-nil result is stored in the checkpoint envelope as
+the `preview` member next to the file reference. The operation log then
+shows the preview without reading the file.
+
+`PreviewConfig` selects a base mode, `PreviewIncludeAll` (the default) or
+`PreviewExcludeAll`, and layers `Include`, `Exclude`, and `Mask` selector
+lists on top. Exclude wins over the other two. A masked field is shown with
+its value replaced by `MaskString` (default `***`). Each selector is a
+`PreviewField` whose `Match` is `FieldMatchAnywhere` (the default, matching
+the name at any depth) or `FieldMatchPath` (matching one exact dot-separated
+path from the root). Fields are addressed by their JSON names.
+
+The result is capped at `MaxPreviewBytes` (default 4096) of JSON. When the
+cap leaves fields out, the preview carries `"$truncated": true`
+(`PreviewTruncatedKey`) so truncation is visible. Traversal stops at
+`MaxDepth` (default 32) nested objects and slices. Slices do not appear as
+slices: the fields of each element merge under the slice's path. A value
+that `encoding/json` cannot encode, including a cyclic one, yields a nil
+preview.
+
+A preview is advisory metadata. Masking or excluding a field in the preview
+does not redact it from the offloaded file, which holds the value in full.
+This is the SDK's only masking facility, and it applies to previews alone.
+
+An envelope written without a preview reads back unchanged, and an envelope
+with a preview reads back through a serdes that has no generator, so the
+hook can be added to or removed from a deployed function while executions
+are running.
+
+```go
+serdes := durable.NewFileSystemSerdes("/mnt/efs", durable.FileSystemSerdesConfig{
+	GeneratePreview: func(v any) map[string]any {
+		return durable.BuildPreview(v, durable.PreviewConfig{
+			Mode:    durable.PreviewExcludeAll,
+			Include: []durable.PreviewField{{Name: "id"}, {Name: "customer.email", Match: durable.FieldMatchPath}},
+			Mask:    []durable.PreviewField{{Name: "ssn"}},
+		})
+	},
+})
+```
+
+The examples `serde-preview-truncation` and `serde-preview-field-selection`
+show both base modes end to end.
+
 ### Added: `FileSystemSerdesConfig.PathEncoding`; the default file layout is now readable
 
 `FileSystemSerdesConfig` gains `PathEncoding`, which chooses where the

@@ -2005,6 +2005,40 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 120
 
+  SerdePreviewTruncationFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-serde-preview-truncation
+      CodeUri: .aws-sam/build-artifacts/serde-preview-truncation/
+      Handler: bootstrap
+      Description: Filesystem serdes with BuildPreview, include-all mode, exclude, and visible truncation
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  SerdePreviewFieldSelectionFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-serde-preview-field-selection
+      CodeUri: .aws-sam/build-artifacts/serde-preview-field-selection/
+      Handler: bootstrap
+      Description: Filesystem serdes with BuildPreview, exclude-all mode, path and anywhere matching, masking
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
   ContextValidationChildFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -2643,6 +2677,12 @@ Outputs:
   SerdeCustomConfigFunction:
     Description: Serde Custom Config Function ARN
     Value: !GetAtt SerdeCustomConfigFunction.Arn
+  SerdePreviewTruncationFunction:
+    Description: Serde Preview Truncation Function ARN
+    Value: !GetAtt SerdePreviewTruncationFunction.Arn
+  SerdePreviewFieldSelectionFunction:
+    Description: Serde Preview Field Selection Function ARN
+    Value: !GetAtt SerdePreviewFieldSelectionFunction.Arn
   ContextValidationChildFunction:
     Description: Context Validation Child Function ARN
     Value: !GetAtt ContextValidationChildFunction.Arn

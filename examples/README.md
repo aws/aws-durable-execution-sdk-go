@@ -160,6 +160,8 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [serde-basic](serde-basic/main.go) | Step, WithStepSerdes, SerdesOf | SUCCEEDED |
 | [serde-callback-deserializer](serde-callback-deserializer/main.go) | WithCallbackDeserializer, custom callback deserialization | SUCCEEDED |
 | [serde-custom-config](serde-custom-config/main.go) | WithSerdes (handler-level) | SUCCEEDED |
+| [serde-preview-truncation](serde-preview-truncation/main.go) | NewFileSystemSerdes, GeneratePreview, BuildPreview (include-all, exclude, truncation) | SUCCEEDED |
+| [serde-preview-field-selection](serde-preview-field-selection/main.go) | NewFileSystemSerdes, GeneratePreview, BuildPreview (exclude-all, path matching, masking) | SUCCEEDED |
 | [logger-after-wait](logger-after-wait/main.go) | Wait, WithLogger, replay suppression | SUCCEEDED |
 | [logger-after-callback](logger-after-callback/main.go) | WaitForCallback, WithLogger | SUCCEEDED |
 | [logger-log-levels](logger-log-levels/main.go) | WithLogger, all log levels | SUCCEEDED |
@@ -171,6 +173,15 @@ interface and rejects any other type with a descriptive error.
 `serde-basic` shows the pattern with `WithStepSerdes`. A `SerdesOf` serdes
 also works handler-wide with `WithSerdes`, but then every operation result
 in the handler must be that one type.
+
+A filesystem serdes stores only a file reference in the checkpoint. Setting
+`FileSystemSerdesConfig.GeneratePreview` adds a compact preview of the
+value next to that reference, so the operation log shows what was stored.
+`durable.BuildPreview` builds one from a `PreviewConfig` with include,
+exclude, and mask selectors and a byte cap; `serde-preview-truncation` and
+`serde-preview-field-selection` show both base modes. A preview is advisory
+metadata: masking or excluding a field there does not remove it from the
+offloaded file.
 
 ### Showcase & Edge Cases
 
