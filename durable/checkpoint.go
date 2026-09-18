@@ -2,9 +2,11 @@ package durable
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -22,6 +24,16 @@ const (
 
 	// checkpointMaxDelay caps the exponential backoff.
 	checkpointMaxDelay = 2 * time.Second
+
+	// checkpointMaxBatchUpdates caps how many operation updates one
+	// checkpoint call carries, independent of their byte size.
+	checkpointMaxBatchUpdates = 250
+
+	// checkpointBatchOverheadBytes approximates the request envelope
+	// (execution ARN, field names) that surrounds the updates. It is added
+	// to the token length when measuring a batch against
+	// [resultSizeLimitBytes].
+	checkpointBatchOverheadBytes = 100
 )
 
 // errCheckpointTerminated is returned by the checkpointer after the
@@ -32,16 +44,45 @@ const (
 // branch token without recording any further state.
 var errCheckpointTerminated = errors.New("durable: checkpoint refused: invocation terminated")
 
+// pendingCheckpoint is one caller's checkpoint request waiting in the queue.
+type pendingCheckpoint struct {
+	// ctx is the caller's context. A request whose context is done before
+	// it is sent is dropped from the queue and settled with ctx.Err().
+	ctx     context.Context
+	updates []OperationUpdate
+
+	// size is the approximate wire size of updates, measured once at
+	// enqueue time so that batch assembly does not re-serialize.
+	size int
+
+	// done receives the request's outcome exactly once. It is buffered so
+	// the flusher never blocks on a caller that has stopped waiting.
+	done chan error
+}
+
 // checkpointer persists operation updates for one durable execution and
 // tracks the rotating checkpoint token. It is safe for concurrent use:
 // operation bodies running on multiple goroutines checkpoint through one
 // checkpointer.
+//
+// Requests are queued and sent by a single flusher goroutine. The flusher
+// takes as many queued requests as fit in one call (bounded by
+// [resultSizeLimitBytes] and [checkpointMaxBatchUpdates]) and sends them
+// together, so requests that arrive while a call is in flight are coalesced
+// into the next call. Because one flusher sends calls one at a time, the
+// token returned by call n is always the token sent with call n+1, and
+// queued requests keep their arrival order within and across calls.
+//
+// mu guards only the queue, the flusher flag, and the token. It is never
+// held during a client call or a retry sleep.
 type checkpointer struct {
 	client       ExecutionClient
 	executionArn string
 
-	mu    sync.Mutex
-	token string
+	mu       sync.Mutex
+	token    string
+	queue    []*pendingCheckpoint
+	flushing bool
 
 	// terminated is atomically set when the invocation commits to PENDING.
 	// Checked without holding mu so that terminate() never blocks behind an
@@ -107,39 +148,144 @@ func (cp *checkpointer) loadStateFrom(ctx context.Context, marker string) ([]*op
 // terminate marks the checkpointer as terminated. All subsequent checkpoint
 // calls return errCheckpointTerminated, and an in-flight checkpoint refuses
 // to commit its result. Uses an atomic store so it never blocks behind a
-// checkpoint holding mu.
+// checkpoint call.
 func (cp *checkpointer) terminate() {
 	cp.terminated.Store(true)
 }
 
 // checkpoint applies updates atomically and rotates the checkpoint token.
-// The returned operations are the updated state from the backend response,
-// which may include backend-assigned fields (e.g. CallbackId).
+// It queues the updates, starts the flusher if none is running, and waits
+// for the call that carries them. Updates from other goroutines that are
+// queued at the same time may travel in the same call.
 //
-// On retryable failures (server faults, throttling, network errors),
-// checkpoint retries up to [checkpointMaxAttempts] with exponential
-// backoff. Non-retryable failures (client faults other than throttling)
-// fail immediately. On any failure the token remains unchanged.
+// On retryable failures (server faults, throttling, network errors), the
+// call carrying the updates is retried up to [checkpointMaxAttempts] with
+// exponential backoff. Non-retryable failures (client faults other than
+// throttling) fail immediately. On any failure the token remains unchanged
+// and every request in the failed call receives the error.
+//
+// If ctx is done before the updates are sent, checkpoint returns ctx.Err()
+// and the updates are dropped from the queue.
 func (cp *checkpointer) checkpoint(ctx context.Context, updates []OperationUpdate) error {
 	// Fast-path refusal: no lock required.
 	if cp.terminated.Load() {
 		return errCheckpointTerminated
 	}
 
+	p := &pendingCheckpoint{
+		ctx:     ctx,
+		updates: updates,
+		size:    updatesWireSize(updates),
+		done:    make(chan error, 1),
+	}
+
 	cp.mu.Lock()
-	defer cp.mu.Unlock()
+	cp.queue = append(cp.queue, p)
+	start := !cp.flushing
+	if start {
+		cp.flushing = true
+	}
+	cp.mu.Unlock()
+
+	if start {
+		go cp.flush()
+	}
+
+	select {
+	case err := <-p.done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// flush is the single flusher. It drains the queue one batch at a time and
+// exits when the queue is empty. Exactly one flush goroutine runs at a time:
+// checkpoint starts one only when it observes flushing == false, and flush
+// clears flushing under mu only when it observes an empty queue.
+func (cp *checkpointer) flush() {
+	for {
+		cp.mu.Lock()
+		if len(cp.queue) == 0 {
+			cp.flushing = false
+			cp.mu.Unlock()
+			return
+		}
+		batch, token := cp.takeBatchLocked()
+		cp.mu.Unlock()
+
+		if len(batch) == 0 {
+			// Every queued request had a done context and was settled
+			// during assembly. Look for more work.
+			continue
+		}
+
+		err := cp.send(batch, token)
+		for _, p := range batch {
+			p.done <- err
+		}
+	}
+}
+
+// takeBatchLocked removes the next batch from the head of the queue and
+// returns it with the token it must be sent with. The caller holds mu.
+//
+// Requests whose context is already done are settled with ctx.Err() and
+// skipped. The batch grows while the next request fits under
+// [resultSizeLimitBytes] and [checkpointMaxBatchUpdates]. A request that
+// would push the batch over either limit stays queued for the next call. A
+// batch always carries at least one request, so a single request larger
+// than the limit is still sent on its own.
+func (cp *checkpointer) takeBatchLocked() ([]*pendingCheckpoint, string) {
+	var (
+		batch    []*pendingCheckpoint
+		nUpdates int
+		size     = len(cp.token) + checkpointBatchOverheadBytes
+		consumed int
+	)
+	for consumed < len(cp.queue) {
+		p := cp.queue[consumed]
+		if err := p.ctx.Err(); err != nil {
+			p.done <- err
+			consumed++
+			continue
+		}
+		if len(batch) > 0 &&
+			(size+p.size > resultSizeLimitBytes || nUpdates+len(p.updates) > checkpointMaxBatchUpdates) {
+			break
+		}
+		batch = append(batch, p)
+		nUpdates += len(p.updates)
+		size += p.size
+		consumed++
+	}
+	cp.queue = slices.Delete(cp.queue, 0, consumed)
+	return batch, cp.token
+}
+
+// send issues one checkpoint call carrying every request in batch, using
+// token, and applies the result. It runs without holding mu. The call uses
+// the first request's context: all requests in one invocation share the
+// invocation context, and requests whose context was already done were
+// removed during batch assembly.
+func (cp *checkpointer) send(batch []*pendingCheckpoint, token string) error {
+	ctx := batch[0].ctx
+	var updates []OperationUpdate
+	for _, p := range batch {
+		updates = append(updates, p.updates...)
+	}
 
 	var lastErr error
 	for attempt := range checkpointMaxAttempts {
-		// Re-check after acquiring the lock or between retries: terminate()
-		// may have been called while we were waiting or sleeping.
+		// Re-check between retries: terminate() may have been called while
+		// we were sleeping.
 		if cp.terminated.Load() {
 			return errCheckpointTerminated
 		}
 
 		out, err := cp.client.Checkpoint(ctx, CheckpointInput{
 			ExecutionArn:    cp.executionArn,
-			CheckpointToken: cp.token,
+			CheckpointToken: token,
 			Updates:         updates,
 		})
 		if err != nil {
@@ -169,11 +315,13 @@ func (cp *checkpointer) checkpoint(ctx context.Context, updates []OperationUpdat
 		if out.CheckpointToken == "" {
 			return errors.New("durable: checkpoint: backend returned no checkpoint token")
 		}
-		cp.token = out.CheckpointToken
 
+		cp.mu.Lock()
+		cp.token = out.CheckpointToken
 		// Merge updated operations into the execution state so that
 		// subsequent reads (e.g. reading CallbackId after START) see
-		// backend-assigned fields.
+		// backend-assigned fields. Done under mu to keep the lock order
+		// checkpointer.mu → executionState.mu that merge documents.
 		if cp.state != nil && out.NewExecutionState != nil {
 			ops := make([]*operation, 0, len(out.NewExecutionState))
 			for _, apiOp := range out.NewExecutionState {
@@ -181,9 +329,24 @@ func (cp *checkpointer) checkpoint(ctx context.Context, updates []OperationUpdat
 			}
 			cp.state.merge(ops)
 		}
+		cp.mu.Unlock()
 		return nil
 	}
 	return lastErr
+}
+
+// updatesWireSize approximates the serialized size of updates in bytes.
+// Payload strings dominate the size, so JSON length is a close estimate of
+// the request body the updates will occupy.
+func updatesWireSize(updates []OperationUpdate) int {
+	if len(updates) == 0 {
+		return 0
+	}
+	b, err := json.Marshal(updates)
+	if err != nil {
+		return 0
+	}
+	return len(b)
 }
 
 // checkpointBackoff computes the delay for the given retry attempt using

@@ -199,30 +199,46 @@ func TestCheckpointConcurrentRotation(t *testing.T) {
 	cp := newCheckpointer(fake, "arn:test", "token-0")
 
 	var wg sync.WaitGroup
-	for range workers {
+	for i := range workers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := cp.checkpoint(context.Background(), nil); err != nil {
+			update := OperationUpdate{Id: aws.String("op-" + strconv.Itoa(i))}
+			if err := cp.checkpoint(context.Background(), []OperationUpdate{update}); err != nil {
 				t.Errorf("concurrent checkpoint(): %v", err)
 			}
 		}()
 	}
 	wg.Wait()
 
-	if got := len(fake.gotTokens); got != workers {
-		t.Fatalf("backend received %d checkpoint calls, want %d", got, workers)
+	// Concurrent requests may be coalesced, so the backend sees at most one
+	// call per worker, and every worker's update arrives exactly once.
+	calls := len(fake.gotTokens)
+	if calls == 0 || calls > workers {
+		t.Fatalf("backend received %d checkpoint calls, want between 1 and %d", calls, workers)
 	}
-	// Serialization invariant: every token the backend issued is used by
-	// exactly one subsequent call, so the sent tokens are all distinct.
-	seen := make(map[string]bool, workers)
-	for _, tok := range fake.gotTokens {
-		if seen[tok] {
-			t.Fatalf("token %q sent to the backend more than once", tok)
+	seenID := make(map[string]int, workers)
+	for _, batch := range fake.gotUpdateBatches {
+		for _, u := range batch {
+			seenID[aws.ToString(u.Id)]++
 		}
-		seen[tok] = true
 	}
-	if got, want := cp.currentToken(), "token-"+strconv.Itoa(workers); got != want {
-		t.Errorf("currentToken() after %d rotations = %q, want %q", workers, got, want)
+	if len(seenID) != workers {
+		t.Fatalf("backend received %d distinct updates, want %d", len(seenID), workers)
+	}
+	for id, n := range seenID {
+		if n != 1 {
+			t.Errorf("update %q sent %d times, want 1", id, n)
+		}
+	}
+	// Serialization invariant: calls are issued one at a time, so call n+1
+	// carries the token that call n returned and no token is reused.
+	for i, tok := range fake.gotTokens {
+		if want := "token-" + strconv.Itoa(i); tok != want {
+			t.Fatalf("call %d sent token %q, want %q", i+1, tok, want)
+		}
+	}
+	if got, want := cp.currentToken(), "token-"+strconv.Itoa(calls); got != want {
+		t.Errorf("currentToken() after %d rotations = %q, want %q", calls, got, want)
 	}
 }
