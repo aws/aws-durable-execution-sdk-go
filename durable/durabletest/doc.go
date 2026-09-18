@@ -74,4 +74,17 @@
 // [TestResult] provides accessors to look up operations by name, index, or
 // ID. Each [TestOperation] carries typed detail getters for the operation's
 // checkpoint state.
+//
+// # Inspecting History
+//
+// [TestResult.Events] is the execution's history event sequence and
+// [TestResult.Invocations] has one record per completed invocation. Both
+// runners populate them, so a test can assert on the event order or the
+// number of invocations an execution needed in either environment:
+//
+//	result := runner.RunUntilComplete(t, input)
+//	if got := len(result.Invocations); got != 3 {
+//	    t.Fatalf("invocations = %d, want 3", got)
+//	}
+//	types := result.EventTypes() // e.g. ["ExecutionStarted", "StepStarted", ...]
 package durabletest

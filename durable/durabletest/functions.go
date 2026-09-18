@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
 	"github.com/aws/aws-durable-execution-sdk-go/durable/internal/wire"
@@ -130,6 +131,10 @@ type localExecution struct {
 	// A child that has not settled stays here and is driven again on the
 	// next invocation of this execution.
 	children map[string]*localExecution
+
+	// invocations counts the handler invocations performed so far. It
+	// numbers the request ID of each invocation.
+	invocations int
 }
 
 func newLocalExecution(handler func(context.Context, []byte) ([]byte, error), client *memoryClient, registry *functionRegistry, arn string, depth int) *localExecution {
@@ -161,22 +166,65 @@ type invokeOutcome struct {
 // invoke performs one invocation cycle: it builds the invocation payload
 // from the checkpoint log, runs the handler, and then dispatches every
 // open chained invoke whose target is a registered function.
+//
+// Around the handler run, invoke records the execution's lifecycle events:
+// ExecutionStarted before the first invocation, InvocationCompleted after
+// every invocation, and ExecutionSucceeded or ExecutionFailed after the
+// invocation whose response ends the execution.
 func (e *localExecution) invoke(eventJSON []byte, maxInvocations int) (invokeOutcome, error) {
 	payload, err := e.buildPayload(eventJSON)
 	if err != nil {
 		return invokeOutcome{}, fmt.Errorf("build invocation payload: %w", err)
 	}
 
+	e.client.recordExecutionStarted(string(eventJSON))
+	e.invocations++
+	requestID := fmt.Sprintf("%s%d", localRequestIDPrefix, e.invocations)
+
+	start := time.Now()
 	response, err := e.handler(context.Background(), payload)
+	end := time.Now()
 	if err != nil {
 		return invokeOutcome{}, fmt.Errorf("handler.Invoke returned error: %w", err)
 	}
+
+	resp, err := parseResponse(response)
+	if err != nil {
+		return invokeOutcome{}, err
+	}
+	respErr := responseError(resp)
+	e.client.recordInvocationCompleted(requestID, start, end, respErr)
+	e.client.recordExecutionEnded(resp.Status, resp.Result, respErr)
 
 	progressed, capReached, err := e.dispatchInvokes(maxInvocations)
 	if err != nil {
 		return invokeOutcome{}, err
 	}
 	return invokeOutcome{response: response, progressed: progressed, capReached: capReached}, nil
+}
+
+// localRequestIDPrefix prefixes the request ID the local runner assigns to
+// each invocation. The number that follows counts invocations of the
+// execution from 1.
+const localRequestIDPrefix = "local-request-"
+
+// responseError returns the error an invocation response carries as an
+// error record, or nil when the response carries none.
+func responseError(resp wire.InvocationResponse) *durable.ErrorObject {
+	if resp.Error == nil {
+		return nil
+	}
+	e := &durable.ErrorObject{
+		ErrorType:    strptr(resp.Error.ErrorType),
+		ErrorMessage: strptr(resp.Error.ErrorMessage),
+	}
+	if resp.Error.ErrorData != "" {
+		e.ErrorData = strptr(resp.Error.ErrorData)
+	}
+	if len(resp.Error.StackTrace) > 0 {
+		e.StackTrace = append([]string(nil), resp.Error.StackTrace...)
+	}
+	return e
 }
 
 // driveUntilSettled repeats invoke until the execution reaches a terminal

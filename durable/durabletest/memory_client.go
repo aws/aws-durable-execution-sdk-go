@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"sync"
 
+	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
+
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
 )
 
@@ -41,6 +43,35 @@ type memoryClient struct {
 	// omitTokenIn counts the Checkpoint calls remaining until one returns
 	// a response without a token. Zero means no omission is scheduled.
 	omitTokenIn int
+
+	// events is the execution's history event log in recording order.
+	// eventSeq is the ID of the most recently recorded event.
+	events   []types.Event
+	eventSeq int32
+
+	// executionStarted is set once the ExecutionStarted event is recorded.
+	// executionEnded is set once a terminal execution event is recorded,
+	// so a later invocation response does not record a second one.
+	executionStarted bool
+	executionEnded   bool
+
+	// checkpointedEnd holds the outcome the handler checkpointed on the
+	// execution operation, which it does when a result is too large to
+	// return inline. The terminal event is not recorded at checkpoint
+	// time: it is recorded from this outcome once the invocation response
+	// arrives, after that invocation's InvocationCompleted event, so the
+	// terminal event stays last as it is in a cloud history. Nil when no
+	// such checkpoint has been made.
+	checkpointedEnd *checkpointedExecutionEnd
+}
+
+// checkpointedExecutionEnd is the terminal outcome a checkpoint on the
+// execution operation carries: the action (SUCCEED or FAIL) and the
+// result payload or error that goes with it.
+type checkpointedExecutionEnd struct {
+	action durable.OperationAction
+	result *string
+	err    *durable.ErrorObject
 }
 
 // invokeTarget is what a chained invoke asked for: the function to run and
@@ -201,6 +232,7 @@ func (m *memoryClient) applyUpdate(u durable.OperationUpdate) durable.Operation 
 		m.opOrder = append(m.opOrder, id)
 	}
 	m.operations[id] = &op
+	m.recordUpdateEvent(u, op)
 	return op
 }
 
@@ -330,6 +362,10 @@ const (
 	statusReady     = "READY"
 )
 
+// errTypeCallbackTimedOut is the ErrorType recorded on the CallbackTimedOut
+// event when [LocalRunner.TimeoutCallback] times out a callback.
+const errTypeCallbackTimedOut = "CallbackTimedOut"
+
 // operationResult is a value type representing the outcome to apply to an
 // operation, used by callback and chained-invoke helpers.
 type operationResult struct {
@@ -378,6 +414,7 @@ func (m *memoryClient) completePendingTimers() bool {
 			updated := *op
 			updated.Status = durable.OperationStatusSucceeded
 			m.operations[id] = &updated
+			m.recordOperationEvent(&updated, types.EventTypeWaitSucceeded, nil, nil)
 			advanced = true
 		}
 	}
@@ -408,6 +445,7 @@ func (m *memoryClient) completeCallback(callbackID string, result operationResul
 		cd := *updated.CallbackDetails
 		cd.Result = strptr(result.result)
 		updated.CallbackDetails = &cd
+		m.recordOperationEvent(&updated, types.EventTypeCallbackSucceeded, cd.Result, nil)
 	case statusFailed:
 		updated.Status = durable.OperationStatusFailed
 		if updated.CallbackDetails == nil {
@@ -419,6 +457,7 @@ func (m *memoryClient) completeCallback(callbackID string, result operationResul
 			ErrorMessage: strptr(result.errMsg),
 		}
 		updated.CallbackDetails = &cd
+		m.recordOperationEvent(&updated, types.EventTypeCallbackFailed, nil, cd.Error)
 	default:
 		return fmt.Errorf("durabletest: unsupported callback result status %q", result.status)
 	}
@@ -444,6 +483,10 @@ func (m *memoryClient) timeoutCallback(callbackID string) error {
 	updated := *op
 	updated.Status = durable.OperationStatusTimedOut
 	m.operations[ptrStr(op.Id)] = &updated
+	m.recordOperationEvent(&updated, types.EventTypeCallbackTimedOut, nil, &durable.ErrorObject{
+		ErrorType:    strptr(errTypeCallbackTimedOut),
+		ErrorMessage: strptr("callback timed out before it was resolved"),
+	})
 	return nil
 }
 
@@ -534,6 +577,7 @@ func (m *memoryClient) settleInvoke(op *durable.Operation, result operationResul
 		updated.ChainedInvokeDetails = &durable.ChainedInvokeDetails{
 			Result: strptr(result.result),
 		}
+		m.recordOperationEvent(&updated, types.EventTypeChainedInvokeSucceeded, updated.ChainedInvokeDetails.Result, nil)
 	case statusFailed:
 		updated.Status = durable.OperationStatusFailed
 		errObj := &durable.ErrorObject{
@@ -547,6 +591,7 @@ func (m *memoryClient) settleInvoke(op *durable.Operation, result operationResul
 			errObj.StackTrace = append([]string(nil), result.stackTrace...)
 		}
 		updated.ChainedInvokeDetails = &durable.ChainedInvokeDetails{Error: errObj}
+		m.recordOperationEvent(&updated, types.EventTypeChainedInvokeFailed, nil, errObj)
 	default:
 		return fmt.Errorf("durabletest: unsupported chained-invoke result status %q", result.status)
 	}

@@ -6,6 +6,10 @@ package durabletest
 import (
 	"encoding/json"
 	"fmt"
+	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
 	"github.com/aws/aws-durable-execution-sdk-go/durable/internal/wire"
@@ -42,6 +46,58 @@ type TestResult struct {
 	// CapReached is true if [LocalRunner.RunUntilComplete] exhausted its
 	// invocation cap without reaching a terminal status.
 	CapReached bool
+
+	// Events is the execution's history event sequence, oldest first.
+	// [CloudRunner] returns the events the service recorded. [LocalRunner]
+	// returns the events it recorded while running the handler: one per
+	// checkpointed operation update, one per transition it applied
+	// between invocations (timers, callbacks, chained invokes), one
+	// InvocationCompleted per invocation, and the execution's start and
+	// terminal events. Event IDs count from 1 in each runner.
+	//
+	// Fields the local runner has no source for are left unset rather
+	// than filled in: ExecutionStartedDetails.ExecutionTimeout,
+	// ChainedInvokeStartedDetails.DurableExecutionArn and
+	// ExecutedVersion, and the Truncated flag on payloads. Local event
+	// timestamps are wall-clock times of recording.
+	Events []types.Event
+
+	// Invocations records each completed invocation of the handler, oldest
+	// first. It is derived from the InvocationCompleted events in Events,
+	// so it is populated by [LocalRunner] and [CloudRunner] alike.
+	Invocations []TestInvocation
+}
+
+// TestInvocation records one completed invocation of the handler.
+type TestInvocation struct {
+	// RequestID identifies the invocation. Under [CloudRunner] it is the
+	// Lambda request ID. Under [LocalRunner] it is assigned by the runner
+	// and counts invocations of the execution from 1; it is not a Lambda
+	// request ID.
+	RequestID string
+
+	// StartTime is when the invocation started.
+	StartTime time.Time
+
+	// EndTime is when the invocation ended.
+	EndTime time.Time
+
+	// Error holds the error the invocation ended with, or nil if it ended
+	// without one. Under [LocalRunner] it is set when the invocation's
+	// response ended the execution as FAILED, and matches
+	// [TestResult.Error] in that case.
+	Error *TestError
+}
+
+// EventTypes returns the type of each event in [TestResult.Events], in
+// order, as strings (e.g. "ExecutionStarted", "StepStarted",
+// "InvocationCompleted").
+func (r *TestResult) EventTypes() []string {
+	out := make([]string, len(r.Events))
+	for i, ev := range r.Events {
+		out[i] = string(ev.EventType)
+	}
+	return out
 }
 
 // Operation returns the first operation with the given name, or nil if not
@@ -248,6 +304,38 @@ func ResultAs[O any](r *TestResult) (O, error) {
 		return zero, fmt.Errorf("durabletest: deserialize result: %w", err)
 	}
 	return result, nil
+}
+
+// attachEvents sets the result's event sequence and derives its invocation
+// records from the InvocationCompleted events in it.
+func (r *TestResult) attachEvents(events []types.Event) {
+	r.Events = events
+	r.Invocations = invocationsFromEvents(events)
+}
+
+// invocationsFromEvents builds one TestInvocation per InvocationCompleted
+// event, in event order.
+func invocationsFromEvents(events []types.Event) []TestInvocation {
+	var out []TestInvocation
+	for _, ev := range events {
+		if ev.EventType != types.EventTypeInvocationCompleted {
+			continue
+		}
+		inv := TestInvocation{}
+		if d := ev.InvocationCompletedDetails; d != nil {
+			inv.RequestID = aws.ToString(d.RequestId)
+			inv.StartTime = aws.ToTime(d.StartTimestamp)
+			inv.EndTime = aws.ToTime(d.EndTimestamp)
+			if d.Error != nil && d.Error.Payload != nil {
+				inv.Error = &TestError{
+					Type:    aws.ToString(d.Error.Payload.ErrorType),
+					Message: aws.ToString(d.Error.Payload.ErrorMessage),
+				}
+			}
+		}
+		out = append(out, inv)
+	}
+	return out
 }
 
 // testResultFromResponse parses an invocation response and builds a

@@ -140,6 +140,7 @@ func (r *LocalRunner[I, O]) Run(t *testing.T, event I) *TestResult {
 		t.Fatalf("durabletest: parse response: %v", err)
 	}
 	result.CapReached = outcome.capReached
+	result.attachEvents(r.client.allEvents())
 	return result
 }
 
@@ -187,6 +188,7 @@ func (r *LocalRunner[I, O]) RunUntilComplete(t *testing.T, event I, opts ...Runn
 		t.Fatalf("durabletest: parse response: %v", err)
 	}
 	result.CapReached = capReached
+	result.attachEvents(r.client.allEvents())
 	return result
 }
 

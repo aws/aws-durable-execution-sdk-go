@@ -13,8 +13,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
-
-	"github.com/aws/aws-durable-execution-sdk-go/durable"
 )
 
 // DurableExecutionAPI is the subset of the Lambda service client that
@@ -237,18 +235,19 @@ func (r *CloudRunner) pollUntilTerminal(ctx context.Context, arn string) (*TestR
 	}
 }
 
-// buildResult fetches the full operation log and constructs a TestResult.
+// buildResult fetches the full event history and constructs a TestResult
+// carrying the events, the invocation records, and the operations folded
+// from the events.
 func (r *CloudRunner) buildResult(ctx context.Context, arn string, execOut *lambda.GetDurableExecutionOutput) (*TestResult, error) {
-	ops, err := r.fetchAllOperations(ctx, arn)
+	events, err := r.fetchAllEvents(ctx, arn)
 	if err != nil {
-		return nil, fmt.Errorf("fetch operations for %q: %w", arn, err)
+		return nil, fmt.Errorf("fetch history for %q: %w", arn, err)
 	}
-
-	testOps := toTestOperations(ops)
 
 	tr := &TestResult{
-		Operations: testOps,
+		Operations: toTestOperations(operationsFromEvents(events)),
 	}
+	tr.attachEvents(events)
 
 	switch execOut.Status {
 	case types.ExecutionStatusSucceeded:
@@ -275,9 +274,9 @@ func (r *CloudRunner) buildResult(ctx context.Context, arn string, execOut *lamb
 	return tr, nil
 }
 
-// fetchAllOperations retrieves the execution's full event history and
-// folds it into one record per operation.
-func (r *CloudRunner) fetchAllOperations(ctx context.Context, arn string) ([]durable.Operation, error) {
+// fetchAllEvents retrieves the execution's full event history, following
+// pagination, in the order the service returns it.
+func (r *CloudRunner) fetchAllEvents(ctx context.Context, arn string) ([]types.Event, error) {
 	// GetDurableExecutionHistory pages through the execution's events;
 	// each event carries the ID of the operation it belongs to.
 	var events []types.Event
@@ -295,7 +294,7 @@ func (r *CloudRunner) fetchAllOperations(ctx context.Context, arn string) ([]dur
 		}
 		events = append(events, out.Events...)
 		if out.NextMarker == nil || *out.NextMarker == "" {
-			return operationsFromEvents(events), nil
+			return events, nil
 		}
 		marker = out.NextMarker
 	}
