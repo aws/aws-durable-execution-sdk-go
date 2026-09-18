@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Fixed: suspension waits for a running asynchronous step
+
+When the handler blocked on a pending operation (a `Wait`, a callback, an
+invoke) while a step started by `StepAsync` or inside a `durable.Go`
+branch was still running, the invocation responded PENDING at once. The
+step's result was then refused by the terminated checkpointer, and the
+next invocation ran the step again.
+
+The invocation now waits until every running step attempt and
+`WaitForCondition` check has recorded its outcome, and every child context
+whose body has returned has recorded its completion, before it responds
+PENDING. Child contexts include `Go` and `RunInChildContext` bodies,
+`Map` and `Parallel` items and the batch itself, and `WaitForCallback`.
+Only that work is waited for: a branch that is itself blocked on
+a pending operation, or that is running code between durable operations,
+delays the response by at most a short settle period (20 ms), during which
+a step it starts is still waited for. The wait ends early when the
+invocation's context ends.
+
 ### Fixed: a stale checkpoint token no longer fails the execution
 
 The service rejects a checkpoint whose token a newer invocation has

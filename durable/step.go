@@ -285,7 +285,14 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 		}
 	})
 
-	result, err := executeStepAttempt(ec, id, name, fn, options, op, attempt)
+	// The attempt counts as executing from its START checkpoint through
+	// the checkpoint of its outcome, so an invocation whose handler blocks
+	// meanwhile waits for the outcome to be recorded before it suspends.
+	result, err := func() (O, error) {
+		ec.suspend.enterExecuting()
+		defer ec.suspend.exitExecuting()
+		return executeStepAttempt(ec, id, name, fn, options, op, attempt)
+	}()
 
 	// OnOperationEnd for live execution.
 	if err == nil {

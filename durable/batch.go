@@ -924,6 +924,14 @@ func runPreClaimedBatchItem[O any](
 	child.adoptBranchToken(tok)
 
 	result, fnTrace, fnErr := runItem(child, index)
+
+	// From here to the checkpoint of the item's completion the item is an
+	// executing span: its outcome belongs to this invocation, so a handler
+	// blocked on a pending operation waits for it to be recorded before it
+	// suspends. See awaitDrain.
+	ec.suspend.enterExecuting()
+	defer ec.suspend.exitExecuting()
+
 	if fnErr != nil {
 		if errors.Is(fnErr, errSuspendExecution) {
 			return BatchItem[O]{}, fnErr
@@ -1102,6 +1110,11 @@ func runNestedBatchItem[O any](
 	child := ec.child(childID, ec.owner, mode)
 
 	result, fnTrace, fnErr := runItem(child, index)
+
+	// From here to the checkpoint of the item's completion the item is an
+	// executing span; see runPreClaimedBatchItem and awaitDrain.
+	ec.suspend.enterExecuting()
+	defer ec.suspend.exitExecuting()
 
 	if fnErr != nil {
 		if errors.Is(fnErr, errSuspendExecution) {
@@ -1367,6 +1380,13 @@ func checkpointBatchSuccess[O any](
 	result BatchResult[O],
 	options batchOptions,
 ) (BatchResult[O], error) {
+	// Every item has reported. From here to the checkpoint of the parent's
+	// completion the batch is an executing span: its outcome belongs to
+	// this invocation, so a handler blocked on a pending operation waits
+	// for it to be recorded before it suspends. See awaitDrain.
+	ec.suspend.enterExecuting()
+	defer ec.suspend.exitExecuting()
+
 	// Serialize the result. If an operation-level serdes is provided,
 	// use it; otherwise serialize a default JSON summary.
 	var serialized []byte

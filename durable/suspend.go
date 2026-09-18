@@ -1,8 +1,10 @@
 package durable
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // suspendSignal coordinates suspension of one invocation. It has two
@@ -25,6 +27,15 @@ import (
 //     with errSuspendExecution so goroutines blocked on Future.Result()
 //     unwind without hanging. Branches that are still able to make
 //     progress keep running and checkpointing until they too block.
+//
+//  3. Executing-span accounting: counts step attempts and condition checks
+//     whose user code is running or whose outcome is being checkpointed,
+//     and child contexts whose completion is being checkpointed. When the
+//     handler goroutine blocks on a pending operation, the invocation
+//     waits until this count has been zero for a settle period, or until
+//     no branch remains that could start a span, before responding
+//     PENDING, so the outcome of work already under way is recorded
+//     rather than discarded and repeated.
 //
 // The fired() predicate is true once a commitment exists AND all active
 // branches have deregistered (i.e., the signal has fired). User-facing code
@@ -51,6 +62,31 @@ type suspendSignal struct {
 	// independently make progress. When active reaches zero and a
 	// commitment remains, the signal fires.
 	active int
+
+	// activeDone is non-nil while active is above zero and is closed when
+	// active returns to zero. awaitDrain waits on it so the response
+	// follows the last deregistration without waiting out its settle
+	// period.
+	activeDone chan struct{}
+
+	// executing counts spans whose outcome belongs to this invocation and
+	// is not yet recorded: a step attempt or condition check from its
+	// START checkpoint through the checkpoint of its outcome, and a child
+	// context from the return of its body through the checkpoint of its
+	// completion. The handler does not respond PENDING while executing is
+	// above zero (see awaitDrain). Branches blocked on a pending
+	// operation or running code between operations are not counted: they
+	// have nothing to record that a later invocation cannot redo.
+	executing int
+
+	// executingGen advances on every enterExecuting. awaitDrain compares
+	// it across its settle period to detect a span that began and ended
+	// while the count was observed at zero.
+	executingGen uint64
+
+	// executingDone is non-nil while executing is above zero and is closed
+	// when executing returns to zero. awaitDrain waits on it.
+	executingDone chan struct{}
 
 	// rootCommitted is set when an operation outside any abandonable
 	// batch-branch subtree has committed the invocation to PENDING. It is
@@ -269,6 +305,9 @@ func (s *suspendSignal) retireCommitment(retirable *atomic.Bool) {
 // a goroutine that can independently make progress.
 func (s *suspendSignal) registerBranch() {
 	s.mu.Lock()
+	if s.active <= 0 {
+		s.activeDone = make(chan struct{})
+	}
 	s.active++
 	s.mu.Unlock()
 }
@@ -279,11 +318,112 @@ func (s *suspendSignal) registerBranch() {
 func (s *suspendSignal) deregisterBranch() {
 	s.mu.Lock()
 	s.active--
+	if s.active <= 0 && s.activeDone != nil {
+		close(s.activeDone)
+		s.activeDone = nil
+	}
 	shouldFire := s.active <= 0 && s.committedLocked()
 	s.mu.Unlock()
 
 	if shouldFire {
 		s.fire()
+	}
+}
+
+// enterExecuting records that an executing span has started: a step
+// attempt, a condition check, or a child context's completion record. Pair
+// with exitExecuting. Every call advances executingGen, so a drain that
+// observed the count at zero can tell that a span began afterwards.
+func (s *suspendSignal) enterExecuting() {
+	s.mu.Lock()
+	if s.executing == 0 {
+		s.executingDone = make(chan struct{})
+	}
+	s.executing++
+	s.executingGen++
+	s.mu.Unlock()
+}
+
+// exitExecuting records that a span recorded by enterExecuting has recorded
+// its outcome. When no span remains, waiters on executingDone are released.
+func (s *suspendSignal) exitExecuting() {
+	s.mu.Lock()
+	s.executing--
+	if s.executing <= 0 {
+		s.executing = 0
+		if s.executingDone != nil {
+			close(s.executingDone)
+			s.executingDone = nil
+		}
+	}
+	s.mu.Unlock()
+}
+
+// awaitDrain blocks until no branch of this invocation can record further
+// work, or until ctx ends. The handler calls it after its goroutine has
+// unwound with errSuspendExecution and before it responds PENDING, so an
+// executing span on another branch finishes and records its outcome in
+// this invocation instead of being refused and repeated by the next one.
+//
+// awaitDrain returns as soon as one of these holds:
+//
+//  1. No branch other than the handler goroutine is registered. Every
+//     executing span runs on a registered branch, so none can begin.
+//  2. No span is executing, and none began during settle. A span ends
+//     when its outcome is checkpointed and the branch that ran it may
+//     begin the next one at once (a step returning into its child
+//     context, which then records its own completion), so a single
+//     observation of a zero count is not stable: the count is read
+//     again after settle, together with the generation stamp that every
+//     enterExecuting advances, and the wait resumes if either changed.
+//  3. ctx is done. The invocation's deadline bounds the wait, so a long
+//     span cannot hold the response past it; its later checkpoint is
+//     refused by the terminated checkpointer.
+//
+// Branches that are blocked on a future, or running code between
+// operations, are not executing and are not waited for beyond settle:
+// they hold nothing a later invocation cannot redo. A span that begins
+// after awaitDrain returns is refused at its next checkpoint, as for any
+// orphaned branch.
+func (s *suspendSignal) awaitDrain(ctx context.Context, settle time.Duration) {
+	for {
+		s.mu.Lock()
+		if s.active <= 0 {
+			s.mu.Unlock()
+			return
+		}
+		if s.executing > 0 {
+			done := s.executingDone
+			s.mu.Unlock()
+			select {
+			case <-done:
+				continue
+			case <-ctx.Done():
+				return
+			}
+		}
+		gen := s.executingGen
+		idle := s.activeDone
+		s.mu.Unlock()
+
+		timer := time.NewTimer(settle)
+		select {
+		case <-timer.C:
+		case <-idle:
+			// The last branch deregistered: condition 1 holds, which
+			// the recheck below confirms without waiting out settle.
+			timer.Stop()
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		}
+
+		s.mu.Lock()
+		stable := s.active <= 0 || (s.executing == 0 && s.executingGen == gen)
+		s.mu.Unlock()
+		if stable {
+			return
+		}
 	}
 }
 

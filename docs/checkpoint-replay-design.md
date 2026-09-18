@@ -99,12 +99,13 @@ that operation and all subsequent ones.
 
 ## Suspension
 
-The `suspendSignal` coordinates suspension across the invocation. It has two
-independent mechanisms: a pending commitment, which decides the invocation
-result, and active-branch accounting, which decides when in-flight futures
-are settled. A third piece, checkpointer termination, takes over when the
-handler's outcome is decided: it bounds what an orphaned branch can record
-once the result is decided.
+The `suspendSignal` coordinates suspension across the invocation. It has
+three mechanisms: a pending commitment, which decides the invocation
+result; active-branch accounting, which decides when in-flight futures
+are settled; and executing-span accounting, which decides when a blocked
+handler may respond. A further piece, checkpointer termination, takes
+over when the handler's outcome is decided: it bounds what an orphaned
+branch can record once the result is decided.
 
 ### Pending commitment
 
@@ -144,6 +145,53 @@ further claims on that context without affecting its siblings.
 
 The invocation responds with `PENDING`. The function is re-invoked when
 the blocking condition resolves.
+
+### Executing-span accounting
+
+Active-branch accounting decides when futures are settled; it does not
+decide when the invocation may respond. A branch that is running a step
+body when the handler blocks holds its token, but a branch that is blocked
+on a plain channel between operations holds its token too. Waiting for
+every branch would let the second kind stall the response indefinitely,
+so the response condition uses a separate count.
+
+The signal counts executing spans. A step attempt is a span from its
+`START` checkpoint through the checkpoint of its outcome, and a
+`WaitForCondition` cycle over the same range. A child context is a span
+from the return of its body through the checkpoint of its completion.
+This covers `RunInChildContext`, `RunInChildContextAsync`, and `Go`; a
+`Map` or `Parallel` item, whether it runs on its own worker goroutine or
+on the batch's goroutine; the batch parent itself, from the last item's
+report through the checkpoint of the parent's completion; and a
+`WaitForCallback` context. Each site increments the count when the span
+begins and decrements it when the outcome has been recorded. A child
+context's body between operations is not counted. Every increment also
+advances a generation stamp.
+
+When the handler goroutine unwinds with `errSuspendExecution`, the handler
+calls `awaitDrain` before it returns `PENDING`. `awaitDrain` returns when
+one of three conditions holds:
+
+1. No branch other than the handler goroutine is registered. Every span
+   runs on a registered branch, so none can begin.
+2. No span is executing, and none began during a settle period (20 ms by
+   default). One observation of a zero count is not stable: a step that
+   has just recorded its outcome returns into its child context, which
+   begins its own span at once. So the count and the generation stamp are
+   read again after the settle period, and the wait starts over if either
+   changed. The last branch deregistering during the period ends it early.
+3. The invocation's context ends. A long span cannot hold the response
+   past the Lambda deadline; its later checkpoint is then refused by the
+   terminated checkpointer, as for any orphaned branch.
+
+Spans that are executing finish and record their outcomes in this
+invocation; the next invocation replays them instead of running them
+again. A span that begins after `awaitDrain` returns is refused at its
+next checkpoint.
+
+The wait applies only to that exit. A handler that returns a result or an
+error while a commitment stands responds at once and never joins
+outstanding branches (see below).
 
 ### Unfinished operations inside a recorded context
 
@@ -203,11 +251,14 @@ commitment can still fire the signal while the branch is parked.
 
 The two mechanisms above decide the result and settle futures, but neither
 constrains a branch that is still running user code when the invocation
-responds. The handler never joins outstanding branches: when it observes a
-standing commitment (either the handler goroutine returned while
-`committed()` is true, or the suspend signal fired), it responds with
-`PENDING` immediately. Because no goroutine is joined, the `PENDING`
-response cannot stall behind a slow or blocked branch.
+responds. The handler never joins outstanding branches. When the handler
+goroutine returns a result or an error while a commitment stands, or the
+suspend signal fires, it responds with `PENDING` immediately. When the
+handler goroutine unwinds with `errSuspendExecution`, it first waits for
+executing spans to record their outcomes (executing-span accounting,
+above), then responds; branches running code outside a span are still not
+joined beyond the settle period, so that response cannot stall behind a
+branch blocked between operations.
 
 The checkpointer is terminated on every exit from the handler, not only
 on suspension. A single `defer` in `runHandler` performs the termination,

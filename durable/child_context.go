@@ -204,6 +204,13 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 		result, _ = wrappedResult.(O)
 	}
 
+	// From here to the checkpoint of the child's completion the operation
+	// is an executing span: its outcome belongs to this invocation, so a
+	// handler blocked on a pending operation waits for it to be recorded
+	// before it suspends. See awaitDrain.
+	ec.suspend.enterExecuting()
+	defer ec.suspend.exitExecuting()
+
 	if fnErr != nil {
 		// Suspension is not a child failure: it propagates so the
 		// invocation ends PENDING and the child resumes in a later
@@ -329,6 +336,14 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 		result, fnTrace, fnErr := runUserFunc(child, fn, fmt.Sprintf("durable: child context %q panicked", name), func() (O, error) {
 			return fn(child)
 		})
+
+		// From here to the checkpoint of the child's completion the
+		// operation is an executing span: its outcome belongs to this
+		// invocation, so a handler blocked on a pending operation waits
+		// for it to be recorded before it suspends. The span ends before
+		// the branch token is released. See awaitDrain.
+		ec.suspend.enterExecuting()
+		defer ec.suspend.exitExecuting()
 
 		if fnErr != nil {
 			// Suspension propagates: settle with suspension error

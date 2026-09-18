@@ -90,6 +90,24 @@ type handlerOptions struct {
 	// noStackTraces disables stack trace capture for failures. Set via
 	// [WithStackTraces]; the zero value keeps capture enabled.
 	noStackTraces bool
+
+	// suspendSettle is how long the executing-span count must stay at
+	// zero before a handler blocked on a pending operation responds
+	// PENDING while other branches are still registered. The zero value
+	// selects defaultSuspendSettle. Set via withSuspendSettle in tests.
+	suspendSettle time.Duration
+}
+
+// defaultSuspendSettle is the default settle period for suspendSignal's
+// drain. A branch that has just recorded one span may begin the next
+// within a scheduler quantum, so the period is long enough to observe
+// that under load, and short enough to add little to a suspension.
+const defaultSuspendSettle = 20 * time.Millisecond
+
+// withSuspendSettle overrides the settle period of the suspension drain.
+// Test-only.
+func withSuspendSettle(d time.Duration) HandlerOption {
+	return handlerOptionFunc(func(o *handlerOptions) { o.suspendSettle = d })
 }
 
 // WithExecutionClient sets the execution client for the durable handler.
@@ -369,6 +387,34 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 				// no token, or the stale-token error (an invocation
 				// failure) when a newer invocation superseded this one.
 				return nil, halt
+			}
+			if errors.Is(out.err, errSuspendExecution) {
+				// The handler goroutine is blocked on a pending
+				// operation, not finished. A step or condition check
+				// launched asynchronously (StepAsync, durable.Go) may
+				// still be running, or a child context may be recording
+				// its completion, and that outcome belongs to this
+				// invocation: responding now would terminate the
+				// checkpointer under it and discard the work. Wait
+				// until no such span is executing and none begins for a
+				// settle period, or until no branch remains that could
+				// begin one. Branches that are blocked, or running code
+				// between operations, are not waited for beyond that:
+				// they record nothing a later invocation cannot redo.
+				// The context's end bounds the wait, so a span cannot
+				// hold the response past the invocation's deadline.
+				settle := h.options.suspendSettle
+				if settle <= 0 {
+					settle = defaultSuspendSettle
+				}
+				ec.suspend.awaitDrain(ctx, settle)
+				if halt := cp.haltCause(); halt != nil {
+					// A branch's checkpoint met a stale-token
+					// rejection while draining; that ends the
+					// invocation with an error, as below.
+					return nil, halt
+				}
+				return nil, errSuspendExecution
 			}
 			if ec.suspend.fired() || ec.suspend.committed() {
 				// The handler returned while a pending commitment

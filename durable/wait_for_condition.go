@@ -134,6 +134,10 @@ func runWaitForCondition[S any](ec *execContext, id, name string, check func(Ste
 		}
 	}
 
+	// The cycle counts as executing from its START checkpoint through the
+	// checkpoint of its outcome; see runStep for the reason.
+	ec.suspend.enterExecuting()
+	defer ec.suspend.exitExecuting()
 	return executeWaitForConditionAttempt(ec, id, name, check, cfg, serdes, op, attempt)
 }
 

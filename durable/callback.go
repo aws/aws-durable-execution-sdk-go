@@ -233,6 +233,14 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 	child := ec.child(id, ec.owner, mode)
 
 	result, fnErr := runWaitForCallbackBody[O](child, name, submitter, options, ec.serdes)
+
+	// From here to the checkpoint of the context's completion the
+	// operation is an executing span: its outcome belongs to this
+	// invocation, so a handler blocked on a pending operation waits for
+	// it to be recorded before it suspends. See awaitDrain.
+	ec.suspend.enterExecuting()
+	defer ec.suspend.exitExecuting()
+
 	if fnErr != nil {
 		if errors.Is(fnErr, errSuspendExecution) {
 			return zero, fnErr
