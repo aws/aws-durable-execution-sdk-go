@@ -43,10 +43,17 @@ type ConditionConfig[S any] struct {
 	// The strategy must be a deterministic function of its arguments,
 	// except for randomized jitter in the returned delay.
 	//
-	// If nil, a default strategy is used: keep polling with exponential
-	// backoff — a 5 second initial delay multiplied by 1.5 after each
-	// attempt, capped at 300 seconds, with full jitter — and fail the
-	// operation once 60 attempts have been made.
+	// Build one from declarative configuration with [NewWaitStrategy] or
+	// [MustNewWaitStrategy], or write a function literal. The field keeps
+	// its unnamed function type so that a [WaitStrategy] value, a function
+	// literal, and a caller-defined function type all assign to it.
+	//
+	// If nil, the strategy that WaitConfig[S]{} builds is used: keep
+	// polling with exponential backoff — a 5 second initial delay
+	// multiplied by 1.5 after each attempt, capped at 300 seconds, with
+	// full jitter — and fail the operation once 60 attempts have been
+	// made. That default has no condition predicate, so it never reports
+	// the condition met; set WaitStrategy to make the wait succeed.
 	WaitStrategy func(state S, attempt int) WaitDecision
 
 	// Serdes overrides the serializer for the condition state.

@@ -2,7 +2,6 @@ package durable
 
 import (
 	"fmt"
-	"math"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -12,31 +11,12 @@ import (
 // operations.
 const operationSubTypeWaitForCondition = "WaitForCondition"
 
-// Default wait strategy parameters substituted when
-// [ConditionConfig].WaitStrategy is nil.
-const (
-	defaultConditionMaxAttempts     = 60
-	defaultConditionInitialDelaySec = 5.0
-	defaultConditionMaxDelaySec     = 300.0
-	defaultConditionBackoffRate     = 1.5
-	defaultConditionJitterStrategy  = JitterFull
-)
-
-// defaultConditionWaitStrategy is the wait strategy used when
-// ConditionConfig.WaitStrategy is nil: keep polling with exponential
-// backoff (5 second initial delay, backoff rate 1.5, capped at 300
-// seconds, full jitter) and fail once 60 attempts have been made.
-func defaultConditionWaitStrategy[S any](_ S, attempt int) WaitDecision {
-	if attempt >= defaultConditionMaxAttempts {
-		return WaitDecision{
-			Err: fmt.Errorf("durable: WaitForCondition exceeded maximum attempts (%d)", defaultConditionMaxAttempts),
-		}
-	}
-	base := math.Min(
-		defaultConditionInitialDelaySec*math.Pow(defaultConditionBackoffRate, float64(attempt-1)),
-		defaultConditionMaxDelaySec,
-	)
-	return WaitDecision{Continue: true, Delay: finalizeDelay(base, defaultConditionJitterStrategy)}
+// defaultConditionWaitStrategy returns the wait strategy used when
+// [ConditionConfig].WaitStrategy is nil. It is the strategy the zero
+// [WaitConfig] builds, so the default and a configured strategy share one
+// implementation.
+func defaultConditionWaitStrategy[S any]() WaitStrategy[S] {
+	return newWaitStrategy(WaitConfig[S]{})
 }
 
 // WaitForCondition polls check until the configured wait strategy stops,
@@ -279,7 +259,7 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 	// the documented default strategy when none is configured.
 	strategy := cfg.WaitStrategy
 	if strategy == nil {
-		strategy = defaultConditionWaitStrategy[S]
+		strategy = defaultConditionWaitStrategy[S]()
 	}
 	decision := strategy(deserialized, attempt)
 

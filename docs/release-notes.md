@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+### Added: `NewWaitStrategy` builds a `WaitForCondition` wait strategy
+
+`WaitConfig` and `NewWaitStrategy` are to `WaitForCondition` what
+`RetryConfig` and `NewRetryStrategy` are to `Step`: declarative exponential
+backoff instead of a hand-written function. `WaitConfig` takes
+`MaxAttempts`, `InitialDelay`, `MaxDelay`, `BackoffRate`, and `Jitter` with
+the same meanings as `RetryConfig`, plus a `ShouldContinue` predicate that
+reports whether to keep polling given the state the latest check returned.
+A met condition wins over exhaustion, so a condition met on the final
+permitted attempt still succeeds. Reaching `MaxAttempts` with the condition
+unmet fails the operation with a `*WaitForConditionError` rather than
+returning the intermediate state. `MustNewWaitStrategy` panics on invalid
+configuration; `NewWaitStrategy` returns the same error.
+
+```go
+status, err := durable.WaitForCondition(ctx, "await-delivery", check,
+	durable.ConditionConfig[string]{
+		InitialState: "IN_TRANSIT",
+		WaitStrategy: durable.MustNewWaitStrategy(durable.WaitConfig[string]{
+			MaxAttempts:    20,
+			InitialDelay:   time.Minute,
+			MaxDelay:       15 * time.Minute,
+			ShouldContinue: func(s string) bool { return s != "DELIVERED" },
+		}),
+	})
+```
+
+`NewWaitStrategy` returns the new named type `WaitStrategy[S]`, whose
+underlying type is the `ConditionConfig.WaitStrategy` field's function
+type. The field's type is unchanged, so function literals, variables, and
+caller-defined function types assign to it as before, and a
+`WaitStrategy[S]` assigns to it too. The default used when `WaitStrategy`
+is nil is unchanged, 5 s initial delay, rate 1.5, 5 minute cap, full
+jitter, 60 attempts, and is now the strategy `WaitConfig[S]{}` builds.
+Zero-value fields select those defaults.
+
 ### Added: `Retry` retries a group of durable operations
 
 `Retry` runs a function that may contain any durable operations, such as an

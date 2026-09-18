@@ -1054,11 +1054,11 @@ func TestWaitForConditionDefaultStrategyConstants(t *testing.T) {
 	if defaultConditionMaxAttempts != 60 {
 		t.Errorf("defaultConditionMaxAttempts = %d, want 60", defaultConditionMaxAttempts)
 	}
-	if defaultConditionInitialDelaySec != 5.0 {
-		t.Errorf("defaultConditionInitialDelaySec = %v, want 5.0", defaultConditionInitialDelaySec)
+	if defaultConditionInitialDelay != 5*time.Second {
+		t.Errorf("defaultConditionInitialDelay = %v, want 5s", defaultConditionInitialDelay)
 	}
-	if defaultConditionMaxDelaySec != 300.0 {
-		t.Errorf("defaultConditionMaxDelaySec = %v, want 300.0", defaultConditionMaxDelaySec)
+	if defaultConditionMaxDelay != 300*time.Second {
+		t.Errorf("defaultConditionMaxDelay = %v, want 300s", defaultConditionMaxDelay)
 	}
 	if defaultConditionBackoffRate != 1.5 {
 		t.Errorf("defaultConditionBackoffRate = %v, want 1.5", defaultConditionBackoffRate)
@@ -1097,7 +1097,7 @@ func TestWaitForConditionDefaultStrategyDelayBounds(t *testing.T) {
 			samples = 2000
 		}
 		for range samples {
-			decision := defaultConditionWaitStrategy[int](0, tc.attempt)
+			decision := defaultConditionWaitStrategy[int]()(0, tc.attempt)
 			if !decision.Continue {
 				t.Fatalf("attempt %d: expected Continue=true", tc.attempt)
 			}
@@ -1131,7 +1131,7 @@ func TestWaitForConditionDefaultStrategyDelayBounds(t *testing.T) {
 func TestWaitForConditionDefaultStrategyExhaustionBoundary(t *testing.T) {
 	// Attempt 59 must continue; attempt 60 must fail with the max-
 	// attempts error. This pins the exhaustion point.
-	decision59 := defaultConditionWaitStrategy[int](0, 59)
+	decision59 := defaultConditionWaitStrategy[int]()(0, 59)
 	if !decision59.Continue {
 		t.Fatal("attempt 59: expected Continue=true (not exhausted yet)")
 	}
@@ -1139,7 +1139,7 @@ func TestWaitForConditionDefaultStrategyExhaustionBoundary(t *testing.T) {
 		t.Fatalf("attempt 59: delay %v < 1s", decision59.Delay)
 	}
 
-	decision60 := defaultConditionWaitStrategy[int](0, 60)
+	decision60 := defaultConditionWaitStrategy[int]()(0, 60)
 	if decision60.Continue {
 		t.Fatal("attempt 60: expected Continue=false (exhausted)")
 	}
@@ -1151,7 +1151,7 @@ func TestWaitForConditionDefaultStrategyExhaustionBoundary(t *testing.T) {
 	}
 
 	// Attempt 61 also fails (boundary is at 60).
-	decision61 := defaultConditionWaitStrategy[int](0, 61)
+	decision61 := defaultConditionWaitStrategy[int]()(0, 61)
 	if decision61.Continue {
 		t.Fatal("attempt 61: expected Continue=false")
 	}

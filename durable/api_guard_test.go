@@ -31,10 +31,12 @@ func main() {
 	_ = durable.RetryConfig{[0]func(){}, 3, 0, 0, 0, "", nil}       // want "implicit assignment to unexported field _ in struct literal"
 	_ = durable.LinearRetryConfig{[0]func(){}, 6, 0, 0, 0, "", nil} // want "implicit assignment to unexported field _ in struct literal"
 	_ = durable.RetryAttempt{[0]func(){}, nil, 1, 0}                // want "implicit assignment to unexported field _ in struct literal"
+	_ = durable.WaitConfig[int]{[0]func(){}, 60, 0, 0, 0, "", nil}  // want "implicit assignment to unexported field _ in struct literal"
 	_ = durable.Branch[string]{Name: "name"}
 	_ = durable.RetryConfig{MaxAttempts: 3}
 	_ = durable.LinearRetryConfig{MaxAttempts: 6}
 	_ = durable.RetryAttempt{Attempt: 1}
+	_ = durable.WaitConfig[int]{MaxAttempts: 60}
 }
 `
 
@@ -166,6 +168,7 @@ func TestGuardedStructsHaveLeadingBlankField(t *testing.T) {
 		reflect.TypeFor[durable.SerdesContext](),
 		reflect.TypeFor[durable.ConditionConfig[string]](),
 		reflect.TypeFor[durable.WaitDecision](),
+		reflect.TypeFor[durable.WaitConfig[string]](),
 		reflect.TypeFor[durable.FileSystemSerdesConfig](),
 	}
 	guard := reflect.TypeFor[[0]func()]()
