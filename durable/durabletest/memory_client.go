@@ -204,6 +204,12 @@ func deriveStatus(action durable.OperationAction) durable.OperationStatus {
 
 // buildStepDetails constructs StepDetails for a checkpoint update, carrying
 // forward attempt count and applying the action semantics.
+//
+// The payload of every action is stored as the step's Result. A RETRY
+// carries the intermediate state of a polling step (WaitForCondition), and
+// the next attempt reads that state back from the operation log. Dropping
+// it would restart every attempt from the initial state, so the step would
+// never observe accumulated progress.
 func buildStepDetails(u durable.OperationUpdate, existing *durable.Operation) *durable.StepDetails {
 	var attempt int32
 	if existing != nil && existing.StepDetails != nil {
@@ -218,21 +224,18 @@ func buildStepDetails(u durable.OperationUpdate, existing *durable.Operation) *d
 		sd.Attempt = attempt
 	case durable.OperationActionSucceed:
 		sd.Attempt = attempt
-		if u.Payload != nil {
-			sd.Result = u.Payload
-		}
 	case durable.OperationActionFail:
 		sd.Attempt = attempt + 1
-		if u.Error != nil {
-			sd.Error = u.Error
-		}
 	case durable.OperationActionRetry:
 		sd.Attempt = attempt + 1
-		if u.Error != nil {
-			sd.Error = u.Error
-		}
 	default:
 		sd.Attempt = attempt
+	}
+	if u.Payload != nil {
+		sd.Result = u.Payload
+	}
+	if u.Error != nil {
+		sd.Error = u.Error
 	}
 	return sd
 }

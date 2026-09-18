@@ -895,3 +895,43 @@ func TestIsTerminal(t *testing.T) {
 		}
 	}
 }
+
+// TestWaitForConditionStateRoundTripUnderLocalRunner asserts that the
+// intermediate state a polling step checkpoints on RETRY is read back by
+// the next attempt under the LocalRunner, so a wait strategy that depends
+// on accumulated state converges.
+func TestWaitForConditionStateRoundTripUnderLocalRunner(t *testing.T) {
+	var seenStates []int
+	h := func(ctx durable.Context, _ any) (int, error) {
+		return durable.WaitForCondition(ctx, "c", func(_ durable.StepContext, s int) (int, error) {
+			seenStates = append(seenStates, s)
+			return s + 1, nil
+		}, durable.ConditionConfig[int]{
+			InitialState: 0,
+			WaitStrategy: func(state int, _ int) durable.WaitDecision {
+				if state >= 3 {
+					return durable.WaitDecision{}
+				}
+				return durable.WaitDecision{Continue: true, Delay: time.Second}
+			},
+		})
+	}
+	res := durabletest.NewLocalRunner(h).RunUntilComplete(t, nil, durabletest.WithMaxInvocations(6))
+	if res.Status != durabletest.Succeeded {
+		t.Fatalf("WaitForCondition never converged: status=%v capReached=%v statesSeen=%v", res.Status, res.CapReached, seenStates)
+	}
+	if res.CapReached {
+		t.Errorf("CapReached = true, want false")
+	}
+	wantSeen := []int{0, 1, 2}
+	if fmt.Sprint(seenStates) != fmt.Sprint(wantSeen) {
+		t.Errorf("statesSeen = %v, want %v", seenStates, wantSeen)
+	}
+	out, err := durabletest.ResultAs[int](res)
+	if err != nil {
+		t.Fatalf("ResultAs error: %v", err)
+	}
+	if out != 3 {
+		t.Errorf("result = %d, want 3", out)
+	}
+}

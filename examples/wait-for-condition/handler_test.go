@@ -14,19 +14,19 @@ func TestHandler(t *testing.T) {
 	runner := durabletest.NewLocalRunner(handler)
 	result := runner.RunUntilComplete(t, nil)
 
-	// The WaitForCondition example uses a wait strategy that validates
-	// state == attempt. In the local runner, WaitForCondition state is
-	// not persisted across retry boundaries in StepDetails.Result,
-	// causing the state to reset to InitialState (0) on the second
-	// attempt. This triggers the "state does not match attempt" error.
-	// On the real backend, state is properly round-tripped via the
-	// checkpoint payload.
-	if result.Status != durabletest.Failed {
-		t.Fatalf("expected Failed (local runner does not persist WaitForCondition state across retries), got %s", result.Status)
+	// The wait strategy requires state == attempt on every cycle, so the
+	// handler succeeds only if the counter checkpointed on each RETRY is
+	// read back by the next attempt. It stops once the counter reaches 3.
+	if result.Status != durabletest.Succeeded {
+		t.Fatalf("expected Succeeded, got %s (error: %v)", result.Status, result.Error)
 	}
 
-	if result.Error == nil {
-		t.Fatal("expected error details")
+	output, err := durabletest.ResultAs[int](result)
+	if err != nil {
+		t.Fatalf("ResultAs error: %v", err)
+	}
+	if output != 3 {
+		t.Errorf("result = %d, want 3", output)
 	}
 
 	durabletest.AssertGoldenSignature(t, result, filepath.Join("testdata", "signature.golden"))

@@ -3,6 +3,6 @@
     "type": "STEP",
     "subType": "WaitForCondition",
     "name": "counter-poll",
-    "status": "FAILED"
+    "status": "SUCCEEDED"
   }
 ]
