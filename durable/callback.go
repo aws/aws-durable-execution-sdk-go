@@ -185,6 +185,9 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 	if err != nil {
 		return zero, err
 	}
+	// One snapshot serves the whole operation, so the result is written
+	// and read back with the same serdes.
+	serdes := ec.serdesDefaults().serdes
 
 	op := ec.state.get(id)
 	if err := validateReplayConsistency(op, string(OperationTypeContext), operationSubTypeWaitForCallback, name); err != nil {
@@ -202,7 +205,7 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 				return zero, fmt.Errorf("durable: WaitForCallback %q: checkpointed SUCCEEDED has no context details", name)
 			}
 			var out O
-			if err := ec.serdes.Unmarshal(ec.Context, ec.serdesCtx(id), []byte(op.childCtx.result), &out); err != nil {
+			if err := serdes.Unmarshal(ec.Context, ec.serdesCtx(id), []byte(op.childCtx.result), &out); err != nil {
 				return zero, newSerdesError(name, serdesDirectionUnmarshal, err)
 			}
 			return out, nil
@@ -232,7 +235,7 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 	mode := childReplayMode(ec, id, op)
 	child := ec.child(id, ec.owner, mode)
 
-	result, fnErr := runWaitForCallbackBody[O](child, name, submitter, options, ec.serdes)
+	result, fnErr := runWaitForCallbackBody[O](child, name, submitter, options, serdes)
 
 	// From here to the checkpoint of the context's completion the
 	// operation is an executing span: its outcome belongs to this
@@ -264,7 +267,7 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 	}
 
 	// Checkpoint ContextSucceeded.
-	serialized, serr := ec.serdes.Marshal(ec.Context, ec.serdesCtx(id), result)
+	serialized, serr := serdes.Marshal(ec.Context, ec.serdesCtx(id), result)
 	if serr != nil {
 		return zero, newSerdesError(name, serdesDirectionMarshal, serr)
 	}
@@ -279,7 +282,7 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 
 	// Round-trip for consistency (first-run == replay).
 	var out O
-	if err := ec.serdes.Unmarshal(ec.Context, ec.serdesCtx(id), serialized, &out); err != nil {
+	if err := serdes.Unmarshal(ec.Context, ec.serdesCtx(id), serialized, &out); err != nil {
 		return zero, newSerdesError(name, serdesDirectionUnmarshal, err)
 	}
 	return out, nil
@@ -606,10 +609,11 @@ func callbackDeserializerForOptions(ec *execContext, opts callbackOptions) Serde
 	if opts.serdes != nil {
 		return opts.serdes
 	}
-	if ec.callbackDeserializer != nil {
-		return deserializerSerdes{d: ec.callbackDeserializer}
+	d := ec.serdesDefaults()
+	if d.callbackDeserializer != nil {
+		return deserializerSerdes{d: d.callbackDeserializer}
 	}
-	return ec.serdes
+	return d.serdes
 }
 
 // deserializerSerdes adapts a [Deserializer] to the [Serdes] interface.
@@ -620,7 +624,7 @@ type deserializerSerdes struct {
 }
 
 func (s deserializerSerdes) Marshal(ctx context.Context, meta SerdesContext, v any) ([]byte, error) {
-	return jsonSerdes{}.Marshal(ctx, meta, v)
+	return JSONSerdes.Marshal(ctx, meta, v)
 }
 
 func (s deserializerSerdes) Unmarshal(_ context.Context, _ SerdesContext, data []byte, v any) error {

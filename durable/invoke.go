@@ -61,7 +61,8 @@ func Invoke[O, I any](ctx Context, name, functionID string, input I, opts ...Inv
 		return zero, fmt.Errorf("durable: Invoke %q: Context was not created by the SDK", name)
 	}
 
-	options := invokeOptions{payloadSerdes: ec.serdes, resultSerdes: ec.serdes}
+	defaultSerdes := ec.serdesDefaults().serdes
+	options := invokeOptions{payloadSerdes: defaultSerdes, resultSerdes: defaultSerdes}
 	for _, o := range opts {
 		o.applyInvoke(&options)
 	}
@@ -88,7 +89,8 @@ func InvokeAsync[O, I any](ctx Context, name, functionID string, input I, opts .
 		return newFailedFuture[O](fmt.Errorf("durable: InvokeAsync %q: Context was not created by the SDK", name))
 	}
 
-	options := invokeOptions{payloadSerdes: ec.serdes, resultSerdes: ec.serdes}
+	defaultSerdes := ec.serdesDefaults().serdes
+	options := invokeOptions{payloadSerdes: defaultSerdes, resultSerdes: defaultSerdes}
 	for _, o := range opts {
 		o.applyInvoke(&options)
 	}
@@ -104,10 +106,13 @@ func InvokeAsync[O, I any](ctx Context, name, functionID string, input I, opts .
 	fut := newFuture[O]()
 	registerFuture(ec.suspend, fut)
 
+	// Snapshot the serializer defaults on the owning goroutine: the owner
+	// may call ConfigureSerdes before the goroutine below runs.
+	defaults := ec.serdesDefaults()
 	tok := ec.suspend.registerBranchToken()
 	go func() {
 		defer tok.release()
-		branch := ec.branch(currentGoroutineOwner())
+		branch := ec.branchWith(currentGoroutineOwner(), defaults)
 		branch.adoptBranchToken(tok)
 		result, runErr := runInvoke[O, I](branch, id, name, functionID, input, options)
 		fut.settle(result, runErr)

@@ -32,11 +32,13 @@ func main() {
 	_ = durable.LinearRetryConfig{[0]func(){}, 6, 0, 0, 0, "", nil} // want "implicit assignment to unexported field _ in struct literal"
 	_ = durable.RetryAttempt{[0]func(){}, nil, 1, 0}                // want "implicit assignment to unexported field _ in struct literal"
 	_ = durable.WaitConfig[int]{[0]func(){}, 60, 0, 0, 0, "", nil}  // want "implicit assignment to unexported field _ in struct literal"
+	_ = durable.SerdesConfig{[0]func(){}, nil, nil}                   // want "implicit assignment to unexported field _ in struct literal"
 	_ = durable.Branch[string]{Name: "name"}
 	_ = durable.RetryConfig{MaxAttempts: 3}
 	_ = durable.LinearRetryConfig{MaxAttempts: 6}
 	_ = durable.RetryAttempt{Attempt: 1}
 	_ = durable.WaitConfig[int]{MaxAttempts: 60}
+	_ = durable.SerdesConfig{Serdes: durable.JSONSerdes}
 }
 `
 

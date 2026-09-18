@@ -2,6 +2,7 @@ package durable
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
@@ -118,7 +119,8 @@ type SerdesContext struct {
 }
 
 // Serdes serializes and deserializes operation inputs and results for
-// checkpoint storage. The default Serdes uses encoding/json.
+// checkpoint storage. The default Serdes is [JSONSerdes], which uses
+// encoding/json.
 //
 // Implementations receive the invocation's [context.Context] for
 // cancellation and deadline propagation (e.g., when offloading payloads to
@@ -170,4 +172,74 @@ func ExecutionStartTime(ctx Context) time.Time {
 		return time.Time{}
 	}
 	return ec.executionStartTime
+}
+
+// SerdesConfig names the handler-level serializer defaults that
+// [ConfigureSerdes] replaces. A nil field keeps the value currently in
+// effect, so a config that sets only one field leaves the other unchanged.
+type SerdesConfig struct {
+	_ [0]func() // blocks unkeyed literals; keeps fields addable
+
+	// Serdes replaces the default serializer for operation results: steps,
+	// child contexts, invokes, and condition state. It has the same role as
+	// [WithSerdes].
+	Serdes Serdes
+
+	// CallbackDeserializer replaces the default deserializer for callback
+	// payloads submitted by external systems. It has the same role as
+	// [WithCallbackDeserializer]. Once set it cannot be cleared: to return
+	// callbacks to the standard serdes, set Serdes and pass a
+	// CallbackDeserializer that delegates to it.
+	CallbackDeserializer Deserializer
+}
+
+// ConfigureSerdes replaces the handler-level serializer defaults for the
+// rest of the invocation. It is the in-handler counterpart of [WithSerdes]
+// and [WithCallbackDeserializer], for a handler that must choose its
+// serializer from the event payload rather than at construction time.
+//
+// The new defaults apply to operations started on ctx after the call and to
+// every child context and concurrent branch derived from ctx after the
+// call. A context derived before the call, such as a branch already
+// started with [Go], keeps the configuration it was derived with.
+// Per-operation options such as [WithStepSerdes] and [WithCallbackSerdes]
+// continue to take precedence over the configured defaults, exactly as
+// they do over the construction-time options. The handler's own input and
+// result are always JSON and are not affected.
+//
+// ConfigureSerdes must run identically on every invocation of an
+// execution, including replays. A step's result is written to the
+// checkpoint with the serdes in effect when the step first runs, and read
+// back from the checkpoint with the serdes in effect when the step is
+// replayed. If those differ, the replay cannot decode the checkpointed
+// bytes and the operation fails with a [SerdesError]; the execution cannot
+// recover, because the checkpoint is fixed. So decide the configuration
+// from inputs that are the same on every invocation: the event payload,
+// or a value already returned by a durable operation. Never decide it from
+// wall-clock time, random values, environment that can change between
+// invocations, or the outcome of a non-durable call. For the same reason,
+// call ConfigureSerdes at the same point in the handler on every
+// invocation, normally before the first durable operation.
+//
+// ConfigureSerdes must be called on the goroutine that owns ctx, like every
+// durable operation; from any other goroutine it fails with
+// [ErrWrongGoroutine]. It returns an error only for that case and for a
+// Context not created by the SDK.
+//
+//	func handler(ctx durable.Context, event OrderEvent) (OrderResult, error) {
+//		if event.Compressed {
+//			if err := durable.ConfigureSerdes(ctx, durable.SerdesConfig{Serdes: gzipSerdes{}}); err != nil {
+//				return OrderResult{}, err
+//			}
+//		}
+//		// Every operation from here on uses gzipSerdes unless it passes
+//		// its own serdes option.
+//		...
+//	}
+func ConfigureSerdes(ctx Context, cfg SerdesConfig) error {
+	ec, ok := ctx.(*execContext)
+	if !ok {
+		return errors.New("durable: ConfigureSerdes: Context was not created by the SDK")
+	}
+	return ec.configureSerdes(cfg)
 }

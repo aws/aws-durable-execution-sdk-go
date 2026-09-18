@@ -945,7 +945,7 @@ func (f batchOptionFunc) applyBatch(o *batchOptions) { f(o) }
 func resolveBatchOptions(ec *execContext, opts []BatchOption) batchOptions {
 	o := batchOptions{
 		maxConcurrency: -1, // unlimited by default
-		itemSerdes:     ec.serdes,
+		itemSerdes:     ec.serdesDefaults().serdes,
 	}
 	for _, opt := range opts {
 		opt.applyBatch(&o)

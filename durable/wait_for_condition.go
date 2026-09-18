@@ -50,7 +50,7 @@ func WaitForCondition[S any](ctx Context, name string, check func(StepContext, S
 
 	serdes := cfg.Serdes
 	if serdes == nil {
-		serdes = ec.serdes
+		serdes = ec.serdesDefaults().serdes
 	}
 
 	id, err := ec.claimOperation()

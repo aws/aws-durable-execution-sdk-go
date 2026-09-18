@@ -7,7 +7,48 @@ import (
 	"reflect"
 )
 
-// jsonSerdes is the default Serdes, backed by encoding/json.
+// JSONSerdes is the default [Serdes]. It encodes with [json.Marshal] and
+// decodes with [json.Unmarshal]. The SDK uses it for every operation result
+// when no serializer option is supplied: no handler-wide [WithSerdes], no
+// per-operation option such as [WithStepSerdes], and no [ConfigureSerdes]
+// call in the handler.
+//
+// JSONSerdes holds no state, so it is safe for concurrent use from any
+// number of goroutines and executions.
+//
+// Use it to write a custom serdes that handles a few types itself and
+// defers everything else to the default encoding. The serdes below stores a
+// [time.Time] as Unix nanoseconds and leaves every other type to
+// JSONSerdes:
+//
+//	type unixTimeSerdes struct{}
+//
+//	func (unixTimeSerdes) Marshal(ctx context.Context, meta durable.SerdesContext, v any) ([]byte, error) {
+//		if t, ok := v.(time.Time); ok {
+//			return []byte(strconv.FormatInt(t.UnixNano(), 10)), nil
+//		}
+//		return durable.JSONSerdes.Marshal(ctx, meta, v)
+//	}
+//
+//	func (unixTimeSerdes) Unmarshal(ctx context.Context, meta durable.SerdesContext, data []byte, v any) error {
+//		if t, ok := v.(*time.Time); ok {
+//			ns, err := strconv.ParseInt(string(data), 10, 64)
+//			if err != nil {
+//				return err
+//			}
+//			*t = time.Unix(0, ns)
+//			return nil
+//		}
+//		return durable.JSONSerdes.Unmarshal(ctx, meta, data, v)
+//	}
+//
+//	durable.Start(handler, durable.WithSerdes(unixTimeSerdes{}))
+var JSONSerdes = jsonSerdes{}
+
+// jsonSerdes is the type of [JSONSerdes]. It has no fields, so every value
+// of the type is the same serdes: JSONSerdes cannot be set to nil or
+// replaced with a different implementation, and the SDK uses JSONSerdes
+// itself as its default.
 type jsonSerdes struct{}
 
 var _ Serdes = jsonSerdes{}

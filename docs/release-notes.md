@@ -2,6 +2,50 @@
 
 ## Unreleased
 
+### Added: `JSONSerdes` exports the default serializer
+
+`JSONSerdes` is the `Serdes` the SDK uses when no serializer option is
+supplied. It encodes with `encoding/json`, holds no state, and is safe for
+concurrent use. A custom serdes that handles a few types itself can now
+defer every other type to it instead of reimplementing the default:
+
+```go
+func (unixTimeSerdes) Marshal(ctx context.Context, meta durable.SerdesContext, v any) ([]byte, error) {
+	if t, ok := v.(time.Time); ok {
+		return []byte(strconv.FormatInt(t.UnixNano(), 10)), nil
+	}
+	return durable.JSONSerdes.Marshal(ctx, meta, v)
+}
+```
+
+### Added: `ConfigureSerdes` replaces serializer defaults inside the handler
+
+`ConfigureSerdes(ctx, SerdesConfig{...})` replaces the handler-level
+default `Serdes` and callback `Deserializer` for the rest of the
+invocation, for a handler that must pick its serializer from the event
+payload rather than at construction time. A nil `SerdesConfig` field keeps
+the current value. The new defaults apply to operations started on `ctx`
+after the call and to child contexts and branches derived after the call;
+per-operation options such as `WithStepSerdes` still take precedence.
+
+The call must run identically on every invocation of an execution,
+including replays: a checkpointed result is decoded with the serdes in
+effect at replay time, so a configuration that differs between invocations
+makes the checkpoint unreadable and the operation fails with a
+`SerdesError`. Like every durable operation, `ConfigureSerdes` must be
+called on the goroutine that owns `ctx`.
+
+```go
+func handler(ctx durable.Context, event OrderEvent) (OrderResult, error) {
+	if event.Compressed {
+		if err := durable.ConfigureSerdes(ctx, durable.SerdesConfig{Serdes: gzipSerdes{}}); err != nil {
+			return OrderResult{}, err
+		}
+	}
+	...
+}
+```
+
 ### Added: `SerdesOf` builds a `Serdes` from typed functions
 
 `SerdesOf[T]` adapts a marshal function taking `T` and an unmarshal

@@ -79,7 +79,7 @@ func Step[O any](ctx Context, name string, fn func(StepContext) (O, error), opts
 		return zero, fmt.Errorf("durable: Step %q: Context was not created by the SDK", name)
 	}
 
-	options := stepOptions{retry: ExponentialBackoff(), serdes: ec.serdes}
+	options := stepOptions{retry: ExponentialBackoff(), serdes: ec.serdesDefaults().serdes}
 	for _, o := range opts {
 		o.applyStep(&options)
 	}
@@ -104,7 +104,7 @@ func StepAsync[O any](ctx Context, name string, fn func(StepContext) (O, error),
 		return newFailedFuture[O](fmt.Errorf("durable: StepAsync %q: Context was not created by the SDK", name))
 	}
 
-	options := stepOptions{retry: ExponentialBackoff(), serdes: ec.serdes}
+	options := stepOptions{retry: ExponentialBackoff(), serdes: ec.serdesDefaults().serdes}
 	for _, o := range opts {
 		o.applyStep(&options)
 	}
@@ -120,10 +120,13 @@ func StepAsync[O any](ctx Context, name string, fn func(StepContext) (O, error),
 	fut := newFuture[O]()
 	registerFuture(ec.suspend, fut)
 
+	// Snapshot the serializer defaults on the owning goroutine: the owner
+	// may call ConfigureSerdes before the goroutine below runs.
+	defaults := ec.serdesDefaults()
 	tok := ec.suspend.registerBranchToken()
 	go func() {
 		defer tok.release()
-		branch := ec.branch(currentGoroutineOwner())
+		branch := ec.branchWith(currentGoroutineOwner(), defaults)
 		branch.adoptBranchToken(tok)
 		result, runErr := runStep(branch, id, name, fn, options)
 		fut.settle(result, runErr)

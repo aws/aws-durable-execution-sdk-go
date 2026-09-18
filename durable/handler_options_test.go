@@ -33,7 +33,8 @@ func TestWithCallbackDeserializerWiring(t *testing.T) {
 	}
 
 	// Verify callbackDeserializerForOptions uses it.
-	ec := &execContext{serdes: jsonSerdes{}, callbackDeserializer: deser}
+	ec := &execContext{}
+	ec.setSerdesDefaults(serdesDefaults{serdes: JSONSerdes, callbackDeserializer: deser})
 	serdes := callbackDeserializerForOptions(ec, callbackOptions{})
 	var result string
 	if err := serdes.Unmarshal(context.Background(), SerdesContext{}, []byte(`"hello"`), &result); err != nil {
@@ -56,7 +57,8 @@ func TestCallbackDeserializerPrecedence(t *testing.T) {
 	})
 	perOpSerdes := &testSerdes{suffix: "-perop"}
 
-	ec := &execContext{serdes: jsonSerdes{}, callbackDeserializer: handlerDeser}
+	ec := &execContext{}
+	ec.setSerdesDefaults(serdesDefaults{serdes: JSONSerdes, callbackDeserializer: handlerDeser})
 
 	// With per-op override.
 	opts := callbackOptions{serdes: perOpSerdes}

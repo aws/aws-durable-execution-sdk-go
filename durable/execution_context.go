@@ -89,14 +89,13 @@ type execContext struct {
 	// decide the invocation's response itself.
 	ownsBranchTok bool
 
-	// serdes is the handler-level default serializer for operation
-	// results. Per-operation serdes options take precedence.
-	serdes Serdes
-
-	// callbackDeserializer is the handler-level default deserializer for
-	// callback payloads submitted by external systems. When nil, callbacks
-	// use the standard serdes.
-	callbackDeserializer Deserializer
+	// serdesCfg holds the handler-level serializer defaults in effect on
+	// this context. It is always non-nil once the context is constructed.
+	// Every read goes through serdesDefaults and every write through
+	// setSerdesDefaults, so a ConfigureSerdes call on the owning goroutine
+	// never races with a read from another goroutine; a reader always sees
+	// either the previous snapshot or the new one, never a torn value.
+	serdesCfg atomic.Pointer[serdesDefaults]
 
 	// suspend is the invocation-wide suspension signal, shared across
 	// the root and all child contexts.
@@ -150,9 +149,9 @@ func newExecContext(ctx context.Context, executionArn string, inv invocationInfo
 		ids:          &opIDs{},
 		owner:        currentGoroutineOwner(),
 		state:        state,
-		serdes:       jsonSerdes{},
 		suspend:      newSuspendSignal(),
 	}
+	ec.setSerdesDefaults(serdesDefaults{serdes: JSONSerdes})
 	ec.mode.Store(int32(mode))
 	ec.attachLogger()
 	return ec
@@ -176,6 +175,68 @@ func (c *execContext) serdesCtx(operationID string) SerdesContext {
 		OperationID:         operationID,
 		DurableExecutionArn: c.executionArn,
 	}
+}
+
+// serdesDefaults is the pair of handler-level serializer defaults in effect
+// on one context. A context stores it behind an atomic pointer and never
+// mutates a stored value: ConfigureSerdes builds a new value and swaps the
+// pointer. So a value read from a context is fixed, and a copy taken before
+// a ConfigureSerdes call still describes the defaults from before the call.
+type serdesDefaults struct {
+	// serdes is the handler-level default serializer for operation
+	// results. Per-operation serdes options take precedence.
+	serdes Serdes
+
+	// callbackDeserializer is the handler-level default deserializer for
+	// callback payloads submitted by external systems. When nil, callbacks
+	// use the standard serdes.
+	callbackDeserializer Deserializer
+}
+
+// serdesDefaults reads c's current serializer defaults. It is safe to call
+// from any goroutine: the load is atomic, so a concurrent ConfigureSerdes
+// on the owner yields either the old snapshot or the new one. An operation
+// that reads the defaults before claimOperation rejects it with
+// ErrWrongGoroutine therefore reads a consistent value and then fails
+// cleanly.
+func (c *execContext) serdesDefaults() serdesDefaults {
+	return *c.serdesCfg.Load()
+}
+
+// setSerdesDefaults installs d as c's serializer defaults. The pointer
+// store is atomic, so readers on other goroutines never observe a torn
+// pair; every caller other than the constructors runs on c's owning
+// goroutine.
+func (c *execContext) setSerdesDefaults(d serdesDefaults) {
+	c.serdesCfg.Store(&d)
+}
+
+// configureSerdes implements [ConfigureSerdes]. The owner check keeps the
+// documented rule that serializer defaults change only from the goroutine
+// that owns the context, the same guard claimOperation applies to
+// operations. The atomic swap in setSerdesDefaults makes the change itself
+// safe against operations that read the defaults from another goroutine
+// before their own owner check rejects them.
+//
+// The owner may keep running after it launches an asynchronous operation,
+// and may then call configureSerdes while that operation's goroutine is
+// still starting. So an asynchronous operation takes a serdesDefaults
+// snapshot on the owning goroutine before the go statement and derives its
+// context through childWith or branchWith. That keeps the documented rule:
+// a context derived before the call keeps the defaults it was derived with.
+func (c *execContext) configureSerdes(cfg SerdesConfig) error {
+	if err := c.owner.check(); err != nil {
+		return fmt.Errorf("durable: ConfigureSerdes: %w", err)
+	}
+	d := c.serdesDefaults()
+	if cfg.Serdes != nil {
+		d.serdes = cfg.Serdes
+	}
+	if cfg.CallbackDeserializer != nil {
+		d.callbackDeserializer = cfg.CallbackDeserializer
+	}
+	c.setSerdesDefaults(d)
+	return nil
 }
 
 func (c *execContext) RequestID() string { return c.invocation.requestID }
@@ -390,27 +451,38 @@ func (c *execContext) adoptBranchToken(tok *branchToken) {
 // The child inherits the parent's branch token without owning it. A caller
 // that runs the child on a freshly registered goroutine replaces the token
 // through adoptBranchToken.
+//
+// child copies c's serializer defaults as they are at the call. A goroutine
+// launched while the owner keeps running uses childWith with a snapshot
+// taken before the go statement, so that a ConfigureSerdes call between the
+// go statement and the child's construction does not reach the child; see
+// configureSerdes.
 func (c *execContext) child(entityID string, owner goroutineOwner, mode executionMode) *execContext {
+	return c.childWith(entityID, owner, mode, c.serdesDefaults())
+}
+
+// childWith is child with the serializer defaults supplied by the caller
+// instead of read from c.
+func (c *execContext) childWith(entityID string, owner goroutineOwner, mode executionMode, d serdesDefaults) *execContext {
 	child := &execContext{
-		Context:              c.Context,
-		executionArn:         c.executionArn,
-		invocation:           c.invocation,
-		logger:               c.logger,
-		ids:                  c.ids.child(entityID),
-		owner:                owner,
-		state:                c.state,
-		checkpointParent:     entityID,
-		serdes:               c.serdes,
-		callbackDeserializer: c.callbackDeserializer,
-		suspend:              c.suspend,
-		checkpointer:         c.checkpointer,
-		pluginDispatcher:     c.pluginDispatcher,
-		executionStartTime:   c.executionStartTime,
-		noStackTraces:        c.noStackTraces,
-		abandon:              c.abandon,
-		branchTok:            c.branchTok,
-		combinatorObserve:    c.combinatorObserve,
+		Context:            c.Context,
+		executionArn:       c.executionArn,
+		invocation:         c.invocation,
+		logger:             c.logger,
+		ids:                c.ids.child(entityID),
+		owner:              owner,
+		state:              c.state,
+		checkpointParent:   entityID,
+		suspend:            c.suspend,
+		checkpointer:       c.checkpointer,
+		pluginDispatcher:   c.pluginDispatcher,
+		executionStartTime: c.executionStartTime,
+		noStackTraces:      c.noStackTraces,
+		abandon:            c.abandon,
+		branchTok:          c.branchTok,
+		combinatorObserve:  c.combinatorObserve,
 	}
+	child.setSerdesDefaults(d)
 	child.mode.Store(int32(mode))
 	child.attachLogger()
 	return child
@@ -439,27 +511,39 @@ func (c *execContext) virtualChild(entityID, parentID string, owner goroutineOwn
 // namespace is minted. The branch inherits the caller's token without
 // owning it; every caller registers the goroutine's own token and adopts
 // it through adoptBranchToken.
+//
+// branch copies c's serializer defaults as they are at the call. The
+// asynchronous operations launch their goroutine while the owner keeps
+// running, so they use branchWith with a snapshot taken before the go
+// statement; a ConfigureSerdes call between the go statement and the
+// branch's construction then does not reach the branch. See
+// configureSerdes.
 func (c *execContext) branch(owner goroutineOwner) *execContext {
+	return c.branchWith(owner, c.serdesDefaults())
+}
+
+// branchWith is branch with the serializer defaults supplied by the caller
+// instead of read from c.
+func (c *execContext) branchWith(owner goroutineOwner, d serdesDefaults) *execContext {
 	b := &execContext{
-		Context:              c.Context,
-		executionArn:         c.executionArn,
-		invocation:           c.invocation,
-		logger:               c.logger,
-		ids:                  c.ids,
-		owner:                owner,
-		state:                c.state,
-		checkpointParent:     c.checkpointParent,
-		serdes:               c.serdes,
-		callbackDeserializer: c.callbackDeserializer,
-		suspend:              c.suspend,
-		checkpointer:         c.checkpointer,
-		pluginDispatcher:     c.pluginDispatcher,
-		executionStartTime:   c.executionStartTime,
-		noStackTraces:        c.noStackTraces,
-		abandon:              c.abandon,
-		branchTok:            c.branchTok,
-		combinatorObserve:    c.combinatorObserve,
+		Context:            c.Context,
+		executionArn:       c.executionArn,
+		invocation:         c.invocation,
+		logger:             c.logger,
+		ids:                c.ids,
+		owner:              owner,
+		state:              c.state,
+		checkpointParent:   c.checkpointParent,
+		suspend:            c.suspend,
+		checkpointer:       c.checkpointer,
+		pluginDispatcher:   c.pluginDispatcher,
+		executionStartTime: c.executionStartTime,
+		noStackTraces:      c.noStackTraces,
+		abandon:            c.abandon,
+		branchTok:          c.branchTok,
+		combinatorObserve:  c.combinatorObserve,
 	}
+	b.setSerdesDefaults(d)
 	b.mode.Store(c.mode.Load())
 	b.attachLogger()
 	return b

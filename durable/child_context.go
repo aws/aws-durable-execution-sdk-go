@@ -176,7 +176,7 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 		return zero, fmt.Errorf("durable: RunInChildContext %q: Context was not created by the SDK", name)
 	}
 
-	options := childOptions{serdes: ec.serdes}
+	options := childOptions{serdes: ec.serdesDefaults().serdes}
 	for _, o := range opts {
 		o.applyChild(&options)
 	}
@@ -364,7 +364,7 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 		return newFailedFuture[O](fmt.Errorf("durable: RunInChildContextAsync %q: Context was not created by the SDK", name))
 	}
 
-	options := childOptions{serdes: ec.serdes}
+	options := childOptions{serdes: ec.serdesDefaults().serdes}
 	for _, o := range opts {
 		o.applyChild(&options)
 	}
@@ -417,11 +417,15 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 	// It deregisters (via defer) after settling the future on all paths.
 	tok := ec.suspend.registerBranchToken()
 
+	// Snapshot the serializer defaults on the owning goroutine: the owner
+	// may call ConfigureSerdes before the goroutine below runs.
+	defaults := ec.serdesDefaults()
+
 	go func() {
 		defer tok.release()
 		// The child context is owned by this goroutine. Capture
 		// ownership here, not on the parent goroutine.
-		child := ec.child(id, currentGoroutineOwner(), mode)
+		child := ec.childWith(id, currentGoroutineOwner(), mode, defaults)
 		child.adoptBranchToken(tok)
 
 		// Recover panics in the child function so they settle the
@@ -568,10 +572,13 @@ func replayChildAsync[O any](ec *execContext, id, name string, options childOpti
 	fut := newFuture[O]()
 	registerFuture(ec.suspend, fut)
 
+	// Snapshot the serializer defaults on the owning goroutine: the owner
+	// may call ConfigureSerdes before the goroutine below runs.
+	defaults := ec.serdesDefaults()
 	tok := ec.suspend.registerBranchToken()
 	go func() {
 		defer tok.release()
-		child := ec.child(id, currentGoroutineOwner(), modeReplaySucceededContext)
+		child := ec.childWith(id, currentGoroutineOwner(), modeReplaySucceededContext, defaults)
 		child.adoptBranchToken(tok)
 
 		result, fnTrace, fnErr := runUserFunc(child, fn, fmt.Sprintf("durable: child context %q panicked", name), func() (O, error) {

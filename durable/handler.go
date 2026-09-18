@@ -58,7 +58,8 @@ func WithLogger(l Logger) HandlerOption {
 
 // WithSerdes sets the default serializer for operation results. It applies
 // to steps, child contexts, invokes, and condition state. Per-operation
-// serdes options take precedence. The default is encoding/json.
+// serdes options take precedence. The default is [JSONSerdes]. To replace
+// the default from inside the handler, see [ConfigureSerdes].
 func WithSerdes(s Serdes) HandlerOption {
 	return handlerOptionFunc(func(o *handlerOptions) { o.serdes = s })
 }
@@ -67,8 +68,9 @@ func WithSerdes(s Serdes) HandlerOption {
 // payloads submitted by external systems. This is used when deserializing
 // the result of a SUCCEEDED callback during replay. Per-operation
 // [WithCallbackSerdes] takes precedence. Without it, callbacks use the
-// handler-level [Serdes] set with [WithSerdes] (default: encoding/json),
-// not a raw-string passthrough; see [CreateCallback].
+// handler-level [Serdes] set with [WithSerdes] (default: [JSONSerdes]),
+// not a raw-string passthrough; see [CreateCallback]. To replace the
+// default from inside the handler, see [ConfigureSerdes].
 func WithCallbackDeserializer(d Deserializer) HandlerOption {
 	return handlerOptionFunc(func(o *handlerOptions) { o.callbackDeserializer = d })
 }
@@ -321,11 +323,13 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	ec.executionStartTime = execStartTimestamp
 	ec.noStackTraces = h.options.noStackTraces
 	cp.state = state
-	if h.options.serdes != nil {
-		ec.serdes = h.options.serdes
-	}
-	if h.options.callbackDeserializer != nil {
-		ec.callbackDeserializer = h.options.callbackDeserializer
+	if h.options.serdes != nil || h.options.callbackDeserializer != nil {
+		d := ec.serdesDefaults()
+		if h.options.serdes != nil {
+			d.serdes = h.options.serdes
+		}
+		d.callbackDeserializer = h.options.callbackDeserializer
+		ec.setSerdesDefaults(d)
 	}
 	ec.pluginDispatcher = pd
 	outcomeCh := make(chan outcome, 1)
