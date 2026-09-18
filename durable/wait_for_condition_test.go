@@ -127,6 +127,102 @@ func TestWaitForConditionImmediateStop(t *testing.T) {
 	}
 }
 
+func TestWaitForConditionIntermediateStateTooLarge(t *testing.T) {
+	// The check returns a state whose serialized form exceeds the result
+	// size limit while the strategy wants to continue. The RETRY path
+	// must return *ResultTooLargeError instead of checkpointing the state.
+	fake := &fakeLambda{}
+	// A JSON string of this many characters serializes to two quote
+	// bytes more, so it is one byte over the limit.
+	oversized := strings.Repeat("x", resultSizeLimitBytes-1)
+	var gotErr error
+	strategyCalled := false
+	resp := invokeStep(t, fake, stepPayload(`""`), func(ctx Context, _ string) (string, error) {
+		_, err := WaitForCondition(ctx, "poll", func(_ StepContext, _ string) (string, error) {
+			return oversized, nil
+		}, ConditionConfig[string]{
+			InitialState: "",
+			WaitStrategy: func(_ string, _ int) WaitDecision {
+				strategyCalled = true
+				return WaitDecision{Continue: true, Delay: time.Second}
+			},
+		})
+		gotErr = err
+		if err != nil {
+			return "", err
+		}
+		return "unexpected", nil
+	})
+
+	if !strategyCalled {
+		t.Error("wait strategy was not consulted before the size check")
+	}
+	var rtlErr *ResultTooLargeError
+	if !errors.As(gotErr, &rtlErr) {
+		t.Fatalf("WaitForCondition error = %T (%v), want *ResultTooLargeError", gotErr, gotErr)
+	}
+	if rtlErr.Name != "poll" {
+		t.Errorf("Name = %q, want %q", rtlErr.Name, "poll")
+	}
+	if want := resultSizeLimitBytes + 1; rtlErr.SizeBytes != want {
+		t.Errorf("SizeBytes = %d, want %d", rtlErr.SizeBytes, want)
+	}
+	if rtlErr.LimitBytes != resultSizeLimitBytes {
+		t.Errorf("LimitBytes = %d, want %d", rtlErr.LimitBytes, resultSizeLimitBytes)
+	}
+	if !strings.Contains(resp, `"Status":"FAILED"`) {
+		t.Errorf("response = %s, want FAILED status", resp)
+	}
+
+	// The oversized state must not reach the checkpoint API: the only
+	// operation update for this operation is START.
+	for _, u := range updateBatch(t, fake) {
+		if aws.ToString(u.SubType) != "WaitForCondition" {
+			continue
+		}
+		if u.Action != OperationActionStart {
+			t.Errorf("unexpected WaitForCondition update action %q", u.Action)
+		}
+	}
+}
+
+func TestWaitForConditionIntermediateStateAtLimit(t *testing.T) {
+	// A state whose serialized form is exactly the limit is not oversized:
+	// the RETRY path checkpoints it as before.
+	fake := &fakeLambda{}
+	atLimit := strings.Repeat("x", resultSizeLimitBytes-2)
+	resp := invokeStep(t, fake, stepPayload(`""`), func(ctx Context, _ string) (string, error) {
+		_, err := WaitForCondition(ctx, "poll", func(_ StepContext, _ string) (string, error) {
+			return atLimit, nil
+		}, ConditionConfig[string]{
+			InitialState: "",
+			WaitStrategy: func(_ string, _ int) WaitDecision {
+				return WaitDecision{Continue: true, Delay: time.Second}
+			},
+		})
+		if err != nil {
+			return "", err
+		}
+		return "unexpected", nil
+	})
+
+	if want := `{"Status":"PENDING"}`; resp != want {
+		t.Errorf("response = %s, want %s", resp, want)
+	}
+	retried := false
+	for _, u := range updateBatch(t, fake) {
+		if u.Action == OperationActionRetry && aws.ToString(u.SubType) == "WaitForCondition" {
+			retried = true
+			if got := len(aws.ToString(u.Payload)); got != resultSizeLimitBytes {
+				t.Errorf("RETRY payload size = %d, want %d", got, resultSizeLimitBytes)
+			}
+		}
+	}
+	if !retried {
+		t.Error("expected RETRY checkpoint for a state at the size limit")
+	}
+}
+
 func TestWaitForConditionReplaySucceeded(t *testing.T) {
 	// Terminal SUCCEEDED: deserialize stored result without re-executing.
 	fake := &fakeLambda{}

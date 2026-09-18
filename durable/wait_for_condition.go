@@ -55,6 +55,12 @@ func defaultConditionWaitStrategy[S any](_ S, attempt int) WaitDecision {
 // If the wait strategy's Continue field is true, its Delay determines how
 // long the execution suspends before re-invoking. When Continue is false, the
 // final state is checkpointed and returned.
+//
+// Every state that check returns is serialized and checkpointed, whether the
+// strategy continues or stops. So the result size limit applies to each
+// intermediate state as well as to the final result. When a serialized state
+// exceeds the limit, WaitForCondition returns a [*ResultTooLargeError]
+// without checkpointing that state.
 func WaitForCondition[S any](ctx Context, name string, check func(StepContext, S) (S, error), cfg ConditionConfig[S]) (S, error) {
 	var zero S
 	ec, ok := ctx.(*execContext)
@@ -305,7 +311,12 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 	}
 
 	// Condition not met: checkpoint RETRY with the intermediate state and
-	// the strategy's delay, then suspend.
+	// the strategy's delay, then suspend. The intermediate state is a
+	// checkpoint payload like the final result, so the same size limit
+	// applies to it.
+	if err := checkResultSize(serialized, name); err != nil {
+		return zero, err
+	}
 	delaySec, delayErr := durationToSeconds(decision.Delay)
 	if delayErr != nil {
 		return zero, fmt.Errorf("durable: WaitForCondition %q: retry delay: %w", name, delayErr)
