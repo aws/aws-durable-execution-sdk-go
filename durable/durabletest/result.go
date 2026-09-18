@@ -111,6 +111,30 @@ func (r *TestResult) Operation(name string) *TestOperation {
 	return nil
 }
 
+// OperationByNameAndIndex returns the index-th operation named name,
+// counting from zero, or nil if fewer than index+1 operations carry the
+// name or index is negative. Occurrences are counted in the order of
+// [TestResult.Operations], so OperationByNameAndIndex(name, 0) is the same
+// operation [TestResult.Operation] returns. Use it when a workflow runs
+// the same named operation more than once, such as a step inside a loop or
+// a repeated child context.
+func (r *TestResult) OperationByNameAndIndex(name string, index int) *TestOperation {
+	if index < 0 {
+		return nil
+	}
+	seen := 0
+	for i := range r.Operations {
+		if r.Operations[i].Name != name {
+			continue
+		}
+		if seen == index {
+			return &r.Operations[i]
+		}
+		seen++
+	}
+	return nil
+}
+
 // OperationByIndex returns the operation at the given zero-based index, or
 // nil if the index is out of bounds.
 func (r *TestResult) OperationByIndex(index int) *TestOperation {
@@ -174,6 +198,18 @@ type TestOperation struct {
 	// ParentID is the parent operation's wire ID, or empty for top-level
 	// operations.
 	ParentID string
+
+	// StartTime is when the operation first reached STARTED status, or the
+	// zero time when the runner has no record of it. [CloudRunner] fills
+	// it from the execution history; [LocalRunner] records the wall-clock
+	// time of the checkpoint that started the operation.
+	StartTime time.Time
+
+	// EndTime is when the operation reached a terminal status, or the
+	// zero time when it has not or the runner has no record of it. For
+	// [LocalRunner] it is the wall-clock time of the checkpoint or runner
+	// call that settled the operation.
+	EndTime time.Time
 
 	// StepDetails holds step-specific details, if the operation is a step.
 	StepDetails *TestStepDetails
@@ -373,6 +409,12 @@ func toTestOperations(ops []durable.Operation) []TestOperation {
 			Type:     string(op.Type),
 			SubType:  ptrStr(op.SubType),
 			ParentID: ptrStr(op.ParentId),
+		}
+		if op.StartTimestamp != nil {
+			to.StartTime = *op.StartTimestamp
+		}
+		if op.EndTimestamp != nil {
+			to.EndTime = *op.EndTimestamp
 		}
 		if sd := op.StepDetails; sd != nil {
 			to.StepDetails = &TestStepDetails{

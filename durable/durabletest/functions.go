@@ -148,6 +148,15 @@ func newLocalExecution(handler func(context.Context, []byte) ([]byte, error), cl
 	}
 }
 
+// reset returns the execution to the state of a newly created one: an
+// empty checkpoint log, no child executions, and an invocation count of
+// zero. The handler, registry, ARN, and depth are unchanged.
+func (e *localExecution) reset() {
+	e.client.reset()
+	e.children = make(map[string]*localExecution)
+	e.invocations = 0
+}
+
 // invokeOutcome reports what one invocation of an execution did.
 type invokeOutcome struct {
 	// response is the handler's invocation response.

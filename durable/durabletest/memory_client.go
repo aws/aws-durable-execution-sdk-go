@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 
@@ -82,11 +83,36 @@ type invokeTarget struct {
 }
 
 func newMemoryClient() *memoryClient {
-	return &memoryClient{
-		token:         "test-token-0",
-		operations:    make(map[string]*durable.Operation),
-		invokeTargets: make(map[string]invokeTarget),
-	}
+	m := &memoryClient{}
+	m.mu.Lock()
+	m.resetLocked()
+	m.mu.Unlock()
+	return m
+}
+
+// reset returns the client to the state of a newly created one: no
+// operations, no invoke targets, no events, the initial token, and no
+// scheduled token omission.
+func (m *memoryClient) reset() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.resetLocked()
+}
+
+// resetLocked initializes every field to its initial value. Caller must
+// hold m.mu.
+func (m *memoryClient) resetLocked() {
+	m.token = "test-token-0"
+	m.tokenSeq = 0
+	m.operations = make(map[string]*durable.Operation)
+	m.opOrder = nil
+	m.invokeTargets = make(map[string]invokeTarget)
+	m.omitTokenIn = 0
+	m.events = nil
+	m.eventSeq = 0
+	m.executionStarted = false
+	m.executionEnded = false
+	m.checkpointedEnd = nil
 }
 
 // Checkpoint applies operation updates, rotates the checkpoint token, and
@@ -200,6 +226,13 @@ func (m *memoryClient) applyUpdate(u durable.OperationUpdate) durable.Operation 
 		ParentId: u.ParentId,
 		Status:   deriveStatus(u.Action),
 	}
+	if existing != nil {
+		// Timestamps describe the operation's whole life, not one
+		// update, so they carry over from the stored record.
+		op.StartTimestamp = existing.StartTimestamp
+		op.EndTimestamp = existing.EndTimestamp
+	}
+	now := stampTransition(&op)
 
 	// Build type-specific details.
 	switch u.Type {
@@ -232,8 +265,29 @@ func (m *memoryClient) applyUpdate(u durable.OperationUpdate) durable.Operation 
 		m.opOrder = append(m.opOrder, id)
 	}
 	m.operations[id] = &op
-	m.recordUpdateEvent(u, op)
+	m.recordUpdateEvent(u, op, now)
 	return op
+}
+
+// stampTransition records the wall-clock time of the status transition op
+// has just made and returns that time, so the matching history event can
+// carry the same timestamp. The first STARTED status sets StartTimestamp;
+// a later STARTED (a step re-entered after a retry) leaves it as it is. A
+// terminal status sets EndTimestamp. PENDING and READY are intermediate
+// and change neither.
+func stampTransition(op *durable.Operation) time.Time {
+	now := time.Now()
+	switch op.Status {
+	case durable.OperationStatusStarted:
+		if op.StartTimestamp == nil {
+			op.StartTimestamp = &now
+		}
+	case durable.OperationStatusSucceeded, durable.OperationStatusFailed,
+		durable.OperationStatusCancelled, durable.OperationStatusTimedOut,
+		durable.OperationStatusStopped:
+		op.EndTimestamp = &now
+	}
+	return now
 }
 
 // deriveStatus maps an OperationAction to the resulting OperationStatus.
@@ -413,8 +467,9 @@ func (m *memoryClient) completePendingTimers() bool {
 			// STARTED → SUCCEEDED: wait elapsed.
 			updated := *op
 			updated.Status = durable.OperationStatusSucceeded
+			now := stampTransition(&updated)
 			m.operations[id] = &updated
-			m.recordOperationEvent(&updated, types.EventTypeWaitSucceeded, nil, nil)
+			m.recordOperationEvent(&updated, types.EventTypeWaitSucceeded, nil, nil, now)
 			advanced = true
 		}
 	}
@@ -445,7 +500,8 @@ func (m *memoryClient) completeCallback(callbackID string, result operationResul
 		cd := *updated.CallbackDetails
 		cd.Result = strptr(result.result)
 		updated.CallbackDetails = &cd
-		m.recordOperationEvent(&updated, types.EventTypeCallbackSucceeded, cd.Result, nil)
+		now := stampTransition(&updated)
+		m.recordOperationEvent(&updated, types.EventTypeCallbackSucceeded, cd.Result, nil, now)
 	case statusFailed:
 		updated.Status = durable.OperationStatusFailed
 		if updated.CallbackDetails == nil {
@@ -457,7 +513,8 @@ func (m *memoryClient) completeCallback(callbackID string, result operationResul
 			ErrorMessage: strptr(result.errMsg),
 		}
 		updated.CallbackDetails = &cd
-		m.recordOperationEvent(&updated, types.EventTypeCallbackFailed, nil, cd.Error)
+		now := stampTransition(&updated)
+		m.recordOperationEvent(&updated, types.EventTypeCallbackFailed, nil, cd.Error, now)
 	default:
 		return fmt.Errorf("durabletest: unsupported callback result status %q", result.status)
 	}
@@ -482,11 +539,12 @@ func (m *memoryClient) timeoutCallback(callbackID string) error {
 
 	updated := *op
 	updated.Status = durable.OperationStatusTimedOut
+	now := stampTransition(&updated)
 	m.operations[ptrStr(op.Id)] = &updated
 	m.recordOperationEvent(&updated, types.EventTypeCallbackTimedOut, nil, &durable.ErrorObject{
 		ErrorType:    strptr(errTypeCallbackTimedOut),
 		ErrorMessage: strptr("callback timed out before it was resolved"),
-	})
+	}, now)
 	return nil
 }
 
@@ -577,7 +635,8 @@ func (m *memoryClient) settleInvoke(op *durable.Operation, result operationResul
 		updated.ChainedInvokeDetails = &durable.ChainedInvokeDetails{
 			Result: strptr(result.result),
 		}
-		m.recordOperationEvent(&updated, types.EventTypeChainedInvokeSucceeded, updated.ChainedInvokeDetails.Result, nil)
+		now := stampTransition(&updated)
+		m.recordOperationEvent(&updated, types.EventTypeChainedInvokeSucceeded, updated.ChainedInvokeDetails.Result, nil, now)
 	case statusFailed:
 		updated.Status = durable.OperationStatusFailed
 		errObj := &durable.ErrorObject{
@@ -591,7 +650,8 @@ func (m *memoryClient) settleInvoke(op *durable.Operation, result operationResul
 			errObj.StackTrace = append([]string(nil), result.stackTrace...)
 		}
 		updated.ChainedInvokeDetails = &durable.ChainedInvokeDetails{Error: errObj}
-		m.recordOperationEvent(&updated, types.EventTypeChainedInvokeFailed, nil, errObj)
+		now := stampTransition(&updated)
+		m.recordOperationEvent(&updated, types.EventTypeChainedInvokeFailed, nil, errObj, now)
 	default:
 		return fmt.Errorf("durabletest: unsupported chained-invoke result status %q", result.status)
 	}

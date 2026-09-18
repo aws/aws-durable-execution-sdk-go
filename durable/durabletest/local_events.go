@@ -19,15 +19,17 @@ import (
 const localExecutionOperationID = "exec-op"
 
 // recordEvent appends one history event to the client's event log. Event
-// IDs increase by one per event, starting at 1, and the timestamp is the
-// wall-clock time of recording. The caller fills in the event's type,
-// operation identity, and details.
+// IDs increase by one per event, starting at 1. at is the event's
+// timestamp: the wall-clock time of the transition the event describes,
+// which is also the time stamped on the operation record (see
+// stampTransition), so the event log and the operation timestamps agree.
+// The caller fills in the event's type, operation identity, and details.
 //
 // Caller must hold m.mu.
-func (m *memoryClient) recordEvent(ev types.Event) {
+func (m *memoryClient) recordEvent(ev types.Event, at time.Time) {
 	m.eventSeq++
 	ev.EventId = aws.Int32(m.eventSeq)
-	ev.EventTimestamp = aws.Time(time.Now())
+	ev.EventTimestamp = aws.Time(at)
 	m.events = append(m.events, ev)
 }
 
@@ -53,7 +55,7 @@ func (m *memoryClient) recordExecutionStarted(input string) {
 		ExecutionStartedDetails: &types.ExecutionStartedDetails{
 			Input: &types.EventInput{Payload: aws.String(input)},
 		},
-	})
+	}, time.Now())
 }
 
 // recordInvocationCompleted records the InvocationCompleted event for one
@@ -73,7 +75,7 @@ func (m *memoryClient) recordInvocationCompleted(requestID string, start, end ti
 	m.recordEvent(types.Event{
 		EventType:                  types.EventTypeInvocationCompleted,
 		InvocationCompletedDetails: details,
-	})
+	}, time.Now())
 }
 
 // recordExecutionEnded records the execution's terminal event from the
@@ -103,7 +105,7 @@ func (m *memoryClient) recordExecutionEnded(status string, result *string, err *
 			EventType:                 types.EventTypeExecutionSucceeded,
 			Id:                        aws.String(localExecutionOperationID),
 			ExecutionSucceededDetails: &types.ExecutionSucceededDetails{Result: eventResult(result)},
-		})
+		}, time.Now())
 	case statusFailed:
 		m.executionEnded = true
 		if err == nil && cp != nil && cp.action == durable.OperationActionFail {
@@ -113,16 +115,17 @@ func (m *memoryClient) recordExecutionEnded(status string, result *string, err *
 			EventType:              types.EventTypeExecutionFailed,
 			Id:                     aws.String(localExecutionOperationID),
 			ExecutionFailedDetails: &types.ExecutionFailedDetails{Error: eventError(err)},
-		})
+		}, time.Now())
 	}
 }
 
 // recordUpdateEvent records the history event that one checkpoint update
-// produces, given the operation record the update resulted in. Updates
-// with no corresponding event type record nothing.
+// produces, given the operation record the update resulted in and the
+// time at of the transition. Updates with no corresponding event type
+// record nothing.
 //
 // Caller must hold m.mu.
-func (m *memoryClient) recordUpdateEvent(u durable.OperationUpdate, op durable.Operation) {
+func (m *memoryClient) recordUpdateEvent(u durable.OperationUpdate, op durable.Operation, at time.Time) {
 	ev := types.Event{
 		Id:       u.Id,
 		Name:     u.Name,
@@ -184,7 +187,7 @@ func (m *memoryClient) recordUpdateEvent(u durable.OperationUpdate, op durable.O
 		details := &types.WaitStartedDetails{}
 		if u.WaitOptions != nil && u.WaitOptions.WaitSeconds != nil {
 			details.Duration = u.WaitOptions.WaitSeconds
-			details.ScheduledEndTimestamp = aws.Time(time.Now().Add(time.Duration(*u.WaitOptions.WaitSeconds) * time.Second))
+			details.ScheduledEndTimestamp = aws.Time(at.Add(time.Duration(*u.WaitOptions.WaitSeconds) * time.Second))
 		}
 		ev.WaitStartedDetails = details
 
@@ -234,15 +237,16 @@ func (m *memoryClient) recordUpdateEvent(u durable.OperationUpdate, op durable.O
 		return
 	}
 
-	m.recordEvent(ev)
+	m.recordEvent(ev, at)
 }
 
 // recordOperationEvent records an event for a transition the runner applied
 // to a stored operation outside a checkpoint: a timer completing, a
-// callback resolving, or a chained invoke settling.
+// callback resolving, or a chained invoke settling. at is the time of the
+// transition.
 //
 // Caller must hold m.mu.
-func (m *memoryClient) recordOperationEvent(op *durable.Operation, eventType types.EventType, result *string, err *durable.ErrorObject) {
+func (m *memoryClient) recordOperationEvent(op *durable.Operation, eventType types.EventType, result *string, err *durable.ErrorObject, at time.Time) {
 	ev := types.Event{
 		EventType: eventType,
 		Id:        op.Id,
@@ -266,7 +270,7 @@ func (m *memoryClient) recordOperationEvent(op *durable.Operation, eventType typ
 	default:
 		return
 	}
-	m.recordEvent(ev)
+	m.recordEvent(ev, at)
 }
 
 // eventResult wraps a result payload for an event, or returns nil when

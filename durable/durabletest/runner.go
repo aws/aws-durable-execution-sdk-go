@@ -103,6 +103,29 @@ func (r *LocalRunner[I, O]) RegisterFunction(functionID string, fn Function) {
 	r.exec.registry.fns[functionID] = fn
 }
 
+// Reset returns the runner to the state it had when [NewLocalRunner]
+// returned it, so the next [Run] or [RunUntilComplete] starts a new
+// execution from scratch. It discards the checkpoint log, the recorded
+// history events, every open callback and chained invoke, any registered
+// durable target still running, and any [OmitTokenOnCheckpoint] schedule
+// that has not fired. Invocation request IDs count from 1 again.
+//
+// The handler and the [durable.HandlerOption] values passed to
+// [NewLocalRunner] are kept, as is the invocation cap. Functions
+// registered with [RegisterFunction] are kept as well: they describe the
+// environment the handler runs in, not the state of one execution, so a
+// test can register targets once and reset between cases.
+//
+// Reset is not safe to call while [Run] or [RunUntilComplete] is in
+// progress. Call it only between invocations, from the goroutine that
+// drives the runner.
+//
+// Results returned by earlier calls are unaffected: a [TestResult] is a
+// snapshot and does not reference the runner.
+func (r *LocalRunner[I, O]) Reset() {
+	r.exec.reset()
+}
+
 // Run performs a single durable invocation against the in-memory client.
 // It constructs the invocation payload from the current checkpoint state,
 // invokes the handler, and returns the result.

@@ -72,8 +72,23 @@
 // # Inspecting Operations
 //
 // [TestResult] provides accessors to look up operations by name, index, or
-// ID. Each [TestOperation] carries typed detail getters for the operation's
-// checkpoint state.
+// ID. [TestResult.OperationByNameAndIndex] selects one occurrence of a name
+// that a loop or a repeated child context checkpointed more than once. Each
+// [TestOperation] carries typed detail getters for the operation's
+// checkpoint state. When an assertion fails, [TestResult.FormatTree]
+// renders the operations as an indented tree for the test log:
+//
+//	if result.Operation("charge") == nil {
+//	    t.Fatalf("charge step missing:\n%s", result.FormatTree())
+//	}
+//
+// # Reusing a Runner
+//
+// A [LocalRunner] keeps its checkpoint log across calls so that successive
+// invocations continue one execution. [LocalRunner.Reset] discards that log
+// and every open callback and invoke while keeping the handler, its options,
+// and the registered functions, so one runner can run several independent
+// test cases.
 //
 // # Inspecting History
 //
