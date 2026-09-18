@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+### Added: `Retry` retries a group of durable operations
+
+`Retry` runs a function that may contain any durable operations, such as an
+invoke followed by a callback, and re-runs the whole function when it fails,
+suspending the execution between attempts. It takes the same `RetryStrategy`
+that `Step` takes, so `ExponentialBackoff`, `NewRetryStrategy`,
+`LinearBackoff`, and hand-written strategies all apply. The function
+receives the durable context to use and the 1-based attempt number.
+
+```go
+label, err := durable.Retry(ctx, "ship", func(c durable.Context, attempt int) (string, error) {
+	id, err := durable.Invoke[string](c, "print-label", labelFunction, order)
+	if err != nil {
+		return "", err
+	}
+	return durable.WaitForCallback[string](c, "pickup", func(sc durable.StepContext, callbackID string) error {
+		return notifyCarrier(callbackID, id)
+	})
+}, durable.MustNewRetryStrategy(durable.RetryConfig{MaxAttempts: 3}))
+```
+
+Each attempt runs in its own child context named `<name>-attempt-<n>`, so
+the operations of one attempt are recorded under that attempt and replay is
+deterministic whatever an earlier attempt did before it failed. A failed
+attempt reaches the strategy as a `*ChildContextError` whose `ErrorType`
+names the error that escaped the function. The backoff between attempts is
+a `Wait` named `<name>-backoff-<n>`; a zero delay waits `DefaultRetryDelay`.
+`WithAttemptChildContext(false)` runs attempts directly in the caller's
+context instead, and `WithAttemptChildOptions` forwards `ChildOption`
+values, such as `WithChildSerdes`, to the per-attempt child context.
+
+When the strategy stops retrying, `Retry` returns a `*RetryError` carrying
+`Attempts`, the final attempt's error as `Err`, and the escaping error's
+`ErrorType` and `Message`. It is recorded under the wire name `RetryError`
+and is matchable as an `*OperationError`. A suspension from inside the
+function, for example a wait or an unresolved callback, propagates
+unchanged and never counts as a failed attempt.
+
 ### Added: `RetryableErrors` restricts retries to matching errors
 
 `RetryConfig` and `LinearRetryConfig` gain a `RetryableErrors []ErrorMatcher`

@@ -106,6 +106,7 @@ The `durable` package provides the following operations:
 | `Race` | Return the result of the first future to settle. |
 | `Join` | Wait for futures of different result types to settle. Returns the first error in argument order. |
 | `Select` | Run named branches concurrently; return the first to settle along with its name. |
+| `Retry` | Retry a function containing durable operations as a unit, suspending between attempts. |
 
 ## A complete example
 

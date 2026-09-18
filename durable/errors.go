@@ -20,6 +20,7 @@ var (
 	_ error = (*CallbackSubmitterError)(nil)
 	_ error = (*ChildContextError)(nil)
 	_ error = (*WaitForConditionError)(nil)
+	_ error = (*RetryError)(nil)
 	_ error = (*CombinatorError)(nil)
 	_ error = (*BatchError)(nil)
 	_ error = (*OperationError)(nil)
@@ -102,6 +103,8 @@ func sdkWireErrorType(err error) (string, bool) {
 		return "ChildContextError", true
 	case *WaitForConditionError:
 		return "WaitForConditionError", true
+	case *RetryError:
+		return "RetryError", true
 	case *CombinatorError:
 		return "PromiseCombinatorError", true
 	case *BatchError:
@@ -222,7 +225,7 @@ const (
 //
 // Every typed operation error ([StepError], [InvokeError], [CallbackError]
 // and its subtypes, [ChildContextError], [WaitForConditionError],
-// [CombinatorError], [StepInterruptedError], [BatchError],
+// [RetryError], [CombinatorError], [StepInterruptedError], [BatchError],
 // [NonDeterministicReplayError], [ResultTooLargeError]) is matchable this
 // way. The typed errors that wrap a recorded failure expose the same
 // fields directly.
@@ -782,7 +785,7 @@ var sdkErrorsByWireType = func() map[string]struct{} {
 	for _, err := range []error{
 		&StepError{}, &StepInterruptedError{}, &InvokeError{},
 		&CallbackError{}, &CallbackExternalError{}, &CallbackTimeoutError{}, &CallbackSubmitterError{},
-		&ChildContextError{}, &WaitForConditionError{}, &CombinatorError{}, &SerdesError{},
+		&ChildContextError{}, &WaitForConditionError{}, &RetryError{}, &CombinatorError{}, &SerdesError{},
 		&OperationError{}, &BatchError{}, &NonDeterministicReplayError{}, &ResultTooLargeError{},
 	} {
 		name, _ := sdkWireErrorType(err)
@@ -855,6 +858,8 @@ func reconstructSDKError(wireType string, op OperationError, sentinel error) err
 		return &ChildContextError{Name: op.Name, ErrorType: rec.errType, Message: rec.message, ErrorData: rec.data, StackTrace: rec.stackTrace, Err: inner}
 	case "WaitForConditionError":
 		return &WaitForConditionError{Name: op.Name, ErrorType: rec.errType, Message: rec.message, ErrorData: rec.data, StackTrace: rec.stackTrace, Err: inner}
+	case "RetryError":
+		return &RetryError{Name: op.Name, ErrorType: rec.errType, Message: rec.message, ErrorData: rec.data, StackTrace: rec.stackTrace, Err: inner}
 	case "PromiseCombinatorError":
 		return &CombinatorError{Name: op.Name, Errors: []error{inner}, recordedMessage: rec.message}
 	case "BatchError":
@@ -901,9 +906,10 @@ func completionReasonOf(message string) CompletionReason {
 //
 //   - The wire name of a typed operation error ([StepError], [InvokeError],
 //     [CallbackError] and its subtypes, [ChildContextError],
-//     [WaitForConditionError], [CombinatorError], [StepInterruptedError],
-//     [BatchError], [OperationError], [NonDeterministicReplayError],
-//     [ResultTooLargeError]) yields that type. Its ErrorType, Message,
+//     [WaitForConditionError], [RetryError], [CombinatorError],
+//     [StepInterruptedError], [BatchError], [OperationError],
+//     [NonDeterministicReplayError], [ResultTooLargeError]) yields that
+//     type. Its ErrorType, Message,
 //     ErrorData, and StackTrace fields hold the record's values. The
 //     operation's Name and the fields the record does not carry (such as
 //     [StepError.Attempts]) are zero. Types whose Error() text is composed
@@ -1055,6 +1061,54 @@ func (e *WaitForConditionError) operationError() *OperationError {
 
 // As supports [errors.As] matching against [*OperationError].
 func (e *WaitForConditionError) As(target any) bool {
+	return asOperationError(target, e.operationError())
+}
+
+// RetryError indicates that a [Retry] group failed: its retry strategy
+// stopped retrying after the final attempt failed.
+//
+// ErrorType and Message describe the error that escaped fn on the final
+// attempt. Err is that attempt's error as [Retry] observed it: a
+// [*ChildContextError] naming the attempt when attempts run in child
+// contexts (the default), or the error fn returned when they do not. A
+// value rebuilt from a checkpoint record carries a stand-in as Err and a
+// zero Attempts. Match on ErrorType. See [OperationError].
+type RetryError struct {
+	// Name is the retry group's name, or the empty string for an unnamed
+	// group.
+	Name string
+
+	// Attempts is the number of times fn ran.
+	Attempts int
+
+	// ErrorType is the wire ErrorType of the final attempt's error.
+	ErrorType string
+
+	// Message is the final attempt's recorded error message.
+	Message string
+
+	// ErrorData is the payload attached with [WithErrorData], if any.
+	ErrorData string
+
+	// StackTrace holds recorded stack trace lines, when captured.
+	StackTrace []string
+
+	// Err is the final attempt's error.
+	Err error
+}
+
+func (e *RetryError) Error() string {
+	return fmt.Sprintf("durable: retry %q failed after %d attempts: %s", e.Name, e.Attempts, causeText(e.ErrorType, e.Message, e.Err))
+}
+
+func (e *RetryError) Unwrap() error { return e.Err }
+
+func (e *RetryError) operationError() *OperationError {
+	return &OperationError{Name: e.Name, ErrorType: e.ErrorType, Message: e.Message, ErrorData: e.ErrorData, StackTrace: e.StackTrace, Err: e.Err}
+}
+
+// As supports [errors.As] matching against [*OperationError].
+func (e *RetryError) As(target any) bool {
 	return asOperationError(target, e.operationError())
 }
 

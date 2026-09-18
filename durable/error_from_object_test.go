@@ -24,6 +24,7 @@ func publicErrorTypeSamples() []error {
 		newCallbackSubmitterError("c", "cb", cause),
 		newChildContextError("child", cause),
 		&WaitForConditionError{Name: "w", Attempts: 2, ErrorType: "Error", Message: "boom", Err: cause.standIn(nil)},
+		newRetryError("r", 3, newChildContextError("r-attempt-3", cause), true),
 		&CombinatorError{Name: "any", Errors: []error{errors.New("a"), errors.New("b")}},
 		&BatchError{Name: "b", Reason: CompletionFailureToleranceExceeded, Errors: []error{errors.New("a")}},
 		&OperationError{Name: "op", ErrorType: "Error", Message: "boom", Err: cause.standIn(nil)},

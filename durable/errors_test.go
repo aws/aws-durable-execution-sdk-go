@@ -188,6 +188,7 @@ var wireErrorTypeCases = []struct {
 	{"CallbackError", &CallbackError{Name: "c", Err: fmt.Errorf("x")}, "CallbackError"},
 	{"ChildContextError", &ChildContextError{Name: "cc", Err: fmt.Errorf("x")}, "ChildContextError"},
 	{"WaitForConditionError", &WaitForConditionError{Name: "w", Err: fmt.Errorf("x")}, "WaitForConditionError"},
+	{"RetryError", &RetryError{Name: "r", Attempts: 3, Err: fmt.Errorf("x")}, "RetryError"},
 	{"CombinatorError", &CombinatorError{Name: "any", Errors: []error{fmt.Errorf("x")}}, "PromiseCombinatorError"},
 	{"BatchError", &BatchError{Name: "b", Reason: CompletionFailureToleranceExceeded, Errors: []error{fmt.Errorf("x")}}, "BatchError"},
 	{"OperationError", &OperationError{Name: "op", Err: fmt.Errorf("x")}, "OperationError"},
