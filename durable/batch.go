@@ -250,11 +250,12 @@ func Parallel[O any](ctx Context, name string, branches []Branch[O], opts ...Bat
 	return batchOutcome(name, result)
 }
 
-// Branch is one branch of a [Parallel] operation.
+// Branch is one branch of a [Parallel] or [Select] operation.
 type Branch[O any] struct {
 	_ [0]func() // blocks unkeyed literals; keeps fields addable
 
-	// Name identifies the branch. It may be empty.
+	// Name identifies the branch. It may be empty in [Parallel]. [Select]
+	// returns it as the winner and rejects duplicate names.
 	Name string
 
 	// Func is the branch body.

@@ -433,6 +433,20 @@ Edge cases mirror the JavaScript promise combinators:
 - `Any` on empty input fails immediately with a `*CombinatorError`.
 - `Race` on empty input suspends, since no future will ever settle.
 
+### Select
+
+`Select` is `Race` over named branches. It runs each `Branch` in its own
+child context and applies the same first-terminal-wins and drain rules to
+the resulting futures. Its checkpointed aggregate holds the winning
+branch's name together with the settled outcome (value or error), so replay
+returns the same winner and the same error even when another branch would
+finish first if the branches ran again. A failed winner does not fail the
+`Select` operation's own record: the operation is recorded as `SUCCEEDED`
+with the rejected outcome inside its result, and the error returned to the
+caller is the branch's `*ChildContextError`, rebuilt from that record on
+replay. Empty input and duplicate branch names are rejected before any
+operation is claimed.
+
 ## Goroutine Ownership
 
 Each `Context` has an owning goroutine. Every durable operation validates

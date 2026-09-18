@@ -1714,6 +1714,23 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 60
 
+  FutureSelectFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-future-select
+      CodeUri: .aws-sam/build-artifacts/future-select/
+      Handler: bootstrap
+      Description: Select combinator - first named branch wins, winner returned
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
   FutureCombinatorsMixedFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -2558,6 +2575,9 @@ Outputs:
   FutureRaceWaitFunction:
     Description: Future Race Wait Function ARN
     Value: !GetAtt FutureRaceWaitFunction.Arn
+  FutureSelectFunction:
+    Description: Future Select Function ARN
+    Value: !GetAtt FutureSelectFunction.Arn
   FutureCombinatorsMixedFunction:
     Description: Future Combinators Mixed Function ARN
     Value: !GetAtt FutureCombinatorsMixedFunction.Arn

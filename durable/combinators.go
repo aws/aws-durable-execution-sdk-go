@@ -199,6 +199,10 @@ func Any[O any](ctx Context, name string, fs []*Future[O], opts ...ChildOption) 
 // future settlement order. opts configure that child-context operation;
 // [WithChildSerdes] selects the serializer for the winner.
 //
+// Race returns the winner's value but not which future produced it. Code
+// that must branch on the winner's identity should use [Select], which
+// runs named branches and checkpoints the winner's name with its value.
+//
 // Empty input suspends (no future will ever settle), matching
 // Promise.race([]) which returns a forever-pending promise.
 func Race[O any](ctx Context, name string, fs []*Future[O], opts ...ChildOption) (O, error) {
