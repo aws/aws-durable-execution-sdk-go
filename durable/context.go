@@ -44,8 +44,13 @@ type Context interface {
 	InvokedFunctionARN() string
 
 	// Logger returns the logger for this context, enriched with durable
-	// execution metadata. During replay, log output is suppressed by
-	// default so that replayed code does not duplicate log lines.
+	// execution metadata. While this context is replaying, log output is
+	// suppressed by default so that replayed code does not duplicate log
+	// lines. Suppression is decided per branch: each context (root, child
+	// context, and each concurrent branch from [Go], [Map], or [Parallel])
+	// consults its own replay state, so a branch that is still replaying
+	// stays suppressed even after a sibling branch has reached live
+	// execution.
 	Logger() Logger
 
 	// IsReplaying reports whether the execution is currently replaying

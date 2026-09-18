@@ -329,7 +329,7 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 // the check succeeds or when capture is disabled.
 func runCheckFunc[S any](ec *execContext, check func(StepContext, S) (S, error), state S) (S, []string, error) {
 	return runUserFunc(ec, check, "durable: WaitForCondition check panicked", func() (S, error) {
-		return check(&stepContext{Context: ec.Context, logger: ec.logger}, state)
+		return check(&stepContext{Context: ec.Context, logger: ec.Logger()}, state)
 	})
 }
 

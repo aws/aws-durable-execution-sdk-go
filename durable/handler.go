@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -214,15 +213,13 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	}
 
 	invMeta := invocationInfoFromContext(ctx)
+	// Replay suppression is applied per context, not here: every context
+	// wraps this base logger with its own replay-aware wrapper (see
+	// execContext.attachLogger), so suppression follows each branch's own
+	// replay state.
 	logger := h.options.logger
 	if logger == nil {
 		logger = newDefaultLogger(in.DurableExecutionArn)
-	} else {
-		// Wrap user-provided loggers with replay suppression so they
-		// don't emit during replay. The default logger already has this
-		// built in; user loggers need the wrapper to implement
-		// replayToggler.
-		logger = &replayAwareLogger{inner: logger, replaying: &atomic.Bool{}}
 	}
 
 	// Plugin dispatcher: nil when no plugins are registered (zero overhead).

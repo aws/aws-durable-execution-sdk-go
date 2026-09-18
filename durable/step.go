@@ -530,7 +530,7 @@ func settleStepFailure[O any](ec *execContext, id, name string, options stepOpti
 // nil when the body succeeds or when capture is disabled.
 func runStepFunc[O any](ec *execContext, fn func(StepContext) (O, error), attempt int) (O, []string, error) {
 	return runUserFunc(ec, fn, "durable: step panicked", func() (O, error) {
-		return fn(&stepContext{Context: ec.Context, logger: ec.logger, attempt: attempt})
+		return fn(&stepContext{Context: ec.Context, logger: ec.Logger(), attempt: attempt})
 	})
 }
 

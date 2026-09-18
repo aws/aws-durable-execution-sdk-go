@@ -34,7 +34,12 @@ type execContext struct {
 
 	executionArn string
 	invocation   invocationInfo
-	logger       Logger
+
+	// logger is the base logger shared by every context of the invocation.
+	// ctxLogger wraps it with replay suppression driven by this context's
+	// own mode, so suppression is decided per branch. See attachLogger.
+	logger    Logger
+	ctxLogger Logger
 
 	// mode tracks the execution's replay lifecycle position. Accessed
 	// atomically because child goroutines read it concurrently with the
@@ -137,10 +142,6 @@ func newExecContext(ctx context.Context, executionArn string, inv invocationInfo
 	if state.numOperations() > 1 {
 		mode = modeReplay
 	}
-	// Sync logger replay state with initial mode.
-	if toggler, ok := logger.(replayToggler); ok {
-		toggler.setReplaying(mode == modeReplay || mode == modeReplaySucceededContext)
-	}
 	ec := &execContext{
 		Context:      ctx,
 		executionArn: executionArn,
@@ -153,7 +154,17 @@ func newExecContext(ctx context.Context, executionArn string, inv invocationInfo
 		suspend:      newSuspendSignal(),
 	}
 	ec.mode.Store(int32(mode))
+	ec.attachLogger()
 	return ec
+}
+
+// attachLogger builds this context's replay-aware logger. The wrapper reads
+// this context's mode on every call, so a still-replaying branch stays
+// suppressed regardless of what sibling contexts are doing. Every
+// constructor (newExecContext, child, branch) calls attachLogger after
+// storing the initial mode.
+func (c *execContext) attachLogger() {
+	c.ctxLogger = newReplayAwareLogger(c.logger, c.IsReplaying)
 }
 
 func (c *execContext) ExecutionArn() string { return c.executionArn }
@@ -171,7 +182,7 @@ func (c *execContext) RequestID() string { return c.invocation.requestID }
 
 func (c *execContext) InvokedFunctionARN() string { return c.invocation.invokedFunctionARN }
 
-func (c *execContext) Logger() Logger { return c.logger }
+func (c *execContext) Logger() Logger { return c.ctxLogger }
 
 func (c *execContext) IsReplaying() bool {
 	m := executionMode(c.mode.Load())
@@ -239,10 +250,6 @@ func (c *execContext) refreshReplayMode() {
 		return
 	}
 	c.mode.Store(int32(modeExecution))
-	// Notify the logger that replay has ended.
-	if toggler, ok := c.logger.(replayToggler); ok {
-		toggler.setReplaying(false)
-	}
 }
 
 // unfinishedInSucceededContext reports whether the checkpointed operation
@@ -405,6 +412,7 @@ func (c *execContext) child(entityID string, owner goroutineOwner, mode executio
 		combinatorObserve:    c.combinatorObserve,
 	}
 	child.mode.Store(int32(mode))
+	child.attachLogger()
 	return child
 }
 
@@ -453,5 +461,6 @@ func (c *execContext) branch(owner goroutineOwner) *execContext {
 		combinatorObserve:    c.combinatorObserve,
 	}
 	b.mode.Store(c.mode.Load())
+	b.attachLogger()
 	return b
 }
