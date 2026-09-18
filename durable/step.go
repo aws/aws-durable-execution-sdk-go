@@ -574,7 +574,9 @@ var _ StepContext = (*stepContext)(nil)
 
 func (c *stepContext) Logger() Logger { return c.logger }
 
-// Attempt returns the 1-based attempt number for this step execution.
+// Attempt returns the 1-based attempt number of the current execution of
+// the user function: a step body, a condition check, or a callback
+// submitter.
 func (c *stepContext) Attempt() int { return c.attempt }
 
 // sealed marks stepContext as the SDK's StepContext implementation.

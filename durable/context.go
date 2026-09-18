@@ -81,8 +81,11 @@ type StepContext interface {
 	// Logger returns the logger for the current step.
 	Logger() Logger
 
-	// Attempt returns the 1-based attempt number for this step
-	// execution. The first attempt is 1.
+	// Attempt returns the 1-based attempt number of the current
+	// execution of the user function. The first attempt is 1. It applies
+	// to step bodies, to condition checks (where it is the poll attempt
+	// number, the same value the wait strategy receives), and to callback
+	// submitters (where it is the submitter's retry attempt).
 	Attempt() int
 
 	// sealed prevents external implementations of StepContext. Only the

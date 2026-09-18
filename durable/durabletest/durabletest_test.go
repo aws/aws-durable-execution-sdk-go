@@ -935,3 +935,41 @@ func TestWaitForConditionStateRoundTripUnderLocalRunner(t *testing.T) {
 		t.Errorf("result = %d, want 3", out)
 	}
 }
+
+// TestWaitForConditionAttemptNumber asserts that a condition check observes
+// the 1-based poll attempt number through StepContext.Attempt, the same
+// value the wait strategy receives.
+func TestWaitForConditionAttemptNumber(t *testing.T) {
+	var seen []int
+	var strategySeen []int
+	h := func(ctx durable.Context, _ any) (int, error) {
+		return durable.WaitForCondition(ctx, "c", func(sc durable.StepContext, s int) (int, error) {
+			seen = append(seen, sc.Attempt())
+			return s + 1, nil
+		}, durable.ConditionConfig[int]{
+			InitialState: 0,
+			WaitStrategy: func(state int, attempt int) durable.WaitDecision {
+				strategySeen = append(strategySeen, attempt)
+				if state >= 3 {
+					return durable.WaitDecision{}
+				}
+				return durable.WaitDecision{Continue: true, Delay: time.Second}
+			},
+		})
+	}
+	res := durabletest.NewLocalRunner(h).RunUntilComplete(t, nil, durabletest.WithMaxInvocations(6))
+	if res.Status != durabletest.Succeeded {
+		t.Fatalf("WaitForCondition never converged: status=%v capReached=%v attemptsSeen=%v", res.Status, res.CapReached, seen)
+	}
+	if len(seen) != 3 {
+		t.Fatalf("check ran %d times, want 3 (attempts seen %v)", len(seen), seen)
+	}
+	for i, a := range seen {
+		if a != i+1 {
+			t.Errorf("check %d saw StepContext.Attempt()=%d, want %d", i+1, a, i+1)
+		}
+	}
+	if fmt.Sprint(strategySeen) != fmt.Sprint(seen) {
+		t.Errorf("wait strategy saw attempts %v, check saw %v; want equal", strategySeen, seen)
+	}
+}
