@@ -514,6 +514,7 @@ func operationFromAPI(op Operation) *operation {
 		subType: aws.ToString(op.SubType),
 		name:    aws.ToString(op.Name),
 	}
+	rec.setTimestamps(op.StartTimestamp, op.EndTimestamp)
 	if sd := op.StepDetails; sd != nil {
 		rec.step = &stepDetails{
 			attempt: int(sd.Attempt),

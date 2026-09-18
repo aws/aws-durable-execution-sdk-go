@@ -26,6 +26,17 @@ type Timestamp struct {
 	Valid bool
 }
 
+// Ptr returns the timestamp as an optional value: a pointer to Time when
+// Valid, nil otherwise. This is the shape the SDK's exported client types
+// use for optional timestamps.
+func (ts Timestamp) Ptr() *time.Time {
+	if !ts.Valid {
+		return nil
+	}
+	t := ts.Time
+	return &t
+}
+
 // MarshalJSON encodes a valid Timestamp as an RFC3339 string and an
 // invalid one as null.
 func (ts Timestamp) MarshalJSON() ([]byte, error) {

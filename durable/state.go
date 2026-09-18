@@ -56,6 +56,22 @@ type operation struct {
 	callback *callbackDetails
 }
 
+// setTimestamps records the operation's start and end times from a wire
+// record's optional timestamps. A nil pointer means the field was absent
+// and leaves the corresponding timestamp zero.
+//
+// Every path that builds an operation from wire data (the invocation
+// payload and checkpoint API responses) calls this, so an operation
+// carries the same timestamps whichever way it arrived.
+func (op *operation) setTimestamps(start, end *time.Time) {
+	if start != nil {
+		op.startTimestamp = *start
+	}
+	if end != nil {
+		op.endTimestamp = *end
+	}
+}
+
 // callbackDetails is the callback-specific portion of a checkpointed
 // operation.
 type callbackDetails struct {

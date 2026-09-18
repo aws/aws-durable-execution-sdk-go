@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
 // TestPluginFanOutJoinsBeforeProceeding verifies that notification hooks
@@ -813,6 +815,79 @@ func TestPluginOperationHookParentIDAndTimestamps(t *testing.T) {
 	}
 }
 
+// TestPluginOperationHookTimestampsFromCheckpointResponse verifies that
+// operation hooks report non-zero StartTimestamp and EndTimestamp for an
+// operation whose state arrived via a checkpoint response rather than the
+// invocation payload.
+//
+// The first step runs live. Its checkpoint response carries the record of
+// the second step as already SUCCEEDED, with timestamps. The second step is
+// then replayed from that merged record, so its hooks must show the
+// timestamps the response contained.
+func TestPluginOperationHookTimestampsFromCheckpointResponse(t *testing.T) {
+	start := time.Date(2026, 7, 24, 0, 0, 1, 0, time.UTC)
+	end := time.Date(2026, 7, 24, 0, 0, 2, 0, time.UTC)
+	merged := Operation{
+		Id:             aws.String(hashID("2")),
+		Status:         OperationStatusSucceeded,
+		Type:           OperationTypeStep,
+		SubType:        aws.String(operationSubTypeStep),
+		Name:           aws.String("second"),
+		StartTimestamp: &start,
+		EndTimestamp:   &end,
+		StepDetails:    &StepDetails{Attempt: 1, Result: aws.String(`"from-response"`)},
+	}
+
+	var ends []OperationHookInfo
+	var mu sync.Mutex
+	plugin := Plugin{
+		OnOperationEnd: func(_ context.Context, info OperationHookInfo) {
+			mu.Lock()
+			ends = append(ends, info)
+			mu.Unlock()
+		},
+	}
+
+	handler := Wrap(func(ctx Context, event string) (string, error) {
+		if _, err := Step(ctx, "first", func(StepContext) (string, error) {
+			return "live", nil
+		}); err != nil {
+			return "", err
+		}
+		return Step(ctx, "second", func(StepContext) (string, error) {
+			return "must-not-run", nil
+		})
+	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{newState: []Operation{merged}}))
+
+	payload := makePluginPayload(t, "arn:test:exec", "tok1", nil)
+	resp, err := handler(makePluginContext(), payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPluginResponseStatus(t, resp, invocationSucceeded)
+
+	mu.Lock()
+	defer mu.Unlock()
+	var second *OperationHookInfo
+	for i := range ends {
+		if ends[i].Name == "second" {
+			second = &ends[i]
+		}
+	}
+	if second == nil {
+		t.Fatalf("no OnOperationEnd for step %q; got %+v", "second", ends)
+	}
+	if !second.IsReplay {
+		t.Fatal("expected step \"second\" to be replayed from the merged record")
+	}
+	if !second.StartTimestamp.Equal(start) {
+		t.Errorf("StartTimestamp = %v, want %v", second.StartTimestamp, start)
+	}
+	if !second.EndTimestamp.Equal(end) {
+		t.Errorf("EndTimestamp = %v, want %v", second.EndTimestamp, end)
+	}
+}
+
 // TestPluginEnrichLogContextAnyValues verifies map[string]any values of
 // mixed types survive the merge.
 func TestPluginEnrichLogContextAnyValues(t *testing.T) {
@@ -849,6 +924,10 @@ func makePluginPayloadWithUpdated(t *testing.T, arn, token string, ops []wireOpe
 // fakePluginClient is a minimal ExecutionClient for plugin tests.
 type fakePluginClient struct {
 	mu sync.Mutex
+
+	// newState, when set, is returned as NewExecutionState on every
+	// Checkpoint call.
+	newState []Operation
 }
 
 func (c *fakePluginClient) GetExecutionState(_ context.Context, _ GetExecutionStateInput) (GetExecutionStateOutput, error) {
@@ -859,7 +938,8 @@ func (c *fakePluginClient) Checkpoint(_ context.Context, in CheckpointInput) (Ch
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return CheckpointOutput{
-		CheckpointToken: in.CheckpointToken,
+		CheckpointToken:   in.CheckpointToken,
+		NewExecutionState: c.newState,
 	}, nil
 }
 

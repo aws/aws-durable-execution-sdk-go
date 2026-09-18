@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 )
@@ -19,6 +20,10 @@ type fakeLambda struct {
 	stateErr   error
 
 	checkpointErr error
+
+	// newState, when set, is returned as NewExecutionState on every
+	// successful Checkpoint call.
+	newState []Operation
 
 	mu               sync.Mutex
 	nextToken        string
@@ -62,7 +67,7 @@ func (f *fakeLambda) Checkpoint(_ context.Context, in CheckpointInput) (Checkpoi
 		// that don't exercise rotation succeed.
 		f.nextToken = "token-fake"
 	}
-	return CheckpointOutput{CheckpointToken: f.nextToken}, nil
+	return CheckpointOutput{CheckpointToken: f.nextToken, NewExecutionState: f.newState}, nil
 }
 
 func opWire(id string, status OperationStatus) Operation {
@@ -138,6 +143,54 @@ func TestCheckpointRotatesToken(t *testing.T) {
 	}
 	if got := cp.currentToken(); got != "token-2" {
 		t.Errorf("currentToken() after rotation = %q, want %q", got, "token-2")
+	}
+}
+
+// TestCheckpointMergeCarriesTimestamps verifies that an operation merged
+// into local state from a checkpoint response carries the start and end
+// timestamps the response contained, the same as one decoded from the
+// invocation payload.
+func TestCheckpointMergeCarriesTimestamps(t *testing.T) {
+	start := time.Date(2026, 7, 24, 0, 0, 1, 0, time.UTC)
+	end := time.Date(2026, 7, 24, 0, 0, 2, 0, time.UTC)
+	fake := &fakeLambda{
+		nextToken: "token-1",
+		newState: []Operation{{
+			Id:             aws.String(hashID("1")),
+			Status:         OperationStatusSucceeded,
+			Type:           OperationTypeStep,
+			SubType:        aws.String(operationSubTypeStep),
+			Name:           aws.String("s"),
+			StartTimestamp: &start,
+			EndTimestamp:   &end,
+			StepDetails:    &StepDetails{Attempt: 1, Result: aws.String(`"ok"`)},
+		}},
+	}
+	cp := newCheckpointer(fake, "arn:test", "token-0")
+	cp.state = newExecutionState(nil)
+
+	if err := cp.checkpoint(context.Background(), nil); err != nil {
+		t.Fatalf("checkpoint() error: %v", err)
+	}
+
+	op := cp.state.get("1")
+	if op == nil {
+		t.Fatal("merged operation not found in state")
+	}
+	if !op.startTimestamp.Equal(start) {
+		t.Errorf("startTimestamp = %v, want %v", op.startTimestamp, start)
+	}
+	if !op.endTimestamp.Equal(end) {
+		t.Errorf("endTimestamp = %v, want %v", op.endTimestamp, end)
+	}
+}
+
+// TestOperationFromAPIAbsentTimestamps verifies that absent timestamps in
+// an API record leave the operation's timestamps zero rather than failing.
+func TestOperationFromAPIAbsentTimestamps(t *testing.T) {
+	op := operationFromAPI(Operation{Id: aws.String("x"), Status: OperationStatusStarted})
+	if !op.startTimestamp.IsZero() || !op.endTimestamp.IsZero() {
+		t.Fatalf("timestamps = (%v, %v), want zero", op.startTimestamp, op.endTimestamp)
 	}
 }
 

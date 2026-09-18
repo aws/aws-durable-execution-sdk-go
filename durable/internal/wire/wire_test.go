@@ -56,6 +56,17 @@ func TestTimestampMarshal(t *testing.T) {
 	}
 }
 
+func TestTimestampPtr(t *testing.T) {
+	want := time.Date(2024, 3, 5, 6, 7, 8, 0, time.UTC)
+	got := Timestamp{Time: want, Valid: true}.Ptr()
+	if got == nil || !got.Equal(want) {
+		t.Errorf("Ptr(valid) = %v, want %v", got, want)
+	}
+	if got := (Timestamp{}).Ptr(); got != nil {
+		t.Errorf("Ptr(invalid) = %v, want nil", got)
+	}
+}
+
 // TestOperationJSONNames pins the wire field names. Both the durable
 // package and durabletest depend on these exact keys; a renamed tag would
 // silently drop a field on decode.

@@ -20,12 +20,7 @@ func operationsFromPayload(in *wire.InitialExecutionState) []*operation {
 			subType:  w.SubType,
 			name:     w.Name,
 		}
-		if w.StartTimestamp.Valid {
-			op.startTimestamp = w.StartTimestamp.Time
-		}
-		if w.EndTimestamp.Valid {
-			op.endTimestamp = w.EndTimestamp.Time
-		}
+		op.setTimestamps(w.StartTimestamp.Ptr(), w.EndTimestamp.Ptr())
 		if sd := w.StepDetails; sd != nil {
 			op.step = &stepDetails{attempt: sd.Attempt, result: sd.Result}
 			if sd.Error != nil {
