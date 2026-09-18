@@ -230,6 +230,25 @@ func main() {
 (`StepAsync`, `WaitAsync`, `InvokeAsync`, `RunInChildContextAsync`) that
 return a `*Future` immediately, the same pattern `durable.Go` shows above.
 
+## Determinism
+
+Replay pairs stored results with operations by position, so a handler must
+create its durable operations in the same order on every invocation. Two
+rules follow from this:
+
+- Code between operations must depend only on the handler input and on
+  results returned by earlier operations. Anything nondeterministic (random
+  values, the current time, network calls) belongs inside a `Step` body,
+  whose result is checkpointed once and replayed afterwards.
+- A `durable.Context` is owned by the goroutine it was created on. Invoking
+  a durable operation on it from any other goroutine (a `go` statement, an
+  `errgroup.Go` callback) fails with `durable.ErrWrongGoroutine`. Use
+  `durable.Go` to run durable work concurrently; it gives the new goroutine
+  a child context of its own. The check runs in every default build.
+
+The package documentation for `durable` covers both rules in detail under
+"Determinism" and "Goroutine Ownership".
+
 ## Testing
 
 The `durable/durabletest` package provides an in-memory test runner that

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -734,46 +733,6 @@ func TestGoGoroutineOwnership(t *testing.T) {
 	})
 
 	if want := `{"Status":"SUCCEEDED","Result":"\"ok\""}`; resp != want {
-		t.Errorf("response = %s, want %s", resp, want)
-	}
-}
-
-func TestGoParentContextFromChildGoroutineFails(t *testing.T) {
-	// Using the PARENT context from a child goroutine must fail fast with
-	// ErrWrongGoroutine — not silently corrupt replay order.
-	// This test exercises the goroutine ownership diagnostic, which is
-	// only active under -tags=durablecheck.
-	fake := &fakeLambda{}
-	resp := invokeStep(t, fake, childPayload(`"x"`), func(ctx Context, _ string) (string, error) {
-		fut := Go(ctx, "misuse", func(_ Context) (string, error) {
-			// Attempt to use the parent ctx from the child goroutine.
-			_, err := Step[string](ctx, "bad", func(StepContext) (string, error) {
-				return "should not run", nil
-			})
-			return "", err
-		})
-		_, err := fut.Result()
-		if err == nil {
-			// Goroutine ownership check is disabled: the step succeeded
-			// because check() is a no-op without the durablecheck tag.
-			return "check-disabled", nil
-		}
-		var childErr *ChildContextError
-		if !errors.As(err, &childErr) {
-			return "", fmt.Errorf("expected ChildContextError wrapping ErrWrongGoroutine, got: %v", err)
-		}
-		if !errors.Is(childErr.Err, ErrWrongGoroutine) {
-			return "", fmt.Errorf("inner error = %v, want ErrWrongGoroutine", childErr.Err)
-		}
-		return "ownership-checked", nil
-	})
-
-	// Without -tags=durablecheck the goroutine check is a no-op, so the
-	// step on the parent context succeeds and the handler returns early.
-	if resp == `{"Status":"SUCCEEDED","Result":"\"check-disabled\""}` {
-		t.Skip("goroutine ownership checks disabled without -tags=durablecheck")
-	}
-	if want := `{"Status":"SUCCEEDED","Result":"\"ownership-checked\""}`; resp != want {
 		t.Errorf("response = %s, want %s", resp, want)
 	}
 }

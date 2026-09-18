@@ -24,6 +24,36 @@
 // Nondeterminism inside a step body is safe: the step's checkpointed result
 // is frozen once persisted.
 //
+// # Goroutine Ownership
+//
+// Every [Context] is owned by the goroutine it was created on: the handler
+// goroutine owns the root Context, and a child goroutine started by [Go]
+// or [RunInChildContextAsync] owns the child Context it receives. Durable
+// operations on a Context must be invoked from its owning goroutine. Two
+// goroutines claiming operations on one Context would claim them in a
+// scheduling-dependent order, and replay would then pair stored results
+// with the wrong operations.
+//
+// The rule is enforced at run time. Every durable operation checks the
+// calling goroutine against the Context's owner before it claims an
+// operation ID, and a call from any other goroutine fails with
+// [ErrWrongGoroutine] without claiming an ID or recording a checkpoint. The
+// check costs a few microseconds per operation (see the benchmark in the
+// package tests); build with -tags durablenocheck to compile it out, at the
+// price of leaving foreign-goroutine calls undetected.
+//
+// [Go] is the replay-safe way to run durable work concurrently. It claims
+// the child's operation ID on the calling goroutine, so the order is
+// deterministic, and then starts a goroutine that owns a fresh child
+// Context. Use the child Context inside the function, never the parent:
+//
+//	fut := durable.Go(ctx, "work", func(child durable.Context) (T, error) {
+//		return durable.Step(child, "step", func(durable.StepContext) (T, error) {
+//			return doWork()
+//		})
+//	})
+//	result, err := fut.Result()
+//
 // # Error Propagation
 //
 // Return an error from a durable operation immediately unless the handler

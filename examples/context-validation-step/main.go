@@ -2,9 +2,9 @@
 // when user code calls a durable operation on the parent context from within
 // a durable.Go child goroutine — specifically inside a step-like pattern.
 //
-// The goroutine ownership diagnostic requires the "durablecheck" build tag.
-// Without it, the check is a no-op and this handler succeeds instead of
-// failing.
+// The goroutine ownership check runs in every default build. Building with
+// -tags durablenocheck compiles it out, and this handler then succeeds
+// instead of failing.
 //
 // In Go, context scope is enforced through goroutine ownership: using a
 // parent context from a child goroutine triggers [durable.ErrWrongGoroutine].

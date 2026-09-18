@@ -124,8 +124,8 @@ func TestClaimOperationForeignGoroutine(t *testing.T) {
 	}()
 	err := <-errCh
 	if err == nil {
-		// Goroutine ownership checking is disabled (no durablecheck tag).
-		t.Skip("goroutine ownership checks disabled without -tags=durablecheck")
+		// Only the opt-out build compiles the check out.
+		t.Skip("goroutine ownership check compiled out by -tags=durablenocheck")
 	}
 	if !errors.Is(err, ErrWrongGoroutine) {
 		t.Errorf("claimOperation() from foreign goroutine = %v, want ErrWrongGoroutine", err)

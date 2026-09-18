@@ -13,8 +13,10 @@ import (
 // SDK calls and other context-aware APIs.
 //
 // A Context is owned by the goroutine it was created on. Durable operations
-// invoked on a Context from any other goroutine fail. Use [Go] to run
-// durable work concurrently.
+// invoked on a Context from any other goroutine fail with
+// [ErrWrongGoroutine] before they claim an operation ID. Use [Go] to run
+// durable work concurrently; it gives the new goroutine a Context of its
+// own. See the package documentation section "Goroutine Ownership".
 //
 // Context is sealed: only the SDK can implement it. External types that
 // embed or imitate this interface will fail to compile because of the

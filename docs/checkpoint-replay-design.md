@@ -410,10 +410,12 @@ Edge cases mirror the JavaScript promise combinators:
 
 ## Goroutine Ownership
 
-Each `Context` has an owning goroutine. When built with the `durablecheck`
-build tag, durable operations validate that the calling goroutine matches
-the owner before proceeding. A mismatch returns `ErrWrongGoroutine`
-immediately. Without the tag, the check is a no-op for production use.
+Each `Context` has an owning goroutine. Every durable operation validates
+that the calling goroutine matches the owner before it claims an operation
+ID. A mismatch returns `ErrWrongGoroutine` immediately, and the rejected
+call claims no ID and records no checkpoint. The check runs in every
+default build. The `durablenocheck` build tag compiles it out; that build
+does not detect foreign-goroutine calls.
 
 This rule exists to enforce deterministic ID minting. If two goroutines
 raced to call operations on the same context, the minting order would be
@@ -423,7 +425,11 @@ divergence.
 
 Goroutine identity is parsed from the `runtime.Stack` header (`goroutine N
 [running]:`). If the ID cannot be determined (future Go runtime changes),
-the check is disabled rather than rejecting correct programs.
+the check is disabled rather than rejecting correct programs. The check
+costs a few microseconds per operation, growing with stack depth, because
+`runtime.Stack` walks the whole calling stack; `BenchmarkClaimOperation`
+in the `durable` package records the numbers. A checkpoint request follows
+every claim, so the check is a small fraction of an operation's cost.
 
 ## Futures
 

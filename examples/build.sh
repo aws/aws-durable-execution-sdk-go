@@ -146,32 +146,12 @@ EXAMPLES="
   comprehensive-operations
 "
 
-# Examples that require additional build tags beyond lambda.norpc.
-# The durablecheck tag enables the goroutine ownership diagnostic so these
-# examples fail as documented when deployed.
-EXTRA_TAGS_durablecheck="
-  context-validation-child
-  context-validation-step
-  context-validation-wait-condition
-"
-
-# extra_tags returns any additional build tags required for the given example.
-extra_tags() {
-  for name in $EXTRA_TAGS_durablecheck; do
-    if [ "$name" = "$1" ]; then
-      printf ',durablecheck'
-      return
-    fi
-  done
-}
-
 for example in $EXAMPLES; do
   out="$BUILD_DIR/$example"
   echo "Building $example -> .aws-sam/build-artifacts/$example/bootstrap"
   mkdir -p "$out"
-  tags="lambda.norpc$(extra_tags "$example")"
   CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-      go build -tags "$tags" -o "$out/bootstrap" "./$example"
+      go build -tags lambda.norpc -o "$out/bootstrap" "./$example"
 
   # SAM BuildMethod: makefile requires a Makefile target matching the logical
   # resource ID from template.yaml. The target copies the pre-built binary
