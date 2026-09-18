@@ -113,6 +113,7 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [parallel-error-preservation](parallel-error-preservation/main.go) | Parallel, error ordering | SUCCEEDED |
 | [parallel-min-successful](parallel-min-successful/main.go) | Parallel, WithCompletion (min successful) | SUCCEEDED |
 | [parallel-min-successful-callback](parallel-min-successful-callback/main.go) | Parallel, MinSuccessful, WaitForCallback | SUCCEEDED |
+| [parallel-should-complete](parallel-should-complete/main.go) | Parallel, WithCompletion (ShouldComplete quorum) | SUCCEEDED |
 | [parallel-tolerated-failure](parallel-tolerated-failure/main.go) | Parallel, ToleratedFailureCount | SUCCEEDED |
 | [parallel-tolerated-failure-percentage](parallel-tolerated-failure-percentage/main.go) | Parallel, WithToleratedFailurePercentage | SUCCEEDED |
 | [parallel-failure-threshold-count](parallel-failure-threshold-count/main.go) | Parallel, fail-fast ToleratedFailureCount=0 (failure propagated) | FAILED |

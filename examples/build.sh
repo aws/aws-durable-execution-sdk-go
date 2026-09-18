@@ -100,6 +100,7 @@ EXAMPLES="
   parallel-error-preservation
   parallel-min-successful
   parallel-min-successful-callback
+  parallel-should-complete
   parallel-tolerated-failure
   parallel-tolerated-failure-percentage
   parallel-failure-threshold-count

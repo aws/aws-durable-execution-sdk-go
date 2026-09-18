@@ -89,6 +89,42 @@ failed item, and `CompletionCustomSucceeded` makes it succeeded even with
 failed items. A `BatchError` rebuilt from a checkpoint record recovers
 either reason.
 
+### New: custom batch completion with `CompletionConfig.ShouldComplete`
+
+`CompletionConfig` gains `ShouldComplete func(BatchProgress)
+CompletionDecision`. The batch calls it after each item reaches a terminal
+state with a `BatchProgress` snapshot: `TotalCount`, `CompletedCount`,
+`SuccessCount`, `FailureCount`, and `Items`, one `BatchItemProgress` per
+input index with `Index`, `Name`, and `Status`. `Status` is
+`BatchItemNotStarted` (the new zero value, `String()` `NOT_STARTED`),
+`BatchItemStarted` for an item in flight, or `BatchItemSucceeded` or
+`BatchItemFailed`. The callback returns `ContinueBatch()` or
+`CompleteBatch(outcome)`, where `outcome` is `CompletionOutcomeSucceeded`
+or `CompletionOutcomeFailed`; completing sets the batch's reason to
+`CompletionCustomSucceeded` or `CompletionCustomFailed`, and that reason
+alone decides `Status()` and whether a `BatchError` is returned. Items in
+flight at completion are reported `BatchItemStarted`, as for a threshold.
+
+`ShouldComplete` is mutually exclusive with `MinSuccessful`,
+`ToleratedFailureCount`, and `ToleratedFailurePercentage`: a config that
+sets both makes `Map` or `Parallel` return an error before any item runs.
+With `ShouldComplete` set there is no fail-fast; only the callback completes
+the batch early. The callback must be deterministic. Its decision is
+recorded with the batch, so replay of a completed batch does not call it
+again. This holds for both nesting modes, including a batch whose result is
+too large for one checkpoint. The zero `CompletionDecision` is the value
+`ContinueBatch()` returns. A callback that panics, or that calls
+`CompleteBatch` with an outcome other than `CompletionOutcomeSucceeded` or
+`CompletionOutcomeFailed`, fails the batch operation with an error that is
+not a `BatchError`.
+
+A branch that a concurrent batch abandons at early completion now writes no
+terminal checkpoint for its child context, even when its body finishes
+before the batch returns. The child context stays `STARTED` in the log,
+matching the `BatchItemStarted` status the result reports.
+
+New example: `examples/parallel-should-complete`.
+
 ### Fixed: a retry decision without a delay waits one second
 
 A `RetryStrategy` that returned `RetryDecision{Retry: true}` without

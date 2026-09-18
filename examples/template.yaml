@@ -1437,6 +1437,23 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 120
 
+  ParallelShouldCompleteFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-parallel-should-complete
+      CodeUri: .aws-sam/build-artifacts/parallel-should-complete/
+      Handler: bootstrap
+      Description: Parallel with a custom ShouldComplete quorum rule
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
   ParallelToleratedFailureFunction:
     Type: AWS::Serverless::Function
     Metadata:
