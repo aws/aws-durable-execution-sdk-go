@@ -28,6 +28,26 @@ const (
 // their zero-based index; use [WithItemNamer] to assign display names from
 // item values. MaxConcurrency bounds in-flight items.
 //
+// # The source collection
+//
+// fn receives the item and its zero-based index, not the items slice. This
+// is deliberate: the other Durable Execution SDKs pass the collection as a
+// fourth argument, but in Go a function literal at the call site already
+// has the slice in scope, so close over it when an item's processing
+// depends on the rest of the collection:
+//
+//	result, err := durable.Map(ctx, "diffs", readings,
+//		func(c durable.Context, r Reading, i int) (float64, error) {
+//			if i == 0 {
+//				return 0, nil
+//			}
+//			return r.Value - readings[i-1].Value, nil
+//		})
+//
+// Like every input to a durable operation, the slice must hold the same
+// items in the same order on every invocation of the handler.
+// [WithItemNamer] uses the same idiom for the same reason.
+//
 // # Completion and failure
 //
 // The default completion policy is fail-fast: with no [WithCompletion]
@@ -616,8 +636,9 @@ func WithCompletion(c CompletionConfig) BatchOption {
 }
 
 // WithItemNamer sets display names for the items of a [Map] operation.
-// The namer receives the item's zero-based index; close over the input
-// slice to derive a name from the item value:
+// The namer receives the item's zero-based index, not the item or the
+// items slice; close over the input slice to derive a name from the item
+// value, as [Map] documents for fn:
 //
 //	durable.Map(ctx, "process", orders, processOrder,
 //	    durable.WithItemNamer(func(i int) string { return orders[i].ID }))

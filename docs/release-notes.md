@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### Decision: `Map` does not pass the source collection to `fn`
+
+The other Durable Execution SDKs call the map function with a fourth
+argument, the collection being mapped. The Go `Map` keeps its callback at
+`func(ctx Context, item I, index int) (O, error)`. This is a deliberate
+difference. In Go the callback is a function literal at the call site
+with the slice already in scope, and the standard library's slice
+functions (`sort.Slice`, `slices.IndexFunc`) follow the same convention,
+so closing over the input is the idiom:
+
+```go
+result, err := durable.Map(ctx, "diffs", readings,
+	func(c durable.Context, r Reading, i int) (float64, error) {
+		if i == 0 {
+			return 0, nil
+		}
+		return r.Value - readings[i-1].Value, nil
+	})
+```
+
+`WithItemNamer` already used this idiom, since a `BatchOption` is not
+generic over the item type and its namer receives only the index. The
+`Map` and `WithItemNamer` documentation now both show it. No signature
+changed.
+
 ### Breaking: `Map` and `Parallel` are fail-fast by default and return a `BatchError`
 
 Two behavioural changes to batch completion.

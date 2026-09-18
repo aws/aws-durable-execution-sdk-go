@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -356,6 +357,71 @@ func TestMapItemNamerIndexPosition(t *testing.T) {
 		if !strings.Contains(resp.Result, want) {
 			t.Fatalf("expected %s in %s", want, resp.Result)
 		}
+	}
+}
+
+// TestMapFuncClosesOverItems covers the documented idiom for reaching the
+// source collection from fn: fn receives the item and its index only, and
+// closes over the input slice to read the rest of the collection. Each
+// item's result is its difference from the previous item, so every result
+// after the first depends on a neighbour reached through the closure. The
+// batch is then replayed from its checkpoint and must return the same
+// results without running fn again.
+func TestMapFuncClosesOverItems(t *testing.T) {
+	var calls atomic.Int32
+	handler := func(ctx Context, readings []int) ([]int, error) {
+		br, err := Map(ctx, "diffs", readings, func(_ Context, r int, i int) (int, error) {
+			calls.Add(1)
+			if i == 0 {
+				return 0, nil
+			}
+			return r - readings[i-1], nil
+		}, WithItemNamer(func(i int) string {
+			return fmt.Sprintf("reading-%d", readings[i])
+		}))
+		if err != nil {
+			return nil, err
+		}
+		for _, it := range br.Items {
+			if want := fmt.Sprintf("reading-%d", readings[it.Index]); it.Name != want {
+				return nil, fmt.Errorf("item %d named %q, want %q", it.Index, it.Name, want)
+			}
+		}
+		return br.Results(), nil
+	}
+
+	fake := &fakeLambda{}
+	resp := invokeBatch(t, fake, batchPayload(`[10,25,45,50]`), handler)
+	assertSucceeded(t, resp)
+	if want := "[0,15,20,5]"; resp.Result != want {
+		t.Fatalf("live result = %s, want %s", resp.Result, want)
+	}
+	if got := calls.Load(); got != 4 {
+		t.Fatalf("fn ran %d times live, want 4", got)
+	}
+	calls.Store(0)
+
+	var mapPayload string
+	for _, u := range updateBatch(t, fake) {
+		if aws.ToString(u.SubType) == "Map" && u.Action == OperationActionSucceed {
+			mapPayload = aws.ToString(u.Payload)
+		}
+	}
+	if mapPayload == "" {
+		t.Fatal("no Map SUCCEED payload found in checkpoint updates")
+	}
+
+	replayResp := invokeBatch(t, &fakeLambda{}, batchPayload(`[10,25,45,50]`, wireOperation{
+		Id:             hashID("1"),
+		Status:         "SUCCEEDED",
+		ContextDetails: &wireContextDetails{Result: mapPayload},
+	}), handler)
+	assertSucceeded(t, replayResp)
+	if replayResp.Result != resp.Result {
+		t.Fatalf("replay result = %s, live = %s", replayResp.Result, resp.Result)
+	}
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("fn ran %d times on replay, want 0", got)
 	}
 }
 
