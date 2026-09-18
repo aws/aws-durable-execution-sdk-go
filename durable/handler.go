@@ -341,7 +341,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		// a successful, failed, or panicking return the token is held
 		// until the invocation has decided its response; the deferred
 		// cleanup in Invoke releases it then.
-		ec.branchTok = ec.suspend.registerBranchToken()
+		ec.adoptBranchToken(ec.suspend.registerBranchToken())
 		go func() {
 			// The root context is owned by this goroutine, not the one
 			// that constructed it.

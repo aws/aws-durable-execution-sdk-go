@@ -124,7 +124,7 @@ func StepAsync[O any](ctx Context, name string, fn func(StepContext) (O, error),
 	go func() {
 		defer tok.release()
 		branch := ec.branch(currentGoroutineOwner())
-		branch.branchTok = tok
+		branch.adoptBranchToken(tok)
 		result, runErr := runStep(branch, id, name, fn, options)
 		fut.settle(result, runErr)
 	}()
@@ -143,7 +143,7 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 		return zero, err
 	}
 	if ec.unfinishedInSucceededContext(op) {
-		return zero, ec.parkUnfinishedReplay()
+		return zero, ec.parkUnfinishedReplay(op, id, string(OperationTypeStep), operationSubTypeStep, name)
 	}
 
 	attempt := 1

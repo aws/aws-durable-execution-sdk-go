@@ -51,7 +51,7 @@ func Map[I, O any](ctx Context, name string, items []I, fn func(ctx Context, ite
 		return BatchResult[O]{}, err
 	}
 	if ec.unfinishedInSucceededContext(op) {
-		return BatchResult[O]{}, ec.parkUnfinishedReplay()
+		return BatchResult[O]{}, ec.parkUnfinishedReplay(op, id, string(OperationTypeContext), operationSubTypeMap, name)
 	}
 	if op != nil && op.status.terminal() {
 		result, err := replayTerminalBatch[I, O](ec, op, id, name, items, fn, options, operationSubTypeMap, operationSubTypeMapIteration)
@@ -141,7 +141,7 @@ func Parallel[O any](ctx Context, name string, branches []Branch[O], opts ...Bat
 		return BatchResult[O]{}, err
 	}
 	if ec.unfinishedInSucceededContext(op) {
-		return BatchResult[O]{}, ec.parkUnfinishedReplay()
+		return BatchResult[O]{}, ec.parkUnfinishedReplay(op, id, string(OperationTypeContext), operationSubTypeParallel, name)
 	}
 	if op != nil && op.status.terminal() {
 		placeholders := make([]struct{}, len(branches))
@@ -883,7 +883,7 @@ func runPreClaimedBatchItem[O any](
 		mode := childReplayMode(ec, childID, op)
 		virtualChild := ec.child(childID, currentGoroutineOwner(), mode)
 		virtualChild.abandon = abandon
-		virtualChild.branchTok = tok
+		virtualChild.adoptBranchToken(tok)
 		result, fnTrace, fnErr := runItem(virtualChild, index)
 		if fnErr != nil {
 			if errors.Is(fnErr, errSuspendExecution) {
@@ -921,7 +921,7 @@ func runPreClaimedBatchItem[O any](
 	mode := childReplayMode(ec, childID, op)
 	child := ec.child(childID, currentGoroutineOwner(), mode)
 	child.abandon = abandon
-	child.branchTok = tok
+	child.adoptBranchToken(tok)
 
 	result, fnTrace, fnErr := runItem(child, index)
 	if fnErr != nil {

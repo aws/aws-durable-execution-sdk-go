@@ -81,7 +81,7 @@ func WaitAsync(ctx Context, name string, d time.Duration, opts ...WaitOption) *F
 	go func() {
 		defer tok.release()
 		branch := ec.branch(currentGoroutineOwner())
-		branch.branchTok = tok
+		branch.adoptBranchToken(tok)
 		err := runWait(branch, id, name, d)
 		fut.settle(Void{}, err)
 	}()
@@ -98,7 +98,7 @@ func runWait(ec *execContext, id, name string, d time.Duration) error {
 		return err
 	}
 	if ec.unfinishedInSucceededContext(op) {
-		return ec.parkUnfinishedReplay()
+		return ec.parkUnfinishedReplay(op, id, string(OperationTypeWait), operationSubTypeWait, name)
 	}
 	if op != nil {
 		switch op.status {

@@ -108,7 +108,7 @@ func InvokeAsync[O, I any](ctx Context, name, functionID string, input I, opts .
 	go func() {
 		defer tok.release()
 		branch := ec.branch(currentGoroutineOwner())
-		branch.branchTok = tok
+		branch.adoptBranchToken(tok)
 		result, runErr := runInvoke[O, I](branch, id, name, functionID, input, options)
 		fut.settle(result, runErr)
 	}()
@@ -126,7 +126,7 @@ func runInvoke[O, I any](ec *execContext, id, name, functionID string, input I, 
 		return zero, err
 	}
 	if ec.unfinishedInSucceededContext(op) {
-		return zero, ec.parkUnfinishedReplay()
+		return zero, ec.parkUnfinishedReplay(op, id, string(OperationTypeChainedInvoke), operationSubTypeChainedInvoke, name)
 	}
 	if op != nil {
 		switch op.status {

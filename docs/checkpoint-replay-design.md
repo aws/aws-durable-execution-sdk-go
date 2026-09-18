@@ -145,6 +145,60 @@ further claims on that context without affecting its siblings.
 The invocation responds with `PENDING`. The function is re-invoked when
 the blocking condition resolves.
 
+### Unfinished operations inside a recorded context
+
+A child context whose result is already recorded can be re-executed on
+replay when that result was too large to store (replay-children mode). Its
+operations replay from their checkpoints. An operation that had not
+completed when the context's result was recorded has no terminal
+checkpoint. It must not run again: re-executing it would repeat its side
+effects, and it cannot produce a result in this invocation. It also makes
+no pending commitment: the context's result is already decided, so an
+unfinished operation inside it must not force the invocation to `PENDING`.
+
+An asynchronous form of such an operation returns a future that settles
+only if the invocation suspends. A synchronous await parks the calling
+goroutine (`parkUnfinishedReplay`). The park ends on the first of three
+events:
+
+1. The suspend signal fires because other branches committed to `PENDING`
+   and deregistered. The caller unwinds with `errSuspendExecution`.
+2. A fixed deadline (`unfinishedReplayParkTimeout`, one second) elapses.
+3. The Lambda context ends.
+
+Events 2 and 3 share one outcome, decided by whether a pending commitment
+exists at that moment. If one does, the invocation responds `PENDING`
+whatever the handler returns, so the caller unwinds with
+`errSuspendExecution`. If none does, the caller unwinds with a
+`*NonDeterministicReplayError` that names the operation and its checkpoint
+status.
+
+Event 2 is the termination guarantee. When the parking goroutine is the
+last active branch, no commitment exists, so nothing can fire the signal;
+without the deadline the park would last until the Lambda deadline, the
+invocation would end `PENDING`, and the next invocation would repeat the
+same wait. A deterministic handler cannot reach this state: the live run
+returned from the context without awaiting the operation, so a replay that
+awaits it has diverged from the recorded execution. The deadline turns that
+divergence into a diagnosable failure of the execution, delivered within
+one second of reaching the park.
+
+Event 3 applies the same commitment check so a Lambda context with less
+than one second remaining cannot defeat the bound. If the context's end
+unwound the park as a suspension regardless, the invocation would respond
+`PENDING` with no diagnostic and the next invocation would park again.
+
+The park releases the goroutine's branch token only when the parking
+context registered that token itself. A child context created on its
+parent's goroutine inherits the parent's token without owning it, so a park
+inside such a child leaves the parent, including the root handler, counted
+as active. Releasing an inherited token would deregister a goroutine that
+is still running; for the root handler it would also let a commitment made
+after the handler returned change the invocation's outcome, which the
+deferred release in `Invoke` exists to prevent. An asynchronous operation's
+branch owns its token and releases it before parking, so a sibling's
+commitment can still fire the signal while the branch is parked.
+
 ### Checkpointer termination
 
 The two mechanisms above decide the result and settle futures, but neither

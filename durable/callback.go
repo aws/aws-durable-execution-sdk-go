@@ -191,7 +191,7 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 		return zero, err
 	}
 	if ec.unfinishedInSucceededContext(op) {
-		return zero, ec.parkUnfinishedReplay()
+		return zero, ec.parkUnfinishedReplay(op, id, string(OperationTypeContext), operationSubTypeWaitForCallback, name)
 	}
 
 	// Terminal states: the whole WaitForCallback context is settled.

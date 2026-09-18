@@ -117,7 +117,7 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 		return zero, err
 	}
 	if ec.unfinishedInSucceededContext(op) {
-		return zero, ec.parkUnfinishedReplay()
+		return zero, ec.parkUnfinishedReplay(op, id, string(OperationTypeContext), operationSubTypeRunInChildContext, name)
 	}
 	if op != nil {
 		switch op.status {
@@ -322,7 +322,7 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 		// The child context is owned by this goroutine. Capture
 		// ownership here, not on the parent goroutine.
 		child := ec.child(id, currentGoroutineOwner(), mode)
-		child.branchTok = tok
+		child.adoptBranchToken(tok)
 
 		// Recover panics in the child function so they settle the
 		// future as a failure rather than crashing the process.

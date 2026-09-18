@@ -2,6 +2,7 @@ package durable
 
 import (
 	"context"
+	"fmt"
 	"sync/atomic"
 	"time"
 )
@@ -21,8 +22,9 @@ const (
 	// modeReplaySucceededContext replays inside a child context whose
 	// overall result is already checkpointed. Operations that were still
 	// in flight when the context succeeded must not re-execute: unlike
-	// modeReplay, an operation with no terminal checkpoint blocks
-	// indefinitely instead of flipping the context to live execution.
+	// modeReplay, an operation with no terminal checkpoint does not flip
+	// the context to live execution. A synchronous await of such an
+	// operation parks with a bounded deadline (see parkUnfinishedReplay).
 	modeReplaySucceededContext
 )
 
@@ -62,6 +64,16 @@ type execContext struct {
 	// context's child and branch contexts, mirroring abandon; nil until a
 	// branch is registered.
 	branchTok *branchToken
+
+	// ownsBranchTok reports whether this context is the one that
+	// registered branchTok, through adoptBranchToken. A context derived by
+	// child or branch inherits the token with ownsBranchTok false. The
+	// park path (parkUnfinishedReplay) releases the token only when the
+	// parking context owns it: a child that parks on the root goroutine
+	// must not deregister the root handler's branch, because the root
+	// goroutine is not finished; it will observe the park outcome and
+	// decide the invocation's response itself.
+	ownsBranchTok bool
 
 	// serdes is the handler-level default serializer for operation
 	// results. Per-operation serdes options take precedence.
@@ -222,22 +234,117 @@ func (c *execContext) unfinishedInSucceededContext(op *operation) bool {
 	return op == nil || !op.status.terminal()
 }
 
+// unfinishedReplayParkTimeout bounds how long parkUnfinishedReplay waits
+// for the invocation to suspend before it gives up and reports the
+// unfinished operation as a determinism violation.
+const unfinishedReplayParkTimeout = time.Second
+
 // parkUnfinishedReplay handles a synchronous await of an unfinished
-// operation inside an already-succeeded child context. The operation must
-// not execute and cannot settle in this invocation, so the caller blocks
-// until the invocation suspends or the Lambda context ends, then unwinds
-// with errSuspendExecution. No pending commitment is made: an unfinished
-// operation inside a succeeded context must not force the invocation to
-// PENDING. The calling branch's token is released first so suspension can
-// fire while this goroutine is parked.
-func (c *execContext) parkUnfinishedReplay() error {
-	c.blocked.Store(true)
-	c.branchTok.release()
+// operation inside an already-succeeded child context. op is the
+// operation's checkpoint, or nil when it has none; id, opType, subType and
+// name describe the operation the current code asked for.
+//
+// The operation must not execute and cannot settle in this invocation. No
+// pending commitment is made: an unfinished operation inside a succeeded
+// context must not force the invocation to PENDING. The caller therefore
+// blocks until one of three events, then unwinds:
+//
+//  1. The invocation suspends because other branches committed to PENDING
+//     and deregistered. The context is marked blocked and the caller
+//     unwinds with errSuspendExecution.
+//  2. unfinishedReplayParkTimeout elapses.
+//  3. The Lambda context ends.
+//
+// Events 2 and 3 share one outcome, decided by whether a pending commitment
+// exists at that moment. If one does, the invocation responds PENDING
+// whatever the handler returns, so the context is marked blocked and the
+// caller unwinds with errSuspendExecution. If none does, the caller unwinds
+// with a *NonDeterministicReplayError that names the unfinished operation.
+//
+// Event 2 is what bounds the wait. A parking branch that is the last active
+// branch has no pending commitment, so nothing can fire the suspend signal;
+// without the deadline it would wait for the Lambda deadline, the
+// invocation would end PENDING, and the next invocation would repeat the
+// same wait. A synchronous await of an operation that had not completed
+// when its context's result was recorded cannot occur in a deterministic
+// handler: the live run must have returned from the context without
+// awaiting it. So the deadline turns a silent stall into an error that
+// names the operation, and the invocation returns within
+// unfinishedReplayParkTimeout of reaching the park.
+//
+// Event 3 gets the same commitment check so that a Lambda context with less
+// than unfinishedReplayParkTimeout remaining does not defeat the bound. If
+// the context ended and the park unwound as a suspension regardless, the
+// invocation would respond PENDING with no diagnostic and the next
+// invocation would park again. Returning the determinism error instead
+// fails the execution with the same diagnostic the deadline produces.
+//
+// The branch token is released before parking only when this context
+// registered it (ownsBranchTok). An asynchronous operation's branch owns
+// its token, so releasing it lets a sibling's commitment fire the signal
+// while this goroutine is parked. A child context created on its parent's
+// goroutine inherits the parent's token and does not own it; releasing
+// that token would deregister a goroutine that is still running, and for
+// the root handler it would let a commitment made after the handler
+// returned change the invocation's outcome. Such a child parks with the
+// token held, and the owning goroutine releases it when it unwinds.
+func (c *execContext) parkUnfinishedReplay(op *operation, id, opType, subType, name string) error {
+	if c.ownsBranchTok {
+		c.branchTok.release()
+	}
+	timer := time.NewTimer(unfinishedReplayParkTimeout)
+	defer timer.Stop()
 	select {
 	case <-c.suspend.done():
+		c.blocked.Store(true)
+		return errSuspendExecution
 	case <-c.Done():
+	case <-timer.C:
 	}
-	return errSuspendExecution
+	if c.suspend.committed() {
+		c.blocked.Store(true)
+		return errSuspendExecution
+	}
+	return newUnfinishedReplayError(op, id, opType, subType, name)
+}
+
+// newUnfinishedReplayError builds the error parkUnfinishedReplay returns
+// when its deadline elapses or the Lambda context ends with no pending
+// commitment. The message states which operation was awaited
+// and why it can never settle, so a determinism violation is diagnosable
+// from the execution's failure record.
+func newUnfinishedReplayError(op *operation, id, opType, subType, name string) *NonDeterministicReplayError {
+	e := &NonDeterministicReplayError{
+		Name:            name,
+		StepID:          id,
+		ExpectedType:    opType,
+		ExpectedSubType: subType,
+		ExpectedName:    name,
+	}
+	checkpoint := "has no checkpoint"
+	if op != nil {
+		e.ActualType = op.opType
+		e.ActualSubType = op.subType
+		e.ActualName = op.name
+		checkpoint = fmt.Sprintf("is checkpointed as %s", op.status)
+	}
+	e.detail = fmt.Sprintf(
+		"durable: non-deterministic replay at step %q (name %q): "+
+			"%s/%s was awaited inside a child context whose result is already recorded, "+
+			"but the operation %s and had not completed when that result was recorded; "+
+			"it does not run again during replay, so the await can never settle",
+		id, name, opType, subType, checkpoint,
+	)
+	return e
+}
+
+// adoptBranchToken records tok as the active-branch registration made for
+// this context's goroutine and marks this context as its owner. Contexts
+// derived from this one by child or branch inherit the token without
+// ownership, so only this context releases it on the park path.
+func (c *execContext) adoptBranchToken(tok *branchToken) {
+	c.branchTok = tok
+	c.ownsBranchTok = true
 }
 
 // child creates the context for a child operation with the given entity ID.
@@ -247,6 +354,10 @@ func (c *execContext) parkUnfinishedReplay() error {
 // modeReplaySucceededContext, not the parent's current mode. Owner is the
 // goroutine that runs the child function, captured by the caller after that
 // goroutine starts.
+//
+// The child inherits the parent's branch token without owning it. A caller
+// that runs the child on a freshly registered goroutine replaces the token
+// through adoptBranchToken.
 func (c *execContext) child(entityID string, owner goroutineOwner, mode executionMode) *execContext {
 	child := &execContext{
 		Context:              c.Context,
@@ -278,7 +389,9 @@ func (c *execContext) child(entityID string, owner goroutineOwner, mode executio
 // keep claiming operations. owner is the goroutine that runs the operation,
 // captured after that goroutine starts. Unlike child, ids is shared by
 // pointer so the parent-ID prefix is preserved and no nested operation-ID
-// namespace is minted.
+// namespace is minted. The branch inherits the caller's token without
+// owning it; every caller registers the goroutine's own token and adopts
+// it through adoptBranchToken.
 func (c *execContext) branch(owner goroutineOwner) *execContext {
 	b := &execContext{
 		Context:              c.Context,

@@ -84,7 +84,7 @@ func runWaitForCondition[S any](ec *execContext, id, name string, check func(Ste
 		return zero, err
 	}
 	if ec.unfinishedInSucceededContext(op) {
-		return zero, ec.parkUnfinishedReplay()
+		return zero, ec.parkUnfinishedReplay(op, id, string(OperationTypeStep), operationSubTypeWaitForCondition, name)
 	}
 
 	// Determine the current attempt number. The checkpointed Attempt

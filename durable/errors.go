@@ -1170,10 +1170,17 @@ func newSerdesError(operation, direction string, cause error) *SerdesError {
 	return &SerdesError{Operation: operation, Direction: direction, Err: cause}
 }
 
-// NonDeterministicReplayError indicates that a checkpointed operation's
-// type does not match what the current code expects at the same position.
-// This means the handler code changed between deployments in a way that
-// breaks replay determinism.
+// NonDeterministicReplayError indicates that replay diverged from the
+// recorded execution. Two cases produce it:
+//
+//   - A checkpointed operation's type, sub-type, or name does not match
+//     what the current code expects at the same position. The handler code
+//     changed between deployments in a way that breaks replay determinism.
+//   - The current code awaits an operation inside a child context whose
+//     result is already recorded, but the operation had not completed when
+//     that result was recorded. Such an operation never runs again during
+//     replay, so the await could never settle; the SDK reports it after a
+//     bounded wait instead of stalling until the invocation times out.
 //
 // A value rebuilt from a checkpoint record (for example the Err of a
 // rejected [Settled]) carries Name and the recorded Error() text; the
@@ -1208,11 +1215,21 @@ type NonDeterministicReplayError struct {
 	// recordedMessage is the Error() text of a value rebuilt from a
 	// checkpoint record. It is empty for a value replay produced.
 	recordedMessage string
+
+	// detail, when set, is the complete Error() text of a value replay
+	// produced for a violation the type and name comparison above cannot
+	// express: an operation awaited inside a child context whose result is
+	// already recorded while the operation itself never completed. It is
+	// empty for a type or name mismatch.
+	detail string
 }
 
 func (e *NonDeterministicReplayError) Error() string {
 	if e.recordedMessage != "" {
 		return e.recordedMessage
+	}
+	if e.detail != "" {
+		return e.detail
 	}
 	expected := e.ExpectedType
 	if e.ExpectedSubType != "" {
