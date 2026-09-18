@@ -238,7 +238,7 @@ func TestBuildPayloadDecodesAsWireInput(t *testing.T) {
 		t.Fatalf("status = %s, want SUCCEEDED", got.Status)
 	}
 
-	payload, err := runner.buildPayload(21)
+	payload, err := runner.exec.buildPayload([]byte("21"))
 	if err != nil {
 		t.Fatalf("buildPayload: %v", err)
 	}

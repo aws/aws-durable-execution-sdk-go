@@ -42,6 +42,33 @@
 //	runner.CompleteChainedInvoke("invoke-op", result)
 //	result = runner.RunUntilComplete(t, input)    // SUCCEEDED
 //
+// # Multi-Function Tests
+//
+// Instead of stubbing an invoke's result, register the target function and
+// let the invoke run it. [LocalRunner.RegisterFunction] binds a function
+// identifier — the name or ARN the handler passes to [durable.Invoke] — to
+// a [Function] built with [DurableFunction] or [PlainFunction]. A durable
+// target runs as its own local execution with its own checkpoint log, so
+// it suspends and resumes like the handler under test; a plain target is
+// called once with the decoded input. The target's result or error is
+// recorded on the invoke, and the caller reads it on its next invocation.
+// Registered targets may invoke other registered identifiers, up to
+// [MaxInvokeDepth] levels deep:
+//
+//	runner := durabletest.NewLocalRunner(orderHandler)
+//	runner.RegisterFunction("pricing-function", durabletest.DurableFunction(pricingHandler))
+//	runner.RegisterFunction("tax-function", durabletest.PlainFunction(taxHandler))
+//	result := runner.RunUntilComplete(t, order) // runs both targets; SUCCEEDED
+//
+// Invokes of identifiers that are not registered still block for
+// [LocalRunner.CompleteChainedInvoke] or [LocalRunner.FailChainedInvoke],
+// so the two styles mix within one test. This holds inside registered
+// durable targets too: when a running target invokes an unregistered
+// identifier, the same two methods resolve that invoke, provided its name
+// is open in only one execution. A durable target blocked on a callback
+// leaves the caller's invoke STARTED; resolving that callback is not yet
+// supported through the runner.
+//
 // # Inspecting Operations
 //
 // [TestResult] provides accessors to look up operations by name, index, or

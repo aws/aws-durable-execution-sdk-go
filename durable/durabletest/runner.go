@@ -4,7 +4,6 @@
 package durabletest
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"testing"
@@ -42,10 +41,13 @@ func WithMaxInvocations(n int) RunnerOption {
 // LocalRunner is safe for sequential use from a single test goroutine.
 // It is NOT safe for concurrent use from multiple goroutines.
 type LocalRunner[I, O any] struct {
-	handler func(context.Context, []byte) ([]byte, error)
-	client  *memoryClient
-	cfg     runnerConfig
+	exec   *localExecution
+	client *memoryClient
+	cfg    runnerConfig
 }
+
+// localExecutionArn is the execution ARN the handler under test observes.
+const localExecutionArn = "arn:aws:lambda:local:local:durable-execution:test"
 
 // NewLocalRunner creates a runner for the given durable handler function.
 // The handler is wired to an in-memory execution client; no AWS
@@ -63,11 +65,42 @@ func NewLocalRunner[I, O any](handler durable.Handler[I, O], opts ...durable.Han
 	allOpts = append(allOpts, durable.WithExecutionClient(client))
 	allOpts = append(allOpts, opts...)
 
+	exec := newLocalExecution(durable.Wrap(handler, allOpts...), client, newFunctionRegistry(), localExecutionArn, 0)
 	return &LocalRunner[I, O]{
-		handler: durable.Wrap(handler, allOpts...),
-		client:  client,
-		cfg:     runnerConfig{maxInvocations: DefaultMaxInvocations},
+		exec:   exec,
+		client: client,
+		cfg:    runnerConfig{maxInvocations: DefaultMaxInvocations},
 	}
+}
+
+// RegisterFunction registers fn as the target of chained invokes of
+// functionID, the function name or ARN the handler under test passes to
+// [durable.Invoke]. Build fn with [DurableFunction] or [PlainFunction].
+// Registering the same identifier again replaces the earlier target.
+//
+// When an invocation of the handler under test ends with an open invoke of
+// a registered identifier, [Run] and [RunUntilComplete] execute the
+// registered target before returning. A durable target runs as its own
+// local execution with its own checkpoint log: it suspends and resumes on
+// its own timers, and when it settles its result or error is recorded on
+// the caller's invoke operation. A non-durable target is called once. The
+// caller observes the outcome on its next invocation, exactly as it would
+// after [CompleteChainedInvoke] or [FailChainedInvoke]: a success returns
+// the decoded result and a failure returns a [*durable.InvokeError].
+//
+// Registered targets may themselves invoke registered identifiers, up to
+// [MaxInvokeDepth] levels deep. A durable target that blocks on external
+// action, such as a callback, leaves the caller's invoke STARTED; the
+// runner drives the target again on the caller's next invocation.
+//
+// Invokes of identifiers that are not registered are unaffected: they stay
+// STARTED until resolved with [CompleteChainedInvoke] or
+// [FailChainedInvoke].
+func (r *LocalRunner[I, O]) RegisterFunction(functionID string, fn Function) {
+	if fn.durable == nil && fn.plain == nil {
+		panic("durabletest: RegisterFunction: fn must be built with DurableFunction or PlainFunction")
+	}
+	r.exec.registry.fns[functionID] = fn
 }
 
 // Run performs a single durable invocation against the in-memory client.
@@ -78,6 +111,12 @@ func NewLocalRunner[I, O any](handler durable.Handler[I, O], opts ...durable.Han
 // re-invokes with the accumulated checkpoint state, simulating the Lambda
 // re-invocation loop.
 //
+// After the handler returns, Run executes any registered function the
+// handler invoked (see [RegisterFunction]). The returned operations reflect
+// the state after those targets ran. A registered durable target is driven
+// for up to the invocation cap ([DefaultMaxInvocations]) within one Run; if
+// it exhausts the cap without settling, [TestResult.CapReached] is true.
+//
 // Run calls t.Fatal on infrastructure errors (payload marshaling, handler
 // invocation errors that indicate a bug rather than a user-handler
 // failure). User-handler errors are reflected in [TestResult.Status] as
@@ -85,21 +124,22 @@ func NewLocalRunner[I, O any](handler durable.Handler[I, O], opts ...durable.Han
 func (r *LocalRunner[I, O]) Run(t *testing.T, event I) *TestResult {
 	t.Helper()
 
-	payload, err := r.buildPayload(event)
+	eventJSON, err := json.Marshal(event)
 	if err != nil {
-		t.Fatalf("durabletest: build invocation payload: %v", err)
+		t.Fatalf("durabletest: marshal event: %v", err)
 	}
 
-	response, err := r.handler(context.Background(), payload)
+	outcome, err := r.exec.invoke(eventJSON, r.cfg.maxInvocations)
 	if err != nil {
-		t.Fatalf("durabletest: handler.Invoke returned error: %v", err)
+		t.Fatalf("durabletest: %v", err)
 	}
 
 	ops := r.client.allOperations()
-	result, err := testResultFromResponse(response, ops)
+	result, err := testResultFromResponse(outcome.response, ops)
 	if err != nil {
 		t.Fatalf("durabletest: parse response: %v", err)
 	}
+	result.CapReached = outcome.capReached
 	return result
 }
 
@@ -109,16 +149,17 @@ func (r *LocalRunner[I, O]) Run(t *testing.T, event I) *TestResult {
 //
 // Between invocations, RunUntilComplete automatically advances
 // time-eligible operations (STEP in PENDING → READY for retry, WAIT in
-// STARTED → SUCCEEDED). If no operations can be auto-advanced and the
-// execution is still PENDING, the method returns the PENDING result
-// without spinning — this indicates that external action (callback
-// submission, chained-invoke completion) is required before progress can
-// continue.
+// STARTED → SUCCEEDED) and executes registered functions the handler
+// invoked (see [RegisterFunction]). If no operations can be auto-advanced,
+// no registered target settled, and the execution is still PENDING, the
+// method returns the PENDING result without spinning — this indicates that
+// external action (callback submission, chained-invoke completion) is
+// required before progress can continue.
 //
 // The invocation cap defaults to [DefaultMaxInvocations] (100) and can be
-// changed with [WithMaxInvocations]. If the cap is exhausted, the final
-// result (typically PENDING) is returned with [TestResult.CapReached] set
-// to true.
+// changed with [WithMaxInvocations]. The same cap applies to each registered
+// durable target. If the cap is exhausted, the final result (typically
+// PENDING) is returned with [TestResult.CapReached] set to true.
 //
 // Run calls t.Fatal on infrastructure errors. User-handler errors surface
 // as a FAILED [TestResult].
@@ -130,29 +171,22 @@ func (r *LocalRunner[I, O]) RunUntilComplete(t *testing.T, event I, opts ...Runn
 		o(&cfg)
 	}
 
-	var result *TestResult
-	for i := range cfg.maxInvocations {
-		result = r.Run(t, event)
-
-		if result.Status != Pending {
-			return result
-		}
-
-		// Complete what would complete on its own with the passage
-		// of time (retry timers, wait expirations). If nothing
-		// completed, the execution is
-		// blocked on external resolution — return immediately.
-		if !r.client.completePendingTimers() {
-			return result
-		}
-
-		_ = i // iteration consumed
+	eventJSON, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("durabletest: marshal event: %v", err)
 	}
 
-	// Cap reached.
-	if result != nil {
-		result.CapReached = true
+	response, capReached, err := r.exec.driveUntilSettled(eventJSON, cfg.maxInvocations)
+	if err != nil {
+		t.Fatalf("durabletest: %v", err)
 	}
+
+	ops := r.client.allOperations()
+	result, err := testResultFromResponse(response, ops)
+	if err != nil {
+		t.Fatalf("durabletest: parse response: %v", err)
+	}
+	result.CapReached = capReached
 	return result
 }
 
@@ -239,19 +273,29 @@ func (r *LocalRunner[I, O]) OpenCallbacks() []OpenCallback {
 // a success result. The name must match the operation name passed to
 // [durable.Invoke]. The payload is serialized to JSON and stored in
 // ChainedInvokeDetails.Result.
+//
+// The invoke may belong to the handler under test or to a registered
+// durable target the runner is running (see [RegisterFunction]), at any
+// depth. Exactly one open invoke may carry the name; if the handler and a
+// running target both have an open invoke of that name, the call returns
+// an error and settles nothing.
 func (r *LocalRunner[I, O]) CompleteChainedInvoke(name string, payload any) error {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("durabletest: marshal chained-invoke result: %w", err)
 	}
-	return r.client.completeChainedInvoke(name, operationResult{status: statusSucceeded, result: string(data)})
+	return r.exec.completeChainedInvoke(name, operationResult{status: statusSucceeded, result: string(data)})
 }
 
 // FailChainedInvoke fails a pending chained-invoke operation with a typed
 // error. The resulting [*durable.InvokeError] carries these values when the
 // handler re-invokes and encounters the FAILED status.
+//
+// The invoke is located the same way as in [CompleteChainedInvoke]: in
+// the handler under test or in any registered durable target the runner
+// is running, and the name must be open in exactly one of them.
 func (r *LocalRunner[I, O]) FailChainedInvoke(name, errorType, errorMessage string) error {
-	return r.client.completeChainedInvoke(name, operationResult{
+	return r.exec.completeChainedInvoke(name, operationResult{
 		status:  statusFailed,
 		errType: errorType,
 		errMsg:  errorMessage,
@@ -288,47 +332,6 @@ func (r *LocalRunner[I, O]) OmitTokenOnCheckpoint(n int) {
 		panic("durabletest: OmitTokenOnCheckpoint: n must be at least 1")
 	}
 	r.client.omitTokenOnCheckpoint(n)
-}
-
-// buildPayload constructs the durable invocation input from the current
-// in-memory state. The payload shape matches what the Lambda durable
-// execution service delivers to a handler.
-func (r *LocalRunner[I, O]) buildPayload(event I) ([]byte, error) {
-	eventJSON, err := json.Marshal(event)
-	if err != nil {
-		return nil, fmt.Errorf("marshal event: %w", err)
-	}
-
-	// Build the operations list for the initial state: starts with the
-	// execution operation carrying the customer input, followed by all
-	// checkpointed operations.
-	allOps := r.client.allOperationsRaw()
-	wireOps := make([]wire.Operation, 0, len(allOps)+1)
-
-	// Execution operation always first.
-	wireOps = append(wireOps, wire.Operation{
-		Id:     "exec-op",
-		Status: "STARTED",
-		Type:   "EXECUTION",
-		ExecutionDetails: &wire.ExecutionDetails{
-			InputPayload: string(eventJSON),
-		},
-	})
-
-	// Append all checkpointed operations.
-	for _, op := range allOps {
-		wireOps = append(wireOps, apiOperationToWire(op))
-	}
-
-	input := wire.InvocationInput{
-		DurableExecutionArn: "arn:aws:lambda:local:local:durable-execution:test",
-		CheckpointToken:     r.client.currentToken(),
-		InitialExecutionState: wire.InitialExecutionState{
-			Operations: wireOps,
-		},
-	}
-
-	return json.Marshal(input)
 }
 
 // allOperationsRaw returns all stored operations (including execution type)

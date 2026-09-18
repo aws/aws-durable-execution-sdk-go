@@ -33,15 +33,28 @@ type memoryClient struct {
 	operations map[string]*durable.Operation // keyed by operation ID
 	opOrder    []string                      // insertion-order tracking
 
+	// invokeTargets records, per CHAINED_INVOKE operation ID, the function
+	// identifier and input payload the handler passed to the invoke. The
+	// runner reads them to dispatch registered functions.
+	invokeTargets map[string]invokeTarget
+
 	// omitTokenIn counts the Checkpoint calls remaining until one returns
 	// a response without a token. Zero means no omission is scheduled.
 	omitTokenIn int
 }
 
+// invokeTarget is what a chained invoke asked for: the function to run and
+// the serialized input to run it with.
+type invokeTarget struct {
+	functionID string
+	payload    string
+}
+
 func newMemoryClient() *memoryClient {
 	return &memoryClient{
-		token:      "test-token-0",
-		operations: make(map[string]*durable.Operation),
+		token:         "test-token-0",
+		operations:    make(map[string]*durable.Operation),
+		invokeTargets: make(map[string]invokeTarget),
 	}
 }
 
@@ -167,6 +180,13 @@ func (m *memoryClient) applyUpdate(u durable.OperationUpdate) durable.Operation 
 		op.CallbackDetails = buildCallbackDetails(u, existing)
 	case durable.OperationTypeChainedInvoke:
 		op.ChainedInvokeDetails = buildChainedInvokeDetails(u)
+		if u.Action == durable.OperationActionStart {
+			target := invokeTarget{payload: ptrStr(u.Payload)}
+			if u.ChainedInvokeOptions != nil {
+				target.functionID = ptrStr(u.ChainedInvokeOptions.FunctionName)
+			}
+			m.invokeTargets[id] = target
+		}
 	case durable.OperationTypeContext:
 		op.ContextDetails = buildContextDetails(u)
 	case durable.OperationTypeExecution:
@@ -313,10 +333,12 @@ const (
 // operationResult is a value type representing the outcome to apply to an
 // operation, used by callback and chained-invoke helpers.
 type operationResult struct {
-	status  string
-	result  string
-	errType string
-	errMsg  string
+	status     string
+	result     string
+	errType    string
+	errMsg     string
+	errData    string
+	stackTrace []string
 }
 
 // OpenCallback identifies a callback operation pending external resolution.
@@ -482,7 +504,29 @@ func (m *memoryClient) completeChainedInvoke(name string, result operationResult
 	if op.Status != durable.OperationStatusStarted {
 		return fmt.Errorf("durabletest: chained-invoke %q is in %s status, expected STARTED", name, op.Status)
 	}
+	return m.settleInvoke(op, result)
+}
 
+// settleInvokeByID applies a result to the STARTED chained-invoke operation
+// with the given operation ID. The runner calls it after a registered
+// function has produced the invoke's outcome.
+func (m *memoryClient) settleInvokeByID(id string, result operationResult) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	op := m.operations[id]
+	if op == nil || op.Type != durable.OperationTypeChainedInvoke {
+		return fmt.Errorf("durabletest: chained-invoke operation %q not found", id)
+	}
+	if op.Status != durable.OperationStatusStarted {
+		return fmt.Errorf("durabletest: chained-invoke %q is in %s status, expected STARTED", id, op.Status)
+	}
+	return m.settleInvoke(op, result)
+}
+
+// settleInvoke writes a terminal outcome onto a chained-invoke operation.
+// Caller must hold m.mu.
+func (m *memoryClient) settleInvoke(op *durable.Operation, result operationResult) error {
 	updated := *op
 	switch result.status {
 	case statusSucceeded:
@@ -492,18 +536,51 @@ func (m *memoryClient) completeChainedInvoke(name string, result operationResult
 		}
 	case statusFailed:
 		updated.Status = durable.OperationStatusFailed
-		updated.ChainedInvokeDetails = &durable.ChainedInvokeDetails{
-			Error: &durable.ErrorObject{
-				ErrorType:    strptr(result.errType),
-				ErrorMessage: strptr(result.errMsg),
-			},
+		errObj := &durable.ErrorObject{
+			ErrorType:    strptr(result.errType),
+			ErrorMessage: strptr(result.errMsg),
 		}
+		if result.errData != "" {
+			errObj.ErrorData = strptr(result.errData)
+		}
+		if len(result.stackTrace) > 0 {
+			errObj.StackTrace = append([]string(nil), result.stackTrace...)
+		}
+		updated.ChainedInvokeDetails = &durable.ChainedInvokeDetails{Error: errObj}
 	default:
 		return fmt.Errorf("durabletest: unsupported chained-invoke result status %q", result.status)
 	}
 
 	m.operations[ptrStr(op.Id)] = &updated
 	return nil
+}
+
+// openInvoke is a STARTED chained-invoke operation together with the
+// target it asked for.
+type openInvoke struct {
+	id     string
+	name   string
+	target invokeTarget
+}
+
+// openInvokes returns every CHAINED_INVOKE operation in STARTED status, in
+// insertion order.
+func (m *memoryClient) openInvokes() []openInvoke {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var out []openInvoke
+	for _, id := range m.opOrder {
+		op := m.operations[id]
+		if op == nil || op.Type != durable.OperationTypeChainedInvoke {
+			continue
+		}
+		if op.Status != durable.OperationStatusStarted {
+			continue
+		}
+		out = append(out, openInvoke{id: id, name: ptrStr(op.Name), target: m.invokeTargets[id]})
+	}
+	return out
 }
 
 // deepCopyOperation creates a fully independent copy of a durable.Operation.
