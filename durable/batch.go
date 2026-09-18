@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"unicode/utf8"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -687,8 +686,10 @@ func executeBatchItems[I, O any](
 			})
 		}
 
-		abandon := new(atomic.Bool)
-		ec.suspend.registerHandle(abandon, ec.abandon)
+		// The handle is minted beneath the enclosing subtree's handle (nil
+		// at the top level), so any enclosing batch's abandonment reaches
+		// every context under this one through the chain.
+		abandon := newAbandonHandle(ec.abandon)
 		outcomeCh := make(chan itemOutcome, totalItems)
 		var wg sync.WaitGroup
 
@@ -795,7 +796,7 @@ func executeBatchItems[I, O any](
 					// Stop awaiting the branches still in flight: they
 					// unwind at their next operation without starting new
 					// work.
-					abandon.Store(true)
+					abandon.abandon()
 				}
 			}
 			if fatalErr == nil {
@@ -804,6 +805,9 @@ func executeBatchItems[I, O any](
 		}
 		// Every dispatched worker has reported; ensure none is still
 		// unwinding before the parent context is checkpointed terminal.
+		// This joins the item workers only. A branch launched by
+		// durable.Go inside an item is not joined here; see
+		// retireCommitment for how its commitment is handled.
 		wg.Wait()
 
 		// A branch abandoned after early completion may have already
@@ -811,15 +815,12 @@ func executeBatchItems[I, O any](
 		// or retry that suspended before the completion decision fired).
 		// Now that every worker has drained, retire those commitments so
 		// abandoned work does not force the whole invocation to PENDING.
+		// A commitment made after this point by any context under this
+		// handle, including a durable.Go branch that outlives the workers
+		// and any batch it starts, is dropped by commitPending because
+		// its handle reaches this one through the chain.
 		if reasonLocked {
 			ec.suspend.retireCommitment(abandon)
-		} else if !sawSuspend {
-			// The batch completed with no outstanding commitment under its
-			// handle. Drop the parentage entry so it does not accumulate
-			// across the many batches of a long-lived invocation. A batch
-			// that suspends across invocations keeps its entry so an
-			// enclosing batch can still cascade retirement to it.
-			ec.suspend.forgetHandle(abandon)
 		}
 
 		if admitErr != nil {
@@ -872,7 +873,7 @@ func runPreClaimedBatchItem[O any](
 	options batchOptions,
 	childSubType string,
 	runItem batchItemFunc[O],
-	abandon *atomic.Bool,
+	abandon *abandonHandle,
 	tok *branchToken,
 ) (BatchItem[O], error) {
 	if err := validateReplayConsistency(op, string(OperationTypeContext), childSubType, itemName); err != nil {

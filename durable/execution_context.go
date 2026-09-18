@@ -51,12 +51,13 @@ type execContext struct {
 	// (different goroutines) are not affected.
 	blocked atomic.Bool
 
-	// abandon, when non-nil and set, marks a batch branch subtree that the
-	// parent Map or Parallel has stopped awaiting after early completion.
-	// A claim on an abandoned context returns errSuspendExecution so the
-	// branch stops starting new work and unwinds. It is shared by a batch
-	// branch's whole child-context subtree; nil for every other context.
-	abandon *atomic.Bool
+	// abandon, when non-nil, is the handle of the batch branch subtree this
+	// context runs under. A claim on a context whose subtree, or any
+	// enclosing subtree, has been abandoned returns errSuspendExecution so
+	// the branch stops starting new work and unwinds. It is shared by a
+	// batch branch's whole child-context subtree; nil for every other
+	// context.
+	abandon *abandonHandle
 
 	// branchTok is the active-branch token for the goroutine that owns this
 	// context. A pending callback's pre-result hook releases it so the
@@ -185,7 +186,7 @@ func (c *execContext) claimOperation() (string, error) {
 	if c.blocked.Load() {
 		return "", errSuspendExecution
 	}
-	if c.abandon != nil && c.abandon.Load() {
+	if c.abandon.abandoned() {
 		return "", errSuspendExecution
 	}
 	if err := c.owner.check(); err != nil {

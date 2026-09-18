@@ -546,3 +546,74 @@ func TestSuspendSignalLateFutureSettlesWithSuspendError(t *testing.T) {
 		t.Fatalf("late future error = %v, want errSuspendExecution", err)
 	}
 }
+
+// TestAbandonHandleChainInheritsAbandonment verifies that a handle minted
+// beneath an already-abandoned handle is abandoned from the start, and that
+// a commitment against it records nothing. This closes the window in which
+// a nested batch is minted after its enclosing batch has retired: the
+// nested handle needs no registration to observe the retirement.
+func TestAbandonHandleChainInheritsAbandonment(t *testing.T) {
+	s := newSuspendSignal()
+	outer := newAbandonHandle(nil)
+	s.retireCommitment(outer)
+	if !outer.abandoned() {
+		t.Fatal("retired handle is not abandoned")
+	}
+	inner := newAbandonHandle(outer)
+	if !inner.abandoned() {
+		t.Fatal("handle minted beneath a retired handle is not abandoned")
+	}
+	// Keep a branch active so a commitment cannot fire the signal; the
+	// assertion is about what is recorded, not about firing.
+	s.registerBranch()
+	defer s.deregisterBranch()
+	s.commitPending(inner)
+	if s.committed() {
+		t.Fatal("commitment against a handle beneath a retired handle was recorded")
+	}
+	if len(s.branchCommits) != 0 {
+		t.Fatalf("branchCommits = %v, want empty", s.branchCommits)
+	}
+}
+
+// TestRetireCommitmentCascadesThroughHandleChain verifies that retiring a
+// handle removes commitments recorded against every handle beneath it,
+// reached through the parent chain alone, while a commitment under a
+// sibling subtree stands. No registry links the handles: a nested batch
+// that has already returned, and whose handle is held only by a
+// durable.Go branch it launched, is still retired by an enclosing batch.
+func TestRetireCommitmentCascadesThroughHandleChain(t *testing.T) {
+	s := newSuspendSignal()
+	s.registerBranch()
+	defer s.deregisterBranch()
+
+	root := newAbandonHandle(nil)
+	inner := newAbandonHandle(root)
+	leaf := newAbandonHandle(inner)
+	sibling := newAbandonHandle(nil)
+
+	s.commitPending(leaf)
+	s.commitPending(inner)
+	if !s.committed() {
+		t.Fatal("commitments under live handles were not recorded")
+	}
+	s.retireCommitment(root)
+	if s.committed() {
+		t.Fatalf("commitments beneath the retired handle stand: %v", s.branchCommits)
+	}
+	if !leaf.abandoned() || !inner.abandoned() {
+		t.Fatal("handles beneath the retired handle do not report abandoned")
+	}
+	if sibling.abandoned() {
+		t.Fatal("sibling handle reports abandoned")
+	}
+
+	s.commitPending(sibling)
+	if !s.committed() {
+		t.Fatal("commitment under a sibling subtree was not recorded")
+	}
+	s.commitPending(leaf)
+	if n := s.branchCommits[leaf]; n != 0 {
+		t.Fatalf("late commitment against a retired subtree recorded %d", n)
+	}
+}

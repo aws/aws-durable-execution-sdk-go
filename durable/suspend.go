@@ -45,8 +45,7 @@ type suspendSignal struct {
 	once sync.Once
 	ch   chan struct{}
 
-	// mu guards firing, futures, active, rootCommitted, branchCommits, and
-	// handleParent.
+	// mu guards firing, futures, active, rootCommitted, and branchCommits.
 	mu      sync.Mutex
 	futures []futureSettler
 
@@ -95,20 +94,65 @@ type suspendSignal struct {
 
 	// branchCommits counts live pending commitments made under each
 	// abandonable batch-branch subtree, keyed by the subtree's abandon
-	// handle. A batch retires its handle's entry when it abandons the
-	// branch after early completion, so abandoned work no longer forces
-	// PENDING.
-	branchCommits map[*atomic.Bool]int
+	// handle. A batch retires the entries of its handle and of every handle
+	// beneath it when it abandons the branch after early completion, so
+	// abandoned work no longer forces PENDING. Once a handle or any of its
+	// ancestors is set, commitPending records nothing against it, so an
+	// entry cannot reappear after retirement. Entries exist only while a
+	// commitment stands, so the map stays bounded.
+	branchCommits map[*abandonHandle]int
+}
 
-	// handleParent records the enclosing abandon handle of each handle a
-	// batch mints, or nil when the batch was minted outside any abandonable
-	// subtree. It lets retirement cascade to handles minted beneath the
-	// retiring handle, so a commitment made inside a nested batch is retired
-	// when an enclosing batch abandons the branch that contains it. Entries
-	// are removed when their handle is retired or when the batch that minted
-	// it finishes without an outstanding commitment, so the map does not
-	// grow across the many batches of a long-lived invocation.
-	handleParent map[*atomic.Bool]*atomic.Bool
+// abandonHandle marks one abandonable batch-branch subtree. A batch mints
+// one handle when it takes the concurrent path and shares it with every
+// context in its item subtrees. The batch sets the handle when it stops
+// awaiting its outstanding branches after early completion.
+//
+// parent is the handle of the enclosing subtree, or nil when the batch runs
+// outside any abandonable subtree. The chain is fixed at creation and is
+// reachable from every context that holds the handle, so a handle's lineage
+// lasts exactly as long as some branch under it can still act. A branch
+// launched by durable.Go inside an item outlives the item worker and the
+// batch that minted the handle; it still reaches every ancestor through the
+// chain, so an enclosing batch's abandonment is visible to it without any
+// registry the batch would have to keep current.
+type abandonHandle struct {
+	set    atomic.Bool
+	parent *abandonHandle
+}
+
+// newAbandonHandle mints a handle beneath parent (nil at the top level).
+// A handle minted beneath an already-abandoned parent is abandoned from
+// the start, because abandoned reads the whole chain.
+func newAbandonHandle(parent *abandonHandle) *abandonHandle {
+	return &abandonHandle{parent: parent}
+}
+
+// abandon marks this subtree abandoned. Every handle beneath it observes
+// the mark through abandoned.
+func (h *abandonHandle) abandon() {
+	h.set.Store(true)
+}
+
+// abandoned reports whether this subtree or any enclosing subtree has been
+// abandoned. Safe to call on a nil handle, which is never abandoned.
+func (h *abandonHandle) abandoned() bool {
+	for ; h != nil; h = h.parent {
+		if h.set.Load() {
+			return true
+		}
+	}
+	return false
+}
+
+// within reports whether h is ancestor or lies beneath it.
+func (h *abandonHandle) within(ancestor *abandonHandle) bool {
+	for ; h != nil; h = h.parent {
+		if h == ancestor {
+			return true
+		}
+	}
+	return false
 }
 
 // futureSettler is the settle interface for a type-erased future. Because
@@ -209,11 +253,25 @@ func (s *suspendSignal) committedLocked() bool {
 // abandonable subtree: a nil handle commits unconditionally, a non-nil one
 // records a retirable commitment against that handle. If no active branches
 // remain after this call, fires the signal immediately.
-func (s *suspendSignal) commitPending(retirable *atomic.Bool) {
+//
+// A commitment against a handle whose subtree, or any enclosing subtree,
+// has been abandoned is a no-op: nothing is recorded and the signal is not
+// fired. A batch joins only its own item workers before it retires the
+// commitments under its handle. A branch launched by durable.Go inside an
+// item is not joined, so it can reach a blocking operation after
+// retirement. Dropping its commitment here gives the same outcome as
+// retiring it, whichever side of the retirement it lands on, so the
+// invocation result does not depend on scheduling. The caller still
+// returns errSuspendExecution and unwinds, as an abandoned branch does.
+func (s *suspendSignal) commitPending(retirable *abandonHandle) {
 	s.mu.Lock()
 	if retirable != nil {
+		if retirable.abandoned() {
+			s.mu.Unlock()
+			return
+		}
 		if s.branchCommits == nil {
-			s.branchCommits = make(map[*atomic.Bool]int)
+			s.branchCommits = make(map[*abandonHandle]int)
 		}
 		s.branchCommits[retirable]++
 	} else {
@@ -227,77 +285,41 @@ func (s *suspendSignal) commitPending(retirable *atomic.Bool) {
 	}
 }
 
-// registerHandle records the parentage of an abandon handle a batch has
-// just minted. parent is the enclosing subtree's handle, or nil when the
-// batch runs outside any abandonable subtree. Parentage lets retirement
-// cascade to handles minted beneath a retiring handle, so nesting depth is
-// unbounded and a commitment made inside a nested batch is retired when an
-// enclosing batch abandons the branch that contains it.
-func (s *suspendSignal) registerHandle(handle, parent *atomic.Bool) {
-	if handle == nil {
-		return
-	}
-	s.mu.Lock()
-	if s.handleParent == nil {
-		s.handleParent = make(map[*atomic.Bool]*atomic.Bool)
-	}
-	s.handleParent[handle] = parent
-	s.mu.Unlock()
-}
-
-// forgetHandle drops the parentage entry for a handle whose batch finished
-// with no outstanding commitment under it. It never touches branchCommits,
-// so it cannot clear a commitment that still stands. It keeps handleParent
-// bounded across the many batches of a long-lived invocation.
-func (s *suspendSignal) forgetHandle(handle *atomic.Bool) {
-	if handle == nil {
-		return
-	}
-	s.mu.Lock()
-	delete(s.handleParent, handle)
-	s.mu.Unlock()
-}
-
-// descendsFromLocked reports whether handle h's ancestor chain reaches
-// ancestor. Caller must hold mu.
-func (s *suspendSignal) descendsFromLocked(h, ancestor *atomic.Bool) bool {
-	for p := s.handleParent[h]; p != nil; p = s.handleParent[p] {
-		if p == ancestor {
-			return true
-		}
-	}
-	return false
-}
-
-// retireCommitment removes the commitments recorded under an abandonable
-// batch-branch subtree's abandon handle and every handle minted beneath it.
-// A batch calls it after it has abandoned the branch and drained every
-// worker, so a branch abandoned after early completion no longer forces the
-// invocation to PENDING, including work done inside a nested batch that
-// minted its own handle. It only removes commitments and never fires: it is
-// invoked post-drain, and because nested batches are strictly nested in the
-// call stack, draining the retiring batch's workers has already drained
-// every nested worker, so no goroutine is left waiting on a future that
-// firing would have settled.
-func (s *suspendSignal) retireCommitment(retirable *atomic.Bool) {
+// retireCommitment marks an abandonable batch-branch subtree abandoned and
+// removes the commitments recorded under its handle and under every handle
+// minted beneath it. A batch calls it after it has abandoned the branch and
+// drained its item workers, so a branch abandoned after early completion no
+// longer forces the invocation to PENDING, including work done inside a
+// nested batch that minted its own handle.
+//
+// Draining the item workers does not drain every goroutine under the
+// subtree. A nested Map or Parallel runs inside an item worker, so its
+// workers are joined before the item worker returns. A branch launched by
+// durable.Go inside an item is not joined by anything: it holds its own
+// branch token and settles its own future when its operation returns. Such
+// a branch can commit before retirement (removed here) or after it (dropped
+// by commitPending, because the handle it carries reaches the retiring
+// handle through its parent chain); either way no commitment stands, so
+// the outcome is the same. The chain also covers a durable.Go launched
+// inside a nested batch's item after that nested batch has returned, and
+// a nested batch that the durable.Go branch starts after retirement: both
+// carry a handle beneath the retiring one.
+//
+// retireCommitment only removes commitments and never fires. The signal
+// fires when the last active branch deregisters while a commitment stands;
+// that rule is unchanged, and no goroutine waits on retirement to settle a
+// future.
+func (s *suspendSignal) retireCommitment(retirable *abandonHandle) {
 	if retirable == nil {
 		return
 	}
+	retirable.abandon()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	// Collect the retiring handle plus every handle whose ancestor chain
-	// reaches it. Reading the parentage map to completion before deleting
-	// keeps each chain walk consistent.
-	toRetire := map[*atomic.Bool]struct{}{retirable: {}}
-	for h := range s.handleParent {
-		if s.descendsFromLocked(h, retirable) {
-			toRetire[h] = struct{}{}
+	for h := range s.branchCommits {
+		if h.within(retirable) {
+			delete(s.branchCommits, h)
 		}
-	}
-	for h := range toRetire {
-		delete(s.branchCommits, h)
-		delete(s.handleParent, h)
 	}
 }
 

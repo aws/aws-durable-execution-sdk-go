@@ -120,9 +120,34 @@ A commitment made by an operation running under a batch branch that its
 parent `Map` or `Parallel` may abandon is recorded against that subtree's
 abandon handle rather than unconditionally. When the parent completes early
 and abandons its outstanding branches, it retires those commitments after
-draining every worker, so work the batch explicitly abandoned does not keep
-the invocation `PENDING`. Retirement cascades to handles minted by nested
-batches. Every other commitment is unconditional and is never retired.
+draining its item workers, so work the batch explicitly abandoned does not
+keep the invocation `PENDING`. Every other commitment is unconditional and
+is never retired.
+
+Each handle carries a pointer to the handle of the enclosing subtree, fixed
+when the batch mints it. A subtree counts as abandoned when its own handle
+or any handle on that chain is set. The chain is reachable from every
+context that holds the handle, so a handle's lineage lasts exactly as long
+as some branch under it can still act; no registry has to be kept current
+as batches start and finish. Retirement sets the retiring handle and
+removes every commitment whose handle reaches it through the chain, so it
+covers commitments made inside nested batches at any depth.
+
+Draining the item workers does not drain every goroutine under the subtree.
+A nested `Map` or `Parallel` runs inside an item worker, so its own workers
+finish before that item worker returns. A branch launched by `durable.Go`
+inside an item is not joined by the batch: it holds its own branch token and
+settles its own future when its operation returns, so it can reach a
+blocking operation after the batch has retired the handle. Such a branch
+may also outlive a nested batch that has already returned, or start a
+nested batch of its own after the retirement. In every case the handle it
+carries reaches the retired handle through the chain, and `commitPending`
+against an abandoned handle is a no-op: nothing is recorded, the signal is
+not fired, and the operation unwinds with `errSuspendExecution` as it would
+on an abandoned branch. A commitment made before retirement is removed by
+it; one made after is dropped. Either way no commitment stands, so the
+invocation outcome does not depend on which side of the retirement the
+branch's operation lands on.
 
 ### Active-branch accounting
 

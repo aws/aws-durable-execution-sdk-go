@@ -1990,6 +1990,256 @@ func TestNestedAbandonedWaitDoesNotForcePending(t *testing.T) {
 	}
 }
 
+// TestGoInsideItemCommitsAfterRetirement forces the interleaving in which a
+// durable.Go branch launched inside a batch item commits to PENDING after
+// the batch has retired its handle's commitments. The batch joins only its
+// item workers, so the Go branch is still running when the batch returns.
+// Its commitment must be dropped, not recorded against the retired handle,
+// so the invocation returns SUCCEEDED exactly as it does when the branch
+// commits before retirement.
+//
+// The ordering is forced through a callback: CreateCallback claims and
+// checkpoints the operation inside the item, but the commitment is deferred
+// to the first Result call. The items return only after the callback
+// exists, so the completion decision and the retirement follow the claim;
+// the Go body calls Result only after the handler has released it, which
+// happens after Map has returned, so the commitment follows the
+// retirement. The handler returns only after the Go body has unwound, so
+// the commitment has landed when the outcome is decided.
+func TestGoInsideItemCommitsAfterRetirement(t *testing.T) {
+	fake := &fakeLambda{}
+	type result struct {
+		Success int    `json:"successCount"`
+		Total   int    `json:"totalCount"`
+		Reason  string `json:"reason"`
+	}
+	created := make(chan struct{})
+	release := make(chan struct{})
+	goDone := make(chan struct{})
+	resp := invokeBatch(t, fake, batchPayload(`null`), func(ctx Context, _ any) (result, error) {
+		br, err := Map(ctx, "outer", []int{0, 1},
+			func(c Context, _ int, index int) (string, error) {
+				if index == 0 {
+					Go(c, "bg", func(gc Context) (string, error) {
+						defer close(goDone)
+						cb, cerr := CreateCallback[string](gc, "cb")
+						if cerr != nil {
+							return "", cerr
+						}
+						close(created)
+						<-release
+						// The first Result call records the commitment.
+						return cb.Result()
+					})
+				}
+				<-created
+				return "fast", nil
+			}, WithCompletion(CompletionConfig{MinSuccessful: 1}))
+		if err != nil {
+			return result{}, err
+		}
+		// Map has returned: its handle is retired. Let the Go branch
+		// commit now, and wait for it to have done so.
+		close(release)
+		<-goDone
+		return result{
+			Success: br.SuccessCount(),
+			Total:   br.TotalCount(),
+			Reason:  br.Reason.String(),
+		}, nil
+	})
+	assertSucceeded(t, resp)
+	var r result
+	if err := json.Unmarshal([]byte(resp.Result), &r); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if r.Reason != "MIN_SUCCESSFUL_REACHED" {
+		t.Errorf("reason = %s, want MIN_SUCCESSFUL_REACHED", r.Reason)
+	}
+	if r.Success < 1 {
+		t.Errorf("successCount = %d, want at least 1", r.Success)
+	}
+}
+
+// TestGoInsideItemWaitOutcomeIsStable runs, many times, a handler whose
+// batch item launches a durable.Go that suspends on a Wait after the item
+// body has returned, and asserts the invocation status is the same on every
+// run. The Go branch's Wait may commit before or after the batch retires its
+// handle, depending on scheduling; neither ordering may change the outcome.
+//
+// The handler returns only after the Go body has unwound, so whatever the
+// branch recorded has landed when the outcome is decided. The item and its
+// sibling return as soon as the Go branch has been launched, so the batch's
+// early completion races the branch's Wait.
+func TestGoInsideItemWaitOutcomeIsStable(t *testing.T) {
+	const runs = 50
+	statuses := make(map[string]int, 2)
+	for i := 0; i < runs; i++ {
+		fake := &fakeLambda{}
+		launched := make(chan struct{})
+		goDone := make(chan struct{})
+		resp := invokeBatch(t, fake, batchPayload(`null`), func(ctx Context, _ any) (string, error) {
+			_, err := Map(ctx, "outer", []int{0, 1},
+				func(c Context, _ int, index int) (string, error) {
+					if index == 0 {
+						Go(c, "bg", func(gc Context) (string, error) {
+							defer close(goDone)
+							if werr := Wait(gc, "long", time.Hour); werr != nil {
+								return "", werr
+							}
+							return "waited", nil
+						})
+						close(launched)
+					}
+					<-launched
+					return "fast", nil
+				}, WithCompletion(CompletionConfig{MinSuccessful: 1}))
+			if err != nil {
+				return "", err
+			}
+			<-goDone
+			return "done", nil
+		})
+		statuses[resp.Status]++
+	}
+	if len(statuses) != 1 {
+		t.Fatalf("invocation status varied across %d runs: %v", runs, statuses)
+	}
+	if statuses["SUCCEEDED"] != runs {
+		t.Fatalf("statuses = %v, want %d SUCCEEDED (the Go branch is under the abandoned subtree)", statuses, runs)
+	}
+}
+
+// TestGoInsideNestedItemCommitsAfterOuterAbandons covers a durable.Go
+// launched inside a NESTED batch's item. The nested batch completes normally
+// and returns while the Go branch is still running with the nested handle.
+// The outer batch then completes early and abandons the item that contained
+// the nested batch. The Go branch commits only after the outer batch has
+// retired its handle. The nested handle reaches the outer handle through its
+// parent chain, so the commitment is dropped and the invocation returns
+// SUCCEEDED, the same outcome as when the Go branch commits before
+// retirement.
+//
+// The ordering is forced: the nested items return only after the Go branch
+// has been launched, the outer sibling returns only after the nested batch
+// has returned, and the Go body commits only after the outer Map has
+// returned to the handler. The handler returns only after the Go body has
+// unwound.
+func TestGoInsideNestedItemCommitsAfterOuterAbandons(t *testing.T) {
+	fake := &fakeLambda{}
+	type result struct {
+		Success int    `json:"successCount"`
+		Total   int    `json:"totalCount"`
+		Reason  string `json:"reason"`
+	}
+	launched := make(chan struct{})
+	nestedDone := make(chan struct{})
+	release := make(chan struct{})
+	goDone := make(chan struct{})
+	resp := invokeBatch(t, fake, batchPayload(`null`), func(ctx Context, _ any) (result, error) {
+		br, err := Map(ctx, "outer", []int{0, 1},
+			func(c Context, _ int, index int) (string, error) {
+				if index == 0 {
+					// Two items so the nested batch takes the concurrent
+					// path and mints its own handle beneath the outer one.
+					_, nerr := Map(c, "inner", []int{0, 1},
+						func(ic Context, _ int, innerIndex int) (string, error) {
+							if innerIndex == 0 {
+								Go(ic, "bg", func(gc Context) (string, error) {
+									defer close(goDone)
+									<-release
+									if werr := Wait(gc, "long", time.Hour); werr != nil {
+										return "", werr
+									}
+									return "waited", nil
+								})
+								close(launched)
+							}
+							<-launched
+							return "inner", nil
+						})
+					close(nestedDone)
+					if nerr != nil {
+						return "", nerr
+					}
+					return "nested", nil
+				}
+				<-nestedDone
+				return "fast", nil
+			}, WithCompletion(CompletionConfig{MinSuccessful: 1}))
+		if err != nil {
+			return result{}, err
+		}
+		// The outer Map has returned and retired its handle. Let the Go
+		// branch reach its Wait now, and wait for it to have unwound.
+		close(release)
+		<-goDone
+		return result{
+			Success: br.SuccessCount(),
+			Total:   br.TotalCount(),
+			Reason:  br.Reason.String(),
+		}, nil
+	})
+	assertSucceeded(t, resp)
+	var r result
+	if err := json.Unmarshal([]byte(resp.Result), &r); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if r.Reason != "MIN_SUCCESSFUL_REACHED" {
+		t.Errorf("reason = %s, want MIN_SUCCESSFUL_REACHED", r.Reason)
+	}
+	if r.Success < 1 {
+		t.Errorf("successCount = %d, want at least 1", r.Success)
+	}
+}
+
+// TestBatchStartedByGoAfterRetirementIsAbandoned covers a durable.Go
+// launched inside a batch item that starts a nested batch only after the
+// outer batch has completed early and retired its handle. The nested batch
+// is minted beneath an already-abandoned handle, so it starts no work: its
+// items never commit, and the invocation returns SUCCEEDED instead of
+// depending on whether the nested batch registered before or after the
+// retirement.
+func TestBatchStartedByGoAfterRetirementIsAbandoned(t *testing.T) {
+	fake := &fakeLambda{}
+	launched := make(chan struct{})
+	release := make(chan struct{})
+	goDone := make(chan struct{})
+	var innerErr error
+	resp := invokeBatch(t, fake, batchPayload(`null`), func(ctx Context, _ any) (string, error) {
+		_, err := Map(ctx, "outer", []int{0, 1},
+			func(c Context, _ int, index int) (string, error) {
+				if index == 0 {
+					Go(c, "bg", func(gc Context) (string, error) {
+						defer close(goDone)
+						<-release
+						_, innerErr = Map(gc, "inner", []int{0, 1},
+							func(ic Context, _ int, _ int) (string, error) {
+								if werr := Wait(ic, "long", time.Hour); werr != nil {
+									return "", werr
+								}
+								return "waited", nil
+							})
+						return "", innerErr
+					})
+					close(launched)
+				}
+				<-launched
+				return "fast", nil
+			}, WithCompletion(CompletionConfig{MinSuccessful: 1}))
+		if err != nil {
+			return "", err
+		}
+		close(release)
+		<-goDone
+		return "done", nil
+	})
+	assertSucceeded(t, resp)
+	if !errors.Is(innerErr, errSuspendExecution) {
+		t.Errorf("nested batch under an abandoned handle returned %v, want errSuspendExecution", innerErr)
+	}
+}
+
 // TestSuspendedBranchHoldsConcurrencySlot verifies that a suspended batch
 // worker retains its max-concurrency slot until reaching a terminal state.
 // No replacement branch is admitted while the suspended branches hold their
