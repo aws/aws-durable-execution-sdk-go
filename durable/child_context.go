@@ -3,6 +3,7 @@ package durable
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -64,9 +65,82 @@ func WithChildErrorMapper(mapper func(err *ChildContextError) error) ChildOption
 	return childOptionFunc(func(o *childOptions) { o.errorMapper = mapper })
 }
 
+// WithChildSummary supplies a summary function for the result of a
+// [RunInChildContext], [RunInChildContextAsync], or [Go] operation. O is
+// the operation's result type; a mismatch is a configuration error the
+// operation returns before it claims an operation ID.
+//
+// The SDK checkpoints the child's result when it is at most 256 KiB
+// serialized. A larger result is not stored: the checkpoint records that
+// the child's operations are kept, and replay re-executes the child body
+// to rebuild the value. Without a summary that checkpoint carries no
+// payload, so inspecting the execution history shows nothing about what
+// the child produced. With a summary, the SDK calls fn with the result
+// and stores the returned string as the checkpoint payload instead:
+//
+//	durable.RunInChildContext(ctx, "import", importRows,
+//		durable.WithChildSummary(func(rows []Row) string {
+//			return fmt.Sprintf("%d rows imported", len(rows))
+//		}))
+//
+// fn runs only when the serialized result exceeds the limit, and only on
+// the invocation that produced the result. The summary is advisory: the
+// SDK never reads it back, and replay correctness never depends on it.
+// The summary must itself fit the checkpoint limit. A summary longer than
+// 256 KiB is truncated on a UTF-8 boundary to that size; an empty summary
+// leaves the payload absent. A panic in fn fails the operation with an
+// error naming the child. fn must be deterministic and free of side
+// effects: it runs at most once per execution, so a summary that varies
+// between runs is a defect a reader of the history cannot detect.
+func WithChildSummary[O any](fn func(result O) string) ChildOption {
+	return childOptionFunc(func(o *childOptions) { o.summary = fn })
+}
+
 type childOptions struct {
 	serdes      Serdes
 	errorMapper func(err *ChildContextError) error
+
+	// summary is the [WithChildSummary] function, stored as any because
+	// ChildOption is not generic. childSummaryFunc asserts it against the
+	// operation's result type.
+	summary any
+}
+
+// childSummaryFunc returns the summary function configured for a child
+// whose result type is O, or nil when none is set. A function of another
+// result type is a configuration error.
+func childSummaryFunc[O any](name string, options childOptions) (func(O) string, error) {
+	if options.summary == nil {
+		return nil, nil
+	}
+	fn, ok := options.summary.(func(O) string)
+	if !ok {
+		return nil, fmt.Errorf("durable: child context %q: WithChildSummary function has type %T, want func(%v) string",
+			name, options.summary, reflect.TypeFor[O]())
+	}
+	return fn, nil
+}
+
+// childSummaryPayload returns the checkpoint payload for a child result
+// that exceeded the size limit: the summary of result, truncated to the
+// limit, or nil when no summary function is set or the summary is empty.
+// A panic in the summary function becomes an error so it fails the child
+// operation instead of unwinding the caller, or, on the asynchronous
+// path, the child's goroutine and with it the process.
+func childSummaryPayload[O any](name string, summary func(O) string, result O) (payload *string, err error) {
+	if summary == nil {
+		return nil, nil
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("durable: child context %q: WithChildSummary function panicked: %v", name, r)
+		}
+	}()
+	s := truncateUTF8(summary(result), checkpointSizeLimitBytes)
+	if s == "" {
+		return nil, nil
+	}
+	return aws.String(s), nil
 }
 
 type childOptionFunc func(*childOptions)
@@ -105,6 +179,10 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 	options := childOptions{serdes: ec.serdes}
 	for _, o := range opts {
 		o.applyChild(&options)
+	}
+	summary, err := childSummaryFunc[O](name, options)
+	if err != nil {
+		return zero, err
 	}
 
 	id, err := ec.claimOperation()
@@ -242,9 +320,14 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 	}
 	update := childUpdate(ec, id, name, OperationActionSucceed)
 	if len(serialized) > checkpointSizeLimitBytes {
-		// Large payload: checkpoint with empty payload and ReplayChildren
-		// so the backend preserves child operations for reconstruction.
+		// Large payload: checkpoint with ReplayChildren so the backend
+		// preserves child operations for reconstruction. The payload is
+		// the caller's summary, if any; replay never reads it.
 		update.ContextOptions = &ContextOptions{ReplayChildren: aws.Bool(true)}
+		update.Payload, err = childSummaryPayload(name, summary, result)
+		if err != nil {
+			return zero, err
+		}
 	} else {
 		update.Payload = aws.String(string(serialized))
 	}
@@ -284,6 +367,10 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 	options := childOptions{serdes: ec.serdes}
 	for _, o := range opts {
 		o.applyChild(&options)
+	}
+	summary, err := childSummaryFunc[O](name, options)
+	if err != nil {
+		return newFailedFuture[O](err)
 	}
 
 	// Claim the operation ID synchronously on the calling goroutine to
@@ -388,6 +475,13 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 		update := childUpdate(ec, id, name, OperationActionSucceed)
 		if len(serialized) > checkpointSizeLimitBytes {
 			update.ContextOptions = &ContextOptions{ReplayChildren: aws.Bool(true)}
+			payload, perr := childSummaryPayload(name, summary, result)
+			if perr != nil {
+				var zero O
+				fut.settle(zero, perr)
+				return
+			}
+			update.Payload = payload
 		} else {
 			update.Payload = aws.String(string(serialized))
 		}
@@ -419,8 +513,9 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 // Go runs fn concurrently in its own child context and returns a future for
 // its result. It is the replay-safe substitute for the go statement inside
 // durable functions, and shorthand for [RunInChildContextAsync]: opts are
-// forwarded unchanged, so [WithChildSerdes] applies to the child result
-// and [WithChildErrorMapper] to its failure.
+// forwarded unchanged, so [WithChildSerdes] applies to the child result,
+// [WithChildSummary] to its checkpoint when the result is oversized, and
+// [WithChildErrorMapper] to its failure.
 //
 // The child's operation identity is claimed before Go returns, so
 // consecutive Go calls from one goroutine are replay-deterministic. Inside

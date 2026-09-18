@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sync"
 	"unicode/utf8"
 
@@ -74,6 +75,9 @@ func Map[I, O any](ctx Context, name string, items []I, fn func(ctx Context, ite
 		return BatchResult[O]{}, fmt.Errorf("durable: Map %q: max concurrency must be positive, got %d", name, options.maxConcurrency)
 	}
 	if err := options.completion.validate(); err != nil {
+		return BatchResult[O]{}, fmt.Errorf("durable: Map %q: %w", name, err)
+	}
+	if _, err := batchSummaryFunc[O](options); err != nil {
 		return BatchResult[O]{}, fmt.Errorf("durable: Map %q: %w", name, err)
 	}
 
@@ -166,6 +170,9 @@ func Parallel[O any](ctx Context, name string, branches []Branch[O], opts ...Bat
 		return BatchResult[O]{}, fmt.Errorf("durable: Parallel %q: max concurrency must be positive, got %d", name, options.maxConcurrency)
 	}
 	if err := options.completion.validate(); err != nil {
+		return BatchResult[O]{}, fmt.Errorf("durable: Parallel %q: %w", name, err)
+	}
+	if _, err := batchSummaryFunc[O](options); err != nil {
 		return BatchResult[O]{}, fmt.Errorf("durable: Parallel %q: %w", name, err)
 	}
 
@@ -642,6 +649,39 @@ func WithNesting(m NestingMode) BatchOption {
 	return batchOptionFunc(func(o *batchOptions) { o.nesting = m })
 }
 
+// WithBatchSummary supplies a summary function for the result of a [Map]
+// or [Parallel] operation. O is the operation's item result type; a
+// mismatch is a configuration error the operation returns before it
+// claims an operation ID.
+//
+// The SDK checkpoints the whole [BatchResult] when it is at most 256 KiB
+// serialized. A larger result is not stored: the checkpoint records that
+// the batch's child operations are kept, plus a compact record of the
+// completion reason and which items finished, and replay rebuilds the
+// result from the children. Without a summary that record says nothing
+// about what the items produced. With a summary, the SDK calls fn with
+// the result and stores the returned string in the record under the
+// "summary" key:
+//
+//	durable.Map(ctx, "resize", images, resize,
+//		durable.WithBatchSummary(func(r durable.BatchResult[Image]) string {
+//			return fmt.Sprintf("%d of %d resized", r.SuccessCount(), r.TotalCount())
+//		}))
+//
+// fn runs only when the serialized result exceeds the limit, and only on
+// the invocation that completed the batch. The summary is advisory: the
+// SDK never reads it back, and replay correctness never depends on it.
+// The record with the summary must itself fit the checkpoint limit. The
+// SDK truncates a summary on a UTF-8 boundary until the record fits, and
+// omits it when no prefix fits; an empty summary is omitted. A panic in
+// fn fails the operation with an error naming the batch. fn must be
+// deterministic and free of side effects: it runs at most once per
+// execution, so a summary that varies between runs is a defect a reader
+// of the history cannot detect.
+func WithBatchSummary[O any](fn func(result BatchResult[O]) string) BatchOption {
+	return batchOptionFunc(func(o *batchOptions) { o.summary = fn })
+}
+
 // CompletionConfig is a batch completion policy for [Map] and [Parallel].
 //
 // The default is fail-fast. When no threshold is set (no [WithCompletion]
@@ -864,6 +904,11 @@ type batchOptions struct {
 	resultSerdes      Serdes
 	nesting           NestingMode
 
+	// summary is the [WithBatchSummary] function, stored as any because
+	// BatchOption is not generic. batchSummaryFunc asserts it against
+	// the operation's item result type.
+	summary any
+
 	// itemID returns the operation ID of the item at an input index. Map
 	// and Parallel set it once the batch's own ID is claimed; see
 	// batchItemIDs. It keys every serdes call for an item's result, so
@@ -884,6 +929,33 @@ func resolveBatchOptions(ec *execContext, opts []BatchOption) batchOptions {
 		opt.applyBatch(&o)
 	}
 	return o
+}
+
+// batchSummaryFunc returns the summary function configured for a batch
+// whose item result type is O, or nil when none is set. A function of
+// another result type is a configuration error.
+func batchSummaryFunc[O any](options batchOptions) (func(BatchResult[O]) string, error) {
+	if options.summary == nil {
+		return nil, nil
+	}
+	fn, ok := options.summary.(func(BatchResult[O]) string)
+	if !ok {
+		return nil, fmt.Errorf("WithBatchSummary function has type %T, want func(%v) string",
+			options.summary, reflect.TypeFor[BatchResult[O]]())
+	}
+	return fn, nil
+}
+
+// callBatchSummary runs the caller's summary function. A panic in the
+// function becomes an error so it fails the batch operation instead of
+// unwinding the caller after every item has already completed.
+func callBatchSummary[O any](name string, summary func(BatchResult[O]) string, result BatchResult[O]) (s string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("durable: batch %q: WithBatchSummary function panicked: %v", name, r)
+		}
+	}()
+	return summary(result), nil
 }
 
 // batchItemFunc runs one batch item in its child context and returns the
@@ -1765,8 +1837,20 @@ func checkpointBatchSuccess[O any](
 		// for both nesting modes: a NORMAL item is rebuilt from its own
 		// checkpoint, a FLAT item from the operations recorded under the
 		// batch. Either way the recorded reason is reused, so a custom
-		// completion callback is not called again on replay.
-		recordBytes, recordErr := json.Marshal(newBatchReplayRecord(result))
+		// completion callback is not called again on replay. The
+		// caller's summary, if any, is stored in the record; see
+		// marshalBatchReplayRecord for how it is kept within the limit.
+		record := newBatchReplayRecord(result)
+		// The summary function's type was validated when the batch
+		// started, so only the nil check remains.
+		if summary, _ := batchSummaryFunc[O](options); summary != nil {
+			s, serr := callBatchSummary(name, summary, result)
+			if serr != nil {
+				return BatchResult[O]{}, serr
+			}
+			record.Summary = s
+		}
+		recordBytes, recordErr := marshalBatchReplayRecord(record)
 		if recordErr != nil {
 			return BatchResult[O]{}, fmt.Errorf("durable: batch %q: serialize replay record: %w", name, recordErr)
 		}
@@ -2194,11 +2278,56 @@ const (
 // whichever of the started (abandoned) or completed index sets is smaller,
 // selected by IndexSet, so the record stays bounded by branch count and
 // never by item payload size.
+//
+// Summary is the caller's [WithBatchSummary] output. It is advisory:
+// replay never reads it. It is absent when no summary function is set or
+// the summary is empty.
 type batchReplayRecord struct {
 	Reason       CompletionReason `json:"completionReason"`
 	StartedTotal int              `json:"totalCount"`
 	IndexSet     string           `json:"indexSet"`
 	Indexes      []int            `json:"indexes"`
+	Summary      string           `json:"summary,omitempty"`
+}
+
+// marshalBatchReplayRecord serializes record so that it fits the
+// checkpoint size limit. The record without its summary is bounded by
+// branch count and always fits. The summary is caller-supplied and may
+// not: it is shortened on a UTF-8 boundary, in proportion to the excess
+// of its JSON encoding over the space the rest of the record leaves,
+// until the encoding fits. A summary with no fitting prefix is omitted.
+func marshalBatchReplayRecord(record batchReplayRecord) ([]byte, error) {
+	summary := record.Summary
+	record.Summary = ""
+	base, err := json.Marshal(record)
+	if err != nil {
+		return nil, err
+	}
+	if summary == "" {
+		return base, nil
+	}
+	// The encoded summary is spliced in as `,"summary":<encoded>` before
+	// the closing brace, so this is the space it may occupy.
+	budget := checkpointSizeLimitBytes - len(base) - len(`,"summary":`)
+	for summary != "" {
+		encoded, err := json.Marshal(summary)
+		if err != nil {
+			return nil, err
+		}
+		if len(encoded) <= budget {
+			record.Summary = summary
+			return json.Marshal(record)
+		}
+		// Shrink in proportion to the overrun. Each pass strictly
+		// shortens the summary, so the loop ends; a prefix keeps
+		// roughly the same escaping ratio, so it ends in a few passes.
+		keep := len(summary) * budget / len(encoded)
+		if keep >= len(summary) {
+			keep = len(summary) - 1
+		}
+		summary = truncateUTF8(summary, max(keep, 0))
+	}
+	return base, nil
 }
 
 // newBatchReplayRecord builds the decision record from a live batch result.

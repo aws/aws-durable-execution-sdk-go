@@ -1315,6 +1315,40 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 60
 
+  MapCustomSummaryGeneratorReplayFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-map-custom-summary-generator-replay
+      CodeUri: .aws-sam/build-artifacts/map-custom-summary-generator-replay/
+      Handler: bootstrap
+      Description: Map with WithBatchSummary over the checkpoint limit, replayed across a suspension
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  MapFlatSummarizedReplayFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-map-flat-summarized-replay
+      CodeUri: .aws-sam/build-artifacts/map-flat-summarized-replay/
+      Handler: bootstrap
+      Description: FLAT Map over the checkpoint limit, replayed across a suspension
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
   ParallelBasicFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -1560,6 +1594,23 @@ Resources:
         ExecutionTimeout: 120
 
   # --- Slice 6: Future Combinators & Concurrency examples ---
+
+  ParallelCustomSummaryGeneratorFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-parallel-custom-summary-generator
+      CodeUri: .aws-sam/build-artifacts/parallel-custom-summary-generator/
+      Handler: bootstrap
+      Description: Parallel with WithBatchSummary over the checkpoint limit
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
 
   FutureAllFunction:
     Type: AWS::Serverless::Function
@@ -2441,6 +2492,12 @@ Outputs:
   MapVirtualContextFunction:
     Description: Map Virtual Context Function ARN
     Value: !GetAtt MapVirtualContextFunction.Arn
+  MapCustomSummaryGeneratorReplayFunction:
+    Description: Map Custom Summary Generator Replay Function ARN
+    Value: !GetAtt MapCustomSummaryGeneratorReplayFunction.Arn
+  MapFlatSummarizedReplayFunction:
+    Description: Map Flat Summarized Replay Function ARN
+    Value: !GetAtt MapFlatSummarizedReplayFunction.Arn
   ParallelBasicFunction:
     Description: Parallel Basic Function ARN
     Value: !GetAtt ParallelBasicFunction.Arn
@@ -2480,6 +2537,9 @@ Outputs:
   ParallelHeterogeneousFunction:
     Description: Parallel Heterogeneous Function ARN
     Value: !GetAtt ParallelHeterogeneousFunction.Arn
+  ParallelCustomSummaryGeneratorFunction:
+    Description: Parallel Custom Summary Generator Function ARN
+    Value: !GetAtt ParallelCustomSummaryGeneratorFunction.Arn
   FutureAllFunction:
     Description: Future All Function ARN
     Value: !GetAtt FutureAllFunction.Arn

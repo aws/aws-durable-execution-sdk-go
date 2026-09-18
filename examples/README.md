@@ -106,6 +106,8 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [map-tolerated-failure-percentage](map-tolerated-failure-percentage/main.go) | Map, WithToleratedFailurePercentage | SUCCEEDED |
 | [map-completion-config-issue](map-completion-config-issue/main.go) | Map, early-completion partial results | SUCCEEDED |
 | [map-virtual-context](map-virtual-context/main.go) | Map, WithNesting (NestingFlat) | SUCCEEDED |
+| [map-custom-summary-generator-replay](map-custom-summary-generator-replay/main.go) | Map, WithBatchSummary (>256KB, replay across suspension) | SUCCEEDED |
+| [map-flat-summarized-replay](map-flat-summarized-replay/main.go) | Map, WithNesting (NestingFlat), >256KB replay across suspension | SUCCEEDED |
 | [parallel-basic](parallel-basic/main.go) | Parallel, WithMaxConcurrency | SUCCEEDED |
 | [parallel-empty](parallel-empty/main.go) | Parallel (no branches) | SUCCEEDED |
 | [parallel-invoke](parallel-invoke/main.go) | Parallel, Invoke | SUCCEEDED |
@@ -120,6 +122,7 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [parallel-failure-threshold-percentage](parallel-failure-threshold-percentage/main.go) | Parallel, ToleratedFailurePercentage (failure propagated) | FAILED |
 | [parallel-virtual-context](parallel-virtual-context/main.go) | Parallel, WithNesting (NestingFlat) | SUCCEEDED |
 | [parallel-heterogeneous](parallel-heterogeneous/main.go) | Parallel, Step, Wait, Invoke | SUCCEEDED |
+| [parallel-custom-summary-generator](parallel-custom-summary-generator/main.go) | Parallel, WithBatchSummary (>256KB) | SUCCEEDED |
 
 ### Future Combinators & Concurrency
 

@@ -93,6 +93,8 @@ EXAMPLES="
   map-completion-config-issue
   map-error-type-preservation
   map-virtual-context
+  map-custom-summary-generator-replay
+  map-flat-summarized-replay
   parallel-basic
   parallel-empty
   parallel-invoke
@@ -107,6 +109,7 @@ EXAMPLES="
   parallel-failure-threshold-percentage
   parallel-virtual-context
   parallel-heterogeneous
+  parallel-custom-summary-generator
   future-all
   future-all-settled
   future-all-wait

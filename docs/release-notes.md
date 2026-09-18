@@ -89,6 +89,33 @@ failed item, and `CompletionCustomSucceeded` makes it succeeded even with
 failed items. A `BatchError` rebuilt from a checkpoint record recovers
 either reason.
 
+### New: `WithChildSummary` and `WithBatchSummary`
+
+A child-context or batch result over the 256 KiB checkpoint limit is not
+stored; the checkpoint records that the operation's children are kept and
+replay rebuilds the result from them. That checkpoint carried no
+description of the result. Two options now supply one.
+
+`durable.WithChildSummary(fn)` is a `ChildOption` for `RunInChildContext`,
+`RunInChildContextAsync`, and `Go`. When the serialized result exceeds the
+limit, the SDK calls `fn` with the result and stores the returned string
+as the checkpoint payload. A summary over 256 KiB is truncated on a UTF-8
+boundary; an empty summary leaves the payload absent.
+
+`durable.WithBatchSummary(fn)` is a `BatchOption` for `Map` and
+`Parallel`. When the serialized `BatchResult` exceeds the limit, the SDK
+calls `fn` with the result and stores the returned string in the batch's
+checkpoint record under the `summary` key, next to the completion reason
+and item statuses replay already used. The summary is truncated on a UTF-8
+boundary until the record fits the limit, and omitted when no prefix fits.
+
+Both functions are typed on the operation's result type; a function of
+another type is a configuration error the operation returns before it
+claims an operation ID. Both run only when the result is oversized, and
+only on the invocation that produced it. The summary is advisory: the SDK
+never reads it back, and replay correctness never depends on it. The
+function must be deterministic and free of side effects.
+
 ### New: custom batch completion with `CompletionConfig.ShouldComplete`
 
 `CompletionConfig` gains `ShouldComplete func(BatchProgress)
