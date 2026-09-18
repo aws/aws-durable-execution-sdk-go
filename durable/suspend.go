@@ -34,10 +34,18 @@ type suspendSignal struct {
 	once sync.Once
 	ch   chan struct{}
 
-	// mu guards futures, active, rootCommitted, branchCommits, and
+	// mu guards firing, futures, active, rootCommitted, branchCommits, and
 	// handleParent.
 	mu      sync.Mutex
 	futures []futureSettler
+
+	// firing is set by fire while it holds mu, before fire drains futures.
+	// From that moment no future is appended to futures: registerFuture
+	// reads firing under mu and settles a new future itself. fire settles
+	// the drained set and closes ch after releasing mu, so firing becomes
+	// true before ch is closed. Checking ch alone would leave a window in
+	// which a future registered after the drain is never settled.
+	firing bool
 
 	// active tracks the number of branches (goroutines) that can
 	// independently make progress. When active reaches zero and a
@@ -93,9 +101,18 @@ func newSuspendSignal() *suspendSignal {
 // fire marks the invocation as suspending. Safe to call multiple times and
 // from multiple goroutines. On the first call, all registered in-flight
 // futures are settled with errSuspendExecution so blocked goroutines unwind.
+//
+// fire sets firing and drains futures in one critical section. A future
+// registered before that section is in the drained set and is settled
+// below. A future registered after it observes firing and is settled by
+// registerFuture. So every registered future is settled exactly once
+// whatever the interleaving. ch is closed last, after the drained set has
+// settled, so done and fired report suspension only once every future
+// registered before fire has unwound.
 func (s *suspendSignal) fire() {
 	s.once.Do(func() {
 		s.mu.Lock()
+		s.firing = true
 		fs := s.futures
 		s.futures = nil // release references
 		s.mu.Unlock()
@@ -297,22 +314,25 @@ func (s *suspendSignal) registerBranchToken() *branchToken {
 	return &branchToken{s: s}
 }
 
-// registerFuture adds a future to the in-flight set. If the signal has
-// already fired, the future is settled immediately. This is called
-// synchronously on the owning goroutine before launching the async
-// operation's goroutine.
+// registerFuture adds a future to the in-flight set so that fire settles it
+// with errSuspendExecution. It is called synchronously on the owning
+// goroutine before the async operation's goroutine is launched.
+//
+// registerFuture needs no ordering guarantee from its caller. If fire has
+// not yet started, the future is appended and fire's drain pass settles it.
+// If fire has already started, fire set firing under mu and has already
+// taken its copy of futures, so an append would never be seen; instead
+// registerFuture settles the future immediately. firing is checked rather
+// than ch because fire closes ch only after settling the drained set, so
+// ch can still be open while the drain has already happened.
 func registerFuture[O any](s *suspendSignal, f *Future[O]) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// If already fired, settle immediately (the close(s.ch) happened
-	// after settling all existing futures; this one arrived late).
-	select {
-	case <-s.ch:
+	if s.firing {
 		var zero O
 		f.settle(zero, errSuspendExecution)
 		return
-	default:
 	}
 
 	s.futures = append(s.futures, &futureSettlerAdapter[O]{f: f})

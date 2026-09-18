@@ -3,6 +3,7 @@ package durable
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -497,5 +498,51 @@ func TestAbandonedGoChildCheckpointRefused(t *testing.T) {
 				t.Errorf("orphan-step checkpoint was recorded (action=%s); expected refusal", u.Action)
 			}
 		}
+	}
+}
+
+// TestSuspendSignalSettlesFutureRegisteredDuringFire verifies that a
+// future registered concurrently with fire is always settled: either by
+// fire's drain pass, or immediately by registerFuture when it observes
+// that fire has started. Each iteration pre-registers many futures so the
+// drain pass is long enough for a concurrent registration to land while
+// fire is still settling.
+func TestSuspendSignalSettlesFutureRegisteredDuringFire(t *testing.T) {
+	const iterations = 3000
+	lost := 0
+	for range iterations {
+		s := newSuspendSignal()
+		for range 200 {
+			registerFuture(s, newFuture[int]())
+		}
+		late := newFuture[int]()
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); s.fire() }()
+		go func() { defer wg.Done(); registerFuture(s, late) }()
+		wg.Wait()
+		if !late.settled() {
+			lost++
+		}
+	}
+	if lost > 0 {
+		t.Errorf("%d/%d late-registered futures were never settled after fire()", lost, iterations)
+	}
+}
+
+// TestSuspendSignalLateFutureSettlesWithSuspendError verifies that a future
+// registered after fire has completed is settled with errSuspendExecution,
+// the same outcome the drain pass gives futures registered before fire.
+func TestSuspendSignalLateFutureSettlesWithSuspendError(t *testing.T) {
+	s := newSuspendSignal()
+	s.fire()
+	late := newFuture[int]()
+	registerFuture(s, late)
+	if !late.settled() {
+		t.Fatal("future registered after fire() was not settled")
+	}
+	_, err := late.Result()
+	if !errors.Is(err, errSuspendExecution) {
+		t.Fatalf("late future error = %v, want errSuspendExecution", err)
 	}
 }
