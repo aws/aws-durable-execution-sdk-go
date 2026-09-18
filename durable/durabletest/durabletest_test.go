@@ -6,6 +6,7 @@ package durabletest_test
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -346,6 +347,55 @@ func TestRunUntilCompleteStepWithRetry(t *testing.T) {
 	}
 	if op.Status != "SUCCEEDED" {
 		t.Errorf("op status = %q, want SUCCEEDED", op.Status)
+	}
+}
+
+func TestRunUntilCompleteRetryableErrorsStopOnNonMatch(t *testing.T) {
+	// A step whose first two attempts fail with a retryable error and whose
+	// third fails with a non-matching one. Retries stop at the third
+	// attempt although the strategy allows five, and the failure reports
+	// the three attempts made.
+	var attempts int32
+	handler := func(ctx durable.Context, event string) (string, error) {
+		return durable.Step[string](ctx, "guarded", func(_ durable.StepContext) (string, error) {
+			attempts++
+			if attempts < 3 {
+				return "", fmt.Errorf("transient failure %d", attempts)
+			}
+			return "", errors.New("permanent failure")
+		}, durable.WithRetry(durable.MustNewRetryStrategy(durable.RetryConfig{
+			MaxAttempts:     5,
+			RetryableErrors: []durable.ErrorMatcher{durable.ErrorContains("transient")},
+		})))
+	}
+
+	runner := durabletest.NewLocalRunner(handler)
+	result := runner.RunUntilComplete(t, "go")
+
+	if result.Status != durabletest.Failed {
+		t.Fatalf("expected FAILED, got %s", result.Status)
+	}
+	if attempts != 3 {
+		t.Errorf("attempts = %d, want 3", attempts)
+	}
+	if result.Error == nil {
+		t.Fatal("expected error details, got nil")
+	}
+	if result.Error.Type != "StepError" {
+		t.Errorf("error type = %q, want StepError", result.Error.Type)
+	}
+	if want := "failed after 3 attempts"; !strings.Contains(result.Error.Message, want) {
+		t.Errorf("error message %q does not contain %q", result.Error.Message, want)
+	}
+	if !strings.Contains(result.Error.Message, "permanent failure") {
+		t.Errorf("error message %q does not carry the final attempt's error", result.Error.Message)
+	}
+	op := result.Operation("guarded")
+	if op == nil {
+		t.Fatal("operation 'guarded' not found")
+	}
+	if op.Status != "FAILED" {
+		t.Errorf("op status = %q, want FAILED", op.Status)
 	}
 }
 

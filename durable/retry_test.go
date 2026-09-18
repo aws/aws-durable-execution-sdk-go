@@ -2,7 +2,9 @@ package durable
 
 import (
 	"errors"
+	"fmt"
 	"math"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -441,4 +443,276 @@ func TestMustLinearBackoffPanicsOnInvalidConfig(t *testing.T) {
 		}
 	}()
 	MustLinearBackoff(LinearRetryConfig{InitialDelay: -time.Second})
+}
+
+// --- RetryableErrors ---
+
+// matcherTestError is an error type for ErrorAs tests. It has a pointer
+// receiver, so *matcherTestError is the type errors.As targets.
+type matcherTestError struct{ code int }
+
+func (e *matcherTestError) Error() string { return fmt.Sprintf("matcher test error %d", e.code) }
+
+// matcherOtherError is a distinct type that must not match
+// ErrorAs[*matcherTestError].
+type matcherOtherError struct{}
+
+func (*matcherOtherError) Error() string { return "other error" }
+
+var errMatcherSentinel = errors.New("matcher sentinel")
+
+// filteredStrategy builds a deterministic exponential strategy that retries
+// only errors matching the given matchers, with room for several attempts.
+func filteredStrategy(t *testing.T, matchers ...ErrorMatcher) RetryStrategy {
+	t.Helper()
+	strategy, err := NewRetryStrategy(RetryConfig{
+		MaxAttempts:     5,
+		Jitter:          JitterNone,
+		RetryableErrors: matchers,
+	})
+	if err != nil {
+		t.Fatalf("NewRetryStrategy error = %v, want nil", err)
+	}
+	return strategy
+}
+
+func TestRetryableErrorsMatchByType(t *testing.T) {
+	// ErrorAs matches the type directly and through fmt.Errorf wrapping,
+	// and does not match a different type.
+	strategy := filteredStrategy(t, ErrorAs[*matcherTestError]())
+
+	direct := &matcherTestError{code: 1}
+	wrapped := fmt.Errorf("outer: %w", &matcherTestError{code: 2})
+	other := &matcherOtherError{}
+
+	if d := strategy(RetryAttempt{Err: direct, Attempt: 1}); !d.Retry {
+		t.Errorf("direct type match = %+v, want retry", d)
+	}
+	if d := strategy(RetryAttempt{Err: wrapped, Attempt: 1}); !d.Retry {
+		t.Errorf("wrapped type match = %+v, want retry", d)
+	}
+	if d := strategy(RetryAttempt{Err: other, Attempt: 1}); d.Retry {
+		t.Errorf("non-matching type = %+v, want no retry", d)
+	}
+}
+
+func TestRetryableErrorsMatchByInterfaceType(t *testing.T) {
+	// ErrorAs accepts an interface type, matching any error that
+	// implements it, wrapped or not.
+	type coded interface {
+		error
+		Code() int
+	}
+	strategy := filteredStrategy(t, ErrorAs[coded]())
+
+	if d := strategy(RetryAttempt{Err: fmt.Errorf("wrap: %w", codedError{7}), Attempt: 1}); !d.Retry {
+		t.Errorf("wrapped interface match = %+v, want retry", d)
+	}
+	if d := strategy(RetryAttempt{Err: errors.New("plain"), Attempt: 1}); d.Retry {
+		t.Errorf("non-implementing error = %+v, want no retry", d)
+	}
+}
+
+type codedError struct{ code int }
+
+func (e codedError) Error() string { return "coded" }
+func (e codedError) Code() int     { return e.code }
+
+func TestRetryableErrorsMatchBySentinel(t *testing.T) {
+	// ErrorIs matches the sentinel directly and through wrapping, and does
+	// not match an error with the same message but a different identity.
+	strategy := filteredStrategy(t, ErrorIs(errMatcherSentinel))
+
+	wrapped := fmt.Errorf("outer: %w", errMatcherSentinel)
+	sameText := errors.New(errMatcherSentinel.Error())
+
+	if d := strategy(RetryAttempt{Err: errMatcherSentinel, Attempt: 1}); !d.Retry {
+		t.Errorf("direct sentinel match = %+v, want retry", d)
+	}
+	if d := strategy(RetryAttempt{Err: wrapped, Attempt: 1}); !d.Retry {
+		t.Errorf("wrapped sentinel match = %+v, want retry", d)
+	}
+	if d := strategy(RetryAttempt{Err: sameText, Attempt: 1}); d.Retry {
+		t.Errorf("same text, different identity = %+v, want no retry", d)
+	}
+}
+
+func TestRetryableErrorsMatchByPattern(t *testing.T) {
+	// ErrorContains is a substring test on Error(); ErrorMatches is a
+	// regexp search on Error(). Both see the full wrapped message.
+	tests := []struct {
+		name    string
+		matcher ErrorMatcher
+		err     error
+		want    bool
+	}{
+		{"contains hit", ErrorContains("throttl"), errors.New("request throttled"), true},
+		{"contains hit in wrapped message", ErrorContains("throttl"), fmt.Errorf("call: %w", errors.New("throttled")), true},
+		{"contains is case-sensitive", ErrorContains("Throttl"), errors.New("request throttled"), false},
+		{"contains miss", ErrorContains("timeout"), errors.New("request throttled"), false},
+		{"contains empty matches all", ErrorContains(""), errors.New("anything"), true},
+		{"regexp hit", ErrorMatches(regexp.MustCompile(`(?i)time ?out`)), errors.New("Read TimeOut"), true},
+		{"regexp hit in wrapped message", ErrorMatches(regexp.MustCompile(`code=5\d\d`)), fmt.Errorf("http: %w", errors.New("code=503")), true},
+		{"regexp miss", ErrorMatches(regexp.MustCompile(`^code=`)), errors.New("http: code=503"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			strategy := filteredStrategy(t, tt.matcher)
+			if d := strategy(RetryAttempt{Err: tt.err, Attempt: 1}); d.Retry != tt.want {
+				t.Errorf("Retry = %v, want %v", d.Retry, tt.want)
+			}
+		})
+	}
+}
+
+func TestRetryableErrorsAnyMatcherSuffices(t *testing.T) {
+	// Several matchers combine with OR: an error retries when any one
+	// matches, and stops retrying when none does.
+	strategy := filteredStrategy(t,
+		ErrorAs[*matcherTestError](),
+		ErrorIs(errMatcherSentinel),
+		ErrorContains("throttl"),
+	)
+
+	for _, err := range []error{
+		&matcherTestError{code: 1},
+		fmt.Errorf("wrap: %w", errMatcherSentinel),
+		errors.New("throttled by downstream"),
+	} {
+		if d := strategy(RetryAttempt{Err: err, Attempt: 1}); !d.Retry {
+			t.Errorf("%v: Retry = false, want true", err)
+		}
+	}
+	if d := strategy(RetryAttempt{Err: errors.New("permanent"), Attempt: 1}); d.Retry {
+		t.Errorf("non-matching error: Retry = true, want false")
+	}
+}
+
+func TestRetryableErrorsNonMatchStopsAtAnyAttempt(t *testing.T) {
+	// A non-matching error stops retrying regardless of attempts
+	// remaining; a matching error still follows the schedule and the
+	// attempt limit.
+	strategy := filteredStrategy(t, ErrorIs(errMatcherSentinel))
+	for attempt := 1; attempt <= 4; attempt++ {
+		if d := strategy(RetryAttempt{Err: errors.New("permanent"), Attempt: attempt}); d.Retry {
+			t.Errorf("attempt %d, non-matching: Retry = true, want false", attempt)
+		}
+		if d := strategy(RetryAttempt{Err: errMatcherSentinel, Attempt: attempt}); !d.Retry {
+			t.Errorf("attempt %d, matching: Retry = false, want true", attempt)
+		}
+	}
+	if d := strategy(RetryAttempt{Err: errMatcherSentinel, Attempt: 5}); d.Retry {
+		t.Errorf("attempt 5, matching: Retry = true, want false (attempts exhausted)")
+	}
+}
+
+func TestRetryableErrorsEmptyRetriesEverything(t *testing.T) {
+	// No criteria: every error is retryable, whether the slice is nil or
+	// empty and non-nil. This preserves the behavior before the field
+	// existed.
+	for _, matchers := range [][]ErrorMatcher{nil, {}} {
+		strategy := filteredStrategy(t, matchers...)
+		for _, err := range []error{
+			errors.New("anything"),
+			&matcherTestError{code: 1},
+			errMatcherSentinel,
+		} {
+			if d := strategy(RetryAttempt{Err: err, Attempt: 1}); !d.Retry {
+				t.Errorf("no criteria, %v: Retry = false, want true", err)
+			}
+		}
+	}
+}
+
+func TestRetryableErrorsDelayUnchangedForMatch(t *testing.T) {
+	// Filtering does not alter the delay schedule of a matching error.
+	strategy := MustNewRetryStrategy(RetryConfig{
+		MaxAttempts:     4,
+		InitialDelay:    2 * time.Second,
+		Jitter:          JitterNone,
+		RetryableErrors: []ErrorMatcher{ErrorIs(errMatcherSentinel)},
+	})
+	for attempt, want := range map[int]time.Duration{1: 2 * time.Second, 2: 4 * time.Second, 3: 8 * time.Second} {
+		if d := strategy(RetryAttempt{Err: errMatcherSentinel, Attempt: attempt}); !d.Retry || d.Delay != want {
+			t.Errorf("attempt %d = %+v, want retry with %v", attempt, d, want)
+		}
+	}
+}
+
+func TestRetryableErrorsLinearBackoff(t *testing.T) {
+	// LinearRetryConfig applies the same filtering.
+	strategy := MustLinearBackoff(LinearRetryConfig{
+		RetryableErrors: []ErrorMatcher{ErrorAs[*matcherTestError]()},
+	})
+	if d := strategy(RetryAttempt{Err: &matcherTestError{code: 1}, Attempt: 1}); !d.Retry || d.Delay != time.Second {
+		t.Errorf("matching = %+v, want retry with 1s delay", d)
+	}
+	if d := strategy(RetryAttempt{Err: errors.New("permanent"), Attempt: 1}); d.Retry {
+		t.Errorf("non-matching = %+v, want no retry", d)
+	}
+}
+
+func TestRetryableErrorsNilEntryRejected(t *testing.T) {
+	// A nil matcher is invalid configuration, reported with its index,
+	// alongside any other invalid field.
+	tests := []struct {
+		name string
+		cfg  RetryConfig
+		want []string
+	}{
+		{"nil literal", RetryConfig{RetryableErrors: []ErrorMatcher{nil}}, []string{"RetryConfig.RetryableErrors[0]"}},
+		{"ErrorIs(nil)", RetryConfig{RetryableErrors: []ErrorMatcher{ErrorIs(nil)}}, []string{"RetryableErrors[0]"}},
+		{"ErrorMatches(nil)", RetryConfig{RetryableErrors: []ErrorMatcher{ErrorMatches(nil)}}, []string{"RetryableErrors[0]"}},
+		{
+			"nil among valid entries",
+			RetryConfig{RetryableErrors: []ErrorMatcher{ErrorContains("a"), nil, ErrorContains("b"), nil}},
+			[]string{"RetryableErrors[1]", "RetryableErrors[3]"},
+		},
+		{
+			"joined with another invalid field",
+			RetryConfig{MaxAttempts: -1, RetryableErrors: []ErrorMatcher{nil}},
+			[]string{"MaxAttempts", "RetryableErrors[0]"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			strategy, err := NewRetryStrategy(tt.cfg)
+			if err == nil {
+				t.Fatal("NewRetryStrategy error = nil, want error")
+			}
+			if strategy != nil {
+				t.Error("strategy is non-nil, want nil on invalid config")
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not mention %s", err, want)
+				}
+			}
+		})
+	}
+
+	if _, err := LinearBackoff(LinearRetryConfig{RetryableErrors: []ErrorMatcher{nil}}); err == nil || !strings.Contains(err.Error(), "LinearRetryConfig.RetryableErrors[0]") {
+		t.Errorf("LinearBackoff error = %v, want LinearRetryConfig.RetryableErrors[0] rejected", err)
+	}
+}
+
+func TestMustNewRetryStrategyPanicsOnNilMatcher(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("MustNewRetryStrategy did not panic on nil matcher")
+		}
+	}()
+	MustNewRetryStrategy(RetryConfig{RetryableErrors: []ErrorMatcher{ErrorIs(nil)}})
+}
+
+func TestRetryableErrorsSliceCopied(t *testing.T) {
+	// Mutating the caller's slice after construction does not change the
+	// strategy.
+	matchers := []ErrorMatcher{ErrorIs(errMatcherSentinel)}
+	strategy := MustNewRetryStrategy(RetryConfig{RetryableErrors: matchers})
+	matchers[0] = ErrorContains("")
+
+	if d := strategy(RetryAttempt{Err: errors.New("permanent"), Attempt: 1}); d.Retry {
+		t.Errorf("strategy observed the caller's mutation: Retry = true, want false")
+	}
 }

@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### Added: `RetryableErrors` restricts retries to matching errors
+
+`RetryConfig` and `LinearRetryConfig` gain a `RetryableErrors []ErrorMatcher`
+field. When it is empty, every error is retryable, as before. When it is
+set, a failed attempt is retried only if at least one matcher accepts its
+error; otherwise the step fails at that attempt with the attempts made so
+far. This matches the other SDKs' `retryableErrors` and
+`retryableErrorTypes` options, folded into one list for Go.
+
+An `ErrorMatcher` is a `func(error) bool`. Four constructors cover the
+common cases: `ErrorIs(target)` uses `errors.Is`, `ErrorAs[T]()` uses
+`errors.As`, and `ErrorContains(substr)` and `ErrorMatches(re)` test the
+error's message. Wrapped errors match under `ErrorIs` and `ErrorAs`.
+
+```go
+durable.MustNewRetryStrategy(durable.RetryConfig{
+	MaxAttempts: 5,
+	RetryableErrors: []durable.ErrorMatcher{
+		durable.ErrorAs[*TransientError](),
+		durable.ErrorIs(io.ErrUnexpectedEOF),
+		durable.ErrorContains("throttl"),
+	},
+})
+```
+
+A nil entry is invalid configuration: `NewRetryStrategy` and
+`LinearBackoff` return an error and the `Must` variants panic. `ErrorIs(nil)`
+and `ErrorMatches(nil)` return a nil matcher so that mistake is caught the
+same way. `RetryableErrors` applies only to strategies built from a config;
+a hand-written `RetryStrategy` sees every failed attempt.
+
 ### Decision: `Map` does not pass the source collection to `fn`
 
 The other Durable Execution SDKs call the map function with a fourth

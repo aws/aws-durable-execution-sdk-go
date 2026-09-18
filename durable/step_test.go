@@ -323,6 +323,66 @@ func TestStepRetryNegativeDelayFails(t *testing.T) {
 	}
 }
 
+func TestStepRetryableErrorsNonMatchFailsImmediately(t *testing.T) {
+	// A configured strategy with RetryableErrors does not retry an error
+	// no matcher accepts: the step checkpoints FAIL on the first attempt
+	// and the StepError reports one attempt, with attempts remaining.
+	fake := &fakeLambda{}
+	var stepErr *StepError
+	resp := invokeStep(t, fake, stepPayload(`""`), func(ctx Context, _ string) (string, error) {
+		_, err := Step(ctx, "s", func(StepContext) (string, error) {
+			return "", errors.New("permanent failure")
+		}, WithRetry(MustNewRetryStrategy(RetryConfig{
+			MaxAttempts:     5,
+			RetryableErrors: []ErrorMatcher{ErrorContains("transient")},
+		})))
+		if !errors.As(err, &stepErr) {
+			t.Errorf("Step error = %v, want *StepError", err)
+		}
+		return "", err
+	})
+
+	if !strings.Contains(resp, `"Status":"FAILED"`) {
+		t.Errorf("response = %s, want FAILED", resp)
+	}
+	updates := updateBatch(t, fake)
+	if len(updates) != 2 {
+		t.Fatalf("received %d updates, want 2 (START, FAIL)", len(updates))
+	}
+	assertStepUpdate(t, updates[1], "1", OperationActionFail)
+	if stepErr == nil {
+		t.Fatal("no StepError observed")
+	}
+	if stepErr.Attempts != 1 {
+		t.Errorf("StepError.Attempts = %d, want 1", stepErr.Attempts)
+	}
+}
+
+func TestStepRetryableErrorsMatchRetries(t *testing.T) {
+	// The same configuration schedules a retry for an error a matcher
+	// accepts, including through wrapping.
+	fake := &fakeLambda{}
+	resp := invokeStep(t, fake, stepPayload(`""`), func(ctx Context, _ string) (string, error) {
+		return Step(ctx, "s", func(StepContext) (string, error) {
+			return "", fmt.Errorf("call: %w", errors.New("transient failure"))
+		}, WithRetry(MustNewRetryStrategy(RetryConfig{
+			MaxAttempts:     5,
+			InitialDelay:    2 * time.Second,
+			Jitter:          JitterNone,
+			RetryableErrors: []ErrorMatcher{ErrorContains("transient")},
+		})))
+	})
+
+	if want := `{"Status":"PENDING"}`; resp != want {
+		t.Errorf("response = %s, want %s", resp, want)
+	}
+	updates := updateBatch(t, fake)
+	if len(updates) != 2 {
+		t.Fatalf("received %d updates, want 2 (START, RETRY)", len(updates))
+	}
+	assertStepUpdate(t, updates[1], "1", OperationActionRetry)
+}
+
 func TestStepRetryStrategyReceivesAttempt(t *testing.T) {
 	// The strategy sees the failing error and the 1-based attempt number
 	// in the RetryAttempt it receives. Elapsed is not tracked yet, so it

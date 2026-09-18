@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math"
 	"math/rand/v2"
+	"regexp"
+	"strings"
 	"time"
 )
 
@@ -52,9 +54,12 @@ type RetryAttempt struct {
 // Strategies must be deterministic functions of the [RetryAttempt] they
 // receive, except for randomized jitter in the returned delay.
 //
-// To retry only specific errors, write a strategy that inspects
-// [RetryAttempt.Err] with [errors.Is] or [errors.As] before delegating to
-// a configured strategy:
+// To retry only specific errors, set [RetryConfig.RetryableErrors] or
+// [LinearRetryConfig.RetryableErrors] on a configured strategy. A
+// hand-written strategy receives every failed attempt and decides for
+// itself; it can inspect [RetryAttempt.Err] with [errors.Is] or
+// [errors.As], or apply an [ErrorMatcher], before delegating to a
+// configured strategy:
 //
 //	transientOnly := func(a durable.RetryAttempt) durable.RetryDecision {
 //		var te *TransientError
@@ -64,6 +69,89 @@ type RetryAttempt struct {
 //		return durable.ExponentialBackoff()(a)
 //	}
 type RetryStrategy func(RetryAttempt) RetryDecision
+
+// ErrorMatcher reports whether a failed attempt's error is retryable. It is
+// used in [RetryConfig.RetryableErrors] and
+// [LinearRetryConfig.RetryableErrors]. [ErrorIs], [ErrorAs],
+// [ErrorContains], and [ErrorMatches] build matchers for the common cases;
+// any func(error) bool is a matcher.
+//
+// A matcher must be a deterministic function of the error it receives, for
+// the same reason a [RetryStrategy] must be.
+type ErrorMatcher func(err error) bool
+
+// ErrorIs returns a matcher that reports whether an error matches target
+// under [errors.Is], so wrapped errors match. It is intended for sentinel
+// errors such as io.EOF.
+//
+// ErrorIs(nil) returns a nil matcher, which [NewRetryStrategy] and
+// [LinearBackoff] reject.
+func ErrorIs(target error) ErrorMatcher {
+	if target == nil {
+		return nil
+	}
+	return func(err error) bool { return errors.Is(err, target) }
+}
+
+// ErrorAs returns a matcher that reports whether an error matches type T
+// under [errors.As], so wrapped errors match. T is the type a caller would
+// pass a pointer to when calling errors.As directly: a pointer type for
+// errors with pointer receivers, or an interface type.
+//
+//	durable.ErrorAs[*TransientError]()
+//	durable.ErrorAs[net.Error]()
+func ErrorAs[T error]() ErrorMatcher {
+	return func(err error) bool {
+		var target T
+		return errors.As(err, &target)
+	}
+}
+
+// ErrorContains returns a matcher that reports whether an error's message,
+// the value of its Error method, contains substr. The empty string matches
+// every error.
+func ErrorContains(substr string) ErrorMatcher {
+	return func(err error) bool { return strings.Contains(err.Error(), substr) }
+}
+
+// ErrorMatches returns a matcher that reports whether an error's message,
+// the value of its Error method, contains a match of re.
+//
+// ErrorMatches(nil) returns a nil matcher, which [NewRetryStrategy] and
+// [LinearBackoff] reject.
+func ErrorMatches(re *regexp.Regexp) ErrorMatcher {
+	if re == nil {
+		return nil
+	}
+	return func(err error) bool { return re.MatchString(err.Error()) }
+}
+
+// errorRetryable reports whether err is retryable under matchers. An empty
+// matcher list means every error is retryable. A non-empty list is
+// retryable when any one matcher reports a match.
+func errorRetryable(err error, matchers []ErrorMatcher) bool {
+	if len(matchers) == 0 {
+		return true
+	}
+	for _, match := range matchers {
+		if match(err) {
+			return true
+		}
+	}
+	return false
+}
+
+// validateErrorMatchers returns one error per nil entry in matchers, naming
+// the config type and index, for inclusion in a config's validation error.
+func validateErrorMatchers(configType string, matchers []ErrorMatcher) []error {
+	var errs []error
+	for i, match := range matchers {
+		if match == nil {
+			errs = append(errs, fmt.Errorf("durable: %s.RetryableErrors[%d] must not be nil", configType, i))
+		}
+	}
+	return errs
+}
 
 // JitterStrategy randomizes retry delays to avoid thundering herds.
 type JitterStrategy string
@@ -114,6 +202,30 @@ type RetryConfig struct {
 	// default is [JitterFull]. When set, it must be one of the defined
 	// [JitterStrategy] constants.
 	Jitter JitterStrategy
+
+	// RetryableErrors restricts retries to errors that at least one
+	// matcher reports as retryable. When empty, every error is retryable.
+	// A non-matching error is not retried: the step fails on that attempt
+	// with the attempts made so far. Entries must not be nil.
+	//
+	// Build matchers with [ErrorIs] for sentinel errors, [ErrorAs] for
+	// error types, and [ErrorContains] or [ErrorMatches] for message
+	// patterns:
+	//
+	//	durable.RetryConfig{
+	//		RetryableErrors: []durable.ErrorMatcher{
+	//			durable.ErrorAs[*TransientError](),
+	//			durable.ErrorIs(io.ErrUnexpectedEOF),
+	//			durable.ErrorContains("throttl"),
+	//		},
+	//	}
+	//
+	// RetryableErrors applies to the strategy [NewRetryStrategy] builds
+	// from this config. A hand-written [RetryStrategy] is not filtered; it
+	// sees every failed attempt. To combine the two, have the hand-written
+	// strategy delegate to the configured one, which then applies the
+	// matchers, or apply an [ErrorMatcher] directly to [RetryAttempt.Err].
+	RetryableErrors []ErrorMatcher
 }
 
 // NewRetryStrategy returns an exponential backoff retry strategy: the delay
@@ -166,6 +278,7 @@ func validateRetryConfig(cfg RetryConfig) error {
 	default:
 		errs = append(errs, fmt.Errorf("durable: RetryConfig.Jitter must be a defined JitterStrategy constant, got %q", cfg.Jitter))
 	}
+	errs = append(errs, validateErrorMatchers("RetryConfig", cfg.RetryableErrors)...)
 	return errors.Join(errs...)
 }
 
@@ -188,8 +301,14 @@ func newRetryStrategy(cfg RetryConfig) RetryStrategy {
 	if cfg.Jitter == "" {
 		cfg.Jitter = JitterFull
 	}
+	// Copy the matchers so a caller mutating its slice after construction
+	// does not change the strategy.
+	matchers := append([]ErrorMatcher(nil), cfg.RetryableErrors...)
 	return func(a RetryAttempt) RetryDecision {
 		if a.Attempt >= cfg.MaxAttempts {
+			return RetryDecision{}
+		}
+		if !errorRetryable(a.Err, matchers) {
 			return RetryDecision{}
 		}
 		base := math.Min(
@@ -263,6 +382,11 @@ type LinearRetryConfig struct {
 	// default is [JitterNone], so the default sequence is exact. When
 	// set, it must be one of the defined [JitterStrategy] constants.
 	Jitter JitterStrategy
+
+	// RetryableErrors restricts retries to errors that at least one
+	// matcher reports as retryable. When empty, every error is retryable.
+	// Entries must not be nil. See [RetryConfig.RetryableErrors].
+	RetryableErrors []ErrorMatcher
 }
 
 // LinearBackoff returns a linear backoff retry strategy: the delay before
@@ -320,6 +444,7 @@ func validateLinearRetryConfig(cfg LinearRetryConfig) error {
 	default:
 		errs = append(errs, fmt.Errorf("durable: LinearRetryConfig.Jitter must be a defined JitterStrategy constant, got %q", cfg.Jitter))
 	}
+	errs = append(errs, validateErrorMatchers("LinearRetryConfig", cfg.RetryableErrors)...)
 	return errors.Join(errs...)
 }
 
@@ -342,8 +467,12 @@ func newLinearRetryStrategy(cfg LinearRetryConfig) RetryStrategy {
 	if cfg.Jitter == "" {
 		cfg.Jitter = JitterNone
 	}
+	matchers := append([]ErrorMatcher(nil), cfg.RetryableErrors...)
 	return func(a RetryAttempt) RetryDecision {
 		if a.Attempt >= cfg.MaxAttempts {
+			return RetryDecision{}
+		}
+		if !errorRetryable(a.Err, matchers) {
 			return RetryDecision{}
 		}
 		base := math.Min(
