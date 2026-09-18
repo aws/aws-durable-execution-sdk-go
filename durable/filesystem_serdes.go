@@ -2,6 +2,7 @@ package durable
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -56,6 +57,12 @@ var _ Serdes = (*fileSystemSerdes)(nil)
 // basePath must be a durable, shared mount (EFS or S3 Files) — NOT
 // Lambda's /tmp. On replay, a different execution environment may service
 // the invocation, so /tmp files from a prior invocation are unavailable.
+//
+// File writes are atomic from a reader's perspective: each value is written
+// to a temporary file in the target directory, synced, and renamed over the
+// final path, so a concurrent reader sees either the previous complete file
+// or the new complete file, never a partial one. This guarantee relies on
+// the mount supporting atomic rename within a directory.
 func NewFileSystemSerdes(basePath string, cfg ...FileSystemSerdesConfig) Serdes {
 	var config FileSystemSerdesConfig
 	if len(cfg) > 0 {
@@ -158,8 +165,99 @@ func (s *fileSystemSerdes) writeFile(meta SerdesContext, valueJSON []byte) (stri
 		return "", fmt.Errorf("durable: filesystem serdes: create dir: %w", err)
 	}
 	filePath := filepath.Join(dir, fileName)
-	if err := os.WriteFile(filePath, valueJSON, 0o644); err != nil {
+	if err := atomicWriteFile(filePath, valueJSON); err != nil {
 		return "", fmt.Errorf("durable: filesystem serdes: write file: %w", err)
 	}
 	return filePath, nil
+}
+
+// fileSystemSerdesTempSuffix is the suffix of the temporary file that
+// atomicWriteFile writes before renaming it over the target. A file with
+// this suffix is never referenced from a checkpoint envelope.
+const fileSystemSerdesTempSuffix = ".tmp"
+
+// syncFile flushes a file's contents to stable storage. It is a variable so
+// tests can inject a failure.
+var syncFile = func(f *os.File) error { return f.Sync() }
+
+// fileSystemSerdesNewFileMode is the permission bits requested for a file
+// that does not yet exist. The process umask reduces it at creation, as it
+// would for a direct create of the target path.
+const fileSystemSerdesNewFileMode = 0o644
+
+// atomicWriteFile writes data to path so that a concurrent reader observes
+// either the previous complete file or the new complete file, never a
+// partially written one.
+//
+// The data is written to a uniquely named temporary file in the same
+// directory as path, synced, and then renamed over path. The temporary file
+// lives in the same directory so the rename stays within one filesystem,
+// which is what makes it atomic. If the write or sync fails, the temporary
+// file is removed and path is left untouched.
+//
+// Permissions match what an in-place write would produce. If path already
+// exists, the replacement keeps its permission bits, so a restrictive mode
+// set by the operator is not widened. If path does not exist, the file is
+// created with fileSystemSerdesNewFileMode reduced by the process umask.
+func atomicWriteFile(path string, data []byte) (err error) {
+	// Read the existing target's permissions before creating the temp file
+	// so the replacement can carry them over.
+	var existingMode os.FileMode
+	var preserveMode bool
+	if info, statErr := os.Stat(path); statErr == nil {
+		existingMode = info.Mode().Perm()
+		preserveMode = true
+	} else if !os.IsNotExist(statErr) {
+		return statErr
+	}
+
+	tmp, err := createTempSibling(path)
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer func() {
+		if err != nil {
+			_ = tmp.Close()
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	if preserveMode {
+		if err = tmp.Chmod(existingMode); err != nil {
+			return err
+		}
+	}
+	if _, err = tmp.Write(data); err != nil {
+		return err
+	}
+	if err = syncFile(tmp); err != nil {
+		return err
+	}
+	if err = tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
+}
+
+// createTempSibling creates a new, uniquely named file next to path with
+// the temporary-write suffix. The file is created exclusively with
+// fileSystemSerdesNewFileMode, so the process umask applies to it the same
+// way it applies to any newly created file.
+func createTempSibling(path string) (*os.File, error) {
+	var random [8]byte
+	for attempt := 0; attempt < 100; attempt++ {
+		if _, err := rand.Read(random[:]); err != nil {
+			return nil, err
+		}
+		tmpPath := path + "." + hex.EncodeToString(random[:]) + fileSystemSerdesTempSuffix
+		f, err := os.OpenFile(tmpPath, os.O_RDWR|os.O_CREATE|os.O_EXCL, fileSystemSerdesNewFileMode)
+		if err == nil {
+			return f, nil
+		}
+		if !os.IsExist(err) {
+			return nil, err
+		}
+	}
+	return nil, fmt.Errorf("create temporary file for %s: too many name collisions", path)
 }

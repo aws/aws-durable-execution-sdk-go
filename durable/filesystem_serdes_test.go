@@ -3,6 +3,7 @@ package durable
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -262,5 +263,172 @@ func TestFileSystemSerdesMissingFile(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "read file") {
 		t.Errorf("error = %v, want read file error", err)
+	}
+}
+
+// tempFilesUnder returns every file under root whose name ends with the
+// temporary-write suffix.
+func tempFilesUnder(t *testing.T, root string) []string {
+	t.Helper()
+	var found []string
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && strings.HasSuffix(d.Name(), fileSystemSerdesTempSuffix) {
+			found = append(found, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", root, err)
+	}
+	return found
+}
+
+func TestFileSystemSerdesWriteLeavesNoTempFile(t *testing.T) {
+	dir := t.TempDir()
+	s := NewFileSystemSerdes(dir)
+	meta := SerdesContext{DurableExecutionArn: "arn:test", OperationID: "op-1"}
+
+	data, err := s.Marshal(context.Background(), meta, map[string]int{"a": 1})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var env fsEnvelope
+	if err := json.Unmarshal(data, &env); err != nil {
+		t.Fatalf("unmarshal envelope: %v", err)
+	}
+	if strings.HasSuffix(env.File, fileSystemSerdesTempSuffix) {
+		t.Errorf("envelope references temporary file %q", env.File)
+	}
+	info, err := os.Stat(env.File)
+	if err != nil {
+		t.Fatalf("target file missing: %v", err)
+	}
+	// A new file gets the same permissions a direct create would, so the
+	// process umask applies. Compare against a reference file created the
+	// direct way rather than a fixed value.
+	ref := filepath.Join(dir, "reference.json")
+	if err := os.WriteFile(ref, []byte("{}"), fileSystemSerdesNewFileMode); err != nil {
+		t.Fatalf("write reference: %v", err)
+	}
+	refInfo, err := os.Stat(ref)
+	if err != nil {
+		t.Fatalf("stat reference: %v", err)
+	}
+	if got, want := info.Mode().Perm(), refInfo.Mode().Perm(); got != want {
+		t.Errorf("new file mode = %o, want %o (same as a direct create)", got, want)
+	}
+	if left := tempFilesUnder(t, dir); len(left) != 0 {
+		t.Errorf("temporary files left after successful write: %v", left)
+	}
+}
+
+func TestFileSystemSerdesOverwritePreservesRestrictiveMode(t *testing.T) {
+	dir := t.TempDir()
+	s := NewFileSystemSerdes(dir)
+	meta := SerdesContext{DurableExecutionArn: "arn:test", OperationID: "op-1"}
+
+	data, err := s.Marshal(context.Background(), meta, "first")
+	if err != nil {
+		t.Fatalf("Marshal first: %v", err)
+	}
+	var env fsEnvelope
+	if err := json.Unmarshal(data, &env); err != nil {
+		t.Fatalf("unmarshal envelope: %v", err)
+	}
+	// An operator tightens the payload's permissions. A later overwrite of
+	// the same operation must not widen them.
+	if err := os.Chmod(env.File, 0o600); err != nil {
+		t.Fatalf("chmod target: %v", err)
+	}
+
+	data, err = s.Marshal(context.Background(), meta, "second")
+	if err != nil {
+		t.Fatalf("Marshal second: %v", err)
+	}
+	info, err := os.Stat(env.File)
+	if err != nil {
+		t.Fatalf("stat target: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("mode after overwrite = %o, want 600", got)
+	}
+	var out string
+	if err := s.Unmarshal(context.Background(), meta, data, &out); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if out != "second" {
+		t.Errorf("Unmarshal result = %q, want %q", out, "second")
+	}
+	if left := tempFilesUnder(t, dir); len(left) != 0 {
+		t.Errorf("temporary files left after overwrite: %v", left)
+	}
+}
+
+func TestFileSystemSerdesFailedWriteRemovesTempFile(t *testing.T) {
+	dir := t.TempDir()
+	s := NewFileSystemSerdes(dir)
+	meta := SerdesContext{DurableExecutionArn: "arn:test", OperationID: "op-1"}
+
+	// Write a first version so the failure case can show the previous
+	// complete file is preserved.
+	data, err := s.Marshal(context.Background(), meta, "first")
+	if err != nil {
+		t.Fatalf("Marshal first: %v", err)
+	}
+	var env fsEnvelope
+	if err := json.Unmarshal(data, &env); err != nil {
+		t.Fatalf("unmarshal envelope: %v", err)
+	}
+
+	// Inject a sync failure for the second write.
+	orig := syncFile
+	t.Cleanup(func() { syncFile = orig })
+	syncFile = func(*os.File) error { return errors.New("injected sync failure") }
+
+	if _, err := s.Marshal(context.Background(), meta, "second"); err == nil {
+		t.Fatal("expected Marshal to fail when sync fails")
+	} else if !strings.Contains(err.Error(), "injected sync failure") {
+		t.Errorf("error = %v, want injected sync failure", err)
+	}
+
+	if left := tempFilesUnder(t, dir); len(left) != 0 {
+		t.Errorf("temporary files left after failed write: %v", left)
+	}
+	content, err := os.ReadFile(env.File)
+	if err != nil {
+		t.Fatalf("read previous file: %v", err)
+	}
+	if string(content) != `"first"` {
+		t.Errorf("previous file content = %s, want %q", content, `"first"`)
+	}
+}
+
+func TestFileSystemSerdesOverwriteReplacesWholeFile(t *testing.T) {
+	dir := t.TempDir()
+	s := NewFileSystemSerdes(dir)
+	meta := SerdesContext{DurableExecutionArn: "arn:test", OperationID: "op-1"}
+
+	if _, err := s.Marshal(context.Background(), meta, strings.Repeat("x", 1000)); err != nil {
+		t.Fatalf("Marshal first: %v", err)
+	}
+	data, err := s.Marshal(context.Background(), meta, "short")
+	if err != nil {
+		t.Fatalf("Marshal second: %v", err)
+	}
+
+	// A shorter second write must fully replace the longer first one, not
+	// leave trailing bytes from it.
+	var out string
+	if err := s.Unmarshal(context.Background(), meta, data, &out); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if out != "short" {
+		t.Errorf("Unmarshal result = %q, want %q", out, "short")
+	}
+	if left := tempFilesUnder(t, dir); len(left) != 0 {
+		t.Errorf("temporary files left after overwrite: %v", left)
 	}
 }
