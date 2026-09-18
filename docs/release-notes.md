@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### Added: `SerdesOf` builds a `Serdes` from typed functions
+
+`SerdesOf[T]` adapts a marshal function taking `T` and an unmarshal
+function returning `T` to the untyped `Serdes` interface. The SDK performs
+the type assertion once: `Marshal` with a value that is not `T`, or
+`Unmarshal` with a target that is not `*T`, returns an error naming both
+the expected and the actual type. `T` is inferred from the function
+arguments.
+
+```go
+masked := durable.SerdesOf(
+	func(_ context.Context, _ durable.SerdesContext, r Receipt) ([]byte, error) {
+		r.Card = "****" + r.Card[len(r.Card)-4:]
+		return json.Marshal(r)
+	},
+	func(_ context.Context, _ durable.SerdesContext, b []byte) (Receipt, error) {
+		var r Receipt
+		return r, json.Unmarshal(b, &r)
+	},
+)
+receipt, err := durable.Step(ctx, "charge", chargeCard, durable.WithStepSerdes(masked))
+```
+
+The `Serdes` interface and every `With*Serdes` option are unchanged. A
+`SerdesOf` serdes set handler-wide with `WithSerdes` serves every operation
+result, so an operation whose result is not `T` fails with a `SerdesError`.
+
 ### Added: `NewWaitStrategy` builds a `WaitForCondition` wait strategy
 
 `WaitConfig` and `NewWaitStrategy` are to `WaitForCondition` what

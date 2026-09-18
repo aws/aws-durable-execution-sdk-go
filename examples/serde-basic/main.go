@@ -1,7 +1,9 @@
 // Command serde-basic demonstrates per-operation serdes using
-// [durable.WithStepSerdes]. A custom Serdes implementation prefixes
-// serialized data with a marker, proving that the SDK uses the configured
-// serializer for checkpoint storage and the matching deserializer on replay.
+// [durable.WithStepSerdes]. The serdes is built with [durable.SerdesOf],
+// which adapts marshal and unmarshal functions written for one type (User)
+// to the untyped [durable.Serdes] interface. The functions prefix serialized
+// data with a marker, proving that the SDK uses the configured serializer
+// for checkpoint storage and the matching deserializer on replay.
 //
 // Go's type system preserves struct methods inherently — JSON
 // deserialization into a typed pointer restores full method access. This
@@ -13,6 +15,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
@@ -35,25 +38,27 @@ func (u User) Greet() string {
 	return fmt.Sprintf("Hello, I'm %s. My email is %s", u.FullName(), u.Email)
 }
 
-// prefixSerdes wraps encoding/json with a custom prefix marker to prove
-// custom serialization is exercised during checkpoint writes and reads.
-type prefixSerdes struct {
-	prefix []byte
-}
-
-func (s *prefixSerdes) Marshal(_ context.Context, _ durable.SerdesContext, v any) ([]byte, error) {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return nil, err
-	}
-	return append(s.prefix, b...), nil
-}
-
-func (s *prefixSerdes) Unmarshal(_ context.Context, _ durable.SerdesContext, data []byte, v any) error {
-	if len(data) < len(s.prefix) {
-		return fmt.Errorf("serde-basic: missing prefix in checkpoint data")
-	}
-	return json.Unmarshal(data[len(s.prefix):], v)
+// newUserSerdes returns a Serdes for User that wraps encoding/json with a
+// prefix marker to prove custom serialization is exercised during
+// checkpoint writes and reads. durable.SerdesOf performs the type assertion,
+// so the functions receive and return User directly instead of any.
+func newUserSerdes(prefix []byte) durable.Serdes {
+	return durable.SerdesOf(
+		func(_ context.Context, _ durable.SerdesContext, u User) ([]byte, error) {
+			b, err := json.Marshal(u)
+			if err != nil {
+				return nil, err
+			}
+			return slices.Concat(prefix, b), nil
+		},
+		func(_ context.Context, _ durable.SerdesContext, data []byte) (User, error) {
+			var u User
+			if len(data) < len(prefix) {
+				return u, fmt.Errorf("serde-basic: missing prefix in checkpoint data")
+			}
+			return u, json.Unmarshal(data[len(prefix):], &u)
+		},
+	)
 }
 
 type event struct {
@@ -68,7 +73,7 @@ type output struct {
 }
 
 func handler(ctx durable.Context, ev event) (output, error) {
-	userSerdes := &prefixSerdes{prefix: []byte("USR:")}
+	userSerdes := newUserSerdes([]byte("USR:"))
 
 	// Step 1: create user with custom serdes.
 	user, err := durable.Step(ctx, "create-user", func(_ durable.StepContext) (User, error) {

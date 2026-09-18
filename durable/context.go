@@ -125,6 +125,15 @@ type SerdesContext struct {
 // external storage), and a [SerdesContext] with the operation's identity
 // and the execution ARN, enabling context-aware serialization strategies
 // such as filesystem offloading keyed by operation.
+//
+// The interface is untyped: Marshal takes any and Unmarshal fills a pointer
+// passed as any. It has to be, because one Serdes value can serve every
+// operation result type in a handler. The handler-wide default set with
+// [WithSerdes] and the payload-offloading serdes from [NewFileSystemSerdes]
+// both do exactly that, so neither can carry a single type parameter. For a
+// serdes written for one result type, use [SerdesOf], which performs the
+// type assertion once and hands typed values to your marshal and unmarshal
+// functions.
 type Serdes interface {
 	Marshal(ctx context.Context, meta SerdesContext, v any) ([]byte, error)
 	Unmarshal(ctx context.Context, meta SerdesContext, data []byte, v any) error
