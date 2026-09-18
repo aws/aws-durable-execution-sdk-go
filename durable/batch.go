@@ -337,6 +337,59 @@ func (r BatchResult[O]) Failed() []BatchItem[O] {
 	return out
 }
 
+// Started returns the items that were started and then abandoned when the
+// batch completed early, in input order. These are the items with status
+// [BatchItemStarted]. They are included in [BatchResult.TotalCount] but
+// are neither successes nor failures. Items that never started are not
+// in Items and so are not returned.
+func (r BatchResult[O]) Started() []BatchItem[O] {
+	var out []BatchItem[O]
+	for i := range r.Items {
+		if r.Items[i].Status == BatchItemStarted {
+			out = append(out, r.Items[i])
+		}
+	}
+	return out
+}
+
+// StartedCount returns the number of items that were started and then
+// abandoned when the batch completed early. [BatchResult.TotalCount] is
+// SuccessCount + FailureCount + StartedCount.
+func (r BatchResult[O]) StartedCount() int {
+	n := 0
+	for i := range r.Items {
+		if r.Items[i].Status == BatchItemStarted {
+			n++
+		}
+	}
+	return n
+}
+
+// Item returns the item or branch with the given name, or nil if no item
+// has that name. When several items share the name, it returns the first
+// in input order. The pointer refers into Items.
+func (r BatchResult[O]) Item(name string) *BatchItem[O] {
+	for i := range r.Items {
+		if r.Items[i].Name == name {
+			return &r.Items[i]
+		}
+	}
+	return nil
+}
+
+// Result returns the successful result of the item or branch with the
+// given name. ok is false if no item has that name or the item did not
+// succeed. When several items share the name, the first in input order is
+// used, whatever its status.
+func (r BatchResult[O]) Result(name string) (value O, ok bool) {
+	item := r.Item(name)
+	if item == nil || item.Status != BatchItemSucceeded {
+		var zero O
+		return zero, false
+	}
+	return item.Result, true
+}
+
 // Errors returns the errors from failed items, in input order.
 func (r BatchResult[O]) Errors() []error {
 	var out []error
@@ -359,10 +412,10 @@ func (r BatchResult[O]) HasFailure() bool {
 }
 
 // batchOutcome is the return value of [Map] and [Parallel] for a
-// completed batch: the populated result and, when at least one item
-// failed, a [BatchError] describing the failure. It is derived from the
-// result's Items and Reason alone, so the first invocation and every replay
-// return the same error for the same checkpointed batch.
+// completed batch: the populated result and, when [BatchResult.Status] is
+// [BatchItemFailed], a [BatchError] describing the failure. It is derived
+// from the result's Items and Reason alone, so the first invocation and
+// every replay return the same error for the same checkpointed batch.
 func batchOutcome[O any](name string, result BatchResult[O]) (BatchResult[O], error) {
 	if result.Status() != BatchItemFailed {
 		return result, nil
@@ -399,9 +452,12 @@ func (r BatchResult[O]) TotalCount() int {
 	return len(r.Items)
 }
 
-// Status returns the overall batch status: [BatchItemFailed] if any item
-// failed or the batch-level completion indicates failure,
-// [BatchItemSucceeded] otherwise.
+// Status returns the overall batch status. A custom completion decision
+// is authoritative: [CompletionCustomFailed] yields [BatchItemFailed] and
+// [CompletionCustomSucceeded] yields [BatchItemSucceeded], whatever the
+// item outcomes. Otherwise Status is [BatchItemFailed] if any item failed
+// or the batch-level completion indicates failure, and
+// [BatchItemSucceeded] if not.
 //
 // Status is derived from the exported Items and Reason fields, so it is
 // authoritative for any BatchResult — including one reconstructed by a
@@ -413,13 +469,19 @@ func (r BatchResult[O]) Status() BatchItemStatus {
 // batchStatusFor computes the overall batch status from the item outcomes
 // and the completion reason.
 func batchStatusFor[O any](items []BatchItem[O], reason CompletionReason) BatchItemStatus {
+	// A custom completion decision decides the outcome even when it
+	// disagrees with the items: a custom failure may have no failed item,
+	// and a custom success may carry failed items.
+	switch reason {
+	case CompletionCustomFailed, CompletionFailureToleranceExceeded:
+		return BatchItemFailed
+	case CompletionCustomSucceeded:
+		return BatchItemSucceeded
+	}
 	for i := range items {
 		if items[i].Status == BatchItemFailed {
 			return BatchItemFailed
 		}
-	}
-	if reason == CompletionFailureToleranceExceeded {
-		return BatchItemFailed
 	}
 	return BatchItemSucceeded
 }
@@ -427,21 +489,35 @@ func batchStatusFor[O any](items []BatchItem[O], reason CompletionReason) BatchI
 // CompletionReason records why a batch operation completed.
 type CompletionReason int
 
-// Batch completion reasons.
+// Batch completion reasons. Values are persisted in checkpoints, so they
+// are pinned explicitly rather than derived from iota ordering.
 const (
 	// CompletionAllCompleted indicates every item ran to completion.
-	CompletionAllCompleted CompletionReason = iota + 1
+	CompletionAllCompleted CompletionReason = 1
 
 	// CompletionMinSuccessfulReached indicates the batch completed early
 	// because the MinSuccessful threshold was met.
-	CompletionMinSuccessfulReached
+	CompletionMinSuccessfulReached CompletionReason = 2
 
 	// CompletionFailureToleranceExceeded indicates the batch failed early
 	// because more items failed than the tolerance allows.
-	CompletionFailureToleranceExceeded
+	CompletionFailureToleranceExceeded CompletionReason = 3
+
+	// CompletionCustomSucceeded indicates a custom completion decision
+	// completed the batch early as succeeded.
+	CompletionCustomSucceeded CompletionReason = 4
+
+	// CompletionCustomFailed indicates a custom completion decision
+	// completed the batch early as failed.
+	CompletionCustomFailed CompletionReason = 5
 )
 
-// String returns the wire representation of the completion reason.
+// completionReasonUnknown is the string form of a [CompletionReason] that
+// is zero or not one of the defined reasons.
+const completionReasonUnknown = "UNKNOWN"
+
+// String returns the wire representation of the completion reason. A zero
+// or unrecognized value returns "UNKNOWN".
 func (r CompletionReason) String() string {
 	switch r {
 	case CompletionAllCompleted:
@@ -450,8 +526,12 @@ func (r CompletionReason) String() string {
 		return "MIN_SUCCESSFUL_REACHED"
 	case CompletionFailureToleranceExceeded:
 		return "FAILURE_TOLERANCE_EXCEEDED"
+	case CompletionCustomSucceeded:
+		return "CUSTOM_COMPLETION_SUCCEEDED"
+	case CompletionCustomFailed:
+		return "CUSTOM_COMPLETION_FAILED"
 	default:
-		return "UNKNOWN"
+		return completionReasonUnknown
 	}
 }
 

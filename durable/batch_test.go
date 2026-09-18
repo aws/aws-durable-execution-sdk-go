@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -626,22 +627,74 @@ func TestBatchOutcome(t *testing.T) {
 			t.Fatalf("err = %v, want nil for success", err)
 		}
 	})
+
+	t.Run("custom failed without item errors", func(t *testing.T) {
+		result := BatchResult[string]{
+			Items: []BatchItem[string]{
+				{Index: 0, Status: BatchItemSucceeded, Result: "ok"},
+				{Index: 1, Status: BatchItemStarted},
+			},
+			Reason: CompletionCustomFailed,
+		}
+		_, err := batchOutcome("b", result)
+		var berr *BatchError
+		if !errors.As(err, &berr) {
+			t.Fatalf("err = %v (%T), want *BatchError", err, err)
+		}
+		if berr.Reason != CompletionCustomFailed || len(berr.Errors) != 0 {
+			t.Errorf("BatchError = %+v, want CUSTOM_COMPLETION_FAILED with no item errors", berr)
+		}
+		if !strings.Contains(err.Error(), "CUSTOM_COMPLETION_FAILED") {
+			t.Errorf("Error() = %q, want reason in message", err.Error())
+		}
+	})
+
+	t.Run("custom succeeded despite failed item", func(t *testing.T) {
+		result := BatchResult[string]{
+			Items: []BatchItem[string]{
+				{Index: 0, Status: BatchItemSucceeded, Result: "ok"},
+				{Index: 1, Status: BatchItemFailed, Err: err1},
+			},
+			Reason: CompletionCustomSucceeded,
+		}
+		got, err := batchOutcome("b", result)
+		if err != nil {
+			t.Fatalf("err = %v, want nil: a custom success decision is authoritative", err)
+		}
+		if got.FailureCount() != 1 {
+			t.Errorf("FailureCount = %d, want 1: the failed item is still reported", got.FailureCount())
+		}
+	})
 }
 
-// TestStatusReflectsCompletionReason verifies that Status() returns
-// BatchItemFailed when the completion reason indicates failure, even
-// without failed items (for forward-compatible batch-level failure).
+// TestStatusReflectsCompletionReason verifies that Status() follows the
+// completion reason: a failure reason yields BatchItemFailed even without
+// failed items, and a custom success decision yields BatchItemSucceeded even
+// with a failed item.
 func TestStatusReflectsCompletionReason(t *testing.T) {
-	// A batch with only succeeded/started items but a failure reason.
-	result := BatchResult[string]{
-		Items: []BatchItem[string]{
-			{Index: 0, Status: BatchItemSucceeded, Result: "ok"},
-		},
-		Reason: CompletionFailureToleranceExceeded,
+	cases := []struct {
+		name   string
+		items  []BatchItem[string]
+		reason CompletionReason
+		want   BatchItemStatus
+	}{
+		{"tolerance exceeded, no failed item", []BatchItem[string]{{Status: BatchItemSucceeded, Result: "ok"}}, CompletionFailureToleranceExceeded, BatchItemFailed},
+		{"custom failed, no failed item", []BatchItem[string]{{Status: BatchItemSucceeded, Result: "ok"}, {Status: BatchItemStarted}}, CompletionCustomFailed, BatchItemFailed},
+		{"custom failed, no items", nil, CompletionCustomFailed, BatchItemFailed},
+		{"custom succeeded, failed item", []BatchItem[string]{{Status: BatchItemFailed, Err: errors.New("x")}}, CompletionCustomSucceeded, BatchItemSucceeded},
+		{"custom succeeded, no items", nil, CompletionCustomSucceeded, BatchItemSucceeded},
+		{"all completed, failed item", []BatchItem[string]{{Status: BatchItemFailed, Err: errors.New("x")}}, CompletionAllCompleted, BatchItemFailed},
+		{"min successful, failed item", []BatchItem[string]{{Status: BatchItemSucceeded}, {Status: BatchItemFailed, Err: errors.New("x")}}, CompletionMinSuccessfulReached, BatchItemFailed},
+		{"min successful, no failed item", []BatchItem[string]{{Status: BatchItemSucceeded}, {Status: BatchItemStarted}}, CompletionMinSuccessfulReached, BatchItemSucceeded},
+		{"unknown reason, no failed item", []BatchItem[string]{{Status: BatchItemSucceeded}}, CompletionReason(0), BatchItemSucceeded},
 	}
-
-	if result.Status() != BatchItemFailed {
-		t.Errorf("Status() = %v, want BatchItemFailed for failure reason", result.Status())
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := BatchResult[string]{Items: tc.items, Reason: tc.reason}
+			if got := result.Status(); got != tc.want {
+				t.Errorf("Status() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -992,18 +1045,6 @@ func TestMapLiveEqualsReplayShapeEarlyCompletion(t *testing.T) {
 	}
 }
 
-// startedCount counts the abandoned (started-but-not-terminal) items in a
-// batch result.
-func startedCount[O any](br BatchResult[O]) int {
-	n := 0
-	for i := range br.Items {
-		if br.Items[i].Status == BatchItemStarted {
-			n++
-		}
-	}
-	return n
-}
-
 // TestConcurrentMinSuccessfulAbandonsInFlight verifies that a concurrent
 // batch completing early on MinSuccessful stops awaiting the branches still
 // in flight: they are reported STARTED and are NOT counted as successes,
@@ -1013,11 +1054,12 @@ func startedCount[O any](br BatchResult[O]) int {
 func TestConcurrentMinSuccessfulAbandonsInFlight(t *testing.T) {
 	fake := &fakeLambda{}
 	type result struct {
-		Success int    `json:"successCount"`
-		Failure int    `json:"failureCount"`
-		Started int    `json:"startedCount"`
-		Total   int    `json:"totalCount"`
-		Reason  string `json:"reason"`
+		Success      int    `json:"successCount"`
+		Failure      int    `json:"failureCount"`
+		Started      int    `json:"startedCount"`
+		StartedIndex []int  `json:"startedIndex"`
+		Total        int    `json:"totalCount"`
+		Reason       string `json:"reason"`
 	}
 	slowBranch := func(a, b string) Branch[string] {
 		return Branch[string]{Func: func(c Context) (string, error) {
@@ -1051,12 +1093,17 @@ func TestConcurrentMinSuccessfulAbandonsInFlight(t *testing.T) {
 		if err != nil {
 			return result{}, err
 		}
+		var startedIndex []int
+		for _, item := range br.Started() {
+			startedIndex = append(startedIndex, item.Index)
+		}
 		return result{
-			Success: br.SuccessCount(),
-			Failure: br.FailureCount(),
-			Started: startedCount(br),
-			Total:   br.TotalCount(),
-			Reason:  br.Reason.String(),
+			Success:      br.SuccessCount(),
+			Failure:      br.FailureCount(),
+			Started:      br.StartedCount(),
+			StartedIndex: startedIndex,
+			Total:        br.TotalCount(),
+			Reason:       br.Reason.String(),
 		}, nil
 	})
 	assertSucceeded(t, resp)
@@ -1074,6 +1121,10 @@ func TestConcurrentMinSuccessfulAbandonsInFlight(t *testing.T) {
 	}
 	if r.Started != 2 {
 		t.Errorf("startedCount = %d, want 2 (abandoned branches)", r.Started)
+	}
+	// Started() reports the abandoned branches in input order.
+	if want := []int{2, 3}; !reflect.DeepEqual(r.StartedIndex, want) {
+		t.Errorf("Started() indexes = %v, want %v", r.StartedIndex, want)
 	}
 	if r.Failure != 0 {
 		t.Errorf("failureCount = %d, want 0", r.Failure)
@@ -1919,7 +1970,7 @@ func TestConcurrentAbandonedWaitDoesNotForcePending(t *testing.T) {
 		}
 		return result{
 			Success: br.SuccessCount(),
-			Started: startedCount(br),
+			Started: br.StartedCount(),
 			Total:   br.TotalCount(),
 			Reason:  br.Reason.String(),
 		}, nil
@@ -2598,5 +2649,116 @@ func TestParallelSerdesAndCallbackTaxonomyLiveToReplay(t *testing.T) {
 	}
 	if replay != live {
 		t.Errorf("replay verdict = %+v, live = %+v — taxonomy degraded across replay", replay, live)
+	}
+}
+
+// TestCompletionReasonString asserts the wire string of every completion
+// reason, the sentinel for the zero and unrecognized values, and that the
+// numeric values persisted in checkpoints are unchanged.
+func TestCompletionReasonString(t *testing.T) {
+	cases := []struct {
+		reason CompletionReason
+		value  int
+		want   string
+	}{
+		{CompletionAllCompleted, 1, "ALL_COMPLETED"},
+		{CompletionMinSuccessfulReached, 2, "MIN_SUCCESSFUL_REACHED"},
+		{CompletionFailureToleranceExceeded, 3, "FAILURE_TOLERANCE_EXCEEDED"},
+		{CompletionCustomSucceeded, 4, "CUSTOM_COMPLETION_SUCCEEDED"},
+		{CompletionCustomFailed, 5, "CUSTOM_COMPLETION_FAILED"},
+		{CompletionReason(0), 0, "UNKNOWN"},
+		{CompletionReason(99), 99, "UNKNOWN"},
+	}
+	for _, tc := range cases {
+		if int(tc.reason) != tc.value {
+			t.Errorf("%s: numeric value = %d, want %d", tc.want, int(tc.reason), tc.value)
+		}
+		if got := tc.reason.String(); got != tc.want {
+			t.Errorf("CompletionReason(%d).String() = %q, want %q", int(tc.reason), got, tc.want)
+		}
+	}
+}
+
+// TestBatchResultLookupByName covers Result and Item on a BatchResult built
+// from its exported fields: a hit, a miss, a failed item, a started item,
+// and duplicate names resolving to the first in input order.
+func TestBatchResultLookupByName(t *testing.T) {
+	failure := errors.New("boom")
+	br := BatchResult[string]{
+		Items: []BatchItem[string]{
+			{Index: 0, Name: "label", Status: BatchItemSucceeded, Result: "L"},
+			{Index: 1, Name: "tracking", Status: BatchItemFailed, Err: failure},
+			{Index: 2, Name: "dup", Status: BatchItemFailed, Err: failure},
+			{Index: 3, Name: "dup", Status: BatchItemSucceeded, Result: "second"},
+			{Index: 4, Name: "slow", Status: BatchItemStarted},
+		},
+		Reason: CompletionAllCompleted,
+	}
+
+	if v, ok := br.Result("label"); !ok || v != "L" {
+		t.Errorf(`Result("label") = %q, %v; want "L", true`, v, ok)
+	}
+	if v, ok := br.Result("missing"); ok || v != "" {
+		t.Errorf(`Result("missing") = %q, %v; want "", false`, v, ok)
+	}
+	if v, ok := br.Result("tracking"); ok || v != "" {
+		t.Errorf(`Result("tracking") on a failed item = %q, %v; want "", false`, v, ok)
+	}
+	if v, ok := br.Result("slow"); ok || v != "" {
+		t.Errorf(`Result("slow") on a started item = %q, %v; want "", false`, v, ok)
+	}
+	// Duplicate names: the first in input order is the match. Here it
+	// failed, so Result reports no success even though a later item with
+	// the same name succeeded.
+	if v, ok := br.Result("dup"); ok || v != "" {
+		t.Errorf(`Result("dup") = %q, %v; want "", false (first match failed)`, v, ok)
+	}
+
+	if item := br.Item("tracking"); item == nil || item.Index != 1 || item.Err != failure {
+		t.Errorf(`Item("tracking") = %+v, want index 1 with its error`, item)
+	}
+	if item := br.Item("dup"); item == nil || item.Index != 2 {
+		t.Errorf(`Item("dup") = %+v, want the first match (index 2)`, item)
+	}
+	if item := br.Item("missing"); item != nil {
+		t.Errorf(`Item("missing") = %+v, want nil`, item)
+	}
+	// Item returns a pointer into Items.
+	if item := br.Item("label"); item != &br.Items[0] {
+		t.Error(`Item("label") does not point into Items`)
+	}
+}
+
+// TestBatchResultStartedAccessors covers Started and StartedCount on a
+// BatchResult built from its exported fields, and their relationship to
+// TotalCount.
+func TestBatchResultStartedAccessors(t *testing.T) {
+	br := BatchResult[string]{
+		Items: []BatchItem[string]{
+			{Index: 0, Name: "a", Status: BatchItemSucceeded, Result: "A"},
+			{Index: 1, Name: "b", Status: BatchItemStarted},
+			{Index: 2, Name: "c", Status: BatchItemFailed, Err: errors.New("boom")},
+			{Index: 3, Name: "d", Status: BatchItemStarted},
+		},
+		Reason: CompletionMinSuccessfulReached,
+	}
+
+	started := br.Started()
+	if len(started) != 2 || started[0].Index != 1 || started[1].Index != 3 {
+		t.Errorf("Started() = %+v, want items 1 and 3 in input order", started)
+	}
+	if got := br.StartedCount(); got != 2 {
+		t.Errorf("StartedCount() = %d, want 2", got)
+	}
+	if got := br.SuccessCount() + br.FailureCount() + br.StartedCount(); got != br.TotalCount() {
+		t.Errorf("SuccessCount+FailureCount+StartedCount = %d, TotalCount = %d", got, br.TotalCount())
+	}
+
+	empty := BatchResult[string]{Reason: CompletionAllCompleted}
+	if got := empty.Started(); len(got) != 0 {
+		t.Errorf("Started() on an empty result = %+v, want none", got)
+	}
+	if got := empty.StartedCount(); got != 0 {
+		t.Errorf("StartedCount() on an empty result = %d, want 0", got)
 	}
 }

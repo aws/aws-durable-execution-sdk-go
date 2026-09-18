@@ -67,6 +67,28 @@ the first failure) is distinguishable from unset; replace
 comparison is exact instead of rounding down through integer division:
 one failure in three (33.3%) now exceeds a threshold of 33.
 
+### New: `BatchResult` lookup by name and started-item accessors
+
+`BatchResult` gains `Result(name)`, which returns the successful result of
+the item or branch with that name and `ok == false` when there is no such
+item or it did not succeed, and `Item(name)`, which returns the item or
+`nil`. With duplicate names both use the first match in input order.
+`Started()` and `StartedCount()` return the items that were started and
+then abandoned when the batch completed early; `TotalCount` already
+includes them, so `TotalCount == SuccessCount + FailureCount +
+StartedCount`. All four are derived from the exported `Items` field.
+
+`CompletionReason` gains `CompletionCustomSucceeded` and
+`CompletionCustomFailed`, whose `String()` values are
+`CUSTOM_COMPLETION_SUCCEEDED` and `CUSTOM_COMPLETION_FAILED`, matching the
+other SDKs. The three existing numeric values are unchanged. `String()` on
+a zero or unrecognized reason returns `UNKNOWN`. A custom decision is
+authoritative for `BatchResult.Status()`: `CompletionCustomFailed` makes the
+batch failed (and `Map`/`Parallel` return a `BatchError`) even with no
+failed item, and `CompletionCustomSucceeded` makes it succeeded even with
+failed items. A `BatchError` rebuilt from a checkpoint record recovers
+either reason.
+
 ### Fixed: a retry decision without a delay waits one second
 
 A `RetryStrategy` that returned `RetryDecision{Retry: true}` without

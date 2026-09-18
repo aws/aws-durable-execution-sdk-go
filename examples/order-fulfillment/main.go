@@ -105,11 +105,11 @@ func handler(ctx durable.Context, order Order) (FulfillmentResult, error) {
 	// Look up branch results by name rather than by index: completion
 	// configs can omit items that never started, so positional access is
 	// not reliable.
-	labelURL, ok := branchResult(shipment, "generate-label")
+	labelURL, ok := shipment.Result("generate-label")
 	if !ok {
 		return FulfillmentResult{}, errors.New("generate-label branch did not produce a result")
 	}
-	trackingNumber, ok := branchResult(shipment, "generate-tracking")
+	trackingNumber, ok := shipment.Result("generate-tracking")
 	if !ok {
 		return FulfillmentResult{}, errors.New("generate-tracking branch did not produce a result")
 	}
@@ -122,17 +122,6 @@ func handler(ctx durable.Context, order Order) (FulfillmentResult, error) {
 		LabelURL:       labelURL,
 		TrackingNumber: trackingNumber,
 	}, nil
-}
-
-// branchResult returns the successful result of the named branch and true,
-// or the zero value and false if the branch is absent or did not succeed.
-func branchResult(r durable.BatchResult[string], name string) (string, bool) {
-	for _, item := range r.Items {
-		if item.Name == name && item.Status == durable.BatchItemSucceeded {
-			return item.Result, true
-		}
-	}
-	return "", false
 }
 
 // validateOrder checks inventory and calculates total in grouped steps.

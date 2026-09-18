@@ -279,20 +279,55 @@ func TestBatchErrorUnwrapReachesItemErrors(t *testing.T) {
 }
 
 // TestBatchErrorWireType asserts the wire-error mapper stamps the public
-// type name and a rebuilt value recovers its reason.
+// type name and a rebuilt value recovers its reason, for every defined
+// completion reason.
 func TestBatchErrorWireType(t *testing.T) {
-	orig := &BatchError{Name: "b", Reason: CompletionFailureToleranceExceeded, Errors: []error{errors.New("x")}}
-	we := errorObject(orig)
-	if aws.ToString(we.ErrorType) != "BatchError" {
-		t.Errorf("ErrorType = %q, want %q", aws.ToString(we.ErrorType), "BatchError")
+	reasons := []CompletionReason{
+		CompletionAllCompleted,
+		CompletionMinSuccessfulReached,
+		CompletionFailureToleranceExceeded,
+		CompletionCustomSucceeded,
+		CompletionCustomFailed,
 	}
-	rebuilt := ErrorFromObject(we)
-	var berr *BatchError
-	if !errors.As(rebuilt, &berr) {
-		t.Fatalf("rebuilt = %T, want *BatchError", rebuilt)
+	for _, reason := range reasons {
+		t.Run(reason.String(), func(t *testing.T) {
+			orig := &BatchError{Name: "b", Reason: reason, Errors: []error{errors.New("x")}}
+			we := errorObject(orig)
+			if aws.ToString(we.ErrorType) != "BatchError" {
+				t.Errorf("ErrorType = %q, want %q", aws.ToString(we.ErrorType), "BatchError")
+			}
+			rebuilt := ErrorFromObject(we)
+			var berr *BatchError
+			if !errors.As(rebuilt, &berr) {
+				t.Fatalf("rebuilt = %T, want *BatchError", rebuilt)
+			}
+			if berr.Reason != reason || berr.Error() != orig.Error() {
+				t.Errorf("rebuilt = %+v (%q), want reason %s and message preserved", berr, berr.Error(), reason)
+			}
+		})
 	}
-	if berr.Reason != CompletionFailureToleranceExceeded || berr.Error() != orig.Error() {
-		t.Errorf("rebuilt = %+v (%q), want reason and message preserved", berr, berr.Error())
+}
+
+// TestCompletionReasonOf asserts the recorded-message parser recovers each
+// defined reason from a BatchError message and returns zero otherwise.
+func TestCompletionReasonOf(t *testing.T) {
+	for _, reason := range []CompletionReason{
+		CompletionAllCompleted,
+		CompletionMinSuccessfulReached,
+		CompletionFailureToleranceExceeded,
+		CompletionCustomSucceeded,
+		CompletionCustomFailed,
+	} {
+		msg := (&BatchError{Name: "b", Reason: reason}).Error()
+		if got := completionReasonOf(msg); got != reason {
+			t.Errorf("completionReasonOf(%q) = %v, want %v", msg, got, reason)
+		}
+	}
+	if got := completionReasonOf("durable: batch \"b\" failed: no reason here"); got != 0 {
+		t.Errorf("completionReasonOf(no reason) = %v, want 0", got)
+	}
+	if got := completionReasonOf((&BatchError{Name: "b", Reason: CompletionReason(99)}).Error()); got != 0 {
+		t.Errorf("completionReasonOf(UNKNOWN reason) = %v, want 0", got)
 	}
 }
 

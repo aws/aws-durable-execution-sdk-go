@@ -873,7 +873,13 @@ func reconstructSDKError(wireType string, op OperationError, sentinel error) err
 // [BatchError] message. It returns zero when the message names no known
 // reason.
 func completionReasonOf(message string) CompletionReason {
-	for _, r := range []CompletionReason{CompletionAllCompleted, CompletionMinSuccessfulReached, CompletionFailureToleranceExceeded} {
+	for _, r := range []CompletionReason{
+		CompletionAllCompleted,
+		CompletionMinSuccessfulReached,
+		CompletionFailureToleranceExceeded,
+		CompletionCustomSucceeded,
+		CompletionCustomFailed,
+	} {
 		if strings.Contains(message, r.String()) {
 			return r
 		}
@@ -1095,15 +1101,19 @@ func (e *CombinatorError) As(target any) bool {
 	return asOperationError(target, e.operationError())
 }
 
-// BatchError is returned as err by [Map] and [Parallel] when at least one
-// item of the batch failed. The batch result is returned alongside it,
-// populated, so the caller can inspect and compensate the partial outcome.
+// BatchError is returned as err by [Map] and [Parallel] when the batch's
+// [BatchResult.Status] is [BatchItemFailed]: at least one item failed, or
+// the batch-level completion indicates failure. The batch result is
+// returned alongside it, populated, so the caller can inspect and
+// compensate the partial outcome.
 //
 // Reason is the batch's [CompletionReason]. It is
 // [CompletionFailureToleranceExceeded] when the completion policy stopped
 // the batch (the fail-fast default, or an exceeded tolerance);
-// [CompletionAllCompleted] or [CompletionMinSuccessfulReached] when the
-// failures were within a configured tolerance and the batch ran on.
+// [CompletionCustomFailed] when a custom completion decision failed the
+// batch, possibly with no failed item; [CompletionAllCompleted] or
+// [CompletionMinSuccessfulReached] when the failures were within a
+// configured tolerance and the batch ran on.
 //
 // Errors holds the per-item errors in input order. [errors.Is] and
 // [errors.As] reach them through Unwrap, so a caller can match an item's
