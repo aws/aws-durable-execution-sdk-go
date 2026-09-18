@@ -177,7 +177,7 @@ func runInvoke[O, I any](ec *execContext, id, name, functionID string, input I, 
 	if name != "" {
 		update.Name = aws.String(name)
 	}
-	if parent := ec.ids.prefix; parent != "" {
+	if parent := ec.parentOperationID(); parent != "" {
 		update.ParentId = aws.String(hashID(parent))
 	}
 	if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {

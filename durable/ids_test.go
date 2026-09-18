@@ -50,14 +50,6 @@ func TestOpIDsPeekDoesNotClaim(t *testing.T) {
 	}
 }
 
-func TestOpIDsSkip(t *testing.T) {
-	ids := &opIDs{}
-	ids.skip()
-	if got := ids.next(); got != "2" {
-		t.Errorf("next() after skip = %q, want %q", got, "2")
-	}
-}
-
 func TestOpIDsChild(t *testing.T) {
 	root := &opIDs{}
 	childEntityID := root.next() // "1"

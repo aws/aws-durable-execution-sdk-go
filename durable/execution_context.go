@@ -44,6 +44,14 @@ type execContext struct {
 	owner goroutineOwner
 	state *executionState
 
+	// checkpointParent is the operation ID that operations claimed on this
+	// context record as their ParentId. It equals ids.prefix for the root
+	// context (empty) and for a child context whose own operation is
+	// checkpointed. A virtual child context has no checkpoint of its own,
+	// so its operations record the nearest checkpointed ancestor instead;
+	// see virtualChild.
+	checkpointParent string
+
 	// blocked is set when an operation on this context enters a pending
 	// state (commits to suspension). Once set, subsequent claims on this
 	// same context fail with errSuspendExecution, preventing user code
@@ -164,10 +172,17 @@ func (c *execContext) IsReplaying() bool {
 // parentWireID returns the hashed wire-format parent context ID for use in
 // OperationHookInfo.ParentID. Returns empty string for root-level operations.
 func (c *execContext) parentWireID() string {
-	if c.ids.prefix == "" {
+	if c.checkpointParent == "" {
 		return ""
 	}
-	return hashID(c.ids.prefix)
+	return hashID(c.checkpointParent)
+}
+
+// parentOperationID returns the operation ID that operations claimed on
+// this context record as their ParentId, or the empty string at the root.
+// Checkpoint update builders hash this value into the ParentId field.
+func (c *execContext) parentOperationID() string {
+	return c.checkpointParent
 }
 
 // claimOperation validates goroutine ownership, refreshes the replay mode
@@ -368,6 +383,7 @@ func (c *execContext) child(entityID string, owner goroutineOwner, mode executio
 		ids:                  c.ids.child(entityID),
 		owner:                owner,
 		state:                c.state,
+		checkpointParent:     entityID,
 		serdes:               c.serdes,
 		callbackDeserializer: c.callbackDeserializer,
 		suspend:              c.suspend,
@@ -380,6 +396,18 @@ func (c *execContext) child(entityID string, owner goroutineOwner, mode executio
 	}
 	child.mode.Store(int32(mode))
 	return child
+}
+
+// virtualChild creates the context for a virtual child operation: one that
+// mints its own operation-ID namespace under entityID but is never
+// checkpointed itself. Because no operation with ID entityID exists in the
+// checkpoint log, operations claimed on the virtual child record
+// parentID, the nearest checkpointed ancestor, as their ParentId. The
+// caller computes mode as for child.
+func (c *execContext) virtualChild(entityID, parentID string, owner goroutineOwner, mode executionMode) *execContext {
+	vc := c.child(entityID, owner, mode)
+	vc.checkpointParent = parentID
+	return vc
 }
 
 // branch creates a sibling context for an async operation's goroutine. The
@@ -402,6 +430,7 @@ func (c *execContext) branch(owner goroutineOwner) *execContext {
 		ids:                  c.ids,
 		owner:                owner,
 		state:                c.state,
+		checkpointParent:     c.checkpointParent,
 		serdes:               c.serdes,
 		callbackDeserializer: c.callbackDeserializer,
 		suspend:              c.suspend,

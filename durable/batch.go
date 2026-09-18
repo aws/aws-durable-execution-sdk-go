@@ -43,6 +43,7 @@ func Map[I, O any](ctx Context, name string, items []I, fn func(ctx Context, ite
 	if err != nil {
 		return BatchResult[O]{}, err
 	}
+	options.itemID = batchItemIDs(ec, id, options.nesting)
 
 	// Check if the batch is already checkpointed as a terminal operation.
 	op := ec.state.get(id)
@@ -57,19 +58,7 @@ func Map[I, O any](ctx Context, name string, items []I, fn func(ctx Context, ite
 		if err != nil {
 			return BatchResult[O]{}, err
 		}
-		// Advance the parent counter past the iteration IDs that were
-		// consumed from it during the original execution. Sequential
-		// (concurrency=1) only claims started items; concurrent claims
-		// all items upfront.
-		concurrency := options.maxConcurrency
-		if concurrency < 0 {
-			concurrency = len(items)
-		}
-		if concurrency == 1 {
-			ec.ids.advance(len(result.Items))
-		} else {
-			ec.ids.advance(len(items))
-		}
+		ec.ids.advance(batchReplayAdvance(options, len(items), len(result.Items)))
 		return result, nil
 	}
 
@@ -133,6 +122,7 @@ func Parallel[O any](ctx Context, name string, branches []Branch[O], opts ...Bat
 	if err != nil {
 		return BatchResult[O]{}, err
 	}
+	options.itemID = batchItemIDs(ec, id, options.nesting)
 
 	// Check if the batch is already checkpointed as a terminal operation.
 	op := ec.state.get(id)
@@ -150,17 +140,7 @@ func Parallel[O any](ctx Context, name string, branches []Branch[O], opts ...Bat
 		if err != nil {
 			return BatchResult[O]{}, err
 		}
-		// Advance the parent counter past the branch IDs that were
-		// consumed from it during the original execution.
-		concurrency := options.maxConcurrency
-		if concurrency < 0 {
-			concurrency = len(branches)
-		}
-		if concurrency == 1 {
-			ec.ids.advance(len(result.Items))
-		} else {
-			ec.ids.advance(len(branches))
-		}
+		ec.ids.advance(batchReplayAdvance(options, len(branches), len(result.Items)))
 		return result, nil
 	}
 
@@ -456,6 +436,24 @@ type BatchOption interface {
 // WithMaxConcurrency bounds how many items or branches run at once.
 // A value of zero or negative is invalid and causes Map/Parallel to return
 // an error.
+//
+// Changing n between deployments does not move the operation IDs of a
+// batch's items or of the operations inside them, so an execution that is
+// in flight inside the batch keeps replaying correctly. Items are
+// identified by input index whether they run one at a time or
+// concurrently: a [NestingFlat] item is numbered under the batch, and a
+// [NestingNormal] item takes the next operation ID after the batch in the
+// enclosing context.
+//
+// A [NestingFlat] batch also consumes the same number of enclosing-context
+// IDs for every n, so changing n never affects the operations that follow
+// it. A [NestingNormal] batch consumes one enclosing-context ID per item
+// that starts: with n == 1 only the items that actually start, with n > 1
+// every item. Those counts differ only when a [WithCompletion] policy stops
+// the batch early. For a [NestingNormal] batch with such a policy, changing
+// n shifts the IDs of the operations after the batch for executions that
+// are in flight; treat that combination as a breaking change for in-flight
+// executions.
 func WithMaxConcurrency(n int) BatchOption {
 	return batchOptionFunc(func(o *batchOptions) {
 		o.maxConcurrency = n
@@ -530,6 +528,12 @@ type batchOptions struct {
 	itemSerdes        Serdes
 	resultSerdes      Serdes
 	nesting           NestingMode
+
+	// itemID returns the operation ID of the item at an input index. Map
+	// and Parallel set it once the batch's own ID is claimed; see
+	// batchItemIDs. It keys every serdes call for an item's result, so
+	// each item's [SerdesContext.OperationID] is distinct.
+	itemID func(index int) string
 }
 
 type batchOptionFunc func(*batchOptions)
@@ -594,17 +598,6 @@ func executeBatchItems[I, O any](
 
 	if concurrency == 1 {
 		// Sequential path: simpler, no goroutines needed.
-
-		// For FLAT nesting, create a shared context whose prefix is the
-		// parent batch ID. All iterations share this context so their
-		// operations are minted sequentially under the parent (no per-
-		// iteration context events).
-		var flatCtx *execContext
-		if options.nesting == NestingFlat {
-			flatMode := childReplayMode(ec, parentID, ec.state.get(parentID))
-			flatCtx = ec.child(parentID, ec.owner, flatMode)
-		}
-
 		for i := 0; i < totalItems; i++ {
 			// Check if we should stop scheduling.
 			if reasonLocked {
@@ -615,15 +608,13 @@ func executeBatchItems[I, O any](
 			var result BatchItem[O]
 			var err error
 			if options.nesting == NestingFlat {
-				result, err = runFlatBatchItemShared[O](flatCtx, parentID, i, itemName, options, runItem)
+				childID, virtualChild := flatItemContext(ec, parentID, i, ec.owner)
+				result, err = runFlatBatchItem[O](virtualChild, childID, i, itemName, options, runItem)
 			} else {
 				result, err = runNestedBatchItem[O](ec, parentID, parentName, itemName, i, options, childSubType, runItem)
 			}
 			if err != nil {
-				// Suspension propagates.
-				if errors.Is(err, errSuspendExecution) {
-					return BatchResult[O]{}, err
-				}
+				// Suspension and every other error propagate unchanged.
 				return BatchResult[O]{}, err
 			}
 
@@ -648,16 +639,18 @@ func executeBatchItems[I, O any](
 		// Concurrent path: a coordinator loop on the calling goroutine
 		// owns all completion state, so no lock is needed. Worker
 		// goroutines only run an item body and report its outcome on a
-		// channel. Child operation ids are claimed up front in index
-		// order so ids mint deterministically across invocations, but a
-		// branch is checkpointed STARTED and dispatched only when the
-		// coordinator admits it. Once the completion decision fires the
-		// coordinator stops admitting and abandons the branches still in
-		// flight: it stops awaiting them, marks them started, and does not
-		// count them. It still drains every dispatched worker before
-		// returning, so no branch outlives the invocation and the parent
-		// SUCCEEDED checkpoint is written only after every child
-		// checkpoint has landed.
+		// channel. Child operation ids are assigned up front in index
+		// order so ids mint deterministically across invocations: NORMAL
+		// items are claimed from the enclosing context, FLAT items are
+		// numbered under the batch (see flatItemID). A branch is
+		// checkpointed STARTED and dispatched only when the coordinator
+		// admits it. Once the completion decision fires the coordinator
+		// stops admitting and abandons the branches still in flight: it
+		// stops awaiting them, marks them started, and does not count
+		// them. It still drains every dispatched worker before returning,
+		// so no branch outlives the invocation and the parent SUCCEEDED
+		// checkpoint is written only after every child checkpoint has
+		// landed.
 		type itemOutcome struct {
 			index int
 			item  BatchItem[O]
@@ -675,9 +668,15 @@ func executeBatchItems[I, O any](
 		preClaimed := make([]preClaimedItem, 0, totalItems)
 		for i := 0; i < totalItems; i++ {
 			itemName := itemNameForIndex(options, i)
-			childID, claimErr := ec.claimOperation()
-			if claimErr != nil {
-				return BatchResult[O]{}, claimErr
+			var childID string
+			if options.nesting == NestingFlat {
+				childID = flatItemID(parentID, i)
+			} else {
+				var claimErr error
+				childID, claimErr = ec.claimOperation()
+				if claimErr != nil {
+					return BatchResult[O]{}, claimErr
+				}
 			}
 			op := ec.state.get(childID)
 			preClaimed = append(preClaimed, preClaimedItem{
@@ -880,37 +879,13 @@ func runPreClaimedBatchItem[O any](
 		return BatchItem[O]{}, err
 	}
 	if options.nesting == NestingFlat {
-		// FLAT mode: run in a virtual child context.
-		mode := childReplayMode(ec, childID, op)
-		virtualChild := ec.child(childID, currentGoroutineOwner(), mode)
+		// FLAT mode: run in a virtual child context. The item's ID was
+		// numbered under the batch by flatItemID; flatItemContext derives
+		// the same ID again from the index.
+		_, virtualChild := flatItemContext(ec, parentID, index, currentGoroutineOwner())
 		virtualChild.abandon = abandon
 		virtualChild.adoptBranchToken(tok)
-		result, fnTrace, fnErr := runItem(virtualChild, index)
-		if fnErr != nil {
-			if errors.Is(fnErr, errSuspendExecution) {
-				return BatchItem[O]{}, fnErr
-			}
-			return BatchItem[O]{
-				Index:  index,
-				Name:   itemName,
-				Status: BatchItemFailed,
-				Err:    flatItemError(fnErr, fnTrace),
-			}, nil
-		}
-		serialized, serErr := options.itemSerdes.Marshal(ec.Context, ec.serdesCtx(childID), result)
-		if serErr != nil {
-			return BatchItem[O]{}, newSerdesError(batchItemOpName(itemName, index), serdesDirectionMarshal, serErr)
-		}
-		var out O
-		if err := options.itemSerdes.Unmarshal(ec.Context, ec.serdesCtx(childID), serialized, &out); err != nil {
-			return BatchItem[O]{}, newSerdesError(batchItemOpName(itemName, index), serdesDirectionUnmarshal, err)
-		}
-		return BatchItem[O]{
-			Index:  index,
-			Name:   itemName,
-			Status: BatchItemSucceeded,
-			Result: out,
-		}, nil
+		return runFlatBatchItem[O](virtualChild, childID, index, itemName, options, runItem)
 	}
 
 	// NORMAL mode: child context with full checkpointing.
@@ -976,31 +951,105 @@ func runPreClaimedBatchItem[O any](
 	}, nil
 }
 
-// runFlatBatchItem runs an item in FLAT nesting mode: no child context,
-// operations are checkpointed under the parent's ID space using a virtual
-// child (no ContextStarted/Succeeded events).
+// flatItemID returns the operation ID of FLAT item index of the batch whose
+// operation ID is parentID.
+//
+// This is the one ID scheme for FLAT items. A FLAT item runs in a virtual
+// child context: it is never checkpointed itself, but it owns an
+// operation-ID namespace so that the operations inside it have stable IDs.
+// Items are numbered as children of the batch, in index order: item 0 is
+// "<parentID>-1", item 1 is "<parentID>-2", and the k-th operation inside
+// item i is "<parentID>-<i+1>-<k>". Every path that runs FLAT items
+// (sequential, concurrent, and replay of a batch too large to store) derives
+// item IDs from this function, so:
+//
+//   - a FLAT batch consumes exactly one operation ID from the enclosing
+//     context, its own, on live execution and on replay alike;
+//   - changing the batch's concurrency does not move any item's operations
+//     to a different ID, so an in-flight execution keeps replaying
+//     correctly across a deployment that changes [WithMaxConcurrency];
+//   - each item has a distinct ID to key per-item serdes files on.
+//
+// The operations inside an item record the batch, not the virtual item, as
+// their ParentId, because the batch is the nearest checkpointed ancestor;
+// see [execContext.virtualChild].
+func flatItemID(parentID string, index int) string {
+	return (&opIDs{prefix: parentID}).format(index + 1)
+}
+
+// batchItemIDs returns the function that maps an input index to the
+// operation ID of that item of the batch id. It must be called on the
+// enclosing context ec directly after the batch's own ID is claimed, before
+// any item is claimed, because NORMAL items take the IDs that follow the
+// batch in the enclosing context, in index order: the sequential path
+// claims one as each item starts and the concurrent path claims them all up
+// front, so item i is always the (i+1)-th ID after the batch. FLAT items are
+// numbered under the batch by flatItemID.
+func batchItemIDs(ec *execContext, id string, nesting NestingMode) func(index int) string {
+	if nesting == NestingFlat {
+		return func(index int) string { return flatItemID(id, index) }
+	}
+	sib := &opIDs{prefix: ec.ids.prefix}
+	base := ec.ids.counter
+	return func(index int) string { return sib.format(base + 1 + index) }
+}
+
+// batchItemSerdesCtx returns the function that builds the [SerdesContext]
+// for an item's result from the item's input index, keyed on the item's
+// own operation ID.
+func batchItemSerdesCtx(ec *execContext, options batchOptions) func(index int) SerdesContext {
+	return func(index int) SerdesContext { return ec.serdesCtx(options.itemID(index)) }
+}
+
+// flatItemContext returns the ID of FLAT item index of the batch parentID
+// and the virtual child context that runs it. The item replays when its
+// first operation is already checkpointed. When ec itself replays inside a
+// context whose overall result is already recorded, the item inherits that
+// mode so its unfinished operations park instead of re-executing.
+func flatItemContext(ec *execContext, parentID string, index int, owner goroutineOwner) (string, *execContext) {
+	childID := flatItemID(parentID, index)
+	mode := childReplayMode(ec, childID, nil)
+	if executionMode(ec.mode.Load()) == modeReplaySucceededContext {
+		mode = modeReplaySucceededContext
+	}
+	return childID, ec.virtualChild(childID, parentID, owner, mode)
+}
+
+// batchReplayAdvance returns how many operation IDs a terminal batch
+// consumed from the enclosing context, beyond its own ID, on the invocation
+// that ran it. Replay of the terminal batch advances the enclosing counter
+// by this amount so the operations after the batch keep their IDs.
+//
+// FLAT items are numbered under the batch (see flatItemID), so a FLAT batch
+// consumes none. NORMAL items are claimed from the enclosing context: the
+// sequential path claims one per started item, and the concurrent path
+// claims one per item up front.
+func batchReplayAdvance(options batchOptions, totalItems, startedItems int) int {
+	if options.nesting == NestingFlat {
+		return 0
+	}
+	concurrency := options.maxConcurrency
+	if concurrency < 0 {
+		concurrency = totalItems
+	}
+	if concurrency == 1 {
+		return startedItems
+	}
+	return totalItems
+}
+
+// runFlatBatchItem runs one item in FLAT nesting mode inside virtualChild,
+// the item's virtual context from flatItemContext, and round-trips the
+// result through the item serdes keyed on childID, the item's own
+// operation ID. No per-item context events are checkpointed.
 func runFlatBatchItem[O any](
-	ec *execContext,
-	parentID string,
+	virtualChild *execContext,
+	childID string,
 	index int,
 	itemName string,
 	options batchOptions,
 	runItem batchItemFunc[O],
 ) (BatchItem[O], error) {
-	// In FLAT mode, the item's operations are minted under the parent
-	// context's ID space. We create a virtual child that shares the
-	// parent's opIDs prefix but does NOT checkpoint its own context events.
-	// The ID for the virtual child is just the next parent-level op ID.
-	childID, err := ec.claimOperation()
-	if err != nil {
-		return BatchItem[O]{}, err
-	}
-
-	// Check for replay: if this virtual child's first op is checkpointed,
-	// it's in replay mode.
-	mode := childReplayMode(ec, childID, ec.state.get(childID))
-	virtualChild := ec.child(childID, ec.owner, mode)
-
 	result, fnTrace, fnErr := runItem(virtualChild, index)
 	if fnErr != nil {
 		if errors.Is(fnErr, errSuspendExecution) {
@@ -1014,56 +1063,14 @@ func runFlatBatchItem[O any](
 		}, nil
 	}
 
-	// Round-trip through serdes.
-	serialized, serErr := options.itemSerdes.Marshal(ec.Context, ec.serdesCtx(childID), result)
+	// Round-trip through serdes for live == replay consistency.
+	sctx := virtualChild.serdesCtx(childID)
+	serialized, serErr := options.itemSerdes.Marshal(virtualChild.Context, sctx, result)
 	if serErr != nil {
 		return BatchItem[O]{}, newSerdesError(batchItemOpName(itemName, index), serdesDirectionMarshal, serErr)
 	}
 	var out O
-	if err := options.itemSerdes.Unmarshal(ec.Context, ec.serdesCtx(childID), serialized, &out); err != nil {
-		return BatchItem[O]{}, newSerdesError(batchItemOpName(itemName, index), serdesDirectionUnmarshal, err)
-	}
-
-	return BatchItem[O]{
-		Index:  index,
-		Name:   itemName,
-		Status: BatchItemSucceeded,
-		Result: out,
-	}, nil
-}
-
-// runFlatBatchItemShared runs an item in FLAT nesting mode using a shared
-// context whose prefix is the parent batch's entity ID. Operations inside
-// the item are minted sequentially under the parent, with no per-iteration
-// context events. The shared context's counter advances across iterations.
-func runFlatBatchItemShared[O any](
-	flatCtx *execContext,
-	parentID string,
-	index int,
-	itemName string,
-	options batchOptions,
-	runItem batchItemFunc[O],
-) (BatchItem[O], error) {
-	result, fnTrace, fnErr := runItem(flatCtx, index)
-	if fnErr != nil {
-		if errors.Is(fnErr, errSuspendExecution) {
-			return BatchItem[O]{}, fnErr
-		}
-		return BatchItem[O]{
-			Index:  index,
-			Name:   itemName,
-			Status: BatchItemFailed,
-			Err:    flatItemError(fnErr, fnTrace),
-		}, nil
-	}
-
-	// Round-trip through serdes.
-	serialized, serErr := options.itemSerdes.Marshal(flatCtx.Context, flatCtx.serdesCtx(parentID), result)
-	if serErr != nil {
-		return BatchItem[O]{}, newSerdesError(batchItemOpName(itemName, index), serdesDirectionMarshal, serErr)
-	}
-	var out O
-	if err := options.itemSerdes.Unmarshal(flatCtx.Context, flatCtx.serdesCtx(parentID), serialized, &out); err != nil {
+	if err := options.itemSerdes.Unmarshal(virtualChild.Context, sctx, serialized, &out); err != nil {
 		return BatchItem[O]{}, newSerdesError(batchItemOpName(itemName, index), serdesDirectionUnmarshal, err)
 	}
 
@@ -1285,7 +1292,7 @@ func replayTerminalBatch[I, O any](
 			child := ec.child(id, ec.owner, mode)
 			return replayBatchChildren[I, O](child, id, name, items, fn, options, parentSubType, childSubType)
 		}
-		return toBatchResult[O](ec.Context, payload, options.itemSerdes, ec.serdesCtx(id))
+		return toBatchResult[O](ec.Context, payload, options.itemSerdes, batchItemSerdesCtx(ec, options))
 
 	case statusFailed:
 		errType := "Error"
@@ -1343,7 +1350,8 @@ func replayBatchChildren[I, O any](
 		var err error
 
 		if options.nesting == NestingFlat {
-			result, err = runFlatBatchItem[O](ec, parentID, i, itemName, options, runItem)
+			childID, virtualChild := flatItemContext(ec, parentID, i, ec.owner)
+			result, err = runFlatBatchItem[O](virtualChild, childID, i, itemName, options, runItem)
 		} else {
 			result, err = runNestedBatchItem[O](ec, parentID, parentName, itemName, i, options, childSubType, runItem)
 		}
@@ -1399,7 +1407,7 @@ func checkpointBatchSuccess[O any](
 			return BatchResult[O]{}, newSerdesError(name, serdesDirectionMarshal, serErr)
 		}
 	} else {
-		payload, payloadErr := fromBatchResult(ec.Context, result, options.itemSerdes, ec.serdesCtx(id))
+		payload, payloadErr := fromBatchResult(ec.Context, result, options.itemSerdes, batchItemSerdesCtx(ec, options))
 		if payloadErr != nil {
 			return BatchResult[O]{}, payloadErr
 		}
@@ -1473,7 +1481,8 @@ type batchCheckpointItem struct {
 
 // toBatchResult converts a deserialized checkpoint payload back into a
 // typed [BatchResult] using the provided item serdes for result values.
-func toBatchResult[O any](ctx context.Context, payload batchCheckpointPayload, itemSerdes Serdes, sctx SerdesContext) (BatchResult[O], error) {
+// itemSctx returns the serdes context for the item at an input index.
+func toBatchResult[O any](ctx context.Context, payload batchCheckpointPayload, itemSerdes Serdes, itemSctx func(index int) SerdesContext) (BatchResult[O], error) {
 	items := make([]BatchItem[O], len(payload.Results))
 	for i, cp := range payload.Results {
 		items[i] = BatchItem[O]{
@@ -1485,7 +1494,7 @@ func toBatchResult[O any](ctx context.Context, payload batchCheckpointPayload, i
 		case BatchItemSucceeded:
 			var out O
 			if cp.Result != "" {
-				if err := itemSerdes.Unmarshal(ctx, sctx, []byte(cp.Result), &out); err != nil {
+				if err := itemSerdes.Unmarshal(ctx, itemSctx(cp.Index), []byte(cp.Result), &out); err != nil {
 					return BatchResult[O]{}, newSerdesError(batchItemOpName(cp.Name, cp.Index), serdesDirectionUnmarshal, err)
 				}
 			}
@@ -1784,8 +1793,9 @@ func flatItemError(fnErr error, fnTrace []string) error {
 
 // fromBatchResult converts a live [BatchResult] into the checkpoint payload
 // format for serialization. Item results are pre-serialized through the
-// provided item serdes.
-func fromBatchResult[O any](ctx context.Context, result BatchResult[O], itemSerdes Serdes, sctx SerdesContext) (batchCheckpointPayload, error) {
+// provided item serdes; itemSctx returns the serdes context for the item at
+// an input index.
+func fromBatchResult[O any](ctx context.Context, result BatchResult[O], itemSerdes Serdes, itemSctx func(index int) SerdesContext) (batchCheckpointPayload, error) {
 	cpItems := make([]batchCheckpointItem, len(result.Items))
 	for i, item := range result.Items {
 		cpItems[i] = batchCheckpointItem{
@@ -1795,7 +1805,7 @@ func fromBatchResult[O any](ctx context.Context, result BatchResult[O], itemSerd
 		}
 		switch item.Status {
 		case BatchItemSucceeded:
-			raw, err := itemSerdes.Marshal(ctx, sctx, item.Result)
+			raw, err := itemSerdes.Marshal(ctx, itemSctx(item.Index), item.Result)
 			if err != nil {
 				return batchCheckpointPayload{}, newSerdesError(batchItemOpName(item.Name, item.Index), serdesDirectionMarshal, err)
 			}
@@ -1996,7 +2006,7 @@ func batchParentUpdate(ec *execContext, id, name, subType string, action Operati
 	if name != "" {
 		update.Name = aws.String(name)
 	}
-	if parent := ec.ids.prefix; parent != "" {
+	if parent := ec.parentOperationID(); parent != "" {
 		update.ParentId = aws.String(hashID(parent))
 	}
 	return update

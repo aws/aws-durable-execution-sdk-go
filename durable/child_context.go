@@ -485,7 +485,7 @@ func childUpdate(ec *execContext, id, name string, action OperationAction) Opera
 	if name != "" {
 		update.Name = aws.String(name)
 	}
-	if parent := ec.ids.prefix; parent != "" {
+	if parent := ec.parentOperationID(); parent != "" {
 		update.ParentId = aws.String(hashID(parent))
 	}
 	return update

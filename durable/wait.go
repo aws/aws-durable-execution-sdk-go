@@ -130,7 +130,7 @@ func runWait(ec *execContext, id, name string, d time.Duration) error {
 	if name != "" {
 		update.Name = aws.String(name)
 	}
-	if parent := ec.ids.prefix; parent != "" {
+	if parent := ec.parentOperationID(); parent != "" {
 		update.ParentId = aws.String(hashID(parent))
 	}
 	if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {

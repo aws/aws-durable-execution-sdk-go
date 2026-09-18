@@ -26,15 +26,9 @@ func (ids *opIDs) peek() string {
 	return ids.format(ids.counter + 1)
 }
 
-// skip claims the next ID without returning it. Replay uses skip to pass
-// over operations that never started.
-func (ids *opIDs) skip() {
-	ids.counter++
-}
-
 // advance moves the counter forward by n positions. Used after replaying a
-// terminal batch to skip the iteration IDs that were consumed from the
-// parent context during the original execution.
+// terminal batch to skip the item IDs that were claimed from this context
+// during the original execution; see batchReplayAdvance.
 func (ids *opIDs) advance(n int) {
 	ids.counter += n
 }
