@@ -233,7 +233,7 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 
 	// Run the inner child: callback + submitter step.
 	mode := childReplayMode(ec, id, op)
-	child := ec.child(id, ec.owner, mode)
+	child := ec.child(id, name, ec.owner, mode)
 
 	result, fnErr := runWaitForCallbackBody[O](child, name, submitter, options, serdes)
 

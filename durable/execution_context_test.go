@@ -3,6 +3,7 @@ package durable
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 )
 
@@ -12,7 +13,7 @@ func newTestContext(t *testing.T, ops []*operation) *execContext {
 		context.Background(),
 		"arn:aws:lambda:us-west-2:123456789012:function:fn:1/durable-execution/test",
 		invocationInfo{requestID: "req-1"},
-		nopLogger{},
+		slog.DiscardHandler,
 		newExecutionState(ops),
 	)
 }
@@ -28,13 +29,6 @@ func execOp() *operation {
 func checkpointed(positionalID string, status operationStatus) *operation {
 	return &operation{id: hashID(positionalID), status: status}
 }
-
-type nopLogger struct{}
-
-func (nopLogger) Debug(string, ...any) {}
-func (nopLogger) Info(string, ...any)  {}
-func (nopLogger) Warn(string, ...any)  {}
-func (nopLogger) Error(string, ...any) {}
 
 func TestNewExecContextMode(t *testing.T) {
 	tests := []struct {
@@ -152,7 +146,7 @@ func TestChildContextInheritsStateAndPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claimOperation(): %v", err)
 	}
-	child := c.child(entityID, currentGoroutineOwner(), executionMode(c.mode.Load()))
+	child := c.child(entityID, "", currentGoroutineOwner(), executionMode(c.mode.Load()))
 
 	id, err := child.claimOperation()
 	if err != nil {

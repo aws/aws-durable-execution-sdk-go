@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -26,7 +27,7 @@ func activeBranches(s *suspendSignal) int {
 // checkpoint, or nil.
 func parkOnChild(root *execContext, op *operation) <-chan error {
 	done := make(chan error, 1)
-	child := root.child("1", root.owner, modeReplaySucceededContext)
+	child := root.child("1", "", root.owner, modeReplaySucceededContext)
 	go func() {
 		done <- child.parkUnfinishedReplay(op, "1-1", string(OperationTypeStep), operationSubTypeStep, "extra")
 	}()
@@ -261,7 +262,7 @@ func TestParkUnfinishedReplayContextDoneWithoutCommitmentFails(t *testing.T) {
 	// It returns the same determinism error the deadline produces, before
 	// the deadline.
 	ctx, cancel := context.WithCancel(context.Background())
-	root := newExecContext(ctx, "arn:test", invocationInfo{}, nopLogger{}, newExecutionState([]*operation{execOp()}))
+	root := newExecContext(ctx, "arn:test", invocationInfo{}, slog.DiscardHandler, newExecutionState([]*operation{execOp()}))
 	root.adoptBranchToken(root.suspend.registerBranchToken())
 
 	start := time.Now()
@@ -293,13 +294,13 @@ func TestParkUnfinishedReplayContextDoneWithCommitmentSuspends(t *testing.T) {
 	// invocation responds PENDING whatever the handler returns, so the park
 	// unwinds as a suspension and the context is marked blocked.
 	ctx, cancel := context.WithCancel(context.Background())
-	root := newExecContext(ctx, "arn:test", invocationInfo{}, nopLogger{}, newExecutionState([]*operation{execOp()}))
+	root := newExecContext(ctx, "arn:test", invocationInfo{}, slog.DiscardHandler, newExecutionState([]*operation{execOp()}))
 	root.adoptBranchToken(root.suspend.registerBranchToken())
 	sibling := root.suspend.registerBranchToken()
 	defer sibling.release()
 	root.suspend.commitPending(nil)
 
-	child := root.child("1", root.owner, modeReplaySucceededContext)
+	child := root.child("1", "", root.owner, modeReplaySucceededContext)
 	done := make(chan error, 1)
 	go func() {
 		done <- child.parkUnfinishedReplay(nil, "1-1", string(OperationTypeStep), operationSubTypeStep, "extra")

@@ -1920,6 +1920,23 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 120
 
+  LoggerSlogHandlerFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-logger-slog-handler
+      CodeUri: .aws-sam/build-artifacts/logger-slog-handler/
+      Handler: bootstrap
+      Description: WithLogHandler with an application slog.Handler
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
   PluginLifecycleFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -2662,6 +2679,9 @@ Outputs:
   LoggerLogLevelsFunction:
     Description: Logger Log Levels Function ARN
     Value: !GetAtt LoggerLogLevelsFunction.Arn
+  LoggerSlogHandlerFunction:
+    Description: Logger Slog Handler Function ARN
+    Value: !GetAtt LoggerSlogHandlerFunction.Arn
   PluginLifecycleFunction:
     Description: Plugin Lifecycle Function ARN
     Value: !GetAtt PluginLifecycleFunction.Arn

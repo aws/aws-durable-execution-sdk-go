@@ -195,7 +195,7 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 			}
 		},
 		func() (any, error) {
-			s, trace, e := runCheckFunc(ec, check, currentState, attempt)
+			s, trace, e := runCheckFunc(ec, id, name, check, currentState, attempt)
 			checkTrace = trace
 			return s, e
 		},
@@ -320,9 +320,9 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 // [StepContext.Attempt]. The trace is the stack trace of the failure as
 // [runUserFunc] captures it, nil when the check succeeds or when capture is
 // disabled.
-func runCheckFunc[S any](ec *execContext, check func(StepContext, S) (S, error), state S, attempt int) (S, []string, error) {
+func runCheckFunc[S any](ec *execContext, id, name string, check func(StepContext, S) (S, error), state S, attempt int) (S, []string, error) {
 	return runUserFunc(ec, check, "durable: WaitForCondition check panicked", func() (S, error) {
-		return check(&stepContext{Context: ec.Context, logger: ec.Logger(), attempt: attempt}, state)
+		return check(&stepContext{Context: ec.Context, logger: ec.operationLogger(id, name, attempt), attempt: attempt}, state)
 	})
 }
 

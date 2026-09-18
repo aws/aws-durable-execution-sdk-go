@@ -2,6 +2,7 @@ package durable
 
 import (
 	"context"
+	"log/slog"
 	"strconv"
 	"testing"
 )
@@ -21,7 +22,7 @@ func BenchmarkClaimOperation(b *testing.B) {
 			context.Background(),
 			"arn:test:bench",
 			invocationInfo{},
-			nopLogger{},
+			slog.DiscardHandler,
 			newExecutionState([]*operation{execOp()}),
 		)
 		ec.owner = owner

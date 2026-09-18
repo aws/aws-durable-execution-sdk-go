@@ -3,6 +3,7 @@ package durable
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 )
 
@@ -44,15 +45,20 @@ type Context interface {
 	// under the [durabletest] local runner).
 	InvokedFunctionARN() string
 
-	// Logger returns the logger for this context, enriched with durable
-	// execution metadata. While this context is replaying, log output is
-	// suppressed by default so that replayed code does not duplicate log
+	// Logger returns the logger for this context. Its records carry the
+	// request ID and execution ARN as structured attributes, and the
+	// tenant ID when the invocation has one, whichever [slog.Handler] is
+	// installed with [WithLogHandler]. Inside a child context (from
+	// [RunInChildContext], [Go], [Map], [Parallel], or [WaitForCallback])
+	// the records also carry the child operation's ID as operationId and
+	// its name as operationName. While this context is replaying, log
+	// output is suppressed so that replayed code does not duplicate log
 	// lines. Suppression is decided per branch: each context (root, child
 	// context, and each concurrent branch from [Go], [Map], or [Parallel])
 	// consults its own replay state, so a branch that is still replaying
 	// stays suppressed even after a sibling branch has reached live
 	// execution.
-	Logger() Logger
+	Logger() *slog.Logger
 
 	// IsReplaying reports whether the execution is currently replaying
 	// previously checkpointed operations.
@@ -79,8 +85,14 @@ type Context interface {
 type StepContext interface {
 	context.Context
 
-	// Logger returns the logger for the current step.
-	Logger() Logger
+	// Logger returns the logger for the current step body, condition
+	// check, or callback submitter. Its records carry the execution
+	// attributes of the enclosing context, this operation's ID as
+	// operationId, its name as operationName when it has one, and the
+	// attempt number. The enclosing context's own operation attributes are
+	// replaced, not repeated: a step inside a child context reports the
+	// step, not the child.
+	Logger() *slog.Logger
 
 	// Attempt returns the 1-based attempt number of the current
 	// execution of the user function. The first attempt is 1. It applies
@@ -93,15 +105,6 @@ type StepContext interface {
 	// SDK creates StepContext values, so adding a method to this
 	// interface cannot break a user type.
 	sealed()
-}
-
-// Logger is the minimal structured logging interface used by the SDK.
-// Fields are alternating key-value pairs, as in log/slog.
-type Logger interface {
-	Debug(msg string, fields ...any)
-	Info(msg string, fields ...any)
-	Warn(msg string, fields ...any)
-	Error(msg string, fields ...any)
 }
 
 // SerdesContext provides contextual information to a [Serdes] implementation,

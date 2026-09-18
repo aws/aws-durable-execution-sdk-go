@@ -209,7 +209,7 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 			// failure is returned in the same shape as a first-run failure
 			// so the caller sees one error type on every invocation.
 			if op.childCtx.replayChildren {
-				child := ec.child(id, ec.owner, modeReplaySucceededContext)
+				child := ec.child(id, name, ec.owner, modeReplaySucceededContext)
 				result, fnErr := fn(child)
 				if fnErr != nil {
 					return zero, replayedChildFailure(name, options, fnErr, ec.returnedErrorTrace(fn, fnErr, 0))
@@ -246,7 +246,7 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 	// when its first operation is already checkpointed. fn runs on the
 	// calling goroutine, which owns the child context.
 	mode := childReplayMode(ec, id, op)
-	child := ec.child(id, ec.owner, mode)
+	child := ec.child(id, name, ec.owner, mode)
 
 	opInfo := OperationHookInfo{
 		ExecutionArn:   ec.executionArn,
@@ -425,7 +425,7 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 		defer tok.release()
 		// The child context is owned by this goroutine. Capture
 		// ownership here, not on the parent goroutine.
-		child := ec.childWith(id, currentGoroutineOwner(), mode, defaults)
+		child := ec.childWith(id, name, currentGoroutineOwner(), mode, defaults)
 		child.adoptBranchToken(tok)
 
 		// Recover panics in the child function so they settle the
@@ -578,7 +578,7 @@ func replayChildAsync[O any](ec *execContext, id, name string, options childOpti
 	tok := ec.suspend.registerBranchToken()
 	go func() {
 		defer tok.release()
-		child := ec.childWith(id, currentGoroutineOwner(), modeReplaySucceededContext, defaults)
+		child := ec.childWith(id, name, currentGoroutineOwner(), modeReplaySucceededContext, defaults)
 		child.adoptBranchToken(tok)
 
 		result, fnTrace, fnErr := runUserFunc(child, fn, fmt.Sprintf("durable: child context %q panicked", name), func() (O, error) {

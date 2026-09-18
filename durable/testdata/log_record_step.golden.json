@@ -1,0 +1,11 @@
+{
+  "timestamp": "2026-09-17T04:56:45.657Z",
+  "level": "INFO",
+  "message": "Greeting step started for: World",
+  "requestId": "9c1b2e5f-7a3d-4b2c-9e1f-6d5a4c3b2a10",
+  "executionArn": "arn:test:execution/greeting",
+  "tenantId": "tenant-a",
+  "operationId": "op-id",
+  "operationName": "greet",
+  "attempt": 1
+}

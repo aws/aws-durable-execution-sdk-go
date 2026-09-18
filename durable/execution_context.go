@@ -3,6 +3,7 @@ package durable
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync/atomic"
 	"time"
 )
@@ -35,11 +36,21 @@ type execContext struct {
 	executionArn string
 	invocation   invocationInfo
 
-	// logger is the base logger shared by every context of the invocation.
-	// ctxLogger wraps it with replay suppression driven by this context's
+	// logHandler is the invocation's handler with the execution attributes
+	// (request ID, execution ARN, tenant ID) already attached; every
+	// context of the invocation shares it. It carries no operation
+	// attributes, so every operation scope (a child context, a step body)
+	// adds its own to this one handler and never inherits another scope's.
+	// That keeps operationId and operationName single-valued in a record.
+	//
+	// logScope is this context's own operation attributes: empty for the
+	// root context, the child operation's ID and name for a child context,
+	// and the parent's scope for a branch. ctxLogger is logHandler plus
+	// logScope, wrapped with replay suppression driven by this context's
 	// own mode, so suppression is decided per branch. See attachLogger.
-	logger    Logger
-	ctxLogger Logger
+	logHandler slog.Handler
+	logScope   []slog.Attr
+	ctxLogger  *slog.Logger
 
 	// mode tracks the execution's replay lifecycle position. Accessed
 	// atomically because child goroutines read it concurrently with the
@@ -136,7 +147,7 @@ func (c *execContext) sealed() {}
 // newExecContext creates the root context for one invocation. The mode
 // starts in replay when checkpointed operations beyond the always-present
 // execution operation exist.
-func newExecContext(ctx context.Context, executionArn string, inv invocationInfo, logger Logger, state *executionState) *execContext {
+func newExecContext(ctx context.Context, executionArn string, inv invocationInfo, handler slog.Handler, state *executionState) *execContext {
 	mode := modeExecution
 	if state.numOperations() > 1 {
 		mode = modeReplay
@@ -145,7 +156,7 @@ func newExecContext(ctx context.Context, executionArn string, inv invocationInfo
 		Context:      ctx,
 		executionArn: executionArn,
 		invocation:   inv,
-		logger:       logger,
+		logHandler:   handler.WithAttrs(executionLogAttrs(executionArn, inv)),
 		ids:          &opIDs{},
 		owner:        currentGoroutineOwner(),
 		state:        state,
@@ -157,13 +168,33 @@ func newExecContext(ctx context.Context, executionArn string, inv invocationInfo
 	return ec
 }
 
-// attachLogger builds this context's replay-aware logger. The wrapper reads
-// this context's mode on every call, so a still-replaying branch stays
-// suppressed regardless of what sibling contexts are doing. Every
-// constructor (newExecContext, child, branch) calls attachLogger after
-// storing the initial mode.
+// attachLogger builds this context's replay-aware logger: the shared
+// execution handler with this context's own operation scope added. The
+// wrapper reads this context's mode on every call, so a still-replaying
+// branch stays suppressed regardless of what sibling contexts are doing.
+// Every constructor (newExecContext, child, branch) calls attachLogger
+// after storing the initial mode and logScope.
 func (c *execContext) attachLogger() {
-	c.ctxLogger = newReplayAwareLogger(c.logger, c.IsReplaying)
+	c.ctxLogger = newReplayLogger(c.scopedLogHandler(c.logScope), c.IsReplaying)
+}
+
+// scopedLogHandler returns the shared execution handler with attrs added,
+// or the handler itself when attrs is empty. The handler is the
+// execution-scoped one, never a context's already-scoped handler, so a
+// nested operation's attributes do not repeat an enclosing scope's keys.
+func (c *execContext) scopedLogHandler(attrs []slog.Attr) slog.Handler {
+	if len(attrs) == 0 {
+		return c.logHandler
+	}
+	return c.logHandler.WithAttrs(attrs)
+}
+
+// operationLogger returns the logger handed to a step body, condition
+// check, or callback submitter of the operation with positional ID id: the
+// execution handler with the operation's own attributes added, in place of
+// this context's scope, under this context's replay suppression.
+func (c *execContext) operationLogger(id, name string, attempt int) *slog.Logger {
+	return newReplayLogger(c.scopedLogHandler(operationLogAttrs(id, name, attempt)), c.IsReplaying)
 }
 
 func (c *execContext) ExecutionArn() string { return c.executionArn }
@@ -243,7 +274,7 @@ func (c *execContext) RequestID() string { return c.invocation.requestID }
 
 func (c *execContext) InvokedFunctionARN() string { return c.invocation.invokedFunctionARN }
 
-func (c *execContext) Logger() Logger { return c.ctxLogger }
+func (c *execContext) Logger() *slog.Logger { return c.ctxLogger }
 
 func (c *execContext) IsReplaying() bool {
 	m := executionMode(c.mode.Load())
@@ -440,7 +471,9 @@ func (c *execContext) adoptBranchToken(tok *branchToken) {
 	c.ownsBranchTok = true
 }
 
-// child creates the context for a child operation with the given entity ID.
+// child creates the context for a child operation with the given entity ID
+// and name. The child's log records carry the operation's hashed ID as
+// operationId and, when name is non-empty, name as operationName.
 //
 // The caller is responsible for computing mode: a child whose own operation
 // is already checkpointed as SUCCEEDED must receive
@@ -457,18 +490,19 @@ func (c *execContext) adoptBranchToken(tok *branchToken) {
 // taken before the go statement, so that a ConfigureSerdes call between the
 // go statement and the child's construction does not reach the child; see
 // configureSerdes.
-func (c *execContext) child(entityID string, owner goroutineOwner, mode executionMode) *execContext {
-	return c.childWith(entityID, owner, mode, c.serdesDefaults())
+func (c *execContext) child(entityID, name string, owner goroutineOwner, mode executionMode) *execContext {
+	return c.childWith(entityID, name, owner, mode, c.serdesDefaults())
 }
 
 // childWith is child with the serializer defaults supplied by the caller
 // instead of read from c.
-func (c *execContext) childWith(entityID string, owner goroutineOwner, mode executionMode, d serdesDefaults) *execContext {
+func (c *execContext) childWith(entityID, name string, owner goroutineOwner, mode executionMode, d serdesDefaults) *execContext {
 	child := &execContext{
 		Context:            c.Context,
 		executionArn:       c.executionArn,
 		invocation:         c.invocation,
-		logger:             c.logger,
+		logHandler:         c.logHandler,
+		logScope:           contextLogAttrs(entityID, name),
 		ids:                c.ids.child(entityID),
 		owner:              owner,
 		state:              c.state,
@@ -493,9 +527,10 @@ func (c *execContext) childWith(entityID string, owner goroutineOwner, mode exec
 // checkpointed itself. Because no operation with ID entityID exists in the
 // checkpoint log, operations claimed on the virtual child record
 // parentID, the nearest checkpointed ancestor, as their ParentId. The
-// caller computes mode as for child.
-func (c *execContext) virtualChild(entityID, parentID string, owner goroutineOwner, mode executionMode) *execContext {
-	vc := c.child(entityID, owner, mode)
+// caller computes mode as for child. name is the item's name for the log
+// scope, as for child.
+func (c *execContext) virtualChild(entityID, name, parentID string, owner goroutineOwner, mode executionMode) *execContext {
+	vc := c.child(entityID, name, owner, mode)
 	vc.checkpointParent = parentID
 	return vc
 }
@@ -508,9 +543,10 @@ func (c *execContext) virtualChild(entityID, parentID string, owner goroutineOwn
 // keep claiming operations. owner is the goroutine that runs the operation,
 // captured after that goroutine starts. Unlike child, ids is shared by
 // pointer so the parent-ID prefix is preserved and no nested operation-ID
-// namespace is minted. The branch inherits the caller's token without
-// owning it; every caller registers the goroutine's own token and adopts
-// it through adoptBranchToken.
+// namespace is minted; the branch also keeps the caller's log scope, since
+// it runs inside the same operation. The branch inherits the caller's token
+// without owning it; every caller registers the goroutine's own token and
+// adopts it through adoptBranchToken.
 //
 // branch copies c's serializer defaults as they are at the call. The
 // asynchronous operations launch their goroutine while the owner keeps
@@ -529,7 +565,8 @@ func (c *execContext) branchWith(owner goroutineOwner, d serdesDefaults) *execCo
 		Context:            c.Context,
 		executionArn:       c.executionArn,
 		invocation:         c.invocation,
-		logger:             c.logger,
+		logHandler:         c.logHandler,
+		logScope:           c.logScope,
 		ids:                c.ids,
 		owner:              owner,
 		state:              c.state,

@@ -1,0 +1,20 @@
+[
+  {
+    "type": "WAIT",
+    "subType": "Wait",
+    "name": "pause",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "RunInChildContext",
+    "name": "child-context",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "direct-object-step",
+    "status": "SUCCEEDED"
+  }
+]

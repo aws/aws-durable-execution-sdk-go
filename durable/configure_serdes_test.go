@@ -245,13 +245,13 @@ func TestConfigureSerdesPropagatesToContextsDerivedAfter(t *testing.T) {
 	// A child or branch derived after the call inherits the new defaults;
 	// one derived before keeps the defaults it was derived with.
 	ec := newTestContext(t, []*operation{execOp()})
-	before := ec.child("1", ec.owner, modeExecution)
+	before := ec.child("1", "", ec.owner, modeExecution)
 
 	custom := &ctxRecordingSerdes{}
 	if err := ConfigureSerdes(ec, SerdesConfig{Serdes: custom, CallbackDeserializer: upperDeserializer{}}); err != nil {
 		t.Fatalf("ConfigureSerdes() error: %v", err)
 	}
-	after := ec.child("2", ec.owner, modeExecution)
+	after := ec.child("2", "", ec.owner, modeExecution)
 	branch := ec.branch(ec.owner)
 
 	if before.serdesDefaults().serdes != JSONSerdes || before.serdesDefaults().callbackDeserializer != nil {

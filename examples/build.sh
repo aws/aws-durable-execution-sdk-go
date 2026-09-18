@@ -128,6 +128,7 @@ EXAMPLES="
   logger-after-wait
   logger-after-callback
   logger-log-levels
+  logger-slog-handler
   plugin-lifecycle
   insight-plugin
   serde-basic

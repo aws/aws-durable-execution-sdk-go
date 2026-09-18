@@ -41,6 +41,7 @@ func (f rawPayloadHandler) Invoke(ctx context.Context, payload []byte) ([]byte, 
 type invocationInfo struct {
 	requestID          string
 	invokedFunctionARN string
+	tenantID           string
 }
 
 // invocationInfoFromContext extracts Lambda invocation metadata from the
@@ -54,5 +55,6 @@ func invocationInfoFromContext(ctx context.Context) invocationInfo {
 	return invocationInfo{
 		requestID:          lc.AwsRequestID,
 		invokedFunctionARN: lc.InvokedFunctionArn,
+		tenantID:           lc.TenantID,
 	}
 }

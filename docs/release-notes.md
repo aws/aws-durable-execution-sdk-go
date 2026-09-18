@@ -2,6 +2,53 @@
 
 ## Unreleased
 
+### Breaking: `Context.Logger()` returns `*slog.Logger`; `WithLogHandler` replaces `WithLogger`
+
+The SDK logs through the standard library's `log/slog`. `Context.Logger()`
+and `StepContext.Logger()` return a `*slog.Logger`, and the extension
+point is an `slog.Handler` set with `WithLogHandler`. Each removed symbol
+and its replacement:
+
+- `Logger` (the four-method interface) is removed. Use `*slog.Logger`. Its
+  `Debug`, `Info`, `Warn`, and `Error` methods take the same message and
+  alternating key-value pairs, so most call sites compile unchanged. A
+  level computed at runtime goes through `Logger.Log(ctx, level, msg, ...)`.
+- `WithLogger(Logger)` is replaced by `WithLogHandler(slog.Handler)`. A
+  logging library that ships an `slog.Handler` plugs in directly.
+- `NopLogger` is replaced by `WithLogHandler(slog.DiscardHandler)`.
+- `WriterLogger` and `NewWriterLogger(w)` are replaced by
+  `WithLogHandler(slog.NewJSONHandler(w, nil))` or any other handler.
+
+The default handler writes JSON to stderr with the field names the other
+durable execution SDKs use, so one CloudWatch query works across
+languages: `timestamp` (ISO 8601 UTC with millisecond precision and a Z
+suffix), `level` (`DEBUG`, `INFO`, `WARN`, `ERROR`), `message`,
+`requestId`, `executionArn`, `tenantId` (when the invocation has one), and
+inside an operation scope `operationId` and `operationName` (when named).
+A child context from `RunInChildContext`, `Go`, `Map`, `Parallel`, or
+`WaitForCallback` is one scope; a step body, condition check, or callback
+submitter is another and also carries `attempt`. Each scope carries its
+own identifiers only, so a step inside a child context reports the step,
+not the child. An attribute whose value is
+an `error` is expanded into `errorType` and `errorMessage`, plus
+`stackTrace` when the error carries recorded frames. slog's `time` and
+`msg` keys do not appear.
+
+The default handler's minimum level is read from `AWS_LAMBDA_LOG_LEVEL`
+(`TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`, `FATAL`, case insensitive).
+Unset or unrecognised selects `INFO`; the previous default logger emitted
+`DEBUG` records. Records below the level are dropped before formatting.
+A supplied handler applies its own level.
+
+The execution and operation identifiers reach a supplied handler through
+its `WithAttrs` method, as structured attributes rather than text in the
+message. Replay suppression wraps whichever handler is installed: while a
+context replays checkpointed operations, its records are dropped before
+they reach the handler, per branch as before.
+
+The new example `logger-slog-handler` installs an application handler
+with snake_case field names and a service field.
+
 ### Added: `BuildPreview` and `FileSystemSerdesConfig.GeneratePreview`
 
 `BuildPreview(value, PreviewConfig)` returns a compact, redacted

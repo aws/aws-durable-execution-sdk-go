@@ -1036,7 +1036,7 @@ func executeBatchItems[I, O any](
 			var result BatchItem[O]
 			var err error
 			if options.nesting == NestingFlat {
-				childID, virtualChild := flatItemContext(ec, parentID, i, ec.owner)
+				childID, virtualChild := flatItemContext(ec, parentID, i, itemName, ec.owner)
 				result, err = runFlatBatchItem[O](virtualChild, childID, i, itemName, options, runItem)
 			} else {
 				result, err = runNestedBatchItem[O](ec, parentID, parentName, itemName, i, options, childSubType, runItem)
@@ -1307,7 +1307,7 @@ func runPreClaimedBatchItem[O any](
 		// FLAT mode: run in a virtual child context. The item's ID was
 		// numbered under the batch by flatItemID; flatItemContext derives
 		// the same ID again from the index.
-		_, virtualChild := flatItemContext(ec, parentID, index, currentGoroutineOwner())
+		_, virtualChild := flatItemContext(ec, parentID, index, itemName, currentGoroutineOwner())
 		virtualChild.abandon = abandon
 		virtualChild.adoptBranchToken(tok)
 		return runFlatBatchItem[O](virtualChild, childID, index, itemName, options, runItem)
@@ -1320,7 +1320,7 @@ func runPreClaimedBatchItem[O any](
 
 	// The child context runs on this goroutine; capture ownership here.
 	mode := childReplayMode(ec, childID, op)
-	child := ec.child(childID, currentGoroutineOwner(), mode)
+	child := ec.child(childID, itemName, currentGoroutineOwner(), mode)
 	child.abandon = abandon
 	child.adoptBranchToken(tok)
 
@@ -1437,17 +1437,18 @@ func batchItemSerdesCtx(ec *execContext, options batchOptions) func(index int) S
 }
 
 // flatItemContext returns the ID of FLAT item index of the batch parentID
-// and the virtual child context that runs it. The item replays when its
-// first operation is already checkpointed. When ec itself replays inside a
-// context whose overall result is already recorded, the item inherits that
-// mode so its unfinished operations park instead of re-executing.
-func flatItemContext(ec *execContext, parentID string, index int, owner goroutineOwner) (string, *execContext) {
+// and the virtual child context that runs it. itemName scopes the item's
+// log records. The item replays when its first operation is already
+// checkpointed. When ec itself replays inside a context whose overall
+// result is already recorded, the item inherits that mode so its
+// unfinished operations park instead of re-executing.
+func flatItemContext(ec *execContext, parentID string, index int, itemName string, owner goroutineOwner) (string, *execContext) {
 	childID := flatItemID(parentID, index)
 	mode := childReplayMode(ec, childID, nil)
 	if executionMode(ec.mode.Load()) == modeReplaySucceededContext {
 		mode = modeReplaySucceededContext
 	}
-	return childID, ec.virtualChild(childID, parentID, owner, mode)
+	return childID, ec.virtualChild(childID, itemName, parentID, owner, mode)
 }
 
 // batchReplayAdvance returns how many operation IDs a terminal batch
@@ -1550,7 +1551,7 @@ func runNestedBatchItem[O any](
 	}
 
 	mode := childReplayMode(ec, childID, op)
-	child := ec.child(childID, ec.owner, mode)
+	child := ec.child(childID, itemName, ec.owner, mode)
 
 	result, fnTrace, fnErr := runItem(child, index)
 
@@ -1626,7 +1627,7 @@ func replayTerminalChildItem[O any](
 		}
 		if op.childCtx.replayChildren {
 			mode := modeReplaySucceededContext
-			child := ec.child(childID, ec.owner, mode)
+			child := ec.child(childID, itemName, ec.owner, mode)
 			result, _, err := runItem(child, index)
 			if err != nil {
 				return BatchItem[O]{}, err
@@ -1704,12 +1705,12 @@ func replayTerminalBatch[I, O any](
 					return BatchResult[O]{}, fmt.Errorf("durable: batch %q: replay record admits %d items but the batch has %d", name, record.StartedTotal, len(items))
 				}
 				if options.nesting == NestingFlat {
-					child := ec.child(id, ec.owner, mode)
+					child := ec.child(id, name, ec.owner, mode)
 					return replayFlatBatchChildrenFromRecord[I, O](child, id, record, items, fn, options)
 				}
 				return replayBatchChildrenFromRecord[I, O](ec, record, items, fn, options, childSubType)
 			}
-			child := ec.child(id, ec.owner, mode)
+			child := ec.child(id, name, ec.owner, mode)
 			return replayBatchChildren[I, O](child, id, name, items, fn, options, parentSubType, childSubType)
 		}
 		// If an operation-level serdes is configured, use it to
@@ -1730,7 +1731,7 @@ func replayTerminalBatch[I, O any](
 			// Fall back to re-executing children if the stored
 			// payload is not the batch summary (could be legacy).
 			mode := modeReplaySucceededContext
-			child := ec.child(id, ec.owner, mode)
+			child := ec.child(id, name, ec.owner, mode)
 			return replayBatchChildren[I, O](child, id, name, items, fn, options, parentSubType, childSubType)
 		}
 		return toBatchResult[O](ec.Context, payload, options.itemSerdes, batchItemSerdesCtx(ec, options))
@@ -1787,7 +1788,7 @@ func replayBatchChildren[I, O any](
 		var err error
 
 		if options.nesting == NestingFlat {
-			childID, virtualChild := flatItemContext(ec, parentID, i, ec.owner)
+			childID, virtualChild := flatItemContext(ec, parentID, i, itemName, ec.owner)
 			result, err = runFlatBatchItem[O](virtualChild, childID, i, itemName, options, runItem)
 		} else {
 			result, err = runNestedBatchItem[O](ec, parentID, parentName, itemName, i, options, childSubType, runItem)
@@ -2520,7 +2521,7 @@ func replayFlatBatchChildrenFromRecord[I, O any](
 			})
 			continue
 		}
-		childID, virtualChild := flatItemContext(ec, parentID, i, ec.owner)
+		childID, virtualChild := flatItemContext(ec, parentID, i, itemName, ec.owner)
 		item, err := runFlatBatchItem[O](virtualChild, childID, i, itemName, options, runItem)
 		if err != nil {
 			return BatchResult[O]{}, err

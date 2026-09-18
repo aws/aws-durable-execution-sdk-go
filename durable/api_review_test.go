@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"math"
 	"reflect"
 	"testing"
@@ -305,7 +306,7 @@ func TestContextSealedVarSatisfied(t *testing.T) {
 func TestStepContextSealedVarSatisfied(t *testing.T) {
 	// Implementation side: stepContext satisfies StepContext. This mirrors
 	// the var _ StepContext = (*stepContext)(nil) declaration in step.go.
-	sc := &stepContext{Context: context.Background(), logger: nopLogger{}, attempt: 1}
+	sc := &stepContext{Context: context.Background(), logger: slog.New(slog.DiscardHandler), attempt: 1}
 	var _ StepContext = sc
 
 	// Interface side: StepContext must carry an unexported method. Without
@@ -325,12 +326,12 @@ func TestExecutionStartTimePropagatedToChildContext(t *testing.T) {
 		context.Background(),
 		"arn:test",
 		invocationInfo{requestID: "req"},
-		nopLogger{},
+		slog.DiscardHandler,
 		newExecutionState(nil),
 	)
 	ec.executionStartTime = startTS
 
-	child := ec.child("1", currentGoroutineOwner(), modeExecution)
+	child := ec.child("1", "", currentGoroutineOwner(), modeExecution)
 	if got := child.executionStartTime; !got.Equal(startTS) {
 		t.Errorf("child executionStartTime = %v, want %v", got, startTS)
 	}

@@ -7,7 +7,7 @@ import "fmt"
 // configuration to fail fast rather than deferring failures to the first
 // invocation.
 //
-// nil logger, serdes, and execution client are valid (they select built-in
+// nil log handler, serdes, and execution client are valid (they select built-in
 // defaults). The only invalid configuration currently is a Plugin with no
 // hook functions set, which is always a programming mistake.
 func validateHandlerOptions(opts *handlerOptions) error {

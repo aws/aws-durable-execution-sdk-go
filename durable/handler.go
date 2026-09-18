@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -40,6 +41,9 @@ func Wrap[I, O any](handler Handler[I, O], opts ...HandlerOption) func(context.C
 	if err := validateHandlerOptions(&options); err != nil {
 		panic(err.Error())
 	}
+	if options.logHandler == nil {
+		options.logHandler = defaultLogHandler()
+	}
 	h := &durableHandler[I, O]{handler: handler, options: options}
 	return h.Invoke
 }
@@ -50,10 +54,29 @@ type HandlerOption interface {
 	applyHandler(*handlerOptions)
 }
 
-// WithLogger sets the logger used for SDK and context logging. The default
-// logger emits structured JSON enriched with execution metadata.
-func WithLogger(l Logger) HandlerOption {
-	return handlerOptionFunc(func(o *handlerOptions) { o.logger = l })
+// WithLogHandler sets the [slog.Handler] behind [Context.Logger] and
+// [StepContext.Logger]. A nil handler selects the default.
+//
+// The default handler writes one JSON object per record to stderr, Lambda's
+// log channel, with these fields: timestamp (ISO 8601 UTC with millisecond
+// precision and a Z suffix), level (DEBUG, INFO, WARN, or ERROR), message,
+// requestId, executionArn, tenantId (when the invocation has one),
+// operationId, operationName, and attempt (inside a step body, condition
+// check, or callback submitter), plus any attributes the call site adds.
+// An attribute whose value is an error is expanded into errorType and
+// errorMessage, and stackTrace when the error carries recorded frames.
+// The default handler's minimum level is read from the AWS_LAMBDA_LOG_LEVEL
+// environment variable (TRACE, DEBUG, INFO, WARN, ERROR, or FATAL, case
+// insensitive); unset or unrecognised selects INFO. A supplied handler
+// applies its own level.
+//
+// The SDK adds the execution and operation attributes through the
+// handler's WithAttrs method, so a supplied handler receives them as
+// structured attributes, and it wraps the handler with per-branch replay
+// suppression: while a context replays checkpointed operations, its
+// records are dropped before they reach the handler.
+func WithLogHandler(h slog.Handler) HandlerOption {
+	return handlerOptionFunc(func(o *handlerOptions) { o.logHandler = h })
 }
 
 // WithSerdes sets the default serializer for operation results. It applies
@@ -76,7 +99,7 @@ func WithCallbackDeserializer(d Deserializer) HandlerOption {
 }
 
 type handlerOptions struct {
-	logger               Logger
+	logHandler           slog.Handler
 	serdes               Serdes
 	callbackDeserializer Deserializer
 
@@ -215,14 +238,6 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	}
 
 	invMeta := invocationInfoFromContext(ctx)
-	// Replay suppression is applied per context, not here: every context
-	// wraps this base logger with its own replay-aware wrapper (see
-	// execContext.attachLogger), so suppression follows each branch's own
-	// replay state.
-	logger := h.options.logger
-	if logger == nil {
-		logger = newDefaultLogger(in.DurableExecutionArn)
-	}
 
 	// Plugin dispatcher: nil when no plugins are registered (zero overhead).
 	pd := newPluginDispatcher(h.options.plugins)
@@ -318,7 +333,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		// is recorded in the FAILED response; nil otherwise.
 		trace []string
 	}
-	ec = newExecContext(ctx, in.DurableExecutionArn, invMeta, logger, state)
+	ec = newExecContext(ctx, in.DurableExecutionArn, invMeta, h.options.logHandler, state)
 	ec.checkpointer = cp
 	ec.executionStartTime = execStartTimestamp
 	ec.noStackTraces = h.options.noStackTraces

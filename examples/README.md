@@ -162,9 +162,10 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [serde-custom-config](serde-custom-config/main.go) | WithSerdes (handler-level) | SUCCEEDED |
 | [serde-preview-truncation](serde-preview-truncation/main.go) | NewFileSystemSerdes, GeneratePreview, BuildPreview (include-all, exclude, truncation) | SUCCEEDED |
 | [serde-preview-field-selection](serde-preview-field-selection/main.go) | NewFileSystemSerdes, GeneratePreview, BuildPreview (exclude-all, path matching, masking) | SUCCEEDED |
-| [logger-after-wait](logger-after-wait/main.go) | Wait, WithLogger, replay suppression | SUCCEEDED |
-| [logger-after-callback](logger-after-callback/main.go) | WaitForCallback, WithLogger | SUCCEEDED |
-| [logger-log-levels](logger-log-levels/main.go) | WithLogger, all log levels | SUCCEEDED |
+| [logger-after-wait](logger-after-wait/main.go) | Wait, Context.Logger, replay suppression | SUCCEEDED |
+| [logger-after-callback](logger-after-callback/main.go) | WaitForCallback, Context.Logger | SUCCEEDED |
+| [logger-log-levels](logger-log-levels/main.go) | Context.Logger, all log levels | SUCCEEDED |
+| [logger-slog-handler](logger-slog-handler/main.go) | WithLogHandler, application slog.Handler | SUCCEEDED |
 | [plugin-lifecycle](plugin-lifecycle/main.go) | WithPlugins, hook lifecycle ordering | SUCCEEDED |
 
 A serdes written for one result type can use `durable.SerdesOf`, which

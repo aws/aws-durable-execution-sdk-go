@@ -3,6 +3,7 @@ package durable
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"strings"
 	"testing"
 )
@@ -72,12 +73,11 @@ func TestCallbackDeserializerPrecedence(t *testing.T) {
 	}
 }
 
-func TestWithLoggerOption(t *testing.T) {
+func TestWithLogHandlerOption(t *testing.T) {
 	opts := handlerOptions{}
-	l := NopLogger{}
-	WithLogger(l).applyHandler(&opts)
-	if opts.logger == nil {
-		t.Fatal("logger not set")
+	WithLogHandler(slog.DiscardHandler).applyHandler(&opts)
+	if opts.logHandler == nil {
+		t.Fatal("log handler not set")
 	}
 }
 
@@ -91,20 +91,20 @@ func TestWithSerdesOption(t *testing.T) {
 }
 
 func TestHandlerOptionsConstructionTimeOnly(t *testing.T) {
-	// Verify that all three main options (Logger, Serdes,
+	// Verify that all three main options (LogHandler, Serdes,
 	// CallbackDeserializer) are captured into handlerOptions, the state
 	// Wrap snapshots at construction time.
-	l := NopLogger{}
+	l := slog.DiscardHandler
 	s := &testSerdes{}
 	d := DeserializerFunc(func([]byte, any) error { return nil })
 
 	options := handlerOptions{}
-	for _, o := range []HandlerOption{WithLogger(l), WithSerdes(s), WithCallbackDeserializer(d)} {
+	for _, o := range []HandlerOption{WithLogHandler(l), WithSerdes(s), WithCallbackDeserializer(d)} {
 		o.applyHandler(&options)
 	}
 
-	if options.logger == nil {
-		t.Error("logger not captured")
+	if options.logHandler == nil {
+		t.Error("log handler not captured")
 	}
 	if options.serdes == nil {
 		t.Error("serdes not captured")

@@ -2,6 +2,7 @@ package durable
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"testing"
 )
@@ -73,7 +74,7 @@ func TestWrapAcceptsValidConfigWithAllOptions(t *testing.T) {
 	handler := func(_ Context, _ string) (string, error) { return "", nil }
 	plugin := Plugin{OnInvocationStart: func(context.Context, InvocationHookInfo) {}}
 	h := Wrap(handler,
-		WithLogger(newDefaultLogger("test")),
+		WithLogHandler(slog.DiscardHandler),
 		WithPlugins(plugin),
 	)
 	if h == nil {
@@ -90,10 +91,10 @@ func TestWrapAcceptsNilSerdes(t *testing.T) {
 	}
 }
 
-func TestWrapAcceptsNilLogger(t *testing.T) {
-	// WithLogger(nil) is valid — means "use default structured logger".
+func TestWrapAcceptsNilLogHandler(t *testing.T) {
+	// WithLogHandler(nil) is valid — means "use the default handler".
 	handler := func(_ Context, _ string) (string, error) { return "", nil }
-	h := Wrap(handler, WithLogger(nil))
+	h := Wrap(handler, WithLogHandler(nil))
 	if h == nil {
 		t.Fatal("Wrap returned nil")
 	}
