@@ -240,8 +240,11 @@ func TestReplayChildrenAwaitedUnfinishedStepFailsInvocation(t *testing.T) {
 	if out.Status != "FAILED" || out.Error == nil {
 		t.Fatalf("response = %s, want FAILED with an error", resp)
 	}
-	if out.Error.ErrorType != "NonDeterministicReplayError" {
-		t.Errorf("ErrorType = %q, want NonDeterministicReplayError", out.Error.ErrorType)
+	// The child body failed while re-executing, so the failure surfaces
+	// in the same shape as a first-run child failure: a ChildContextError
+	// whose message is the determinism error's own.
+	if out.Error.ErrorType != "ChildContextError" {
+		t.Errorf("ErrorType = %q, want ChildContextError", out.Error.ErrorType)
 	}
 	if !strings.Contains(out.Error.ErrorMessage, `name "extra"`) {
 		t.Errorf("ErrorMessage = %q, does not name the unfinished step", out.Error.ErrorMessage)

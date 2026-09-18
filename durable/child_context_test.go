@@ -1122,6 +1122,124 @@ func TestRunInChildContextAsyncReplayChildrenReExecution(t *testing.T) {
 	}
 }
 
+// replayChildrenFailure is the error a child body returns in the replay
+// parity tests. A named type gives the record a distinct ErrorType.
+type replayChildrenFailure struct{}
+
+func (replayChildrenFailure) Error() string { return "body failed" }
+
+// replayChildrenPayloads returns the two invocations a child sees: the
+// first run, where the child has no checkpoint, and the replay of a
+// SUCCEEDED child whose result was too large to store.
+func replayChildrenPayloads() map[string][]byte {
+	return map[string][]byte{
+		"first run": childPayload(`"x"`),
+		"replay children": childPayload(`"x"`,
+			checkpointedChild("1", "SUCCEEDED", &wireContextDetails{ReplayChildren: true}),
+		),
+	}
+}
+
+// assertChildFailureParity runs handler against both invocations and
+// asserts that the error it reports is a *ChildContextError with the same
+// name and ErrorType each time. handler returns the child's error
+// unchanged so the response carries it.
+func assertChildFailureParity(t *testing.T, handler func(ctx Context, report func(error)) (string, error)) {
+	t.Helper()
+	var seen []*ChildContextError
+	for label, payload := range replayChildrenPayloads() {
+		var got error
+		invokeStep(t, &fakeLambda{}, payload, func(ctx Context, _ string) (string, error) {
+			return handler(ctx, func(err error) { got = err })
+		})
+		if got == nil {
+			t.Fatalf("%s: child returned no error", label)
+		}
+		var childErr *ChildContextError
+		if !errors.As(got, &childErr) {
+			t.Fatalf("%s: error is %T (%v), want *ChildContextError", label, got, got)
+		}
+		if childErr.Name != "big" {
+			t.Errorf("%s: ChildContextError.Name = %q, want big", label, childErr.Name)
+		}
+		if childErr.ErrorType == "" {
+			t.Errorf("%s: ChildContextError.ErrorType is empty", label)
+		}
+		seen = append(seen, childErr)
+	}
+	if seen[0].ErrorType != seen[1].ErrorType {
+		t.Errorf("ErrorType differs between invocations: %q vs %q", seen[0].ErrorType, seen[1].ErrorType)
+	}
+	if seen[0].Message != seen[1].Message {
+		t.Errorf("Message differs between invocations: %q vs %q", seen[0].Message, seen[1].Message)
+	}
+}
+
+func TestRunInChildContextReplayChildrenFailureIsChildContextError(t *testing.T) {
+	// A child body that fails while re-executing in ReplayChildren mode
+	// returns the same error type as a body that fails on the first run.
+	assertChildFailureParity(t, func(ctx Context, report func(error)) (string, error) {
+		_, err := RunInChildContext(ctx, "big", func(Context) (string, error) {
+			return "", replayChildrenFailure{}
+		})
+		report(err)
+		return "handled", nil
+	})
+}
+
+func TestGoReplayChildrenFailureIsChildContextError(t *testing.T) {
+	// Async variant: the future settles with the same error type on the
+	// first run and on ReplayChildren replay.
+	assertChildFailureParity(t, func(ctx Context, report func(error)) (string, error) {
+		fut := Go(ctx, "big", func(Context) (string, error) {
+			return "", replayChildrenFailure{}
+		})
+		_, err := fut.Result()
+		report(err)
+		return "handled", nil
+	})
+}
+
+func TestGoReplayChildrenRunsOnOwnGoroutine(t *testing.T) {
+	// In ReplayChildren mode Go must not run the child body on the calling
+	// goroutine: the future is unsettled when Go returns, and the child
+	// owns its own branch token rather than borrowing the caller's.
+	fake := &fakeLambda{}
+	payload := childPayload(`"x"`,
+		checkpointedChild("1", "SUCCEEDED", &wireContextDetails{ReplayChildren: true}),
+	)
+	release := make(chan struct{})
+	var borrowedToken, unowned bool
+	resp := invokeStep(t, fake, payload, func(ctx Context, _ string) (string, error) {
+		parent, _ := ctx.(*execContext)
+		fut := Go(ctx, "big", func(childCtx Context) (string, error) {
+			child, _ := childCtx.(*execContext)
+			borrowedToken = child.branchTok == parent.branchTok
+			unowned = !child.ownsBranchTok
+			<-release
+			return "reconstructed", nil
+		})
+		if fut.settled() {
+			t.Error("future settled before Go returned: child body ran synchronously")
+		}
+		close(release)
+		return fut.Result()
+	})
+
+	if want := `{"Status":"SUCCEEDED","Result":"\"reconstructed\""}`; resp != want {
+		t.Errorf("response = %s, want %s", resp, want)
+	}
+	if borrowedToken {
+		t.Error("replayed child inherited the caller's branch token")
+	}
+	if unowned {
+		t.Error("replayed child does not own its branch token")
+	}
+	if n := len(updateBatch(t, fake)); n != 0 {
+		t.Errorf("replay sent %d updates, want 0", n)
+	}
+}
+
 func TestRunInChildContextAsyncReplayChildrenLargePayload(t *testing.T) {
 	// Async variant: large payload triggers ContextOptions.ReplayChildren.
 	fake := &fakeLambda{}

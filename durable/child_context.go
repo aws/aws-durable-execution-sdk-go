@@ -127,10 +127,16 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 			}
 			// ReplayChildren mode: the result was too large to
 			// checkpoint, so re-execute the child body to reconstruct it.
+			// fn runs on the calling goroutine, as on the first run. A
+			// failure is returned in the same shape as a first-run failure
+			// so the caller sees one error type on every invocation.
 			if op.childCtx.replayChildren {
-				mode := modeReplaySucceededContext
-				child := ec.child(id, ec.owner, mode)
-				return fn(child)
+				child := ec.child(id, ec.owner, modeReplaySucceededContext)
+				result, fnErr := fn(child)
+				if fnErr != nil {
+					return zero, replayedChildFailure(name, options, fnErr, ec.returnedErrorTrace(fn, fnErr, 0))
+				}
+				return result, nil
 			}
 			var out O
 			if err := options.serdes.Unmarshal(ec.Context, ec.serdesCtx(id), []byte(op.childCtx.result), &out); err != nil {
@@ -425,7 +431,9 @@ func Go[O any](ctx Context, name string, fn func(Context) (O, error), opts ...Ch
 }
 
 // resolveTerminalChild handles a child operation that already has a terminal
-// status in the checkpoint log, returning a pre-settled future.
+// status in the checkpoint log. It returns a pre-settled future, except in
+// ReplayChildren mode, where the child body runs again on its own goroutine
+// and the future settles when it finishes.
 func resolveTerminalChild[O any](ec *execContext, op *operation, id, name string, options childOptions, fn func(Context) (O, error)) *Future[O] {
 	switch op.status {
 	case statusSucceeded:
@@ -435,13 +443,7 @@ func resolveTerminalChild[O any](ec *execContext, op *operation, id, name string
 		// ReplayChildren mode: re-execute the child body to reconstruct
 		// the large result that was not checkpointed.
 		if op.childCtx.replayChildren {
-			mode := modeReplaySucceededContext
-			child := ec.child(id, currentGoroutineOwner(), mode)
-			result, err := fn(child)
-			if err != nil {
-				return newFailedFuture[O](err)
-			}
-			return newSettledFuture(result, nil)
+			return replayChildAsync(ec, id, name, options, fn)
 		}
 		var out O
 		if err := options.serdes.Unmarshal(ec.Context, ec.serdesCtx(id), []byte(op.childCtx.result), &out); err != nil {
@@ -457,6 +459,49 @@ func resolveTerminalChild[O any](ec *execContext, op *operation, id, name string
 		// but handle gracefully.
 		return newFailedFuture[O](fmt.Errorf("durable: child context %q: unexpected terminal status %s", name, op.status))
 	}
+}
+
+// replayChildAsync re-executes the body of a SUCCEEDED child context whose
+// result was not checkpointed. The body runs on its own goroutine with its
+// own branch token, the same shape as the first run of
+// [RunInChildContextAsync], so the returned future is unsettled when this
+// function returns and the child does not borrow the caller's branch
+// registration. The child's completion is already recorded, so nothing is
+// checkpointed; a failure settles the future in the same shape as a
+// first-run failure.
+func replayChildAsync[O any](ec *execContext, id, name string, options childOptions, fn func(Context) (O, error)) *Future[O] {
+	fut := newFuture[O]()
+	registerFuture(ec.suspend, fut)
+
+	tok := ec.suspend.registerBranchToken()
+	go func() {
+		defer tok.release()
+		child := ec.child(id, currentGoroutineOwner(), modeReplaySucceededContext)
+		child.adoptBranchToken(tok)
+
+		result, fnTrace, fnErr := runUserFunc(child, fn, fmt.Sprintf("durable: child context %q panicked", name), func() (O, error) {
+			return fn(child)
+		})
+		if fnErr != nil {
+			var zero O
+			fut.settle(zero, replayedChildFailure(name, options, fnErr, fnTrace))
+			return
+		}
+		fut.settle(result, nil)
+	}()
+	return fut
+}
+
+// replayedChildFailure builds the error returned when a child body fails
+// while re-executing in ReplayChildren mode. Suspension is not a child
+// failure: it propagates as errSuspendExecution so the invocation ends
+// PENDING and the child resumes in a later invocation. Any other error is
+// wrapped through the configured mapper exactly as a first-run failure is.
+func replayedChildFailure(name string, options childOptions, fnErr error, fnTrace []string) error {
+	if errors.Is(fnErr, errSuspendExecution) || errors.Is(fnErr, errCheckpointTerminated) {
+		return errSuspendExecution
+	}
+	return options.failure(name, recordOf(fnErr).withTrace(fnTrace))
 }
 
 // childReplayMode determines the execution mode for a child context. A child

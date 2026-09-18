@@ -62,8 +62,11 @@ func TestUnfinishedReplayInLastBranchReturns(t *testing.T) {
 	if res.Status != durabletest.Failed || res.Error == nil {
 		t.Fatalf("status = %v, want FAILED with an error", res.Status)
 	}
-	if res.Error.Type != "NonDeterministicReplayError" {
-		t.Errorf("error type = %q, want NonDeterministicReplayError", res.Error.Type)
+	// The determinism error escaped the child body while it re-executed,
+	// so it surfaces as a child failure, the same shape as on the first
+	// run. Its message still names the unfinished operation.
+	if res.Error.Type != "ChildContextError" {
+		t.Errorf("error type = %q, want ChildContextError", res.Error.Type)
 	}
 	if !strings.Contains(res.Error.Message, `name "extra"`) {
 		t.Errorf("error message %q does not name the unfinished step", res.Error.Message)
