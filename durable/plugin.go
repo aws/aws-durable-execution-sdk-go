@@ -2,6 +2,7 @@ package durable
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 )
@@ -17,6 +18,18 @@ import (
 // Goroutine safety: hook dispatches from concurrent branches (parallel map
 // items, async operations) may run in parallel. Plugin implementations must
 // be safe for concurrent use from multiple goroutines.
+//
+// Wrap hooks: WrapInvocation, WrapOperationAttemptFn, and WrapChildContextFn
+// receive the wrapped work as fn and must call fn exactly once, returning its
+// result. The SDK runs the wrapped work at most once regardless of what the
+// hook does. A hook that calls fn again receives the first call's result. A
+// hook that panics is contained: if it panics before calling fn, the SDK
+// runs fn once and uses that result; if it panics after calling fn, the SDK
+// uses the result fn already produced. If fn itself panics, that panic
+// reaches the SDK as it would without the hook, even if the hook recovers
+// it and returns normally or calls fn again. A hook that panics while fn is
+// still running on another goroutine fails the wrapped work with an error;
+// fn is still not run again.
 type Plugin struct {
 	// OnInvocationStart is called once at the start of each Lambda
 	// invocation, before the user handler runs.
@@ -68,21 +81,24 @@ type Plugin struct {
 	OnOperationChange func(ctx context.Context, info OperationChangeHookInfo)
 
 	// WrapInvocation wraps the user handler invocation. The outer plugin
-	// (index 0) wraps first. fn must be called exactly once.
+	// (index 0) wraps first. fn must be called exactly once; see the
+	// wrap-hook contract in the [Plugin] documentation.
 	//
 	// EXPERIMENTAL: this field is experimental and may be changed or
 	// removed in future releases.
 	WrapInvocation func(ctx context.Context, info InvocationHookInfo, fn func() (any, error)) (any, error)
 
 	// WrapOperationAttemptFn wraps the execution of an operation attempt
-	// body (step fn, condition check). fn must be called exactly once.
+	// body (step fn, condition check). fn must be called exactly once; see
+	// the wrap-hook contract in the [Plugin] documentation.
 	//
 	// EXPERIMENTAL: this field is experimental and may be changed or
 	// removed in future releases.
 	WrapOperationAttemptFn func(ctx context.Context, info AttemptHookInfo, fn func() (any, error)) (any, error)
 
 	// WrapChildContextFn wraps the execution of a child-context function.
-	// fn must be called exactly once.
+	// fn must be called exactly once; see the wrap-hook contract in the
+	// [Plugin] documentation.
 	//
 	// EXPERIMENTAL: this field is experimental and may be changed or
 	// removed in future releases.
@@ -374,8 +390,8 @@ func invokePluginSafely(p *Plugin, call func(*Plugin)) {
 }
 
 // wrapChain composes plugins' wrap hooks around fn. plugins[0] is outermost.
-// A panicking wrapper is skipped in favor of the inner fn. Returns fn()
-// unchanged when d is nil.
+// A panicking wrapper is skipped without running fn a second time; see
+// invokeWrapSafely. Returns fn() unchanged when d is nil.
 //
 // getWrap extracts the wrap function from a plugin; return nil if the
 // plugin does not implement this particular wrap hook.
@@ -400,17 +416,100 @@ func wrapChain(d *pluginDispatcher, getWrap func(*Plugin) func(func() (any, erro
 	return next()
 }
 
-// invokeWrapSafely calls wrapFn(innerFn), recovering panics. If the
-// wrapper panics, the inner fn is called directly (panicking wrappers are
-// skipped in favor of the inner fn).
-func invokeWrapSafely(wrapFn func(func() (any, error)) (any, error), innerFn func() (any, error)) (result any, err error) {
+// errWrapBodyUnfinished is the error returned when a wrap hook panics while
+// the wrapped body it started on another goroutine has not yet returned.
+// The body is not run again, and its result is not available.
+var errWrapBodyUnfinished = errors.New("durable: plugin wrap hook panicked before the wrapped function returned; result unavailable")
+
+// guardedFn runs a wrapped body at most once, whatever the wrap hooks
+// around it do. The first call runs fn and records its outcome. Every
+// later call returns the recorded outcome without running fn again. A
+// panic in fn is recorded and re-raised on the first call and on every
+// later call, so a hook that recovers the body's panic cannot turn it into
+// a normal result by calling fn again.
+type guardedFn struct {
+	fn func() (any, error)
+
+	mu       sync.Mutex
+	entered  bool // fn has been called
+	done     bool // fn returned or panicked
+	result   any
+	err      error
+	panicked bool
+	panicVal any
+}
+
+// call runs fn on the first call and returns the recorded outcome on every
+// later call. A later call after fn panicked re-raises that panic. A later
+// call while fn is still running on another goroutine returns
+// errWrapBodyUnfinished.
+func (g *guardedFn) call() (any, error) {
+	g.mu.Lock()
+	if g.entered {
+		result, err, done, panicked, panicVal := g.result, g.err, g.done, g.panicked, g.panicVal
+		g.mu.Unlock()
+		if !done {
+			return nil, errWrapBodyUnfinished
+		}
+		if panicked {
+			panic(panicVal)
+		}
+		return result, err
+	}
+	g.entered = true
+	g.mu.Unlock()
+
 	defer func() {
 		if r := recover(); r != nil {
-			// Wrapper panicked; skip it and call inner fn directly.
-			result, err = innerFn()
+			g.mu.Lock()
+			g.done = true
+			g.panicked = true
+			g.panicVal = r
+			g.mu.Unlock()
+			panic(r)
 		}
 	}()
-	return wrapFn(innerFn)
+	result, err := g.fn()
+	g.mu.Lock()
+	g.result, g.err, g.done = result, err, true
+	g.mu.Unlock()
+	return result, err
+}
+
+// rethrowBodyPanic re-raises the recorded panic when fn panicked. It is a
+// no-op otherwise. Called after a wrap hook returns normally, so a hook
+// that recovered the body's panic cannot report the body as successful.
+func (g *guardedFn) rethrowBodyPanic() {
+	g.mu.Lock()
+	panicked, panicVal := g.panicked, g.panicVal
+	g.mu.Unlock()
+	if panicked {
+		panic(panicVal)
+	}
+}
+
+// invokeWrapSafely calls wrapFn(innerFn), recovering panics raised by the
+// hook. innerFn is guarded so it runs at most once. If the hook panics
+// before calling innerFn, innerFn runs once. If the hook panics after
+// calling innerFn, the recorded result of that call is returned. If
+// innerFn itself panicked, that panic reaches the caller even when the
+// hook recovers it, calls innerFn again, or returns normally. A hook that
+// calls innerFn more than once receives the first call's outcome on every
+// call after it.
+func invokeWrapSafely(wrapFn func(func() (any, error)) (any, error), innerFn func() (any, error)) (result any, err error) {
+	g := &guardedFn{fn: innerFn}
+	defer func() {
+		if r := recover(); r != nil {
+			// Either the hook panicked or the body's panic propagated
+			// through the hook. call runs the body when it never ran,
+			// returns its recorded outcome when it did, and re-raises
+			// the body's own panic when it panicked.
+			result, err = g.call()
+		}
+	}()
+	result, err = wrapFn(g.call)
+	g.rethrowBodyPanic()
+	return result, err
 }
 
 // enrichLogContext merges all plugins' log context enrichments in
