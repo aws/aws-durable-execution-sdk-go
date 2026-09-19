@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Stable: the plugin instrumentation API
+
+The plugin instrumentation API is no longer experimental. `durable.Plugin`,
+`durable.WithPlugins`, `durable.WithPluginChildOperationsDepth`, the hook
+info types, and the status and outcome constants are covered by the
+compatibility policy in the Plugin API section of the README: within a
+major version a release may add hook fields, info fields, and constants,
+and does not remove or rename an identifier, change a hook's signature, or
+change the documented dispatch semantics. The `EXPERIMENTAL` markers are
+removed from the godoc.
+
+The `durable.Plugin` documentation now states the dispatch contract in one
+place: for every hook, when it fires, whether it fires on replay, its order
+relative to the other hooks, and the goroutine that dispatches it, with
+the single-plugin and multi-plugin cases told apart. It also states the
+concurrency contract: hooks of concurrent operations run in parallel, and
+so do the hooks of different plugins for one event, so every hook must be
+safe for concurrent use. A package test drives every hook from concurrent
+branches under the race detector.
+
+The wrap-hook change and the depth option below are the last changes to the
+plugin API made under the experimental marker.
+
 ### Added: `WithChildSubType`
 
 `durable.WithChildSubType(subType)` is a `ChildOption` for
@@ -61,7 +84,7 @@ configuration error; one inside a `NestingFlat` item is supported.
 The `child-context-virtual` and `child-context-serdes-virtual` examples
 now use the option; before, they showed concurrent child contexts.
 
-### Added (experimental plugin API): `WithPluginChildOperationsDepth`
+### Added: `WithPluginChildOperationsDepth`
 
 `WithPluginChildOperationsDepth(depth)` bounds the depth in the operation
 tree of the operations reported to plugins. Operations deeper than `depth`
@@ -84,7 +107,7 @@ configured depth, so a consumer can tell that the operations inside one
 were withheld rather than absent. Every reported operation's parent is also
 reported, so `ParentID` chains stay complete.
 
-### Breaking (experimental plugin API): wrap hooks pass a context to `fn`
+### Breaking: wrap hooks pass a context to `fn`
 
 The `fn` argument of `Plugin.WrapInvocation`, `Plugin.WrapOperationAttemptFn`,
 and `Plugin.WrapChildContextFn` changes from `func() (any, error)` to

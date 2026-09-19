@@ -5,8 +5,11 @@ snapshot records to configurable destinations as durable workflows run, complete
 or fail. Records capture execution metadata, timing, operation details, and
 content fields (inputs, outputs, errors) for diagnostics and monitoring.
 
-> **EXPERIMENTAL.** The plugin instrumentation API (`durable.WithPlugins`) is
-> experimental and may change in future releases without a major-version bump.
+> The plugin instrumentation API this module is built on (`durable.Plugin`,
+> `durable.WithPlugins`) is stable and covered by the SDK's compatibility
+> policy; see the Plugin API section of the [root README](../README.md). The
+> insight record schema and the `insight` package API are still pre-release
+> and may change before the first stable release of this module.
 
 ## Installation
 

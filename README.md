@@ -14,7 +14,9 @@ external orchestrators.
 > anything whatsoever.
 >
 > This code is experimental and liable to change without notice. Any aspect of
-> this code that works today can stop working at any time.
+> this code that works today can stop working at any time. The one exception
+> is the plugin instrumentation API, which follows the compatibility policy
+> in the [Plugin API](#plugin-api) section below.
 >
 > This code is a preview of what a Go SDK might look like. There is no
 > guarantee that it will necessarily become a final product.
@@ -385,7 +387,59 @@ durable.Start(handler, durable.WithReplayLogMode(durable.ReplayLogModeEmit))
 
 ## Plugin API
 
-The plugin instrumentation API (`WithPlugins`) is EXPERIMENTAL. It provides lifecycle hooks for observability and tracing. The API may change in future releases.
+The plugin instrumentation API gives observability and tracing integrations
+hooks into the lifecycle of an execution. A `durable.Plugin` is a struct of
+optional hook functions; set the ones you need and register the plugin with
+`durable.WithPlugins`.
+
+```go
+tracer := durable.Plugin{
+	OnOperationStart: func(ctx context.Context, info durable.OperationHookInfo) {
+		log.Printf("start %s %s replay=%v", info.Type, info.Name, info.IsReplay)
+	},
+	WrapOperationAttemptFn: func(ctx context.Context, info durable.AttemptHookInfo, fn func(context.Context) (any, error)) (any, error) {
+		ctx, span := startSpan(ctx, info.Name)
+		defer span.End()
+		return fn(ctx)
+	},
+}
+durable.Start(handler, durable.WithPlugins(tracer))
+```
+
+The hooks cover the invocation (`OnInvocationStart`, `OnInvocationEnd`,
+`OnOperationChange`, `WrapInvocation`), each operation (`OnOperationStart`,
+`OnOperationEnd`), each attempt of a retryable operation
+(`OnOperationAttemptStart`, `OnOperationAttemptEnd`,
+`WrapOperationAttemptFn`), child contexts (`WrapChildContextFn`), and log
+records (`EnrichLogContext`). The wrap hooks receive the wrapped work as a
+function and may pass it a derived context, which becomes the parent of the
+context the user code observes. `WithPluginChildOperationsDepth` bounds how
+deep in the operation tree hooks are reported.
+
+The `durable.Plugin` documentation states, for every hook, when it fires,
+whether it fires on replay, its order relative to the other hooks, and the
+goroutine that dispatches it. With one plugin registered a notification hook
+runs on that goroutine; with several, each plugin's hook runs on a goroutine
+the dispatch joins, so the plugins' hooks for one event run in parallel.
+Hooks of concurrent operations run in parallel too, so a plugin must be
+safe for concurrent use. The
+[insight](insight/README.md) module is a complete plugin built on this API.
+
+### Compatibility policy
+
+The plugin API is stable. Within a major version of the module, a release
+may add hook fields to `Plugin`, add fields to the hook info types, and add
+status or outcome constants. A release does not remove or rename an
+exported identifier of the plugin API, change a hook's signature, or change
+the documented dispatch semantics; a change of that kind requires a new
+major version. Construct `Plugin` and the hook info types with keyed fields
+so that added fields do not break your code, and tolerate status values you
+do not know. Each addition is listed in
+[docs/release-notes.md](docs/release-notes.md). The policy holds from the
+first release that carries it, including releases at v0. The pre-release
+notice at the top of this file states that any part of the SDK can change
+without notice; this API is the exception it names. The notice's warning
+against production use still applies to the SDK as a whole.
 
 ## Feedback & Support
 

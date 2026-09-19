@@ -8,20 +8,111 @@ import (
 	"time"
 )
 
-// Plugin configures an EXPERIMENTAL instrumentation plugin that observes
-// durable execution lifecycle events. Plugins implement only the hooks they
-// need by setting non-nil function fields; nil fields are skipped with zero
-// overhead.
+// Plugin configures an instrumentation plugin that observes durable
+// execution lifecycle events. Plugins implement only the hooks they need by
+// setting non-nil function fields; nil fields are skipped with zero
+// overhead. Register plugins with [WithPlugins]. Construct a Plugin with
+// keyed fields: a minor release may add hook fields.
 //
-// EXPERIMENTAL: this type is experimental and may be changed or removed in
-// future releases without a major-version bump.
+// # Compatibility
 //
-// Goroutine safety: hook dispatches from concurrent branches (parallel map
-// items, async operations) may run in parallel. Plugin implementations must
-// be safe for concurrent use from multiple goroutines.
+// The plugin API is stable. It comprises this type, [WithPlugins],
+// [WithPluginChildOperationsDepth], the hook info types
+// ([InvocationHookInfo], [InvocationEndHookInfo], [OperationHookInfo],
+// [AttemptHookInfo], [AttemptEndHookInfo], [OperationChangeHookInfo]), and
+// the [PluginInvocationStatus], [PluginOperationStatus], and
+// [PluginAttemptOutcome] constants. Within a major version of the module
+// the SDK may add hook fields to Plugin, add fields to the hook info types,
+// and add constants. It does not remove or rename an exported identifier of
+// the plugin API, change a hook's signature, or change the dispatch
+// semantics documented on this type and on each hook. A change of that
+// kind requires a new major version. A plugin that constructs Plugin and
+// the hook info types with keyed fields therefore compiles, and keeps its
+// documented behavior, against every later release of the same major
+// version. An unkeyed literal of one of these types stops compiling when a
+// field is added, so the promise does not extend to it. The policy holds at
+// v0 as well as at v1 and later. The release notes record each addition to
+// the plugin API.
 //
-// Wrap hooks: WrapInvocation, WrapOperationAttemptFn, and WrapChildContextFn
-// receive the wrapped work as fn and must call fn exactly once, returning its
+// A new hook info field is zero on hooks and paths that do not set it, and
+// a new status or outcome constant is delivered only to plugins that run
+// against a release that defines it. A plugin that switches on a status
+// should tolerate values it does not know.
+//
+// # Dispatch
+//
+// The notification hooks (the On* fields) are dispatched synchronously at
+// the lifecycle point they report. The dispatching goroutine is the one
+// that reached the point: the goroutine that received the invocation for
+// the invocation-level hooks, and the goroutine that runs the operation for
+// the operation-level hooks. It calls every registered plugin's hook and
+// waits for all of them to return before it proceeds. With one registered
+// plugin the hook runs on the dispatching goroutine itself. With several,
+// each plugin's hook runs on a goroutine started for that dispatch, and
+// the dispatching goroutine joins them all before it proceeds; the hooks of
+// different plugins for one notification may therefore run in parallel,
+// and no order is defined among them. In this documentation, a hook that
+// is "dispatched from" a goroutine runs on that goroutine when one plugin
+// is registered and on a goroutine that the dispatch joins when several
+// are. Either way the dispatching goroutine waits, so a slow hook delays
+// execution for as long as it runs. A hook receives a copy of its info, so
+// it cannot alter the operation it observes. A notification hook that
+// panics is recovered and the panic discarded; the hook never affects
+// execution.
+//
+// The wrap hooks (the Wrap* fields) run on the dispatching goroutine
+// however many plugins are registered. They compose in registration order:
+// the plugin at index 0 is outermost, and each hook receives the next as
+// fn. See the wrap-hook contract below.
+//
+// Hooks fire in this order within one invocation: OnInvocationStart, then
+// OnOperationChange when any operation changed externally since the
+// previous invocation, then WrapInvocation around the handler. The
+// operation-level hooks fire inside the handler as the operations run.
+// OnInvocationEnd fires last, once the invocation's outcome is decided and
+// recorded. Exactly one OnInvocationStart and exactly one OnInvocationEnd
+// fire per invocation. Every operation-level hook receives an
+// [OperationHookInfo] whose IsReplay reports whether the operation is
+// replayed from a checkpoint; each hook's documentation states when it
+// fires on replay. An operation beyond the depth set by
+// [WithPluginChildOperationsDepth] fires no operation-level hook.
+//
+// # Concurrency
+//
+// Hook dispatches from concurrent branches of one execution run in
+// parallel. The items of a [Map] or [Parallel] with a concurrency above
+// one, the bodies started by [Go], [StepAsync], [RunInChildContextAsync],
+// and the other Async variants, and the operations nested inside them each
+// dispatch their operation-level hooks from their own goroutine, and the
+// SDK does not serialize those dispatches. EnrichLogContext runs on the
+// goroutine that logs, which may be any goroutine holding a [Context] or
+// [StepContext]. Every field of a Plugin must therefore be safe for
+// concurrent use from multiple goroutines: a hook that mutates state shared
+// with other hooks or with user code must guard it with its own
+// synchronization. Under this contract the SDK is free of data races; the
+// package tests exercise every hook from concurrent branches under the race
+// detector.
+//
+// The invocation-level hooks (OnInvocationStart, OnOperationChange,
+// WrapInvocation, OnInvocationEnd) are dispatched in sequence from the
+// goroutine that received the invocation: each dispatch completes before
+// the next begins. So within one invocation, one plugin's invocation-level
+// hooks never overlap one another. The hooks of one operation are
+// dispatched in sequence from the goroutine that runs the operation, in
+// the order start, attempt hooks, wrap hook, end, each completing before
+// the next is dispatched. So one plugin's hooks for one operation never
+// overlap one another either. Both guarantees hold per plugin: with
+// several plugins registered, the hooks of different plugins for the same
+// notification run in parallel, as the Dispatch section states. Neither
+// guarantee extends across operations or across invocations: a hook for
+// one operation may run concurrently with a hook for another operation on
+// a concurrent branch, and EnrichLogContext may run concurrently with any
+// hook.
+//
+// # Wrap hooks
+//
+// WrapInvocation, WrapOperationAttemptFn, and WrapChildContextFn receive
+// the wrapped work as fn and must call fn exactly once, returning its
 // result. fn takes a [context.Context]. The context a hook passes to fn
 // becomes the parent of the context the wrapped user code observes: the
 // handler's [Context] for WrapInvocation, the [StepContext] of a step body
@@ -54,12 +145,22 @@ import (
 // recovers it and returns normally or calls fn again. A hook that panics
 // while fn is still running on another goroutine fails the wrapped work
 // with an error; fn is still not run again.
+//
+// The error fn returns may be the SDK's internal signal that the invocation
+// is suspending. A wrap hook must return fn's result and error unchanged;
+// a hook that replaces the error breaks suspension and replay.
 type Plugin struct {
 	// OnInvocationStart is called once at the start of each Lambda
-	// invocation, before the user handler runs.
-	//
-	// EXPERIMENTAL: this field is experimental and may be changed or
-	// removed in future releases.
+	// invocation of the execution, before the user handler runs. It is
+	// the first hook of the invocation: it fires before OnOperationChange
+	// and before WrapInvocation. It fires on the first invocation and on
+	// every later one; IsFirstInvocation on the info tells them apart.
+	// The info's Operations map is a snapshot of every checkpointed
+	// operation as the invocation begins. It is dispatched from the
+	// goroutine that received the invocation, in the sense the Dispatch
+	// section of [Plugin] defines: on that goroutine with one plugin
+	// registered, on a goroutine the dispatch joins with several. It
+	// never overlaps another invocation-level hook of the same plugin.
 	OnInvocationStart func(ctx context.Context, info InvocationHookInfo)
 
 	// OnInvocationEnd is called once when the invocation ends, with the
@@ -67,85 +168,159 @@ type Plugin struct {
 	// finished, Pending when the invocation suspended on an operation that
 	// completes later, and Retrying when the invocation returned an error
 	// to Lambda and the service will invoke the execution again. See the
-	// [PluginInvocationStatus] constants.
-	//
-	// EXPERIMENTAL: this field is experimental and may be changed or
-	// removed in future releases.
+	// [PluginInvocationStatus] constants. It is the last hook of the
+	// invocation: WrapInvocation and the hooks of every operation the
+	// handler awaited have returned before it fires. On Succeeded it
+	// fires only after the result has been recorded, so a plugin never
+	// reports a success the execution has not committed. It fires on
+	// every invocation, whether the handler completed, suspended, or
+	// failed. It is dispatched from the goroutine that received the
+	// invocation: on that goroutine with one plugin registered, on a
+	// goroutine the dispatch joins with several.
 	OnInvocationEnd func(ctx context.Context, info InvocationEndHookInfo)
 
-	// OnOperationStart is called when a durable operation begins
-	// execution. Fires on replayed operations with IsReplay=true.
-	//
-	// EXPERIMENTAL: this field is experimental and may be changed or
-	// removed in future releases.
+	// OnOperationStart is called when a durable operation begins in this
+	// invocation, before the operation's body, attempt hooks, and wrap
+	// hooks, and before any hook of an operation nested inside it. Each
+	// operation dispatches at most one start per invocation. An
+	// operation that runs live reports [PluginOperationStarted] with
+	// IsReplay false. An operation that is re-entered before it settled
+	// reports its checkpointed status with IsReplay true. A [Step]
+	// replayed from a terminal checkpoint reports that status with
+	// IsReplay true and then dispatches OnOperationEnd with no hook in
+	// between. For a succeeded Step the SDK decodes the checkpointed
+	// result between the two; if decoding fails, the Step returns the
+	// decoding error to its caller and dispatches no end. Every other
+	// operation replayed from a terminal checkpoint dispatches only the
+	// end, because its start was dispatched by the invocation that
+	// recorded it. A Step whose retry is scheduled and not yet due
+	// dispatches no hook until the attempt runs. Each operation's own
+	// documentation states any further detail of its replayed events. It
+	// is dispatched from the goroutine that runs the operation: on that
+	// goroutine with one plugin registered, on a goroutine the dispatch
+	// joins with several. Starts of concurrent operations may run in
+	// parallel.
 	OnOperationStart func(ctx context.Context, info OperationHookInfo)
 
-	// OnOperationEnd is called when a durable operation completes. Fires
-	// on replayed operations with IsReplay=true.
-	//
-	// EXPERIMENTAL: this field is experimental and may be changed or
-	// removed in future releases.
+	// OnOperationEnd is called when a durable operation reaches a
+	// terminal status: Succeeded, Failed, TimedOut, Stopped, or
+	// Cancelled. Each operation dispatches at most one end per
+	// invocation, after OnOperationAttemptEnd of its final attempt and,
+	// for a context operation, after its body has returned. A live operation
+	// dispatches its end after its terminal checkpoint is recorded, with
+	// IsReplay false. An operation that suspends the invocation has no
+	// outcome yet and dispatches no end; the later invocation that
+	// observes its terminal checkpoint dispatches the end with IsReplay
+	// true and the checkpointed timestamps, result, and error. An
+	// operation replayed from a terminal checkpoint dispatches the end
+	// with IsReplay true on every invocation that replays it, with one
+	// exception: a succeeded [Step] whose checkpointed result fails to
+	// decode dispatches no end on that invocation (see OnOperationStart).
+	// It is dispatched from the goroutine that runs the operation: on
+	// that goroutine with one plugin registered, on a goroutine the
+	// dispatch joins with several.
 	OnOperationEnd func(ctx context.Context, info OperationHookInfo)
 
 	// OnOperationAttemptStart is called before each attempt of a
-	// retryable operation (Step, WaitForCondition).
-	//
-	// EXPERIMENTAL: this field is experimental and may be changed or
-	// removed in future releases.
+	// retryable operation runs its body: a [Step] body or a
+	// [WaitForCondition] check. It fires after OnOperationStart of the
+	// operation and before WrapOperationAttemptFn. Attempts are numbered
+	// from 1 and the numbering continues across invocations. Only a live
+	// attempt fires it: an attempt whose outcome is checkpointed is not
+	// run again, so a replayed operation dispatches no attempt hooks. It
+	// is dispatched from the goroutine that runs the operation: on that
+	// goroutine with one plugin registered, on a goroutine the dispatch
+	// joins with several.
 	OnOperationAttemptStart func(ctx context.Context, info AttemptHookInfo)
 
 	// OnOperationAttemptEnd is called after each attempt of a retryable
-	// operation completes.
-	//
-	// EXPERIMENTAL: this field is experimental and may be changed or
-	// removed in future releases.
+	// operation has an outcome. With [PluginAttemptSucceeded] it fires
+	// after the attempt's result is checkpointed and before
+	// OnOperationEnd. With [PluginAttemptFailed] it fires when the body
+	// returns an error, or when the result cannot be serialized or is
+	// too large, before the retry decision: a retry that follows suspends
+	// the invocation and the next attempt fires OnOperationAttemptStart
+	// in a later invocation; a final failure fires OnOperationEnd. Like
+	// OnOperationAttemptStart it fires only for live attempts. It is
+	// dispatched from the goroutine that runs the operation: on that
+	// goroutine with one plugin registered, on a goroutine the dispatch
+	// joins with several.
 	OnOperationAttemptEnd func(ctx context.Context, info AttemptEndHookInfo)
 
-	// OnOperationChange is called at invocation start for operations
-	// whose status changed externally between invocations.
-	//
-	// EXPERIMENTAL: this field is experimental and may be changed or
-	// removed in future releases.
+	// OnOperationChange is called at most once per invocation, after
+	// OnInvocationStart and before WrapInvocation, when at least one
+	// operation changed status externally between the previous invocation
+	// and this one: a wait that elapsed, a callback that was resolved, a
+	// chained invoke that finished. It does not fire on an invocation
+	// with no such change, including the first. The info's
+	// UpdatedOperations is the same map [InvocationHookInfo] carries
+	// under that name; every entry has IsReplay set. It is dispatched
+	// from the goroutine that received the invocation: on that goroutine
+	// with one plugin registered, on a goroutine the dispatch joins with
+	// several.
 	OnOperationChange func(ctx context.Context, info OperationChangeHookInfo)
 
-	// WrapInvocation wraps the user handler invocation. The outer plugin
-	// (index 0) wraps first. fn must be called exactly once; the context
-	// passed to fn is the parent of the handler's [Context]. See the
-	// wrap-hook contract in the [Plugin] documentation.
-	//
-	// EXPERIMENTAL: this field is experimental and may be changed or
-	// removed in future releases.
+	// WrapInvocation wraps the user handler invocation. It fires once per
+	// invocation, after OnInvocationStart and OnOperationChange and
+	// before every operation-level hook; OnInvocationEnd fires after it
+	// returns. The outer plugin (index 0) wraps first. fn must be called
+	// exactly once; the context passed to fn is the parent of the
+	// handler's [Context]. fn returns the handler's result and error,
+	// which the hook must return unchanged; see the wrap-hook contract in
+	// the [Plugin] documentation. It runs on the goroutine that received
+	// the invocation however many plugins are registered.
 	WrapInvocation func(ctx context.Context, info InvocationHookInfo, fn func(ctx context.Context) (any, error)) (any, error)
 
 	// WrapOperationAttemptFn wraps the execution of an operation attempt
-	// body (step fn, condition check). fn must be called exactly once; the
-	// context passed to fn is the parent of the body's [StepContext]. See
-	// the wrap-hook contract in the [Plugin] documentation.
-	//
-	// EXPERIMENTAL: this field is experimental and may be changed or
-	// removed in future releases.
+	// body: a [Step] body or a [WaitForCondition] check. It fires for
+	// each live attempt, after OnOperationAttemptStart and before
+	// OnOperationAttemptEnd, and never for a replayed operation. fn must
+	// be called exactly once; the context passed to fn is the parent of
+	// the body's [StepContext]. See the wrap-hook contract in the
+	// [Plugin] documentation. It runs on the goroutine that runs the
+	// operation however many plugins are registered; hooks of concurrent
+	// operations may run in parallel.
 	WrapOperationAttemptFn func(ctx context.Context, info AttemptHookInfo, fn func(ctx context.Context) (any, error)) (any, error)
 
-	// WrapChildContextFn wraps the execution of a child-context function.
-	// fn must be called exactly once; the context passed to fn is the
-	// parent of the child [Context]. See the wrap-hook contract in the
-	// [Plugin] documentation.
-	//
-	// EXPERIMENTAL: this field is experimental and may be changed or
-	// removed in future releases.
+	// WrapChildContextFn wraps the execution of a child-context function:
+	// the body passed to [RunInChildContext], [RunInChildContextAsync],
+	// or [Go], including a child under [WithChildVirtual]. It fires after
+	// OnOperationStart of the child and before its OnOperationEnd, with
+	// IsReplay false for a live child and IsReplay true for a child
+	// re-entered before it settled or a virtual child replaying the
+	// operations inside it. A child replayed from a terminal checkpoint
+	// dispatches only its end and, in general, does not run its body, so
+	// the hook does not fire. One such child does run its body: a
+	// succeeded child whose result was too large to checkpoint runs its
+	// body again to rebuild the result. That run is not wrapped, so the
+	// hook does not fire for it either; its OnOperationEnd, with the
+	// checkpointed timestamps, is dispatched before the body runs. [Map]
+	// and [Parallel] items and [WaitForCallback] are context operations
+	// too but do not fire it. fn must be called exactly once; the
+	// context passed to fn is the parent of the child [Context]. See the
+	// wrap-hook contract in the [Plugin] documentation. It runs on the
+	// goroutine that runs the child body however many plugins are
+	// registered.
 	WrapChildContextFn func(ctx context.Context, info OperationHookInfo, fn func(ctx context.Context) (any, error)) (any, error)
 
 	// EnrichLogContext returns additional key-value pairs to merge into
 	// every log record emitted through [Context.Logger] and
-	// [StepContext.Logger]. It is called once per record, after replay
-	// suppression, so a record dropped during replay does not invoke it.
+	// [StepContext.Logger]. It is called once per record that the
+	// logger emits, after replay suppression has been decided. Under
+	// [ReplayLogModeSuppress], the default, a record written while the
+	// context replays is dropped and the hook is not called for it. Under
+	// [ReplayLogModeEmit] such a record is emitted with the attribute
+	// replay=true, and the hook is called for it as for a live record.
 	// ctx is the record's context: the one passed to a *Context logging
 	// method such as [slog.Logger.InfoContext], else context.Background().
+	// It runs on the goroutine that logs however many plugins are
+	// registered, so it may run concurrently with itself and with every
+	// other hook.
 	//
 	// Each returned entry becomes an attribute of the record unless its
 	// key is already taken. Precedence, highest first: the SDK's own
 	// fields (timestamp, level, message, requestId, executionArn,
-	// tenantId, operationId, operationName, attempt), then attributes the
+	// tenantId, operationId, operationName, attempt, replay), then attributes the
 	// user supplied with the record or through [slog.Logger.With], then
 	// plugin fields. A plugin field under a taken key is dropped, so a
 	// plugin cannot overwrite the SDK's identifiers. Keys are compared by
@@ -157,40 +332,28 @@ type Plugin struct {
 	// the logger opens after an attribute was attached at that same path
 	// is also taken: the plugin fields would form a second object under
 	// that key beside the attached one, so none are added to records
-	// logged through that logger. When
-	// several plugins implement the hook, their maps are merged in
-	// registration order and a later plugin's value replaces an earlier
-	// one's under the same key. Fields are added in key order. A hook that
-	// panics contributes no fields and does not fail the log call or the
-	// invocation. When no plugin implements the hook, no per-record work
-	// is done.
-	//
-	// EXPERIMENTAL: this field is experimental and may be changed or
-	// removed in future releases.
+	// logged through that logger. When several plugins implement the
+	// hook, their maps are merged in registration order and a later
+	// plugin's value replaces an earlier one's under the same key. Fields
+	// are added in key order. A hook that panics contributes no fields
+	// and does not fail the log call or the invocation. When no plugin
+	// implements the hook, no per-record work is done.
 	EnrichLogContext func(ctx context.Context) map[string]any
 }
 
-// InvocationHookInfo carries context for invocation-level hooks.
-//
-// EXPERIMENTAL: this type is experimental and may be changed or removed in
-// future releases.
+// InvocationHookInfo carries context for invocation-level hooks. A minor
+// release may add fields; construct it with keyed fields.
 type InvocationHookInfo struct {
 	ExecutionArn      string
 	IsFirstInvocation bool
 
 	// ExecutionInput is the deserialized customer event for the execution.
 	// It is the raw unmarshaled value (typically a map or struct).
-	//
-	// EXPERIMENTAL: this field is experimental and may be changed or
-	// removed in future releases.
 	ExecutionInput any
 
 	// ExecutionStartTimestamp is the time the execution was first created,
 	// sourced from the execution operation's StartTimestamp in the wire
 	// payload. Zero when unavailable (e.g. payload lacks timestamp data).
-	//
-	// EXPERIMENTAL: this field is experimental and may be changed or
-	// removed in future releases.
 	ExecutionStartTimestamp time.Time
 
 	// UpdatedOperations contains operations whose status changed
@@ -198,9 +361,6 @@ type InvocationHookInfo struct {
 	// embeds the same data as OnOperationChange to allow plugins that
 	// need both to avoid state ordering dependencies. It is a subset of
 	// Operations.
-	//
-	// EXPERIMENTAL: this field is experimental and may be changed or
-	// removed in future releases.
 	UpdatedOperations map[string]OperationHookInfo
 
 	// Operations contains every operation known at the start of the
@@ -215,39 +375,25 @@ type InvocationHookInfo struct {
 	// modified afterwards, so a plugin may read it at any time. It is nil
 	// when no registered plugin implements OnInvocationStart or
 	// WrapInvocation, the hooks that receive it.
-	//
-	// EXPERIMENTAL: this field is experimental and may be changed or
-	// removed in future releases.
 	Operations map[string]OperationHookInfo
 }
 
-// InvocationEndHookInfo carries context for the OnInvocationEnd hook.
-//
-// EXPERIMENTAL: this type is experimental and may be changed or removed in
-// future releases.
+// InvocationEndHookInfo carries context for the OnInvocationEnd hook. A
+// minor release may add fields; construct it with keyed fields.
 type InvocationEndHookInfo struct {
 	ExecutionArn string
 	Status       PluginInvocationStatus
 
 	// ExecutionResult is the handler's return value when the invocation
 	// succeeded. Nil on failure or suspension.
-	//
-	// EXPERIMENTAL: this field is experimental and may be changed or
-	// removed in future releases.
 	ExecutionResult any
 
 	// ExecutionError is the error that caused invocation failure. Nil on
 	// success or suspension.
-	//
-	// EXPERIMENTAL: this field is experimental and may be changed or
-	// removed in future releases.
 	ExecutionError error
 }
 
 // PluginInvocationStatus is the invocation outcome visible to plugins.
-//
-// EXPERIMENTAL: this type is experimental and may be changed or removed in
-// future releases.
 type PluginInvocationStatus string
 
 // Invocation status constants for plugin hooks.
@@ -255,9 +401,6 @@ type PluginInvocationStatus string
 // Succeeded and Failed are terminal: the execution has finished and no
 // further invocation follows. Pending and Retrying both mean the execution
 // continues in a later invocation; they differ in why this one ended.
-//
-// EXPERIMENTAL: these constants are experimental and may be changed or
-// removed in future releases.
 const (
 	// PluginInvocationSucceeded reports that the handler returned a result
 	// and the execution has succeeded. ExecutionResult carries the result.
@@ -289,10 +432,8 @@ const (
 	PluginInvocationRetrying PluginInvocationStatus = "RETRYING"
 )
 
-// OperationHookInfo carries context for operation-level hooks.
-//
-// EXPERIMENTAL: this type is experimental and may be changed or removed in
-// future releases.
+// OperationHookInfo carries context for operation-level hooks. A minor
+// release may add fields; construct it with keyed fields.
 type OperationHookInfo struct {
 	ExecutionArn string
 	ID           string
@@ -304,8 +445,8 @@ type OperationHookInfo struct {
 	IsReplay     bool
 
 	// ParentID is the ID of the parent context operation, if any. Empty
-	// for top-level (root context) operations. Used by insight to filter
-	// and build the operation tree.
+	// for top-level (root context) operations. A consumer that builds the
+	// operation tree follows it.
 	//
 	// Every reported operation's parent is itself reported, so a consumer
 	// can follow ParentID from any reported operation up to the root. Under
@@ -313,9 +454,6 @@ type OperationHookInfo struct {
 	// operation at the configured depth are not reported; that operation
 	// carries ChildrenOmitted so the consumer can tell the subtree was
 	// truncated rather than absent.
-	//
-	// EXPERIMENTAL: this field is experimental and may be changed or
-	// removed in future releases.
 	ParentID string
 
 	// ChildrenOmitted reports that the operations nested inside this one
@@ -325,51 +463,32 @@ type OperationHookInfo struct {
 	// ParentID. False when no depth is set or the operation lies above it.
 	// A consumer that finds no children for an operation with this field
 	// set must treat the subtree as unreported, not as empty.
-	//
-	// EXPERIMENTAL: this field is experimental and may be changed or
-	// removed in future releases.
 	ChildrenOmitted bool
 
 	// StartTimestamp is when this operation began. Set on OnOperationStart
 	// and OnOperationEnd; zero on hooks where not yet known.
-	//
-	// EXPERIMENTAL: this field is experimental and may be changed or
-	// removed in future releases.
 	StartTimestamp time.Time
 
 	// EndTimestamp is when this operation reached a terminal state. Set on
 	// OnOperationEnd; zero on OnOperationStart.
-	//
-	// EXPERIMENTAL: this field is experimental and may be changed or
-	// removed in future releases.
 	EndTimestamp time.Time
 
 	// Result is the operation's serialized result (raw wire form), if any.
 	// Set on OnOperationEnd for succeeded operations; empty otherwise.
-	//
-	// EXPERIMENTAL: this field is experimental and may be changed or
-	// removed in future releases.
 	Result string
 
 	// Error is the error the operation failed with, if any. Set on
 	// OnOperationEnd for failed operations; nil otherwise.
-	//
-	// EXPERIMENTAL: this field is experimental and may be changed or
-	// removed in future releases.
 	Error error
 }
 
 // PluginOperationStatus is an operation's lifecycle status visible to
 // plugins.
-//
-// EXPERIMENTAL: this type is experimental and may be changed or removed in
-// future releases.
 type PluginOperationStatus string
 
-// Operation status constants for plugin hooks.
-//
-// EXPERIMENTAL: these constants are experimental and may be changed or
-// removed in future releases.
+// Operation status constants for plugin hooks. A later release may add
+// constants; a plugin that switches on the status should tolerate values
+// it does not know.
 const (
 	PluginOperationStarted   PluginOperationStatus = "STARTED"
 	PluginOperationReady     PluginOperationStatus = "READY"
@@ -381,19 +500,15 @@ const (
 	PluginOperationCancelled PluginOperationStatus = "CANCELLED"
 )
 
-// AttemptHookInfo carries context for attempt-level hooks.
-//
-// EXPERIMENTAL: this type is experimental and may be changed or removed in
-// future releases.
+// AttemptHookInfo carries context for attempt-level hooks. A minor release
+// may add fields; construct it with keyed fields.
 type AttemptHookInfo struct {
 	OperationHookInfo
 	Attempt int
 }
 
-// AttemptEndHookInfo carries context for the OnOperationAttemptEnd hook.
-//
-// EXPERIMENTAL: this type is experimental and may be changed or removed in
-// future releases.
+// AttemptEndHookInfo carries context for the OnOperationAttemptEnd hook. A
+// minor release may add fields; construct it with keyed fields.
 type AttemptEndHookInfo struct {
 	OperationHookInfo
 	Attempt int
@@ -402,33 +517,25 @@ type AttemptEndHookInfo struct {
 }
 
 // PluginAttemptOutcome is the result of an operation attempt.
-//
-// EXPERIMENTAL: this type is experimental and may be changed or removed in
-// future releases.
 type PluginAttemptOutcome string
 
 // Attempt outcome constants for plugin hooks.
-//
-// EXPERIMENTAL: these constants are experimental and may be changed or
-// removed in future releases.
 const (
 	PluginAttemptSucceeded PluginAttemptOutcome = "SUCCEEDED"
 	PluginAttemptFailed    PluginAttemptOutcome = "FAILED"
 )
 
-// OperationChangeHookInfo carries context for OnOperationChange.
-//
-// EXPERIMENTAL: this type is experimental and may be changed or removed in
-// future releases.
+// OperationChangeHookInfo carries context for OnOperationChange. A minor
+// release may add fields; construct it with keyed fields.
 type OperationChangeHookInfo struct {
 	ExecutionArn      string
 	UpdatedOperations map[string]OperationHookInfo
 }
 
-// WithPlugins registers instrumentation plugins with the handler.
-//
-// EXPERIMENTAL: this function is experimental and may be changed or removed
-// in future releases.
+// WithPlugins registers instrumentation plugins with the handler. Plugins
+// are appended in call order, and the order decides how the wrap hooks
+// compose: the first registered plugin is outermost. See [Plugin] for the
+// dispatch and concurrency contract and the compatibility policy.
 func WithPlugins(plugins ...Plugin) HandlerOption {
 	return handlerOptionFunc(func(o *handlerOptions) {
 		o.plugins = append(o.plugins, plugins...)
@@ -464,9 +571,6 @@ func WithPlugins(plugins ...Plugin) HandlerOption {
 //
 // The default reports every depth. depth must not be negative; [Wrap] and
 // [Start] panic on a negative value.
-//
-// EXPERIMENTAL: this function is experimental and may be changed or
-// removed in future releases.
 func WithPluginChildOperationsDepth(depth int) HandlerOption {
 	return handlerOptionFunc(func(o *handlerOptions) {
 		o.pluginChildDepth = depth
@@ -493,11 +597,15 @@ func newPluginDispatcher(plugins []Plugin) *pluginDispatcher {
 	return &pluginDispatcher{plugins: plugins}
 }
 
-// dispatchNotification fans out to every plugin's hook concurrently (one
-// goroutine per plugin) and waits for all to complete. Panics and errors
-// inside hook functions are swallowed (recovered) and never affect execution.
+// dispatchNotification calls call for every registered plugin and returns
+// once all calls have returned. With one plugin, call runs on the caller's
+// goroutine. With several, each call runs on a goroutine started here and
+// the caller waits for all of them, so the plugins' hooks for one
+// notification run in parallel. Panics inside hook functions are recovered
+// and never affect execution. This is the dispatch behavior the Plugin
+// documentation describes as "dispatched from" the caller's goroutine.
 //
-// No-op when d is nil or has no plugins (zero overhead fast path).
+// No-op when d is nil (zero overhead fast path).
 func dispatchNotification(d *pluginDispatcher, call func(*Plugin)) {
 	if d == nil {
 		return
