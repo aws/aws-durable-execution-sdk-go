@@ -246,6 +246,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		}
 		return nil, err
 	}
+	state.setUpdatedOperationIDs(in.UpdatedOperationIds)
 
 	var event I
 	if raw, ok := customerInput(&in.InitialExecutionState); ok {

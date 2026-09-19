@@ -120,6 +120,14 @@ func assertIdentity(t *testing.T, ev opEvent, id, name, opType, subType, parentI
 // each invocation.
 func runSuspendResume(t *testing.T, handler func(context.Context, []byte) ([]byte, error), rec *opRecorder, resumeOps []wireOperation, wantFinal string) (first, second []opEvent) {
 	t.Helper()
+	return runSuspendResumeUpdated(t, handler, rec, resumeOps, nil, wantFinal)
+}
+
+// runSuspendResumeUpdated is runSuspendResume whose second invocation
+// payload lists updatedIDs (wire IDs) as the operations updated since the
+// first invocation.
+func runSuspendResumeUpdated(t *testing.T, handler func(context.Context, []byte) ([]byte, error), rec *opRecorder, resumeOps []wireOperation, updatedIDs []string, wantFinal string) (first, second []opEvent) {
+	t.Helper()
 	resp, err := handler(makePluginContext(), makePluginPayload(t, "arn:test:lifecycle", "tok1", nil))
 	if err != nil {
 		t.Fatal(err)
@@ -127,7 +135,7 @@ func runSuspendResume(t *testing.T, handler func(context.Context, []byte) ([]byt
 	assertPluginResponseStatus(t, resp, invocationPending)
 	first = rec.take()
 
-	resp, err = handler(makePluginContext(), makePluginPayload(t, "arn:test:lifecycle", "tok2", append([]wireOperation{lifecycleExecOp()}, resumeOps...)))
+	resp, err = handler(makePluginContext(), makePluginPayloadWithUpdated(t, "arn:test:lifecycle", "tok2", append([]wireOperation{lifecycleExecOp()}, resumeOps...), updatedIDs))
 	if err != nil {
 		t.Fatal(err)
 	}

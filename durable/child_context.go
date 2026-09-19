@@ -204,6 +204,11 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 			if op.childCtx == nil {
 				return zero, fmt.Errorf("durable: child context %q: checkpointed %s operation has no context details", name, op.status)
 			}
+			// The child reached its terminal state when the checkpoint
+			// recorded it, so its end is dispatched before the result is
+			// rebuilt: neither a failing result Serdes nor a failing
+			// re-execution suppresses it.
+			dispatchReplayedContextEnd(ec, id, name, operationSubTypeRunInChildContext, op, nil)
 			// ReplayChildren mode: the result was too large to
 			// checkpoint, so re-execute the child body to reconstruct it.
 			// fn runs on the calling goroutine, as on the first run. A
@@ -224,7 +229,9 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 			return out, nil
 
 		case statusFailed:
-			return zero, options.failure(name, childFailureRecord(op))
+			failure := options.failure(name, childFailureRecord(op))
+			dispatchReplayedContextEnd(ec, id, name, operationSubTypeRunInChildContext, op, failure)
+			return zero, failure
 
 		case statusStarted, statusPending, statusReady, statusCancelled, statusTimedOut, statusStopped:
 			// STARTED re-enters below and replays the child's own
@@ -249,17 +256,9 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 	mode := childReplayMode(ec, id, op)
 	child := ec.child(id, name, ec.owner, mode)
 
-	opInfo := OperationHookInfo{
-		ExecutionArn:   ec.executionArn,
-		ID:             id,
-		Name:           name,
-		Type:           string(OperationTypeContext),
-		SubType:        operationSubTypeRunInChildContext,
-		Status:         PluginOperationStarted,
-		IsReplay:       ec.IsReplaying(),
-		ParentID:       ec.parentWireID(),
-		StartTimestamp: time.Now(),
-	}
+	// The start is dispatched before the wrap hooks run, with the same
+	// info the hooks receive, so a plugin can correlate the two.
+	opInfo := dispatchContextStart(ec, id, name, operationSubTypeRunInChildContext, op)
 
 	// WrapChildContextFn wraps the child body execution. The context the
 	// hooks supply becomes the child context's parent; the child is not
@@ -315,7 +314,9 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 			}
 			return zero, cerr
 		}
-		return zero, options.failure(name, rec)
+		failure := options.failure(name, rec)
+		dispatchContextEnd(ec, opInfo, "", failure)
+		return zero, failure
 	}
 
 	serialized, err := options.serdes.Marshal(ec.Context, ec.serdesCtx(id), result)
@@ -341,6 +342,7 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 		}
 		return zero, err
 	}
+	dispatchContextEnd(ec, opInfo, aws.ToString(update.Payload), nil)
 
 	var out O
 	if err := options.serdes.Unmarshal(ec.Context, ec.serdesCtx(id), serialized, &out); err != nil {
@@ -433,6 +435,8 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 		child := ec.childWith(id, name, currentGoroutineOwner(), mode, defaults)
 		child.adoptBranchToken(tok)
 
+		opInfo := dispatchContextStart(ec, id, name, operationSubTypeRunInChildContext, op)
+
 		// Recover panics in the child function so they settle the
 		// future as a failure rather than crashing the process.
 		result, fnTrace, fnErr := runUserFunc(child, fn, fmt.Sprintf("durable: child context %q panicked", name), func() (O, error) {
@@ -472,7 +476,9 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 				return
 			}
 			var zero O
-			fut.settle(zero, options.failure(name, rec))
+			failure := options.failure(name, rec)
+			dispatchContextEnd(ec, opInfo, "", failure)
+			fut.settle(zero, failure)
 			return
 		}
 
@@ -505,6 +511,7 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 			fut.settle(result, err)
 			return
 		}
+		dispatchContextEnd(ec, opInfo, aws.ToString(update.Payload), nil)
 
 		// Round-trip through serdes for consistency with the blocking
 		// variant (first-run value == replay value).
@@ -537,13 +544,15 @@ func Go[O any](ctx Context, name string, fn func(Context) (O, error), opts ...Ch
 // resolveTerminalChild handles a child operation that already has a terminal
 // status in the checkpoint log. It returns a pre-settled future, except in
 // ReplayChildren mode, where the child body runs again on its own goroutine
-// and the future settles when it finishes.
+// and the future settles when it finishes. The replayed end is dispatched
+// here, before the result is rebuilt, as in [RunInChildContext].
 func resolveTerminalChild[O any](ec *execContext, op *operation, id, name string, options childOptions, fn func(Context) (O, error)) *Future[O] {
 	switch op.status {
 	case statusSucceeded:
 		if op.childCtx == nil {
 			return newFailedFuture[O](fmt.Errorf("durable: child context %q: checkpointed %s operation has no context details", name, op.status))
 		}
+		dispatchReplayedContextEnd(ec, id, name, operationSubTypeRunInChildContext, op, nil)
 		// ReplayChildren mode: re-execute the child body to reconstruct
 		// the large result that was not checkpointed.
 		if op.childCtx.replayChildren {
@@ -556,7 +565,9 @@ func resolveTerminalChild[O any](ec *execContext, op *operation, id, name string
 		return newSettledFuture(out, nil)
 
 	case statusFailed:
-		return newFailedFuture[O](options.failure(name, childFailureRecord(op)))
+		failure := options.failure(name, childFailureRecord(op))
+		dispatchReplayedContextEnd(ec, id, name, operationSubTypeRunInChildContext, op, failure)
+		return newFailedFuture[O](failure)
 
 	default:
 		// CANCELLED, TIMED_OUT, STOPPED: not expected for context ops,
@@ -651,4 +662,90 @@ func childFailureRecord(op *operation) errorRecord {
 		return errorRecord{errType: "Error", message: "child context failed"}
 	}
 	return op.childCtx.record()
+}
+
+// dispatchContextStart dispatches the start of the context operation id,
+// which is about to run its body, and returns the dispatched info. op is
+// the operation's checkpoint as it was before any START checkpoint: nil
+// for a live context, else the unsettled record the context re-enters.
+//
+// dispatchContextStart, dispatchContextEnd, and dispatchReplayedContextEnd
+// are the operation lifecycle hooks of a context operation, shared by
+// RunInChildContext, RunInChildContextAsync, and WaitForCallback. A context
+// operation dispatches at most one start and at most one end per
+// invocation:
+//
+//   - A context that runs its body dispatches a start first. A live
+//     context, one with no checkpoint yet, reports STARTED with IsReplay
+//     false after its START checkpoint. A context re-entered while its
+//     checkpoint is still unsettled reports the checkpointed status with
+//     IsReplay true. Either way the start is dispatched before the body,
+//     and before WrapChildContextFn, so a plugin can correlate the two.
+//   - The body's outcome is recorded by this invocation, so the end that
+//     follows the terminal checkpoint is live: IsReplay false. A body that
+//     suspends has no outcome, so no end is dispatched.
+//   - A context replayed from a terminal checkpoint dispatches only a
+//     replayed end with the checkpointed timestamps and outcome: its start
+//     was dispatched by the invocation that recorded it.
+//
+// The events are dispatched on the parent context ec, so ParentID names
+// the context that claimed the operation, and nested contexts report a
+// ParentID chain that mirrors their checkpoint hierarchy.
+func dispatchContextStart(ec *execContext, id, name, subType string, op *operation) OperationHookInfo {
+	info := ec.operationHookInfo(id, name, string(OperationTypeContext), subType, op != nil)
+	status := PluginOperationStarted
+	if op != nil {
+		info.StartTimestamp = op.startTimestamp
+		status = toPluginOperationStatus(op.status)
+	} else {
+		info.StartTimestamp = checkpointedStartTime(ec.state.get(id))
+	}
+	info.Status = status
+	dispatchOperationStart(ec, info, status)
+	return info
+}
+
+// dispatchContextEnd dispatches the live end of the context operation id
+// once its terminal checkpoint is recorded. start is the info returned by
+// dispatchContextStart. err is the failure the operation returns to its
+// caller, nil for a succeeded context whose checkpointed payload is
+// result.
+func dispatchContextEnd(ec *execContext, start OperationHookInfo, result string, err error) {
+	info := ec.operationHookInfo(start.ID, start.Name, start.Type, start.SubType, false)
+	info.StartTimestamp = start.StartTimestamp
+	info.EndTimestamp = checkpointedEndTime(ec.state.get(start.ID))
+	if err != nil {
+		info.Error = err
+		dispatchOperationEnd(ec, info, PluginOperationFailed)
+		return
+	}
+	info.Result = result
+	dispatchOperationEnd(ec, info, PluginOperationSucceeded)
+}
+
+// dispatchReplayedContextEnd dispatches the replayed end of the context
+// operation id whose checkpoint op is terminal. err is the failure the
+// operation returns to its caller, nil for a SUCCEEDED context, whose
+// checkpointed payload is reported as Result.
+func dispatchReplayedContextEnd(ec *execContext, id, name, subType string, op *operation, err error) {
+	info := ec.operationHookInfo(id, name, string(OperationTypeContext), subType, true)
+	info.StartTimestamp = op.startTimestamp
+	info.EndTimestamp = op.endTimestamp
+	if err != nil {
+		info.Error = err
+	} else if op.childCtx != nil {
+		info.Result = op.childCtx.result
+	}
+	dispatchOperationEnd(ec, info, toPluginOperationStatus(op.status))
+}
+
+// checkpointedEndTime returns op's end timestamp when op exists and
+// carries one, else the current time. Used for the end hook of a live
+// operation right after its terminal checkpoint: the checkpoint response
+// may or may not carry the operation record with its timestamp.
+func checkpointedEndTime(op *operation) time.Time {
+	if op != nil && !op.endTimestamp.IsZero() {
+		return op.endTimestamp
+	}
+	return time.Now()
 }

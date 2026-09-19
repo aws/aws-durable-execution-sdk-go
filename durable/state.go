@@ -171,6 +171,15 @@ type executionState struct {
 	// take Lock.
 	mu         sync.RWMutex
 	operations map[string]*operation
+
+	// updated holds the wire IDs of the operations whose status changed
+	// between the previous invocation and this one, as the invocation
+	// payload reports them. It is written once, before the handler runs,
+	// and only read afterwards, so it needs no lock. An operation in this
+	// set settled outside the SDK's own invocations, so the invocation
+	// that observes its terminal checkpoint reports the end as live, not
+	// replayed.
+	updated map[string]struct{}
 }
 
 func newExecutionState(ops []*operation) *executionState {
@@ -179,6 +188,27 @@ func newExecutionState(ops []*operation) *executionState {
 		m[op.id] = op
 	}
 	return &executionState{operations: m}
+}
+
+// setUpdatedOperationIDs records the wire IDs of the operations the
+// invocation payload reports as changed since the previous invocation.
+// Called once, before any operation runs.
+func (s *executionState) setUpdatedOperationIDs(wireIDs []string) {
+	if len(wireIDs) == 0 {
+		s.updated = nil
+		return
+	}
+	s.updated = make(map[string]struct{}, len(wireIDs))
+	for _, id := range wireIDs {
+		s.updated[id] = struct{}{}
+	}
+}
+
+// updatedSinceLastInvocation reports whether the operation with the
+// positional ID changed between the previous invocation and this one.
+func (s *executionState) updatedSinceLastInvocation(positionalID string) bool {
+	_, ok := s.updated[hashID(positionalID)]
+	return ok
 }
 
 // get returns the checkpointed operation for the positional ID, or nil if

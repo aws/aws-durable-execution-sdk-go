@@ -91,22 +91,44 @@ func CreateCallback[O any](ctx Context, name string, opts ...CallbackOption) (*C
 	}
 	if op != nil {
 		serdes := callbackDeserializerForOptions(ec, options)
+		// A callback settles outside the SDK: an external system resolves
+		// it between invocations. When the invocation payload lists the
+		// callback among the operations updated since the previous
+		// invocation, this invocation is the first to observe the
+		// outcome, so the end is live (IsReplay false). Otherwise an
+		// earlier invocation already reported it and the end is replayed.
+		// An in-flight callback is always replayed: its start was
+		// dispatched by the invocation that created it.
+		isReplay := !ec.state.updatedSinceLastInvocation(id)
+		info := ec.operationHookInfo(id, name, string(OperationTypeCallback), operationSubTypeCallback, isReplay)
+		info.StartTimestamp = op.startTimestamp
 		switch op.status {
 		case statusSucceeded:
+			// The callback settled when the checkpoint recorded it, so
+			// its end is dispatched before the result is deserialized: a
+			// failing result Serdes does not suppress it.
+			if op.callback != nil {
+				info.Result = op.callback.result
+			}
+			info.EndTimestamp = op.endTimestamp
+			dispatchOperationEnd(ec, info, PluginOperationSucceeded)
 			cb := resolveCallbackSuccess[O](ec.Context, op, id, name, serdes, ec.serdesCtx(id))
 			return cb, nil
 
-		case statusFailed:
-			cb := resolveCallbackFailure[O](op, name)
-			return cb, nil
-
-		case statusTimedOut:
-			cb := resolveCallbackTimeout[O](op, name)
+		case statusFailed, statusTimedOut:
+			cb, cbErr := resolveCallbackFailure[O](op, name)
+			info.Error = cbErr
+			info.EndTimestamp = op.endTimestamp
+			dispatchOperationEnd(ec, info, toPluginOperationStatus(op.status))
 			return cb, nil
 
 		case statusStarted, statusPending:
 			// Callback is in flight; create a future that fires
 			// suspend when Result() is called (deferred suspension).
+			// The start is replayed; the end belongs to the invocation
+			// that observes the settled callback.
+			info.IsReplay = true
+			dispatchOperationStart(ec, info, toPluginOperationStatus(op.status))
 			callbackID := ""
 			if op.callback != nil {
 				callbackID = op.callback.callbackID
@@ -137,9 +159,18 @@ func CreateCallback[O any](ctx Context, name string, opts ...CallbackOption) (*C
 	// returns it in the checkpoint response (merged into state). Read it
 	// so the submitter step (in WaitForCallback) can use it.
 	callbackID := ""
-	if updated := ec.state.get(id); updated != nil && updated.callback != nil {
-		callbackID = updated.callback.callbackID
+	created := ec.state.get(id)
+	if created != nil && created.callback != nil {
+		callbackID = created.callback.callbackID
 	}
+
+	// The callback is recorded. Its start timestamp comes from the
+	// checkpoint response when the response carried the record, else from
+	// the clock. The callback settles only in a later invocation, so this
+	// one dispatches no end.
+	info := ec.operationHookInfo(id, name, string(OperationTypeCallback), operationSubTypeCallback, false)
+	info.StartTimestamp = checkpointedStartTime(created)
+	dispatchOperationStart(ec, info, PluginOperationStarted)
 
 	// Return a callback whose Result() fires suspend on first call.
 	// This allows WaitForCallback to run the submitter step between
@@ -204,6 +235,10 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 			if op.childCtx == nil {
 				return zero, fmt.Errorf("durable: WaitForCallback %q: checkpointed SUCCEEDED has no context details", name)
 			}
+			// The context settled when the checkpoint recorded it, so
+			// its end is dispatched before the result is deserialized: a
+			// failing result Serdes does not suppress it.
+			dispatchReplayedContextEnd(ec, id, name, operationSubTypeWaitForCallback, op, nil)
 			var out O
 			if err := serdes.Unmarshal(ec.Context, ec.serdesCtx(id), []byte(op.childCtx.result), &out); err != nil {
 				return zero, newSerdesError(name, serdesDirectionUnmarshal, err)
@@ -211,7 +246,9 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 			return out, nil
 
 		case statusFailed:
-			return zero, wfcbFailedError(ec, op, id, name)
+			failure := wfcbFailedError(ec, op, id, name)
+			dispatchReplayedContextEnd(ec, id, name, operationSubTypeWaitForCallback, op, failure)
+			return zero, failure
 
 		case statusStarted, statusPending, statusReady:
 			// Context is in flight; fall through to execute/replay.
@@ -231,9 +268,12 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 		}
 	}
 
-	// Run the inner child: callback + submitter step.
+	// Run the inner child: callback + submitter step. The context's start
+	// is dispatched before the inner operations dispatch theirs; the inner
+	// callback and step report this context's wire ID as their ParentID.
 	mode := childReplayMode(ec, id, op)
 	child := ec.child(id, name, ec.owner, mode)
+	opInfo := dispatchContextStart(ec, id, name, operationSubTypeWaitForCallback, op)
 
 	result, fnErr := runWaitForCallbackBody[O](child, name, submitter, options, serdes)
 
@@ -263,6 +303,7 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 			}
 			return zero, cerr
 		}
+		dispatchContextEnd(ec, opInfo, "", fnErr)
 		return zero, fnErr
 	}
 
@@ -279,6 +320,7 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 		}
 		return zero, err
 	}
+	dispatchContextEnd(ec, opInfo, string(serialized), nil)
 
 	// Round-trip for consistency (first-run == replay).
 	var out O
@@ -431,30 +473,24 @@ func resolveCallbackSuccess[O any](ctx context.Context, op *operation, id, name 
 	return &Callback[O]{id: op.callback.callbackID, future: newSettledFuture(out, nil)}
 }
 
-// resolveCallbackFailure creates a pre-settled callback for a FAILED
-// checkpointed status: the external system reported the failure.
-func resolveCallbackFailure[O any](op *operation, name string) *Callback[O] {
+// resolveCallbackFailure creates a pre-settled callback for a FAILED or
+// TIMED_OUT checkpointed status and returns the error it settles with: a
+// [*CallbackExternalError] when the external system reported the failure,
+// a [*CallbackTimeoutError] when the callback timed out.
+func resolveCallbackFailure[O any](op *operation, name string) (*Callback[O], error) {
 	callbackID := ""
 	rec := errorRecord{}
 	if op.callback != nil {
 		callbackID = op.callback.callbackID
 		rec = op.callback.record()
 	}
-	cbErr := newCallbackExternalError(name, callbackID, rec)
-	return &Callback[O]{id: callbackID, future: newFailedFuture[O](cbErr)}
-}
-
-// resolveCallbackTimeout creates a pre-settled callback for a TIMED_OUT
-// checkpointed status.
-func resolveCallbackTimeout[O any](op *operation, name string) *Callback[O] {
-	callbackID := ""
-	rec := errorRecord{}
-	if op.callback != nil {
-		callbackID = op.callback.callbackID
-		rec = op.callback.record()
+	var cbErr error
+	if op.status == statusTimedOut {
+		cbErr = newCallbackTimeoutError(name, callbackID, rec)
+	} else {
+		cbErr = newCallbackExternalError(name, callbackID, rec)
 	}
-	cbErr := newCallbackTimeoutError(name, callbackID, rec)
-	return &Callback[O]{id: callbackID, future: newFailedFuture[O](cbErr)}
+	return &Callback[O]{id: callbackID, future: newFailedFuture[O](cbErr)}, cbErr
 }
 
 // callbackUpdate assembles the shared fields of a callback operation update.
