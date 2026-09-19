@@ -1,6 +1,7 @@
 package durable
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -185,17 +186,17 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 	// when it succeeded or capture is disabled.
 	var checkTrace []string
 
-	wrappedResult, wrappedErr := wrapChain(ec.pluginDispatcher,
-		func(p *Plugin) func(func() (any, error)) (any, error) {
+	wrappedResult, wrappedErr := wrapChain(ec.pluginDispatcher, ec,
+		func(p *Plugin) wrapHook {
 			if p.WrapOperationAttemptFn == nil {
 				return nil
 			}
-			return func(innerFn func() (any, error)) (any, error) {
-				return p.WrapOperationAttemptFn(ec, attemptInfo, innerFn)
+			return func(ctx context.Context, innerFn wrapBody) (any, error) {
+				return p.WrapOperationAttemptFn(ctx, attemptInfo, innerFn)
 			}
 		},
-		func() (any, error) {
-			s, trace, e := runCheckFunc(ec, id, name, check, currentState, attempt)
+		func(ctx context.Context) (any, error) {
+			s, trace, e := runCheckFunc(ctx, ec, id, name, check, currentState, attempt)
 			checkTrace = trace
 			return s, e
 		},
@@ -315,14 +316,15 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 	return zero, errSuspendExecution
 }
 
-// runCheckFunc executes the check function with panic recovery. The check
-// observes attempt, the 1-based poll attempt number, through
-// [StepContext.Attempt]. The trace is the stack trace of the failure as
-// [runUserFunc] captures it, nil when the check succeeds or when capture is
-// disabled.
-func runCheckFunc[S any](ec *execContext, id, name string, check func(StepContext, S) (S, error), state S, attempt int) (S, []string, error) {
+// runCheckFunc executes the check function with panic recovery. ctx is the
+// parent of the check's [StepContext]: ec's context, or the one the wrap
+// hooks supplied. The check observes attempt, the 1-based poll attempt
+// number, through [StepContext.Attempt]. The trace is the stack trace of
+// the failure as [runUserFunc] captures it, nil when the check succeeds or
+// when capture is disabled.
+func runCheckFunc[S any](ctx context.Context, ec *execContext, id, name string, check func(StepContext, S) (S, error), state S, attempt int) (S, []string, error) {
 	return runUserFunc(ec, check, "durable: WaitForCondition check panicked", func() (S, error) {
-		return check(&stepContext{Context: ec.Context, logger: ec.operationLogger(id, name, attempt), attempt: attempt}, state)
+		return check(&stepContext{Context: ctx, logger: ec.operationLogger(id, name, attempt), attempt: attempt}, state)
 	})
 }
 

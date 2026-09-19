@@ -22,8 +22,8 @@ import (
 func TestWrapPanicAfterCallDoubleExecutesStepBody(t *testing.T) {
 	var stepRuns int32
 	p := durable.Plugin{
-		WrapOperationAttemptFn: func(_ context.Context, _ durable.AttemptHookInfo, fn func() (any, error)) (any, error) {
-			_, _ = fn()
+		WrapOperationAttemptFn: func(ctx context.Context, _ durable.AttemptHookInfo, fn func(context.Context) (any, error)) (any, error) {
+			_, _ = fn(ctx)
 			panic("plugin panics after calling fn")
 		},
 	}
@@ -51,7 +51,7 @@ func TestWrapPanicAfterCallDoubleExecutesStepBody(t *testing.T) {
 func TestWrapPanicBeforeCallRunsStepBodyOnce(t *testing.T) {
 	var stepRuns int32
 	p := durable.Plugin{
-		WrapOperationAttemptFn: func(_ context.Context, _ durable.AttemptHookInfo, _ func() (any, error)) (any, error) {
+		WrapOperationAttemptFn: func(_ context.Context, _ durable.AttemptHookInfo, _ func(context.Context) (any, error)) (any, error) {
 			panic("plugin panics before calling fn")
 		},
 	}
@@ -81,8 +81,8 @@ func TestWrapPanicBeforeCallRunsStepBodyOnce(t *testing.T) {
 func TestWrapChildContextPanicAfterCallRunsBodyOnce(t *testing.T) {
 	var childRuns int32
 	p := durable.Plugin{
-		WrapChildContextFn: func(_ context.Context, _ durable.OperationHookInfo, fn func() (any, error)) (any, error) {
-			_, _ = fn()
+		WrapChildContextFn: func(ctx context.Context, _ durable.OperationHookInfo, fn func(context.Context) (any, error)) (any, error) {
+			_, _ = fn(ctx)
 			panic("plugin panics after calling fn")
 		},
 	}
@@ -112,8 +112,8 @@ func TestWrapChildContextPanicAfterCallRunsBodyOnce(t *testing.T) {
 func TestWrapInvocationPanicAfterCallRunsHandlerOnce(t *testing.T) {
 	var handlerRuns int32
 	p := durable.Plugin{
-		WrapInvocation: func(_ context.Context, _ durable.InvocationHookInfo, fn func() (any, error)) (any, error) {
-			_, _ = fn()
+		WrapInvocation: func(ctx context.Context, _ durable.InvocationHookInfo, fn func(context.Context) (any, error)) (any, error) {
+			_, _ = fn(ctx)
 			panic("plugin panics after calling fn")
 		},
 	}

@@ -3,6 +3,7 @@ package durable
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sync"
 	"time"
 )
@@ -21,15 +22,38 @@ import (
 //
 // Wrap hooks: WrapInvocation, WrapOperationAttemptFn, and WrapChildContextFn
 // receive the wrapped work as fn and must call fn exactly once, returning its
-// result. The SDK runs the wrapped work at most once regardless of what the
-// hook does. A hook that calls fn again receives the first call's result. A
-// hook that panics is contained: if it panics before calling fn, the SDK
-// runs fn once and uses that result; if it panics after calling fn, the SDK
-// uses the result fn already produced. If fn itself panics, that panic
-// reaches the SDK as it would without the hook, even if the hook recovers
-// it and returns normally or calls fn again. A hook that panics while fn is
-// still running on another goroutine fails the wrapped work with an error;
-// fn is still not run again.
+// result. fn takes a [context.Context]. The context a hook passes to fn
+// becomes the parent of the context the wrapped user code observes: the
+// handler's [Context] for WrapInvocation, the [StepContext] of a step body
+// or condition check for WrapOperationAttemptFn, and the child [Context]
+// for WrapChildContextFn. A hook that attaches a value to the ctx it
+// received and passes the derived context to fn makes that value readable
+// inside the user code, and inside every hook nested further in. A hook
+// that passes the ctx it received unchanged causes no behavior change. A
+// nil context is treated as the ctx the hook received.
+//
+// The SDK preserves the cancellation, the deadline, and the values of the
+// context it gave the outermost hook. When a hook passes fn any context
+// other than the one it received, the user code observes a context that is
+// cancelled when either context is cancelled, reports the earlier of the
+// two deadlines, and falls back to the SDK's context for values the hook's
+// context lacks. This holds whether or not the hook's context descends from
+// the SDK's. A hook therefore cannot detach the wrapped work from the
+// invocation's cancellation or deadline. That merged context is cancelled
+// once fn returns; user code must not keep using it after the step body,
+// condition check, child context function, or handler it was given to has
+// returned.
+//
+// The SDK runs the wrapped work at most once regardless of what the hook
+// does. A hook that calls fn again receives the first call's result; the
+// context passed to the later call is ignored. A hook that panics is
+// contained: if it panics before calling fn, the SDK runs fn once with the
+// ctx the hook received and uses that result; if it panics after calling
+// fn, the SDK uses the result fn already produced. If fn itself panics,
+// that panic reaches the SDK as it would without the hook, even if the hook
+// recovers it and returns normally or calls fn again. A hook that panics
+// while fn is still running on another goroutine fails the wrapped work
+// with an error; fn is still not run again.
 type Plugin struct {
 	// OnInvocationStart is called once at the start of each Lambda
 	// invocation, before the user handler runs.
@@ -81,28 +105,31 @@ type Plugin struct {
 	OnOperationChange func(ctx context.Context, info OperationChangeHookInfo)
 
 	// WrapInvocation wraps the user handler invocation. The outer plugin
-	// (index 0) wraps first. fn must be called exactly once; see the
+	// (index 0) wraps first. fn must be called exactly once; the context
+	// passed to fn is the parent of the handler's [Context]. See the
 	// wrap-hook contract in the [Plugin] documentation.
 	//
 	// EXPERIMENTAL: this field is experimental and may be changed or
 	// removed in future releases.
-	WrapInvocation func(ctx context.Context, info InvocationHookInfo, fn func() (any, error)) (any, error)
+	WrapInvocation func(ctx context.Context, info InvocationHookInfo, fn func(ctx context.Context) (any, error)) (any, error)
 
 	// WrapOperationAttemptFn wraps the execution of an operation attempt
-	// body (step fn, condition check). fn must be called exactly once; see
+	// body (step fn, condition check). fn must be called exactly once; the
+	// context passed to fn is the parent of the body's [StepContext]. See
 	// the wrap-hook contract in the [Plugin] documentation.
 	//
 	// EXPERIMENTAL: this field is experimental and may be changed or
 	// removed in future releases.
-	WrapOperationAttemptFn func(ctx context.Context, info AttemptHookInfo, fn func() (any, error)) (any, error)
+	WrapOperationAttemptFn func(ctx context.Context, info AttemptHookInfo, fn func(ctx context.Context) (any, error)) (any, error)
 
 	// WrapChildContextFn wraps the execution of a child-context function.
-	// fn must be called exactly once; see the wrap-hook contract in the
+	// fn must be called exactly once; the context passed to fn is the
+	// parent of the child [Context]. See the wrap-hook contract in the
 	// [Plugin] documentation.
 	//
 	// EXPERIMENTAL: this field is experimental and may be changed or
 	// removed in future releases.
-	WrapChildContextFn func(ctx context.Context, info OperationHookInfo, fn func() (any, error)) (any, error)
+	WrapChildContextFn func(ctx context.Context, info OperationHookInfo, fn func(ctx context.Context) (any, error)) (any, error)
 
 	// EnrichLogContext returns additional key-value pairs to merge into
 	// every log record emitted through [Context.Logger] and
@@ -389,19 +416,34 @@ func invokePluginSafely(p *Plugin, call func(*Plugin)) {
 	call(p)
 }
 
-// wrapChain composes plugins' wrap hooks around fn. plugins[0] is outermost.
-// A panicking wrapper is skipped without running fn a second time; see
-// invokeWrapSafely. Returns fn() unchanged when d is nil.
+// wrapBody is the wrapped work a wrap hook receives: it runs the body with
+// the context the hook supplies.
+type wrapBody = func(context.Context) (any, error)
+
+// wrapHook is one plugin's wrap hook with its info argument bound: it
+// receives the context to pass on and the next body in the chain.
+type wrapHook = func(context.Context, wrapBody) (any, error)
+
+// wrapChain composes plugins' wrap hooks around fn. plugins[0] is outermost
+// and receives ctx. Each hook passes a context to the next body; the
+// innermost body runs fn with that context, re-attached to ctx by
+// bodyContext so the body keeps ctx's cancellation, deadline, and values. A
+// panicking wrapper is skipped without running fn a second time; see
+// invokeWrapSafely. Returns fn(ctx) unchanged when d is nil.
 //
 // getWrap extracts the wrap function from a plugin; return nil if the
 // plugin does not implement this particular wrap hook.
-func wrapChain(d *pluginDispatcher, getWrap func(*Plugin) func(func() (any, error)) (any, error), fn func() (any, error)) (any, error) {
+func wrapChain(d *pluginDispatcher, ctx context.Context, getWrap func(*Plugin) wrapHook, fn wrapBody) (any, error) {
 	if d == nil {
-		return fn()
+		return fn(ctx)
 	}
 
 	// Build chain: plugins[0] outermost via reduceRight
-	next := fn
+	next := func(supplied context.Context) (any, error) {
+		bodyCtx, release := bodyContext(ctx, supplied)
+		defer release()
+		return fn(bodyCtx)
+	}
 	for i := len(d.plugins) - 1; i >= 0; i-- {
 		wrap := getWrap(&d.plugins[i])
 		if wrap == nil {
@@ -409,11 +451,105 @@ func wrapChain(d *pluginDispatcher, getWrap func(*Plugin) func(func() (any, erro
 		}
 		innerNext := next
 		wrapFn := wrap
-		next = func() (any, error) {
-			return invokeWrapSafely(wrapFn, innerNext)
+		next = func(c context.Context) (any, error) {
+			return invokeWrapSafely(c, wrapFn, innerNext)
 		}
 	}
-	return next()
+	return next(ctx)
+}
+
+// bodyContext returns the context the wrapped body runs with, given the
+// context the SDK gave the outermost hook (orig) and the one the innermost
+// hook passed to fn (supplied). The second result releases what bodyContext
+// allocated; the caller runs it once the body has returned.
+//
+// A nil supplied context, or orig itself, leaves the body with orig and
+// returns a no-op release. Any other supplied context is merged with orig,
+// whether or not it descends from orig: a context.Context is an interface,
+// so nothing observable proves that a supplied context forwards orig's
+// cancellation, deadline, and values. In particular, equal Done channels
+// prove nothing. Two unrelated contexts that are never cancelled both
+// report a nil Done channel, and a context may forward orig's Done while
+// reporting a different Deadline or hiding orig's values. The body
+// therefore gets a context that is cancelled when either orig or supplied
+// is, that reports the earlier of the two deadlines, and that reads values
+// from supplied first and from orig when supplied lacks them.
+//
+// The merged context is bound to the body. While the body runs, orig's
+// cancellation reaches it through a callback registered on orig. When orig
+// ends first, the merged context is cancelled with orig's cause. When the
+// body returns first, release removes that callback from orig and cancels
+// the merged context. One invocation may run many wrapped bodies, so
+// without release each body would leave a callback and a context object
+// attached to orig until the invocation itself ended.
+func bodyContext(orig, supplied context.Context) (context.Context, func()) {
+	if supplied == nil || sameContext(orig, supplied) {
+		return orig, func() {}
+	}
+
+	merged := supplied
+	releaseDeadline := func() {}
+	if d, ok := orig.Deadline(); ok {
+		if sd, sok := supplied.Deadline(); !sok || d.Before(sd) {
+			merged, releaseDeadline = context.WithDeadline(merged, d)
+		}
+	}
+	merged, cancel := context.WithCancelCause(merged)
+	// Cancel the body's context when orig ends, with orig's cause, and
+	// release the deadline context after it so the cause is not replaced
+	// by a plain cancellation. A supplied context that ends first cancels
+	// merged on its own, through the parent chain.
+	stop := context.AfterFunc(orig, func() {
+		cancel(context.Cause(orig))
+		releaseDeadline()
+	})
+	release := func() {
+		stop()
+		cancel(nil)
+		releaseDeadline()
+	}
+	return &fallbackValueContext{Context: merged, fallback: orig}, release
+}
+
+// sameContext reports whether a and b are the same context value.
+//
+// Comparing two interface values panics when both hold the same dynamic
+// type and that type is not comparable, for example a struct with a slice
+// field. A context.Context implementation may be such a type, and a hook
+// that passes its context through unchanged then hands bodyContext two
+// copies of it. So the comparison is guarded: two values of the same
+// non-comparable type are reported as different, and bodyContext merges
+// them, which keeps the body's values, deadline, and cancellation intact.
+func sameContext(a, b context.Context) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	va, vb := reflect.ValueOf(a), reflect.ValueOf(b)
+	if va.Type() != vb.Type() {
+		return false
+	}
+	if !va.Comparable() {
+		return false
+	}
+	return a == b
+}
+
+// fallbackValueContext is a context that reads a value from Context first
+// and from fallback when Context lacks it. Done, Err, and Deadline come from
+// Context alone. Because Done and the cancellation lookup the standard
+// library performs through Value both resolve to Context, contexts derived
+// from a fallbackValueContext propagate cancellation the same way as ones
+// derived from Context directly.
+type fallbackValueContext struct {
+	context.Context
+	fallback context.Context
+}
+
+func (c *fallbackValueContext) Value(key any) any {
+	if v := c.Context.Value(key); v != nil {
+		return v
+	}
+	return c.fallback.Value(key)
 }
 
 // errWrapBodyUnfinished is the error returned when a wrap hook panics while
@@ -422,13 +558,19 @@ func wrapChain(d *pluginDispatcher, getWrap func(*Plugin) func(func() (any, erro
 var errWrapBodyUnfinished = errors.New("durable: plugin wrap hook panicked before the wrapped function returned; result unavailable")
 
 // guardedFn runs a wrapped body at most once, whatever the wrap hooks
-// around it do. The first call runs fn and records its outcome. Every
-// later call returns the recorded outcome without running fn again. A
-// panic in fn is recorded and re-raised on the first call and on every
-// later call, so a hook that recovers the body's panic cannot turn it into
-// a normal result by calling fn again.
+// around it do. The first call runs fn with the context that call supplies
+// and records its outcome. Every later call returns the recorded outcome
+// without running fn again, whatever context it supplies. A panic in fn is
+// recorded and re-raised on the first call and on every later call, so a
+// hook that recovers the body's panic cannot turn it into a normal result
+// by calling fn again.
 type guardedFn struct {
-	fn func() (any, error)
+	fn wrapBody
+
+	// hookCtx is the context the hook around this body received. It
+	// stands in for a nil context supplied to call, and it is the context
+	// fn runs with when the hook panics before calling fn.
+	hookCtx context.Context
 
 	mu       sync.Mutex
 	entered  bool // fn has been called
@@ -439,11 +581,14 @@ type guardedFn struct {
 	panicVal any
 }
 
-// call runs fn on the first call and returns the recorded outcome on every
-// later call. A later call after fn panicked re-raises that panic. A later
-// call while fn is still running on another goroutine returns
-// errWrapBodyUnfinished.
-func (g *guardedFn) call() (any, error) {
+// call runs fn(ctx) on the first call and returns the recorded outcome on
+// every later call. A nil ctx stands for the hook's own context. A later
+// call after fn panicked re-raises that panic. A later call while fn is
+// still running on another goroutine returns errWrapBodyUnfinished.
+func (g *guardedFn) call(ctx context.Context) (any, error) {
+	if ctx == nil {
+		ctx = g.hookCtx
+	}
 	g.mu.Lock()
 	if g.entered {
 		result, err, done, panicked, panicVal := g.result, g.err, g.done, g.panicked, g.panicVal
@@ -469,7 +614,7 @@ func (g *guardedFn) call() (any, error) {
 			panic(r)
 		}
 	}()
-	result, err := g.fn()
+	result, err := g.fn(ctx)
 	g.mu.Lock()
 	g.result, g.err, g.done = result, err, true
 	g.mu.Unlock()
@@ -488,26 +633,26 @@ func (g *guardedFn) rethrowBodyPanic() {
 	}
 }
 
-// invokeWrapSafely calls wrapFn(innerFn), recovering panics raised by the
-// hook. innerFn is guarded so it runs at most once. If the hook panics
-// before calling innerFn, innerFn runs once. If the hook panics after
-// calling innerFn, the recorded result of that call is returned. If
-// innerFn itself panicked, that panic reaches the caller even when the
-// hook recovers it, calls innerFn again, or returns normally. A hook that
-// calls innerFn more than once receives the first call's outcome on every
-// call after it.
-func invokeWrapSafely(wrapFn func(func() (any, error)) (any, error), innerFn func() (any, error)) (result any, err error) {
-	g := &guardedFn{fn: innerFn}
+// invokeWrapSafely calls wrapFn(ctx, innerFn), recovering panics raised by
+// the hook. innerFn is guarded so it runs at most once, with the context
+// the hook passes it. If the hook panics before calling innerFn, innerFn
+// runs once with ctx. If the hook panics after calling innerFn, the
+// recorded result of that call is returned. If innerFn itself panicked,
+// that panic reaches the caller even when the hook recovers it, calls
+// innerFn again, or returns normally. A hook that calls innerFn more than
+// once receives the first call's outcome on every call after it.
+func invokeWrapSafely(ctx context.Context, wrapFn wrapHook, innerFn wrapBody) (result any, err error) {
+	g := &guardedFn{fn: innerFn, hookCtx: ctx}
 	defer func() {
 		if r := recover(); r != nil {
 			// Either the hook panicked or the body's panic propagated
 			// through the hook. call runs the body when it never ran,
 			// returns its recorded outcome when it did, and re-raises
 			// the body's own panic when it panicked.
-			result, err = g.call()
+			result, err = g.call(ctx)
 		}
 	}()
-	result, err = wrapFn(g.call)
+	result, err = wrapFn(ctx, g.call)
 	g.rethrowBodyPanic()
 	return result, err
 }

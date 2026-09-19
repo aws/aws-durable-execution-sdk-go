@@ -189,8 +189,8 @@ func TestOrphanBranchRefusedBeforeInvocationPostProcessing(t *testing.T) {
 			errNotObserved := errors.New("orphan step did not settle during post-processing")
 			var observedInWrap, observedAtEnd error
 			plugin := Plugin{
-				WrapInvocation: func(_ context.Context, _ InvocationHookInfo, fn func() (any, error)) (any, error) {
-					res, err := fn()
+				WrapInvocation: func(ctx context.Context, _ InvocationHookInfo, fn func(context.Context) (any, error)) (any, error) {
+					res, err := fn(ctx)
 					// The handler's outcome is decided. Release the orphan
 					// and wait for its step to settle.
 					close(gate)
@@ -286,8 +286,8 @@ func TestOversizedResultCheckpointedBehindInFlightOrphan(t *testing.T) {
 
 	stepErr := make(chan error, 1)
 	plugin := Plugin{
-		WrapInvocation: func(_ context.Context, _ InvocationHookInfo, fn func() (any, error)) (any, error) {
-			res, err := fn()
+		WrapInvocation: func(ctx context.Context, _ InvocationHookInfo, fn func(context.Context) (any, error)) (any, error) {
+			res, err := fn(ctx)
 			// runHandler has returned, so the checkpointer is terminated.
 			// Let the orphan's in-flight call complete.
 			close(handlerDecided)

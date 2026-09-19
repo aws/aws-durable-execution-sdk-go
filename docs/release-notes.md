@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+### Breaking (experimental plugin API): wrap hooks pass a context to `fn`
+
+The `fn` argument of `Plugin.WrapInvocation`, `Plugin.WrapOperationAttemptFn`,
+and `Plugin.WrapChildContextFn` changes from `func() (any, error)` to
+`func(ctx context.Context) (any, error)`. The context a hook passes to `fn`
+becomes the parent of the context the wrapped user code observes: the
+handler's `Context` for `WrapInvocation`, the `StepContext` of a step body
+or condition check for `WrapOperationAttemptFn`, and the child `Context` for
+`WrapChildContextFn`. A plugin that derives a context (a tracing span, a
+correlation value, a scoped logger) and passes it to `fn` makes it readable
+inside user code; before this change the body captured its own context and
+a plugin had no way to reach it.
+
+To migrate, pass the `ctx` the hook received to `fn`:
+
+```go
+WrapOperationAttemptFn: func(ctx context.Context, info durable.AttemptHookInfo, fn func(context.Context) (any, error)) (any, error) {
+	return fn(ctx)
+},
+```
+
+A hook that passes its `ctx` on unchanged sees no behavior change. `fn` must
+still be called exactly once; a later call returns the first call's result
+and ignores the context passed to it. A nil context stands for the `ctx` the
+hook received. The wrapped work stays attached to the invocation's context:
+when a hook passes `fn` any context other than the one it received, the user
+code observes a context that is cancelled when either is cancelled, reports
+the earlier of the two deadlines, and falls back to the invocation's context
+for values the hook's context lacks, whether or not the hook's context
+descends from the invocation's. That merged context is cancelled once `fn`
+returns, so user code must not keep using it after the wrapped function has
+returned.
+
 ### Added: the `insight` and `analysis` modules are released with the SDK
 
 Each release tags the root module `vX.Y.Z` and the nested modules

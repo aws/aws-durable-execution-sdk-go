@@ -83,22 +83,22 @@ func TestPluginErrorSwallowedCustomerErrorPreserved(t *testing.T) {
 
 	// Plugin that panics — its panic should be skipped and inner fn called.
 	panicker := Plugin{
-		WrapInvocation: func(_ context.Context, _ InvocationHookInfo, fn func() (any, error)) (any, error) {
+		WrapInvocation: func(ctx context.Context, _ InvocationHookInfo, fn func(context.Context) (any, error)) (any, error) {
 			panic("wrap panic")
 		},
 	}
 
 	pd := newPluginDispatcher([]Plugin{panicker})
-	_, err := wrapChain(pd,
-		func(p *Plugin) func(func() (any, error)) (any, error) {
+	_, err := wrapChain(pd, context.Background(),
+		func(p *Plugin) wrapHook {
 			if p.WrapInvocation == nil {
 				return nil
 			}
-			return func(fn func() (any, error)) (any, error) {
-				return p.WrapInvocation(context.Background(), InvocationHookInfo{}, fn)
+			return func(ctx context.Context, fn wrapBody) (any, error) {
+				return p.WrapInvocation(ctx, InvocationHookInfo{}, fn)
 			}
 		},
-		func() (any, error) {
+		func(context.Context) (any, error) {
 			return nil, customerErr
 		},
 	)
@@ -121,33 +121,33 @@ func TestPluginWrapCompositionOrder(t *testing.T) {
 	}
 
 	p1 := Plugin{
-		WrapInvocation: func(_ context.Context, _ InvocationHookInfo, fn func() (any, error)) (any, error) {
+		WrapInvocation: func(ctx context.Context, _ InvocationHookInfo, fn func(context.Context) (any, error)) (any, error) {
 			record("p1-before")
-			result, err := fn()
+			result, err := fn(ctx)
 			record("p1-after")
 			return result, err
 		},
 	}
 	p2 := Plugin{
-		WrapInvocation: func(_ context.Context, _ InvocationHookInfo, fn func() (any, error)) (any, error) {
+		WrapInvocation: func(ctx context.Context, _ InvocationHookInfo, fn func(context.Context) (any, error)) (any, error) {
 			record("p2-before")
-			result, err := fn()
+			result, err := fn(ctx)
 			record("p2-after")
 			return result, err
 		},
 	}
 
 	pd := newPluginDispatcher([]Plugin{p1, p2})
-	_, _ = wrapChain(pd,
-		func(p *Plugin) func(func() (any, error)) (any, error) {
+	_, _ = wrapChain(pd, context.Background(),
+		func(p *Plugin) wrapHook {
 			if p.WrapInvocation == nil {
 				return nil
 			}
-			return func(fn func() (any, error)) (any, error) {
-				return p.WrapInvocation(context.Background(), InvocationHookInfo{}, fn)
+			return func(ctx context.Context, fn wrapBody) (any, error) {
+				return p.WrapInvocation(ctx, InvocationHookInfo{}, fn)
 			}
 		},
-		func() (any, error) {
+		func(context.Context) (any, error) {
 			record("fn")
 			return nil, nil
 		},
@@ -184,16 +184,16 @@ func TestPluginNilHookFieldsSkipped(t *testing.T) {
 	})
 
 	// Wrap with nil should pass through.
-	result, err := wrapChain(pd,
-		func(p *Plugin) func(func() (any, error)) (any, error) {
+	result, err := wrapChain(pd, context.Background(),
+		func(p *Plugin) wrapHook {
 			if p.WrapInvocation == nil {
 				return nil
 			}
-			return func(fn func() (any, error)) (any, error) {
-				return p.WrapInvocation(context.Background(), InvocationHookInfo{}, fn)
+			return func(ctx context.Context, fn wrapBody) (any, error) {
+				return p.WrapInvocation(ctx, InvocationHookInfo{}, fn)
 			}
 		},
-		func() (any, error) {
+		func(context.Context) (any, error) {
 			return "hello", nil
 		},
 	)
@@ -219,11 +219,11 @@ func TestPluginZeroPluginsZeroOverhead(t *testing.T) {
 	})
 
 	// Wrap with nil should pass through directly.
-	result, err := wrapChain(nil,
-		func(p *Plugin) func(func() (any, error)) (any, error) {
+	result, err := wrapChain(nil, context.Background(),
+		func(p *Plugin) wrapHook {
 			return nil
 		},
-		func() (any, error) {
+		func(context.Context) (any, error) {
 			return 42, nil
 		},
 	)
@@ -470,9 +470,9 @@ func TestPluginWrapChildContextFn(t *testing.T) {
 	}
 
 	plugin := Plugin{
-		WrapChildContextFn: func(_ context.Context, _ OperationHookInfo, fn func() (any, error)) (any, error) {
+		WrapChildContextFn: func(ctx context.Context, _ OperationHookInfo, fn func(context.Context) (any, error)) (any, error) {
 			record("wrap-before")
-			r, e := fn()
+			r, e := fn(ctx)
 			record("wrap-after")
 			return r, e
 		},

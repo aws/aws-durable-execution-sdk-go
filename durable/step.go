@@ -389,17 +389,17 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 	// is disabled.
 	var stepTrace []string
 
-	wrappedResult, wrappedErr := wrapChain(ec.pluginDispatcher,
-		func(p *Plugin) func(func() (any, error)) (any, error) {
+	wrappedResult, wrappedErr := wrapChain(ec.pluginDispatcher, ec,
+		func(p *Plugin) wrapHook {
 			if p.WrapOperationAttemptFn == nil {
 				return nil
 			}
-			return func(innerFn func() (any, error)) (any, error) {
-				return p.WrapOperationAttemptFn(ec, attemptInfo, innerFn)
+			return func(ctx context.Context, innerFn wrapBody) (any, error) {
+				return p.WrapOperationAttemptFn(ctx, attemptInfo, innerFn)
 			}
 		},
-		func() (any, error) {
-			r, trace, e := runStepFunc(ec, id, name, fn, attempt)
+		func(ctx context.Context) (any, error) {
+			r, trace, e := runStepFunc(ctx, ec, id, name, fn, attempt)
 			stepTrace = trace
 			return r, e
 		},
@@ -537,11 +537,13 @@ func settleStepFailure[O any](ec *execContext, id, name string, options stepOpti
 
 // runStepFunc executes the step body with panic recovery: a panicking step
 // is a failed attempt, subject to the retry strategy like any other error.
-// trace is the stack trace of the failure as [runUserFunc] captures it,
-// nil when the body succeeds or when capture is disabled.
-func runStepFunc[O any](ec *execContext, id, name string, fn func(StepContext) (O, error), attempt int) (O, []string, error) {
+// ctx is the parent of the body's [StepContext]: ec's context, or the one
+// the wrap hooks supplied. trace is the stack trace of the failure as
+// [runUserFunc] captures it, nil when the body succeeds or when capture is
+// disabled.
+func runStepFunc[O any](ctx context.Context, ec *execContext, id, name string, fn func(StepContext) (O, error), attempt int) (O, []string, error) {
 	return runUserFunc(ec, fn, "durable: step panicked", func() (O, error) {
-		return fn(&stepContext{Context: ec.Context, logger: ec.operationLogger(id, name, attempt), attempt: attempt})
+		return fn(&stepContext{Context: ctx, logger: ec.operationLogger(id, name, attempt), attempt: attempt})
 	})
 }
 

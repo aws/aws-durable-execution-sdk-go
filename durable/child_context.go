@@ -1,6 +1,7 @@
 package durable
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"reflect"
@@ -260,18 +261,21 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 		StartTimestamp: time.Now(),
 	}
 
-	// WrapChildContextFn wraps the child body execution.
+	// WrapChildContextFn wraps the child body execution. The context the
+	// hooks supply becomes the child context's parent; the child is not
+	// visible to any other goroutine before fn runs.
 	var fnTrace []string
-	wrappedResult, wrappedErr := wrapChain(ec.pluginDispatcher,
-		func(p *Plugin) func(func() (any, error)) (any, error) {
+	wrappedResult, wrappedErr := wrapChain(ec.pluginDispatcher, ec,
+		func(p *Plugin) wrapHook {
 			if p.WrapChildContextFn == nil {
 				return nil
 			}
-			return func(innerFn func() (any, error)) (any, error) {
-				return p.WrapChildContextFn(ec, opInfo, innerFn)
+			return func(ctx context.Context, innerFn wrapBody) (any, error) {
+				return p.WrapChildContextFn(ctx, opInfo, innerFn)
 			}
 		},
-		func() (any, error) {
+		func(ctx context.Context) (any, error) {
+			child.Context = ctx
 			r, e := fn(child)
 			if e != nil {
 				fnTrace = ec.returnedErrorTrace(fn, e, 0)

@@ -261,8 +261,8 @@ func TestClientErrorInvocationScopeFromPluginFailsInvocation(t *testing.T) {
 		},
 	}
 	plugin := Plugin{
-		WrapInvocation: func(_ context.Context, _ InvocationHookInfo, fn func() (any, error)) (any, error) {
-			if _, err := fn(); err != nil {
+		WrapInvocation: func(ctx context.Context, _ InvocationHookInfo, fn func(context.Context) (any, error)) (any, error) {
+			if _, err := fn(ctx); err != nil {
 				return nil, err
 			}
 			return nil, &ClientError{Scope: ErrorScopeInvocation, Err: cause}

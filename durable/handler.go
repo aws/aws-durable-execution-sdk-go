@@ -376,8 +376,11 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	// of the outcome on this goroutine once the handler has returned.
 	var handlerTrace []string
 
-	// WrapInvocation: compose around the handler execution.
-	runHandler := func() (any, error) {
+	// WrapInvocation: compose around the handler execution. The context
+	// the hooks supply becomes the root context's parent; the handler
+	// goroutine has not started yet, so no other goroutine reads it.
+	runHandler := func(hctx context.Context) (any, error) {
+		ec.Context = hctx
 		// Every exit from runHandler terminates the checkpointer:
 		// suspension, success, handler error, and handler panic (which
 		// runUserFunc converts into an error). One defer covers them all,
@@ -480,13 +483,13 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		}
 	}
 
-	wrapResult, wrapErr := wrapChain(pd,
-		func(p *Plugin) func(func() (any, error)) (any, error) {
+	wrapResult, wrapErr := wrapChain(pd, ctx,
+		func(p *Plugin) wrapHook {
 			if p.WrapInvocation == nil {
 				return nil
 			}
-			return func(fn func() (any, error)) (any, error) {
-				return p.WrapInvocation(ctx, invInfo, fn)
+			return func(hctx context.Context, fn wrapBody) (any, error) {
+				return p.WrapInvocation(hctx, invInfo, fn)
 			}
 		},
 		runHandler,

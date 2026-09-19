@@ -14,16 +14,16 @@ import (
 // WrapInvocation hooks.
 func wrapInvocationChain(plugins []Plugin, fn func() (any, error)) (any, error) {
 	pd := newPluginDispatcher(plugins)
-	return wrapChain(pd,
-		func(p *Plugin) func(func() (any, error)) (any, error) {
+	return wrapChain(pd, context.Background(),
+		func(p *Plugin) wrapHook {
 			if p.WrapInvocation == nil {
 				return nil
 			}
-			return func(inner func() (any, error)) (any, error) {
-				return p.WrapInvocation(context.Background(), InvocationHookInfo{}, inner)
+			return func(ctx context.Context, inner wrapBody) (any, error) {
+				return p.WrapInvocation(ctx, InvocationHookInfo{}, inner)
 			}
 		},
-		fn,
+		func(context.Context) (any, error) { return fn() },
 	)
 }
 
@@ -33,8 +33,8 @@ func wrapInvocationChain(plugins []Plugin, fn func() (any, error)) (any, error) 
 func TestWrapPanicAfterCallReturnsRecordedResult(t *testing.T) {
 	var runs int32
 	hook := Plugin{
-		WrapInvocation: func(_ context.Context, _ InvocationHookInfo, fn func() (any, error)) (any, error) {
-			_, _ = fn()
+		WrapInvocation: func(ctx context.Context, _ InvocationHookInfo, fn func(context.Context) (any, error)) (any, error) {
+			_, _ = fn(ctx)
 			panic("after fn")
 		},
 	}
@@ -59,8 +59,8 @@ func TestWrapPanicAfterCallPreservesBodyError(t *testing.T) {
 	bodyErr := errors.New("body error")
 	var runs int32
 	hook := Plugin{
-		WrapInvocation: func(_ context.Context, _ InvocationHookInfo, fn func() (any, error)) (any, error) {
-			_, _ = fn()
+		WrapInvocation: func(ctx context.Context, _ InvocationHookInfo, fn func(context.Context) (any, error)) (any, error) {
+			_, _ = fn(ctx)
 			panic("after fn")
 		},
 	}
@@ -81,7 +81,7 @@ func TestWrapPanicAfterCallPreservesBodyError(t *testing.T) {
 func TestWrapPanicBeforeCallRunsBodyOnce(t *testing.T) {
 	var runs int32
 	hook := Plugin{
-		WrapInvocation: func(_ context.Context, _ InvocationHookInfo, _ func() (any, error)) (any, error) {
+		WrapInvocation: func(_ context.Context, _ InvocationHookInfo, _ func(context.Context) (any, error)) (any, error) {
 			panic("before fn")
 		},
 	}
@@ -107,9 +107,9 @@ func TestWrapHookCallsFnTwiceRunsBodyOnce(t *testing.T) {
 	var runs int32
 	var second any
 	hook := Plugin{
-		WrapInvocation: func(_ context.Context, _ InvocationHookInfo, fn func() (any, error)) (any, error) {
-			_, _ = fn()
-			r, e := fn()
+		WrapInvocation: func(ctx context.Context, _ InvocationHookInfo, fn func(context.Context) (any, error)) (any, error) {
+			_, _ = fn(ctx)
+			r, e := fn(ctx)
 			second = r
 			return r, e
 		},
@@ -135,8 +135,8 @@ func TestWrapHookCallsFnTwiceRunsBodyOnce(t *testing.T) {
 func TestWrapBodyPanicPropagatesWithoutRerun(t *testing.T) {
 	var runs int32
 	hook := Plugin{
-		WrapInvocation: func(_ context.Context, _ InvocationHookInfo, fn func() (any, error)) (any, error) {
-			return fn()
+		WrapInvocation: func(ctx context.Context, _ InvocationHookInfo, fn func(context.Context) (any, error)) (any, error) {
+			return fn(ctx)
 		},
 	}
 	var recovered any
@@ -159,8 +159,8 @@ func TestWrapBodyPanicPropagatesWithoutRerun(t *testing.T) {
 // panic after calling fn, the body runs once and its result is returned.
 func TestWrapNestedPanicsRunBodyOnce(t *testing.T) {
 	var runs int32
-	panicAfter := func(_ context.Context, _ InvocationHookInfo, fn func() (any, error)) (any, error) {
-		_, _ = fn()
+	panicAfter := func(ctx context.Context, _ InvocationHookInfo, fn func(context.Context) (any, error)) (any, error) {
+		_, _ = fn(ctx)
 		panic("after fn")
 	}
 	plugins := []Plugin{{WrapInvocation: panicAfter}, {WrapInvocation: panicAfter}}
@@ -186,13 +186,13 @@ func TestWrapNestedPanicsRunBodyOnce(t *testing.T) {
 func TestWrapHookRecoversBodyPanicAndReturnsNormally(t *testing.T) {
 	var runs int32
 	hook := Plugin{
-		WrapInvocation: func(_ context.Context, _ InvocationHookInfo, fn func() (any, error)) (result any, err error) {
+		WrapInvocation: func(ctx context.Context, _ InvocationHookInfo, fn func(context.Context) (any, error)) (result any, err error) {
 			defer func() {
 				if r := recover(); r != nil {
 					result, err = "hook-result", nil
 				}
 			}()
-			return fn()
+			return fn(ctx)
 		},
 	}
 	var recovered any
@@ -218,14 +218,14 @@ func TestWrapHookRecoversBodyPanicAndCallsFnAgain(t *testing.T) {
 	var runs int32
 	var secondCallPanic any
 	hook := Plugin{
-		WrapInvocation: func(_ context.Context, _ InvocationHookInfo, fn func() (any, error)) (any, error) {
+		WrapInvocation: func(ctx context.Context, _ InvocationHookInfo, fn func(context.Context) (any, error)) (any, error) {
 			func() {
 				defer func() { _ = recover() }()
-				_, _ = fn()
+				_, _ = fn(ctx)
 			}()
 			func() {
 				defer func() { secondCallPanic = recover() }()
-				_, _ = fn()
+				_, _ = fn(ctx)
 			}()
 			return "hook-result", nil
 		},
@@ -255,10 +255,10 @@ func TestWrapHookRecoversBodyPanicAndCallsFnAgain(t *testing.T) {
 func TestWrapHookRecoversBodyPanicThenPanics(t *testing.T) {
 	var runs int32
 	hook := Plugin{
-		WrapInvocation: func(_ context.Context, _ InvocationHookInfo, fn func() (any, error)) (any, error) {
+		WrapInvocation: func(ctx context.Context, _ InvocationHookInfo, fn func(context.Context) (any, error)) (any, error) {
 			func() {
 				defer func() { _ = recover() }()
-				_, _ = fn()
+				_, _ = fn(ctx)
 			}()
 			panic("hook panic")
 		},
