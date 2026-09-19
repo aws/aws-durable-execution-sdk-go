@@ -1,8 +1,11 @@
 name: Cloud tests
 
-# Deploys every example with SAM into the test account, then invokes each
-# example function and asserts its durable execution reaches the terminal
-# state documented in examples/README.md (harness: examples/cloud).
+# Deploys every example with SAM into the test account, then runs two
+# test passes against the deployed functions: the smoke test in
+# examples/cloud, which invokes each example once and checks its terminal
+# state, result, or error type against examples/cloud/expectations.go; and
+# each example's own handler test in cloud mode, which reuses the
+# assertions that ci.yml runs locally (see examples/internal/extest).
 
 on:
   push:
@@ -87,8 +90,15 @@ jobs:
               FunctionNamePrefix="$FUNCTION_NAME_PREFIX" \
               ExecutionRoleArn="$EXECUTION_ROLE_ARN"
 
-      - name: Run cloud tests
+      - name: Run cloud smoke test
         working-directory: examples
         run: |
           go test -tags cloud ./cloud -run TestExamples \
             -v -timeout 80m -parallel 8
+
+      - name: Run example tests in cloud mode
+        working-directory: examples
+        env:
+          DURABLE_EXAMPLES_RUNNER: cloud
+        run: |
+          go test ./... -run TestHandler -timeout 80m -p 8

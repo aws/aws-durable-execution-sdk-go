@@ -7,13 +7,28 @@ import (
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
+	"github.com/aws/aws-durable-execution-sdk-go/examples/internal/extest"
 )
 
 func TestHandler(t *testing.T) {
 	input := Input{MaxAttempts: 3}
 
-	runner := durabletest.NewLocalRunner(handler)
+	runner := extest.New(t, handler)
 	result := runner.RunUntilComplete(t, input)
+
+	if runner.Cloud() {
+		// Nothing resolves the callbacks in the cloud: each attempt times
+		// out and the handler fails after the last one, as documented in
+		// examples/README.md. Locally the test approves the first
+		// callback and the handler succeeds on attempt 1.
+		if result.Status != durabletest.Failed {
+			t.Fatalf("expected Failed (callbacks time out), got %s", result.Status)
+		}
+		if result.Error == nil || result.Error.Type != "CallbackTimeoutError" {
+			t.Fatalf("expected CallbackTimeoutError, got %+v", result.Error)
+		}
+		return
+	}
 
 	// First callback suspends the execution.
 	if result.Status != durabletest.Pending {

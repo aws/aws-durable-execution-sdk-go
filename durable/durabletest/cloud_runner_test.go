@@ -473,3 +473,61 @@ func TestCloudRunnerTimedOutStatus(t *testing.T) {
 		t.Errorf("expected ExecutionTimeout error, got %+v", result.Error)
 	}
 }
+
+// TestCloudRunnerOmitsExecutionOperation checks that the execution's own
+// lifecycle events, which the service records with the execution's
+// operation ID, do not appear in Operations. LocalRunner leaves the
+// execution operation out, and the two runners must agree so that the
+// same operation-log assertions hold in both environments.
+func TestCloudRunnerOmitsExecutionOperation(t *testing.T) {
+	api := &fakeCloudAPI{
+		getHistoryFunc: func(_ context.Context, _ *lambda.GetDurableExecutionHistoryInput) (*lambda.GetDurableExecutionHistoryOutput, error) {
+			return &lambda.GetDurableExecutionHistoryOutput{
+				Events: []types.Event{
+					{
+						Id:                      aws.String("exec-1"),
+						Name:                    aws.String("exec-1"),
+						EventType:               types.EventTypeExecutionStarted,
+						ExecutionStartedDetails: &types.ExecutionStartedDetails{},
+					},
+					{
+						Id:                 aws.String("op-1"),
+						Name:               aws.String("greet"),
+						SubType:            aws.String("Step"),
+						EventType:          types.EventTypeStepStarted,
+						StepStartedDetails: &types.StepStartedDetails{},
+					},
+					{
+						Id:                   aws.String("op-1"),
+						Name:                 aws.String("greet"),
+						SubType:              aws.String("Step"),
+						EventType:            types.EventTypeStepSucceeded,
+						StepSucceededDetails: &types.StepSucceededDetails{Result: &types.EventResult{Payload: aws.String(`"hi"`)}},
+					},
+					{
+						Id:                        aws.String("exec-1"),
+						EventType:                 types.EventTypeExecutionSucceeded,
+						ExecutionSucceededDetails: &types.ExecutionSucceededDetails{},
+					},
+				},
+			}, nil
+		},
+	}
+
+	runner := durabletest.NewCloudRunner(api, "my-func:$LATEST",
+		durabletest.WithPollInterval(time.Millisecond),
+		durabletest.WithTimeout(time.Second),
+	)
+	result := runner.Run(t, nil)
+
+	if len(result.Operations) != 1 {
+		t.Fatalf("expected only the handler's operation, got %d: %+v", len(result.Operations), result.Operations)
+	}
+	if op := result.Operations[0]; op.Type != "STEP" || op.Name != "greet" {
+		t.Errorf("operation = %s %q, want STEP \"greet\"", op.Type, op.Name)
+	}
+	// The events themselves are still reported in full.
+	if len(result.Events) != 4 {
+		t.Errorf("expected 4 events, got %d", len(result.Events))
+	}
+}

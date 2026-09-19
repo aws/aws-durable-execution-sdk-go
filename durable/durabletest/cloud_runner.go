@@ -13,6 +13,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
+
+	"github.com/aws/aws-durable-execution-sdk-go/durable"
 )
 
 // DurableExecutionAPI is the subset of the Lambda service client that
@@ -237,7 +239,9 @@ func (r *CloudRunner) pollUntilTerminal(ctx context.Context, arn string) (*TestR
 
 // buildResult fetches the full event history and constructs a TestResult
 // carrying the events, the invocation records, and the operations folded
-// from the events.
+// from the events. The execution's own lifecycle events fold into an
+// EXECUTION operation; it is dropped so that [TestResult.Operations] holds
+// only the handler's operations, as it does under [LocalRunner].
 func (r *CloudRunner) buildResult(ctx context.Context, arn string, execOut *lambda.GetDurableExecutionOutput) (*TestResult, error) {
 	events, err := r.fetchAllEvents(ctx, arn)
 	if err != nil {
@@ -245,7 +249,7 @@ func (r *CloudRunner) buildResult(ctx context.Context, arn string, execOut *lamb
 	}
 
 	tr := &TestResult{
-		Operations: toTestOperations(operationsFromEvents(events)),
+		Operations: toTestOperations(withoutExecutionOperation(operationsFromEvents(events))),
 	}
 	tr.attachEvents(events)
 
@@ -302,6 +306,18 @@ func (r *CloudRunner) fetchAllEvents(ctx context.Context, arn string) ([]types.E
 
 // maxHistoryItemsPerPage is the largest page size the history API allows.
 const maxHistoryItemsPerPage = 1000
+
+// withoutExecutionOperation returns ops without any EXECUTION operation.
+func withoutExecutionOperation(ops []durable.Operation) []durable.Operation {
+	out := make([]durable.Operation, 0, len(ops))
+	for _, op := range ops {
+		if op.Type == durable.OperationTypeExecution {
+			continue
+		}
+		out = append(out, op)
+	}
+	return out
+}
 
 func isTerminalExecutionStatus(s types.ExecutionStatus) bool {
 	switch s {

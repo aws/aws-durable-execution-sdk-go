@@ -9,53 +9,56 @@ import (
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
+	"github.com/aws/aws-durable-execution-sdk-go/examples/internal/extest"
 )
 
 func TestHandler(t *testing.T) {
+	// The target is the deployed retry-invoke-target companion in the
+	// cloud. Locally the name is only a label: the test resolves each
+	// invoke by hand below.
 	input := Input{
-		TargetFunction:   "arn:aws:lambda:us-east-1:123456789012:function:retry-invoke-target",
+		TargetFunction:   extest.TargetFunction("retry-invoke-target"),
 		FailUntilAttempt: 3,
 		MaxAttempts:      3,
 	}
 
-	runner := durabletest.NewLocalRunner(handler)
+	runner := extest.New(t, handler)
 	result := runner.RunUntilComplete(t, input)
 
-	// First invoke suspends — awaiting external resolution.
-	if result.Status != durabletest.Pending {
-		t.Fatalf("expected Pending (awaiting invoke-1), got %s", result.Status)
+	if runner.Local() {
+		// Locally each invoke suspends until the test resolves it. In
+		// the cloud the companion answers: it fails attempts 1 and 2 and
+		// succeeds on attempt 3, which is what these steps simulate.
+		if result.Status != durabletest.Pending {
+			t.Fatalf("expected Pending (awaiting invoke-1), got %s", result.Status)
+		}
+		if err := runner.FailChainedInvoke("invoke-1", "Error", "deliberate failure on attempt 1"); err != nil {
+			t.Fatalf("fail invoke-1: %v", err)
+		}
+
+		result = runner.RunUntilComplete(t, input)
+		if result.Status != durabletest.Pending {
+			t.Fatalf("expected Pending (awaiting invoke-2), got %s", result.Status)
+		}
+		if err := runner.FailChainedInvoke("invoke-2", "Error", "deliberate failure on attempt 2"); err != nil {
+			t.Fatalf("fail invoke-2: %v", err)
+		}
+
+		result = runner.RunUntilComplete(t, input)
+		if result.Status != durabletest.Pending {
+			t.Fatalf("expected Pending (awaiting invoke-3), got %s", result.Status)
+		}
+		targetResult := struct {
+			Message string `json:"message"`
+			Attempt int    `json:"attempt"`
+		}{Message: "success on attempt 3", Attempt: 3}
+		if err := runner.CompleteChainedInvoke("invoke-3", targetResult); err != nil {
+			t.Fatalf("complete invoke-3: %v", err)
+		}
+
+		result = runner.RunUntilComplete(t, input)
 	}
 
-	// Fail invoke-1 (simulating target failure on attempt 1).
-	if err := runner.FailChainedInvoke("invoke-1", "Error", "deliberate failure on attempt 1"); err != nil {
-		t.Fatalf("fail invoke-1: %v", err)
-	}
-
-	result = runner.RunUntilComplete(t, input)
-	if result.Status != durabletest.Pending {
-		t.Fatalf("expected Pending (awaiting invoke-2), got %s", result.Status)
-	}
-
-	// Fail invoke-2 (simulating target failure on attempt 2).
-	if err := runner.FailChainedInvoke("invoke-2", "Error", "deliberate failure on attempt 2"); err != nil {
-		t.Fatalf("fail invoke-2: %v", err)
-	}
-
-	result = runner.RunUntilComplete(t, input)
-	if result.Status != durabletest.Pending {
-		t.Fatalf("expected Pending (awaiting invoke-3), got %s", result.Status)
-	}
-
-	// Succeed invoke-3 (target succeeds on attempt 3).
-	targetResult := struct {
-		Message string `json:"message"`
-		Attempt int    `json:"attempt"`
-	}{Message: "success on attempt 3", Attempt: 3}
-	if err := runner.CompleteChainedInvoke("invoke-3", targetResult); err != nil {
-		t.Fatalf("complete invoke-3: %v", err)
-	}
-
-	result = runner.RunUntilComplete(t, input)
 	if result.Status != durabletest.Succeeded {
 		t.Fatalf("expected Succeeded, got %s", result.Status)
 	}

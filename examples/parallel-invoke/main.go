@@ -32,7 +32,7 @@ func handler(ctx durable.Context, event Input) (Output, error) {
 		if prefix == "" {
 			prefix = "v2-"
 		}
-		targetFn := prefix + "go-invoke-simple-target"
+		targetFn := prefix + "go-invoke-simple-target:$LATEST"
 		event.Branches = []BranchInput{
 			{FunctionName: targetFn, Payload: map[string]string{"msg": "branch-0"}},
 			{FunctionName: targetFn, Payload: map[string]string{"msg": "branch-1"}},

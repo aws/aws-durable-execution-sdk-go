@@ -231,14 +231,55 @@ Subsequent deploys reuse the saved `samconfig.toml`:
 | `ExecutionRoleArn` | (required) | IAM role the deployed functions assume. The template does not create a role, so pass an existing one. `scripts/test-execution-role.yaml` at the repository root is a one-time template that creates a suitable role; its `RoleArn` output is the value to pass. |
 | `FunctionNamePrefix` | (empty) | Optional prefix for Lambda function names |
 
-## Cloud tests
+## Testing
 
-`cloud/cloud_test.go` invokes every deployed example and asserts that its
-durable execution reaches the terminal state listed in the tables above. It
-is what `.github/workflows/cloud-tests.yml` runs. Deploy with a stack name and
-`FunctionNamePrefix` of your own so that concurrent deployments from different
-branches do not overwrite each other. Then set `FUNCTION_NAME_PREFIX` to that
-prefix (empty if none) and run the test with the same credentials and region:
+Every example has a `handler_test.go` that drives the handler with the
+runner returned by `internal/extest.New`. By default that is the in-memory
+`durabletest.LocalRunner`, so `go test ./...` needs no AWS credentials or
+network access. Setting `DURABLE_EXAMPLES_RUNNER=cloud` switches every
+migrated test to `durabletest.CloudRunner`, which invokes the deployed
+example and checks the same assertions against its recorded execution. The
+function name is `FUNCTION_NAME_PREFIX` + `go-` + the example directory, so
+set the prefix the stack was deployed with:
+
+```bash
+DURABLE_EXAMPLES_RUNNER=cloud FUNCTION_NAME_PREFIX=myprefix- go test ./... -run TestHandler -timeout 80m
+```
+
+Steps that exist only locally, such as resolving a chained invoke or a
+callback by hand, are guarded with `runner.Local()` and a comment saying
+what resolves them in the cloud. Assertions that hold in only one
+environment are guarded the same way; a local-only runner method called in
+cloud mode fails the test instead of being skipped. Local timers advance
+without waiting; the cloud waits for real, so a test does not assert
+elapsed times.
+
+Examples are migrated to the helper in batches by operation family. The
+Step & Retry and Wait & WaitForCondition families are migrated; the
+remaining families still construct `durabletest.NewLocalRunner` directly
+and run locally in both modes.
+
+## Cloud smoke test
+
+`cloud/cloud_test.go` is the fast smoke test for a deployed stack. It
+invokes every deployed example once with `event.json`, waits for the
+terminal state, and checks the terminal state, the result of a succeeding
+example, or the error type of a failing example against
+`cloud/expectations.go`. That file is the single table of expected
+outcomes; the "Expected Terminal State" column in the tables above
+mirrors it. A result that legitimately varies between runs (a timestamp,
+a measured duration, a count that depends on scheduling) is checked by a
+predicate that states why. The unit test in `cloud/expectations_test.go`
+fails when an example in `build.sh` has no entry, so a new example cannot
+pass the smoke test by default.
+
+The smoke test is kept alongside the per-example cloud mode above because
+it is one invocation per example with the shared event and runs in about
+three minutes; `.github/workflows/cloud-tests.yml` runs both. Deploy with
+a stack name and `FunctionNamePrefix` of your own so that concurrent
+deployments from different branches do not overwrite each other. Then set
+`FUNCTION_NAME_PREFIX` to that prefix (empty if none) and run the test
+with the same credentials and region:
 
 ```bash
 FUNCTION_NAME_PREFIX=myprefix- go test -tags cloud ./cloud -run TestExamples -v -timeout 80m -parallel 8

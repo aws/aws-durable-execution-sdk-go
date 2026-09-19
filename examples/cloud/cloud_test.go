@@ -3,13 +3,20 @@
 
 //go:build cloud
 
-// Cloud integration tests for the deployed examples.
+// Cloud smoke test for the deployed examples.
 //
 // Each example function is invoked with the shared event payload and its
-// durable execution is polled until it reaches a terminal state, which is
-// asserted against the expected terminal state documented in
-// examples/README.md. The example list is parsed from build.sh so there is
-// a single source of truth.
+// durable execution is polled until it reaches a terminal state. The
+// terminal state, the result of a succeeding example, and the error type
+// of a failing example are then checked against the expectation the
+// example declares in expectations.go. The example list is parsed from
+// build.sh so there is a single source of truth.
+//
+// This test is the fast smoke test for the deployed stack: one invocation
+// per example with the shared event, and one expectation per example. The
+// per-example tests under examples/<name>/handler_test.go carry each
+// example's full assertions and run against the same deployed functions
+// when the runner is switched to cloud mode (see examples/internal/extest).
 //
 // Prerequisites:
 //   - Examples deployed: ./build.sh && sam build && sam deploy
@@ -24,11 +31,8 @@
 package cloud
 
 import (
-	"bufio"
 	"context"
-	"fmt"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -45,71 +49,11 @@ const pollInterval = 5 * time.Second
 // terminal state after being invoked.
 const executionTimeout = 15 * time.Minute
 
-// expectFailed lists examples whose durable execution is documented to end
-// FAILED (see examples/README.md). Every other example is expected to end
-// SUCCEEDED.
-var expectFailed = map[string]bool{
-	"retry-exhaustion":                      true,
-	"retry-callback":                        true,
-	"child-ops-invalid-depth":               true,
-	"context-validation-child":              true,
-	"context-validation-step":               true,
-	"context-validation-wait-condition":     true,
-	"handler-error":                         true,
-	"map-failure-threshold-percentage":      true,
-	"parallel-failure-threshold-count":      true,
-	"parallel-failure-threshold-percentage": true,
-}
-
-// companions are deployed functions that only serve as invoke targets or
-// callback submitters for other examples; they are never invoked directly.
-var companions = map[string]bool{
-	"retry-invoke-target":  true,
-	"invoke-simple-target": true,
-	"invoke-tenant-target": true,
-	"callback-sender":      true,
-}
-
 // nonDurable lists plain Lambda examples: the synchronous invoke response
-// is the terminal signal and there is no durable execution to poll.
+// is both the terminal signal and the result, and there is no durable
+// execution to poll.
 var nonDurable = map[string]bool{
 	"non-durable": true,
-}
-
-// loadExamples parses the EXAMPLES list out of build.sh so the harness
-// stays in sync with what actually gets built and deployed.
-func loadExamples(path string) ([]string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	var examples []string
-	inList := false
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !inList {
-			if strings.HasPrefix(line, `EXAMPLES="`) {
-				inList = true
-			}
-			continue
-		}
-		if strings.HasPrefix(line, `"`) {
-			break
-		}
-		if name := strings.TrimSpace(line); name != "" {
-			examples = append(examples, name)
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	if len(examples) == 0 {
-		return nil, fmt.Errorf("no examples found in %s", path)
-	}
-	return examples, nil
 }
 
 func TestExamples(t *testing.T) {
@@ -139,6 +83,14 @@ func TestExamples(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
+			// expectations_test.go already fails the unit run for a
+			// missing entry; failing here as well keeps a cloud-only run
+			// from passing an unverified example.
+			exp, ok := expectations[name]
+			if !ok {
+				t.Fatalf("no expectation declared for %s in expectations.go", name)
+			}
+
 			functionName := prefix + "go-" + name
 			out, err := client.Invoke(ctx, &lambda.InvokeInput{
 				FunctionName: aws.String(functionName),
@@ -154,46 +106,44 @@ func TestExamples(t *testing.T) {
 					t.Fatalf("expected clean invoke, got FunctionError %s: %s",
 						aws.ToString(out.FunctionError), string(out.Payload))
 				}
+				exp.assert(t, outcome{result: string(out.Payload)})
 				return
 			}
 
-			want := types.ExecutionStatusSucceeded
-			if expectFailed[name] {
-				want = types.ExecutionStatusFailed
-			}
-
 			if out.DurableExecutionArn == nil {
-				// A handler-level error can fail before a durable
-				// execution is reported; that satisfies FAILED.
-				if want == types.ExecutionStatusFailed && out.FunctionError != nil {
-					return
-				}
 				t.Fatalf("no durable execution ARN returned (FunctionError: %s, payload: %s)",
 					aws.ToString(out.FunctionError), string(out.Payload))
 			}
 
-			got := waitForTerminal(ctx, t, client, aws.ToString(out.DurableExecutionArn))
-			if got != want {
-				t.Fatalf("expected terminal status %s, got %s", want, got)
+			final := waitForTerminal(ctx, t, client, aws.ToString(out.DurableExecutionArn))
+			got := outcome{
+				failed: final.Status != types.ExecutionStatusSucceeded,
+				result: aws.ToString(final.Result),
 			}
+			if final.Error != nil {
+				got.errorType = aws.ToString(final.Error.ErrorType)
+			}
+			exp.assert(t, got)
 		})
 	}
 }
 
 // waitForTerminal polls the durable execution until it leaves RUNNING or
-// the execution timeout elapses.
-func waitForTerminal(ctx context.Context, t *testing.T, client *lambda.Client, arn string) types.ExecutionStatus {
+// the execution timeout elapses, and returns the final description with
+// its result and error included.
+func waitForTerminal(ctx context.Context, t *testing.T, client *lambda.Client, arn string) *lambda.GetDurableExecutionOutput {
 	t.Helper()
 	deadline := time.Now().Add(executionTimeout)
 	for {
 		out, err := client.GetDurableExecution(ctx, &lambda.GetDurableExecutionInput{
-			DurableExecutionArn: aws.String(arn),
+			DurableExecutionArn:  aws.String(arn),
+			IncludeExecutionData: aws.Bool(true),
 		})
 		if err != nil {
 			t.Fatalf("get durable execution %s: %v", arn, err)
 		}
 		if out.Status != types.ExecutionStatusRunning {
-			return out.Status
+			return out
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out after %s waiting for terminal state of %s", executionTimeout, arn)

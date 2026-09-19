@@ -8,10 +8,11 @@ import (
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
+	"github.com/aws/aws-durable-execution-sdk-go/examples/internal/extest"
 )
 
 func TestHandler(t *testing.T) {
-	runner := durabletest.NewLocalRunner(handler)
+	runner := extest.New(t, handler)
 	result := runner.RunUntilComplete(t, nil)
 
 	// The wait strategy requires state == attempt on every cycle, so the
