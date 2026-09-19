@@ -383,6 +383,8 @@ var expectations = map[string]expectation{
 	"parallel-invoke":                       {result: `{"successCount":3}`},
 	"parallel-min-successful":               {result: `{"successCount":2,"totalCount":4,"completionReason":"MIN_SUCCESSFUL_REACHED","results":["Branch 1 result","Branch 2 result"]}`},
 	"parallel-min-successful-callback":      {result: `{"successCount":3,"totalCount":5,"completionReason":"MIN_SUCCESSFUL_REACHED"}`},
+	"parallel-min-successful-threshold":     {result: `{"successCount":2,"startedCount":3,"totalCount":5,"completionReason":"MIN_SUCCESSFUL_REACHED","succeeded":["fast","quick"],"abandoned":["slow","slower","straggler"]}`},
+	"parallel-invalid-max-concurrency":      {failed: true, errorType: "Error"},
 	"parallel-should-complete": {
 		nondeterministic: "startedCount depends on whether the slowest branch has started when the quorum is reached",
 		check: func(t testing.TB, result string) {
@@ -400,11 +402,13 @@ var expectations = map[string]expectation{
 
 	"retry-callback":   {failed: true, errorType: "CallbackTimeoutError"},
 	"retry-exhaustion": {failed: true, errorType: "StepError"},
+	"retry-linear":     {result: `{"message":"request confirmed on attempt 4","attempts":4}`},
 	"retry-invoke":     {result: `{"response":{"message":"success on attempt 3","attempt":3},"attempts":3}`},
 
 	"serde-basic":                   {result: `{"user":{"firstName":"","lastName":"","email":""},"greeting":"Hello, I'm  . My email is "}`},
 	"serde-callback-deserializer":   {result: `{"first":"HELLO FIRST","second":"HELLO SECOND"}`},
 	"serde-custom-config":           {result: `{"summary":"Order ORD-12345: $0.00 (processed)","id":"ORD-12345","amount":0,"status":"processed"}`},
+	"serde-filesystem-overflow":     {result: `{"smallOrderId":"ORD-42","largeLength":307200}`},
 	"serde-preview-field-selection": {result: `{"id":"cust-9","email":"decoy@example.com","customerEmail":"person@example.com","auditLength":2000}`},
 	"serde-preview-truncation":      {result: `{"id":"acct-123","tier":"gold","notesLength":500}`},
 

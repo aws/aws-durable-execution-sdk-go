@@ -22,6 +22,7 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [interrupted-no-retry](interrupted-no-retry/main.go) | Step, AtMostOnce semantics | SUCCEEDED |
 | [step-error-determinism](step-error-determinism/main.go) | Step, error replay determinism | SUCCEEDED |
 | [retry-exhaustion](retry-exhaustion/main.go) | Step, RetryStrategy exhaustion | FAILED |
+| [retry-linear](retry-linear/main.go) | Step, MustLinearBackoff, LinearBackoff (delays 1 s, 2 s, 3 s) | SUCCEEDED |
 | [retry-invoke](retry-invoke/main.go) | Invoke, retry loop | SUCCEEDED |
 | [retry-invoke-target](retry-invoke-target/main.go) | (target function for retry-invoke) | — |
 | [retry-callback](retry-callback/main.go) | WaitForCallback, retry loop | FAILED |
@@ -115,6 +116,8 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [parallel-error-preservation](parallel-error-preservation/main.go) | Parallel, error ordering | SUCCEEDED |
 | [parallel-min-successful](parallel-min-successful/main.go) | Parallel, WithCompletion (min successful) | SUCCEEDED |
 | [parallel-min-successful-callback](parallel-min-successful-callback/main.go) | Parallel, MinSuccessful, WaitForCallback | SUCCEEDED |
+| [parallel-min-successful-threshold](parallel-min-successful-threshold/main.go) | Parallel, MinSuccessful reached by the two fastest of five staggered branches | SUCCEEDED |
+| [parallel-invalid-max-concurrency](parallel-invalid-max-concurrency/main.go) | Parallel, WithMaxConcurrency validation (zero is rejected) | FAILED |
 | [parallel-should-complete](parallel-should-complete/main.go) | Parallel, WithCompletion (ShouldComplete quorum) | SUCCEEDED |
 | [parallel-tolerated-failure](parallel-tolerated-failure/main.go) | Parallel, ToleratedFailureCount | SUCCEEDED |
 | [parallel-tolerated-failure-percentage](parallel-tolerated-failure-percentage/main.go) | Parallel, WithToleratedFailurePercentage | SUCCEEDED |
@@ -160,6 +163,7 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [serde-basic](serde-basic/main.go) | Step, WithStepSerdes, SerdesOf | SUCCEEDED |
 | [serde-callback-deserializer](serde-callback-deserializer/main.go) | WithCallbackDeserializer, custom callback deserialization | SUCCEEDED |
 | [serde-custom-config](serde-custom-config/main.go) | WithSerdes (handler-level) | SUCCEEDED |
+| [serde-filesystem-overflow](serde-filesystem-overflow/main.go) | ConfigureSerdes, NewFileSystemSerdes (FileSystemSerdesModeOverflow) | SUCCEEDED |
 | [serde-preview-truncation](serde-preview-truncation/main.go) | NewFileSystemSerdes, GeneratePreview, BuildPreview (include-all, exclude, truncation) | SUCCEEDED |
 | [serde-preview-field-selection](serde-preview-field-selection/main.go) | NewFileSystemSerdes, GeneratePreview, BuildPreview (exclude-all, path matching, masking) | SUCCEEDED |
 | [logger-after-wait](logger-after-wait/main.go) | Wait, Context.Logger, replay suppression | SUCCEEDED |
@@ -175,7 +179,10 @@ interface and rejects any other type with a descriptive error.
 also works handler-wide with `WithSerdes`, but then every operation result
 in the handler must be that one type.
 
-A filesystem serdes stores only a file reference in the checkpoint. Setting
+A filesystem serdes stores only a file reference in the checkpoint. In
+`FileSystemSerdesModeOverflow` a value small enough for the checkpoint is
+stored inline instead, and only a larger value is written to a file;
+`serde-filesystem-overflow` shows one of each. Setting
 `FileSystemSerdesConfig.GeneratePreview` adds a compact preview of the
 value next to that reference, so the operation log shows what was stored.
 `durable.BuildPreview` builds one from a `PreviewConfig` with include,

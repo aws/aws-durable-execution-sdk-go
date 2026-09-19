@@ -1,0 +1,63 @@
+[
+  {
+    "type": "CONTEXT",
+    "subType": "Parallel",
+    "name": "staggered-branches",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "ParallelBranch",
+    "name": "fast",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "ParallelBranch",
+    "name": "quick",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "ParallelBranch",
+    "name": "slow",
+    "status": "STARTED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "ParallelBranch",
+    "name": "slower",
+    "status": "STARTED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "ParallelBranch",
+    "name": "straggler",
+    "status": "STARTED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED"
+  }
+]

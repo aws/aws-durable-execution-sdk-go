@@ -178,6 +178,23 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 120
 
+  RetryLinearFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-retry-linear
+      CodeUri: .aws-sam/build-artifacts/retry-linear/
+      Handler: bootstrap
+      Description: Step retried with the linear backoff strategy, delays 1s, 2s, 3s
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
   RetryInvokeFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -1471,6 +1488,40 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 120
 
+  ParallelMinSuccessfulThresholdFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-parallel-min-successful-threshold
+      CodeUri: .aws-sam/build-artifacts/parallel-min-successful-threshold/
+      Handler: bootstrap
+      Description: Parallel with MinSuccessful reached by the two fastest of five staggered branches
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  ParallelInvalidMaxConcurrencyFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-parallel-invalid-max-concurrency
+      CodeUri: .aws-sam/build-artifacts/parallel-invalid-max-concurrency/
+      Handler: bootstrap
+      Description: Parallel with an invalid WithMaxConcurrency value, fails before any branch starts
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
   ParallelShouldCompleteFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -2022,6 +2073,24 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 120
 
+  SerdeFilesystemOverflowFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-serde-filesystem-overflow
+      CodeUri: .aws-sam/build-artifacts/serde-filesystem-overflow/
+      Handler: bootstrap
+      MemorySize: 512
+      Description: Filesystem serdes in overflow mode, small value inline and 300KB value in a file
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
   SerdePreviewTruncationFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -2382,6 +2451,9 @@ Outputs:
   RetryExhaustionFunction:
     Description: Retry Exhaustion Function ARN
     Value: !GetAtt RetryExhaustionFunction.Arn
+  RetryLinearFunction:
+    Description: Retry Linear Function ARN
+    Value: !GetAtt RetryLinearFunction.Arn
   RetryInvokeFunction:
     Description: Retry Invoke Function ARN
     Value: !GetAtt RetryInvokeFunction.Arn
@@ -2604,6 +2676,12 @@ Outputs:
   ParallelMinSuccessfulCallbackFunction:
     Description: Parallel Min Successful Callback Function ARN
     Value: !GetAtt ParallelMinSuccessfulCallbackFunction.Arn
+  ParallelMinSuccessfulThresholdFunction:
+    Description: Parallel Min Successful Threshold Function ARN
+    Value: !GetAtt ParallelMinSuccessfulThresholdFunction.Arn
+  ParallelInvalidMaxConcurrencyFunction:
+    Description: Parallel Invalid Max Concurrency Function ARN
+    Value: !GetAtt ParallelInvalidMaxConcurrencyFunction.Arn
   ParallelToleratedFailureFunction:
     Description: Parallel Tolerated Failure Function ARN
     Value: !GetAtt ParallelToleratedFailureFunction.Arn
@@ -2697,6 +2775,9 @@ Outputs:
   SerdeCustomConfigFunction:
     Description: Serde Custom Config Function ARN
     Value: !GetAtt SerdeCustomConfigFunction.Arn
+  SerdeFilesystemOverflowFunction:
+    Description: Serde Filesystem Overflow Function ARN
+    Value: !GetAtt SerdeFilesystemOverflowFunction.Arn
   SerdePreviewTruncationFunction:
     Description: Serde Preview Truncation Function ARN
     Value: !GetAtt SerdePreviewTruncationFunction.Arn

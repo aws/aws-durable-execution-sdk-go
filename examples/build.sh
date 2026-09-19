@@ -28,6 +28,7 @@ EXAMPLES="
   interrupted-no-retry
   step-error-determinism
   retry-exhaustion
+  retry-linear
   retry-invoke
   retry-invoke-target
   retry-callback
@@ -102,6 +103,8 @@ EXAMPLES="
   parallel-error-preservation
   parallel-min-successful
   parallel-min-successful-callback
+  parallel-min-successful-threshold
+  parallel-invalid-max-concurrency
   parallel-should-complete
   parallel-tolerated-failure
   parallel-tolerated-failure-percentage
@@ -134,6 +137,7 @@ EXAMPLES="
   serde-basic
   serde-callback-deserializer
   serde-custom-config
+  serde-filesystem-overflow
   serde-preview-truncation
   serde-preview-field-selection
   context-validation-child
