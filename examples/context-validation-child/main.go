@@ -34,6 +34,7 @@ func handler(ctx durable.Context, _ any) (string, error) {
 	// and use the parent ctx instead. This triggers ErrWrongGoroutine.
 	f2 := durable.Go(ctx, "child-goroutine", func(_ durable.Context) (string, error) {
 		// This uses the PARENT ctx from a different goroutine — fails.
+		//durable:ignore -- this example demonstrates the violation on purpose
 		return durable.Step(ctx, "wrong-step", func(_ durable.StepContext) (string, error) {
 			return "should not execute", nil
 		})

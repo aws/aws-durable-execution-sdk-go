@@ -21,13 +21,14 @@ jobs:
           - { name: insight, dir: "insight" }
           - { name: conformance, dir: "conformance" }
           - { name: examples, dir: "examples" }
+          - { name: analysis, dir: "analysis" }
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.0.0
         with:
-          go-version-file: go.mod
+          go-version-file: ${{ matrix.module.dir }}/go.mod
           cache-dependency-path: ${{ matrix.module.dir }}/go.sum
 
       - name: Build
@@ -64,3 +65,12 @@ jobs:
       - name: Test
         working-directory: ${{ matrix.module.dir }}
         run: go test -race ./...
+
+      # The determinism analyzer must stay clean on the repository's own
+      # examples and conformance handlers.
+      - name: Run durablelint on examples and conformance
+        if: matrix.module.name == 'analysis'
+        run: |
+          go build -C analysis -o "$RUNNER_TEMP/durablelint" ./cmd/durablelint
+          (cd examples && "$RUNNER_TEMP/durablelint" ./...)
+          (cd conformance && "$RUNNER_TEMP/durablelint" ./...)

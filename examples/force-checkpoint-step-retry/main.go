@@ -29,7 +29,10 @@ func handler(ctx durable.Context, _ any) (string, error) {
 		{Name: "retrying", Func: func(branchCtx durable.Context) (any, error) {
 			attemptCount := 0
 			return durable.Step(branchCtx, "retrying-step", func(_ durable.StepContext) (string, error) {
-				attemptCount++
+				// The counter lives in the branch, so it restarts at 0 on
+				// every invocation; the step therefore exhausts its
+				// retries, which is the failure the batch tolerates below.
+				attemptCount++ //durable:ignore durableclosure -- the reset on each invocation is the behaviour this example exercises
 				if attemptCount < 3 {
 					return "", fmt.Errorf("attempt %d failed", attemptCount)
 				}

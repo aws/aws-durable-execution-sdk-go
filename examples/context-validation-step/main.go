@@ -30,6 +30,7 @@ func handler(ctx durable.Context, _ any) (string, error) {
 		// ❌ WRONG: Using parent ctx from child goroutine inside step.
 		// This triggers ErrWrongGoroutine because ctx is owned by
 		// the parent goroutine, not this goroutine.
+		//durable:ignore -- this example demonstrates the violation on purpose
 		_, err = durable.Step(ctx, "wrong-parent-step", func(_ durable.StepContext) (string, error) {
 			return "should not execute", nil
 		})

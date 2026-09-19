@@ -29,6 +29,7 @@ func handler(ctx durable.Context, _ any) (string, error) {
 		return durable.WaitForCondition(childCtx, "check-loop",
 			func(_ durable.StepContext, state int) (int, error) {
 				// Using parent context here triggers the ownership error.
+				//durable:ignore -- this example demonstrates the violation on purpose
 				_, err := durable.Step(ctx, "wrong-parent-step", func(_ durable.StepContext) (string, error) {
 					return "should not execute", nil
 				})

@@ -20,7 +20,7 @@ type Result struct {
 func handler(_ durable.Context, event json.RawMessage) (Result, error) {
 	return Result{
 		Received:  string(event),
-		Timestamp: time.Now().UnixMilli(),
+		Timestamp: time.Now().UnixMilli(), //durable:ignore durablenondeterminism -- no durable operations follow, so it is never replayed
 		Message:   "Handler completed successfully",
 	}, nil
 }

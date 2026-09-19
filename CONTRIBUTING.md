@@ -50,6 +50,7 @@ The repository is a multi-module Go workspace:
 | `insight/` | Observability plugin (separate `go.mod`) |
 | `conformance/` | Conformance test handlers for cross-SDK validation |
 | `examples/` | Self-contained example Lambda functions |
+| `analysis/` | `durablelint` static analyzer for determinism rules (separate `go.mod`) |
 
 Each module with its own `go.mod` is built and tested independently.
 
@@ -87,8 +88,8 @@ Or through the Makefile wrapper:
 make check-all
 ```
 
-Both run the following steps in each of the four modules (root/durable,
-insight, conformance, examples):
+Both run the following steps in each of the five modules (root/durable,
+insight, conformance, examples, analysis):
 
 1. `go build ./...`
 2. `go vet ./...`
@@ -97,7 +98,9 @@ insight, conformance, examples):
 5. `go test -race ./...`
 
 The examples module also runs `go vet -tags cloud ./cloud` to check the
-cloud test harness compiles.
+cloud test harness compiles. The analysis module also builds `durablelint`
+and runs it over the examples and conformance modules, which must report
+nothing. See [analysis/README.md](analysis/README.md) for the analyzer.
 
 You can check a single module by passing its path:
 

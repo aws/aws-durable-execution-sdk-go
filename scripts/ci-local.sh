@@ -5,7 +5,7 @@
 # Usage:
 #   scripts/ci-local.sh [module...]
 #
-# Modules default to all four: . insight conformance examples
+# Modules default to all five: . insight conformance examples analysis
 # (e.g. `scripts/ci-local.sh examples` to check only the examples module).
 #
 # Requires: Go and golangci-lint at the versions pinned in .mise.toml
@@ -18,7 +18,7 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 if [ $# -gt 0 ]; then
     MODULES=$*
 else
-    MODULES=". insight conformance examples"
+    MODULES=". insight conformance examples analysis"
 fi
 
 for mod in $MODULES; do
@@ -49,6 +49,19 @@ for mod in $MODULES; do
 
     echo " -> go test -race ./..."
     go test -race ./...
+
+    if [ "$mod" = "analysis" ]; then
+        # The determinism analyzer must stay clean on the repository's own
+        # examples and conformance handlers.
+        bin=$(mktemp -t durablelint.XXXXXX)
+        echo " -> go build -o durablelint ./cmd/durablelint"
+        go build -o "$bin" ./cmd/durablelint
+        for target in examples conformance; do
+            echo " -> durablelint ./... (in $target)"
+            (cd "$ROOT/$target" && "$bin" ./...)
+        done
+        rm -f "$bin"
+    fi
 done
 
 echo "All checks passed."
