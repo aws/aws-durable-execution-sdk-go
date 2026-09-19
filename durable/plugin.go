@@ -450,7 +450,9 @@ func WithPlugins(plugins ...Plugin) HandlerOption {
 // context's operation plus one. A [Map] or [Parallel] item has the depth
 // of its batch plus one, and the operations inside the item one more. An
 // item under [NestingFlat] has no operation of its own, so the operations
-// inside it have the depth of the batch plus one. depth is the deepest
+// inside it have the depth of the batch plus one; likewise a child context
+// under [WithChildVirtual] adds no level, so the operations inside it have
+// the depth of the operations claimed on its parent. depth is the deepest
 // depth reported: 0 reports only the operations claimed on the handler's
 // Context, 1 also reports their direct children, and so on.
 //

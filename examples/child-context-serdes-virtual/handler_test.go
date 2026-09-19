@@ -22,8 +22,9 @@ func TestHandler(t *testing.T) {
 	if err != nil {
 		t.Fatalf("deserialize result: %v", err)
 	}
-	// The uppercaseSerdes uppercases on marshal, so the stored/returned
-	// value should be uppercase when read back through the virtual child.
+	// The uppercaseSerdes uppercases on marshal. A virtual child stores
+	// nothing, but its result still passes through the serdes, so the
+	// returned value is uppercase.
 	if output != "HELLO FROM VIRTUAL" {
 		t.Errorf("expected 'HELLO FROM VIRTUAL' (uppercased by custom serdes), got %q", output)
 	}

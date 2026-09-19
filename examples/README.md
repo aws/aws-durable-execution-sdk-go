@@ -48,9 +48,9 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [invoke-tenant-target](invoke-tenant-target/main.go) | (target function for invoke-tenant-id) | — |
 | [chained-invoke](chained-invoke/main.go) | Invoke (sequential chain) | SUCCEEDED |
 | [child-context-basic](child-context-basic/main.go) | RunInChildContext | SUCCEEDED |
-| [child-context-virtual](child-context-virtual/main.go) | RunInChildContext (virtual) | SUCCEEDED |
+| [child-context-virtual](child-context-virtual/main.go) | RunInChildContext, WithChildVirtual (no CONTEXT events for the wrapper) | SUCCEEDED |
 | [child-context-serdes](child-context-serdes/main.go) | RunInChildContext, WithChildSerdes | SUCCEEDED |
-| [child-context-serdes-virtual](child-context-serdes-virtual/main.go) | RunInChildContextAsync, WithChildSerdes (virtual) | SUCCEEDED |
+| [child-context-serdes-virtual](child-context-serdes-virtual/main.go) | RunInChildContextAsync, WithChildVirtual, WithChildSerdes | SUCCEEDED |
 | [child-context-serdes-large-payload](child-context-serdes-large-payload/main.go) | RunInChildContext, FileSystemSerdes (>256KB) | SUCCEEDED |
 | [child-context-large-data](child-context-large-data/main.go) | RunInChildContext (ReplayChildren) | SUCCEEDED |
 | [child-context-error-propagation](child-context-error-propagation/main.go) | RunInChildContext, error propagation | SUCCEEDED |

@@ -73,6 +73,14 @@ type execContext struct {
 	// see virtualChild.
 	checkpointParent string
 
+	// virtual reports whether this context is a virtual child context made
+	// by [WithChildVirtual]: one with an operation-ID namespace of its own
+	// but no checkpoint of its own. A virtual child context cannot hold
+	// another; see [WithChildVirtual]. A batch item in [NestingFlat] mode
+	// is also virtual in the checkpoint sense but does not set this flag,
+	// because a virtual child inside a flat item is supported.
+	virtual bool
+
 	// blocked is set when an operation on this context enters a pending
 	// state (commits to suspension). Once set, subsequent claims on this
 	// same context fail with errSuspendExecution, preventing user code
@@ -421,20 +429,41 @@ func (c *execContext) parentOperationID() string {
 // On error, no state is mutated: the operation ID is not consumed and the
 // mode is unchanged.
 func (c *execContext) claimOperation() (string, error) {
-	if c.suspend.fired() {
-		return "", errSuspendExecution
-	}
-	if c.blocked.Load() {
-		return "", errSuspendExecution
-	}
-	if c.abandon.abandoned() {
-		return "", errSuspendExecution
-	}
-	if err := c.owner.check(); err != nil {
+	if err := c.claimable(); err != nil {
 		return "", err
 	}
 	c.refreshReplayMode()
 	return c.ids.next(), nil
+}
+
+// claimUncheckpointedOperation claims the next operation ID for an
+// operation that records no checkpoint of its own: a virtual child context
+// ([WithChildVirtual]). It applies the same checks as claimOperation but
+// leaves the replay mode as it is. The claimed ID is never in the
+// checkpoint log, so its absence says nothing about where replay ends; the
+// next checkpointed operation claimed on this context, or inside the
+// virtual child, settles that.
+func (c *execContext) claimUncheckpointedOperation() (string, error) {
+	if err := c.claimable(); err != nil {
+		return "", err
+	}
+	return c.ids.next(), nil
+}
+
+// claimable reports whether this context may claim an operation: the
+// invocation is not suspending, the context is not blocked or abandoned,
+// and the calling goroutine owns it.
+func (c *execContext) claimable() error {
+	if c.suspend.fired() {
+		return errSuspendExecution
+	}
+	if c.blocked.Load() {
+		return errSuspendExecution
+	}
+	if c.abandon.abandoned() {
+		return errSuspendExecution
+	}
+	return c.owner.check()
 }
 
 // refreshReplayMode switches from replay to live execution when the
@@ -654,6 +683,22 @@ func (c *execContext) virtualChild(entityID, name, parentID string, owner gorout
 	vc := c.child(entityID, name, owner, mode)
 	vc.checkpointParent = parentID
 	vc.hookDepth = c.batchItemDepth(parentID)
+	return vc
+}
+
+// virtualChildContextWith creates the context for a standalone virtual
+// child context, the one [WithChildVirtual] selects, with the inherited
+// defaults d supplied by the caller as for childWith. The child mints its
+// operation IDs under entityID but is never checkpointed itself, so its
+// operations record c's own checkpoint parent as their ParentId: they are
+// recorded exactly where operations claimed on c are recorded. For the
+// same reason they have the depth of c's operations, not one more. The
+// caller computes mode with virtualChildReplayMode.
+func (c *execContext) virtualChildContextWith(entityID, name string, owner goroutineOwner, mode executionMode, d inheritedDefaults) *execContext {
+	vc := c.childWith(entityID, name, owner, mode, d)
+	vc.checkpointParent = c.checkpointParent
+	vc.hookDepth = c.hookDepth
+	vc.virtual = true
 	return vc
 }
 

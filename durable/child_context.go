@@ -123,6 +123,63 @@ func WithChildSubType(subType string) ChildOption {
 	return childOptionFunc(func(o *childOptions) { o.subType = subType })
 }
 
+// WithChildVirtual makes a [RunInChildContext], [RunInChildContextAsync],
+// or [Go] child context virtual. A virtual child context groups durable
+// operations and scopes their names and log records like a checkpointed
+// child context, but it is not an operation itself: nothing is
+// checkpointed for the wrapper, so the execution history holds no
+// ContextStarted, ContextSucceeded, or ContextFailed event for it. The
+// operations inside it are checkpointed
+// where the enclosing context's own operations are: they record the
+// nearest checkpointed ancestor as their parent, and their IDs are
+// numbered under the virtual child's position, so adding or removing the
+// option around existing operations changes their identity on replay.
+//
+//	durable.RunInChildContext(ctx, "enrich", enrichOrder, durable.WithChildVirtual())
+//
+// This is the same mechanism [NestingFlat] applies to the items of a
+// [Map] or [Parallel]: a flat item is a virtual child context that the
+// batch creates for each item, and WithChildVirtual creates one
+// standalone. Where [WithNesting] chooses per batch, WithChildVirtual
+// chooses per child context.
+//
+// Because the wrapper leaves no record, replay re-runs the child body on
+// every invocation that reaches it; the operations inside replay from
+// their own checkpoints as usual, and a suspending operation inside it
+// resumes in a later invocation exactly as it would in a checkpointed
+// child. The body must therefore be deterministic in the same way a
+// handler is. The child starts in the replay state of its parent, and
+// like its parent it switches to live execution at its first operation
+// that has no checkpoint. The result is round-tripped through the child's
+// [Serdes] on every run, so the caller sees the same value live and on
+// replay, and it has no size limit because it is never stored. A failure
+// of the body is returned as a [*ChildContextError], or the error a
+// [WithChildErrorMapper] mapper derives from it, rebuilt from the same
+// failure on every run.
+//
+// Plugins observe a virtual child context as they observe a checkpointed
+// one: an operation start is dispatched before [Plugin].WrapChildContextFn
+// wraps the body, and an operation end once the body has an outcome, with
+// the [WithChildSubType] subtype and the enclosing context's ParentID. A
+// plugin that counts runs sees one start and one end per invocation that
+// reaches the child. Because nothing is recorded, no event of the child
+// records a checkpoint: the start and the end report IsReplay true on
+// every invocation. WrapChildContextFn receives the start's info with
+// IsReplay false when the child executes live and true when it replays the
+// operations inside it. The operations inside it report the enclosing
+// context's ParentID, not the child's, so the child adds no level to the
+// depth [WithPluginChildOperationsDepth] counts. A [WithChildSummary]
+// function is never called.
+//
+// A virtual child context cannot hold another virtual child context: the
+// inner one returns a configuration error before it claims an operation
+// ID. Make one of the two a checkpointed child context instead. A virtual
+// child context inside a [NestingFlat] item, and a flat batch inside a
+// virtual child context, are both supported.
+func WithChildVirtual() ChildOption {
+	return childOptionFunc(func(o *childOptions) { o.virtual = true })
+}
+
 type childOptions struct {
 	serdes      Serdes
 	errorMapper func(err *ChildContextError) error
@@ -135,6 +192,10 @@ type childOptions struct {
 	// subType is the [WithChildSubType] value; empty when the option was
 	// not supplied. childSubType resolves and validates it.
 	subType string
+
+	// virtual is set by [WithChildVirtual]: the child is not checkpointed
+	// itself. See runVirtualChild and runVirtualChildAsync.
+	virtual bool
 }
 
 // maxOperationSubTypeLength is the longest operation subtype the service
@@ -275,6 +336,9 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 	subType, err := childSubType(name, options)
 	if err != nil {
 		return zero, err
+	}
+	if options.virtual {
+		return runVirtualChild(ec, name, subType, options, fn)
 	}
 
 	id, err := ec.claimOperation()
@@ -473,6 +537,9 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 	if err != nil {
 		return newFailedFuture[O](err)
 	}
+	if options.virtual {
+		return runVirtualChildAsync(ec, name, subType, options, fn)
+	}
 
 	// Claim the operation ID synchronously on the calling goroutine to
 	// preserve deterministic ID minting order across concurrent Go calls.
@@ -637,6 +704,258 @@ func Go[O any](ctx Context, name string, fn func(Context) (O, error), opts ...Ch
 	return RunInChildContextAsync(ctx, name, fn, opts...)
 }
 
+// claimVirtualChild claims the operation ID of the virtual child context
+// name on ec, or reports why it cannot run there. A virtual child context
+// cannot hold another: neither wrapper would leave a record, so the inner
+// one would add only an operation-ID namespace level. The option is
+// rejected there, before an ID is claimed, so a virtual level is always
+// one deep, as a flat batch item is. The ID is claimed without touching
+// ec's replay mode (see claimUncheckpointedOperation): a virtual child
+// records nothing, so its absence from the checkpoint log does not mean
+// replay has ended. A checkpoint at the claimed position belongs to code
+// that ran a checkpointed operation there, so that is a non-deterministic
+// replay.
+func claimVirtualChild(ec *execContext, name string) (string, error) {
+	if ec.virtual {
+		return "", fmt.Errorf("durable: child context %q: WithChildVirtual cannot be used inside a virtual child context; make one of the two a checkpointed child context", name)
+	}
+	id, err := ec.claimUncheckpointedOperation()
+	if err != nil {
+		return "", err
+	}
+	if op := ec.state.get(id); op != nil {
+		e := &NonDeterministicReplayError{
+			Name:          name,
+			StepID:        op.id,
+			ExpectedName:  name,
+			ActualType:    op.opType,
+			ActualSubType: op.subType,
+			ActualName:    op.name,
+		}
+		e.detail = fmt.Sprintf(
+			"durable: non-deterministic replay at step %q (name %q): "+
+				"the checkpoint records a %s/%s operation named %q, but the code declares a virtual child context, "+
+				"which records no operation of its own — the handler code changed between deployments",
+			op.id, name, op.opType, op.subType, op.name)
+		return "", e
+	}
+	return id, nil
+}
+
+// runVirtualChild is [RunInChildContext] for a child context with
+// [WithChildVirtual]. It claims the child's operation ID as a checkpointed
+// child would, so the operations inside it are numbered the same way, but
+// checkpoints nothing for the child itself. It dispatches the same
+// operation lifecycle hooks as a checkpointed child, with subType as the
+// operation's subtype: a start before [Plugin].WrapChildContextFn wraps
+// fn, and an end once fn has an outcome; see dispatchVirtualContextStart
+// for the IsReplay each hook reports. fn runs on the calling goroutine in
+// the replay mode inherited from ec (see virtualChildReplayMode).
+// Suspension propagates unchanged and dispatches no end; any other
+// failure of fn is returned in the shape of a first-run failure of a
+// checkpointed child, and the result is round-tripped through the serdes.
+func runVirtualChild[O any](ec *execContext, name, subType string, options childOptions, fn func(Context) (O, error)) (O, error) {
+	var zero O
+	id, err := claimVirtualChild(ec, name)
+	if err != nil {
+		return zero, err
+	}
+	mode := virtualChildReplayMode(ec)
+	child := ec.virtualChildContextWith(id, name, ec.owner, mode, ec.inheritedDefaults())
+
+	opInfo := dispatchVirtualContextStart(ec, id, name, subType)
+
+	var fnTrace []string
+	wrappedResult, wrappedErr := wrapVirtualChildBody(ec, opInfo, mode, func(ctx context.Context) (any, error) {
+		child.Context = ctx
+		r, e := fn(child)
+		if e != nil {
+			fnTrace = ec.returnedErrorTrace(fn, e, 0)
+		}
+		return r, e
+	})
+	if wrappedErr != nil {
+		return zero, virtualChildFailure(ec, opInfo, name, options, wrappedErr, fnTrace)
+	}
+	var result O
+	if wrappedResult != nil {
+		result, _ = wrappedResult.(O)
+	}
+	return virtualChildSuccess(ec, opInfo, name, options, result)
+}
+
+// wrapVirtualChildBody runs body, the body of the virtual child context
+// start describes, through every plugin's [Plugin].WrapChildContextFn,
+// as the checkpointed child paths do. The hooks receive start's info with
+// IsReplay set from mode, the mode the child runs in: false when the child
+// executes live, true when it replays the operations inside it. The
+// context the innermost hook supplies is passed to body.
+func wrapVirtualChildBody(ec *execContext, start OperationHookInfo, mode executionMode, body wrapBody) (any, error) {
+	wrapInfo := start
+	wrapInfo.IsReplay = mode != modeExecution
+	return wrapChain(ec.operationHooks(), ec,
+		func(p *Plugin) wrapHook {
+			if p.WrapChildContextFn == nil {
+				return nil
+			}
+			return func(ctx context.Context, innerFn wrapBody) (any, error) {
+				return p.WrapChildContextFn(ctx, wrapInfo, innerFn)
+			}
+		},
+		body,
+	)
+}
+
+// runVirtualChildAsync is [RunInChildContextAsync] for a child context with
+// [WithChildVirtual]; see runVirtualChild. The child's operation ID is
+// claimed synchronously, as for a checkpointed child, so that the IDs of
+// concurrent children stay in program order. fn runs on its own goroutine,
+// which owns the child context, and the future settles with its outcome.
+// The lifecycle hooks are dispatched from that goroutine, as they are for
+// a checkpointed asynchronous child, and [Plugin].WrapChildContextFn wraps
+// fn there, after the start. Nothing is checkpointed for the child itself,
+// so the goroutine holds no executing span: a pending operation inside it
+// settles the branch as it would under a checkpointed child.
+func runVirtualChildAsync[O any](ec *execContext, name, subType string, options childOptions, fn func(Context) (O, error)) *Future[O] {
+	id, err := claimVirtualChild(ec, name)
+	if err != nil {
+		return newFailedFuture[O](err)
+	}
+	mode := virtualChildReplayMode(ec)
+
+	fut := newFuture[O]()
+	registerFuture(ec.suspend, fut)
+
+	// Snapshot the serializer and logging defaults on the owning goroutine:
+	// the owner may call ConfigureSerdes or ConfigureLogging before the
+	// goroutine below runs.
+	defaults := ec.inheritedDefaults()
+	tok := ec.suspend.registerBranchToken()
+	go func() {
+		defer tok.release()
+		child := ec.virtualChildContextWith(id, name, currentGoroutineOwner(), mode, defaults)
+		child.adoptBranchToken(tok)
+
+		opInfo := dispatchVirtualContextStart(ec, id, name, subType)
+
+		// Recover panics in the child function and the wrap hooks so
+		// they settle the future as a failure rather than crashing the
+		// process. The context the hooks supply becomes the child's
+		// parent context; the child is not visible to any other
+		// goroutine before fn runs.
+		result, fnTrace, fnErr := runUserFunc(child, fn, fmt.Sprintf("durable: child context %q panicked", name), func() (O, error) {
+			var zero O
+			wrappedResult, wrappedErr := wrapVirtualChildBody(ec, opInfo, mode, func(ctx context.Context) (any, error) {
+				child.Context = ctx
+				return fn(child)
+			})
+			if wrappedErr != nil {
+				return zero, wrappedErr
+			}
+			if wrappedResult == nil {
+				return zero, nil
+			}
+			r, _ := wrappedResult.(O)
+			return r, nil
+		})
+		if fnErr != nil {
+			var zero O
+			fut.settle(zero, virtualChildFailure(ec, opInfo, name, options, fnErr, fnTrace))
+			return
+		}
+		fut.settle(virtualChildSuccess(ec, opInfo, name, options, result))
+	}()
+	return fut
+}
+
+// dispatchVirtualContextStart dispatches the start of the virtual child
+// context id, whose body is about to run, and returns the dispatched info.
+// The context operation hooks of a virtual child mirror those of a
+// checkpointed child (see dispatchContextStart): a start before the body
+// and before WrapChildContextFn, then an end once the body has an
+// outcome, or no end when the body suspends. The IsReplay they report
+// differs, because the child records nothing:
+//
+//   - The start and the end report IsReplay true on every invocation. A
+//     checkpointed child reports IsReplay false only on the events that
+//     record a checkpoint, and no event of a virtual child records one.
+//     The start reports STARTED, as a checkpointed child re-entered before
+//     it settles does.
+//   - WrapChildContextFn receives the start's info with IsReplay set from
+//     the mode the child runs in: false when it executes live, true when
+//     it replays the operations inside it. See wrapVirtualChildBody.
+//
+// The operations inside a virtual child record its parent as theirs, so
+// no reported operation names the child as ParentID whatever the plugin
+// depth bound; ChildrenOmitted is therefore false: the subtree is absent,
+// not omitted.
+func dispatchVirtualContextStart(ec *execContext, id, name, subType string) OperationHookInfo {
+	info := ec.operationHookInfo(id, name, string(OperationTypeContext), subType, true)
+	info.ChildrenOmitted = false
+	info.StartTimestamp = time.Now()
+	info.Status = PluginOperationStarted
+	dispatchOperationStart(ec, info, PluginOperationStarted)
+	return info
+}
+
+// dispatchVirtualContextEnd dispatches the end of the virtual child
+// context start describes, with IsReplay true (see
+// dispatchVirtualContextStart). err is the failure the child returns to
+// its caller, nil for a child that succeeded with the serialized result.
+// The child has no checkpoint to take an end time from, so the end is
+// stamped now.
+func dispatchVirtualContextEnd(ec *execContext, start OperationHookInfo, result string, err error) {
+	info := ec.operationHookInfo(start.ID, start.Name, start.Type, start.SubType, true)
+	info.ChildrenOmitted = false
+	info.StartTimestamp = start.StartTimestamp
+	info.EndTimestamp = time.Now()
+	if err != nil {
+		info.Error = err
+		dispatchOperationEnd(ec, info, PluginOperationFailed)
+		return
+	}
+	info.Result = result
+	dispatchOperationEnd(ec, info, PluginOperationSucceeded)
+}
+
+// virtualChildFailure builds the error a virtual child context returns
+// when its body fails with fnErr, and dispatches the child's end with it.
+// Suspension is not a failure and dispatches no end; see
+// replayedChildFailure for the shape of the error.
+func virtualChildFailure(ec *execContext, start OperationHookInfo, name string, options childOptions, fnErr error, fnTrace []string) error {
+	failure := replayedChildFailure(name, options, fnErr, fnTrace)
+	if !errors.Is(failure, errSuspendExecution) {
+		dispatchVirtualContextEnd(ec, start, "", failure)
+	}
+	return failure
+}
+
+// virtualChildSuccess round-trips result through the child's serdes, keyed
+// on the virtual child's operation ID, so the value returned live equals
+// the value returned on replay, which re-runs the body, and dispatches the
+// child's end with the serialized result. A virtual child has no
+// checkpoint that could settle it, so its outcome is whatever this
+// function returns to the caller: a serdes failure in either direction
+// dispatches a failed end carrying the [SerdesError] the caller receives,
+// so every start of a virtual child is followed by exactly one end.
+func virtualChildSuccess[O any](ec *execContext, start OperationHookInfo, name string, options childOptions, result O) (O, error) {
+	var zero O
+	serialized, err := options.serdes.Marshal(ec.Context, ec.serdesCtx(start.ID), result)
+	if err != nil {
+		failure := newSerdesError(name, serdesDirectionMarshal, err)
+		dispatchVirtualContextEnd(ec, start, "", failure)
+		return zero, failure
+	}
+	var out O
+	if err := options.serdes.Unmarshal(ec.Context, ec.serdesCtx(start.ID), serialized, &out); err != nil {
+		failure := newSerdesError(name, serdesDirectionUnmarshal, err)
+		dispatchVirtualContextEnd(ec, start, "", failure)
+		return zero, failure
+	}
+	dispatchVirtualContextEnd(ec, start, string(serialized), nil)
+	return out, nil
+}
+
 // resolveTerminalChild handles a child operation that already has a terminal
 // status in the checkpoint log. It returns a pre-settled future, except in
 // ReplayChildren mode, where the child body runs again on its own goroutine
@@ -709,10 +1028,12 @@ func replayChildAsync[O any](ec *execContext, id, name string, options childOpti
 }
 
 // replayedChildFailure builds the error returned when a child body fails
-// while re-executing in ReplayChildren mode. Suspension is not a child
-// failure: it propagates as errSuspendExecution so the invocation ends
-// PENDING and the child resumes in a later invocation. Any other error is
-// wrapped through the configured mapper exactly as a first-run failure is.
+// on a run that records nothing for the child itself: re-execution in
+// ReplayChildren mode, or any run of a virtual child context. Suspension is
+// not a child failure: it propagates as errSuspendExecution so the
+// invocation ends PENDING and the child resumes in a later invocation. Any
+// other error is wrapped through the configured mapper exactly as a
+// first-run failure is.
 func replayedChildFailure(name string, options childOptions, fnErr error, fnTrace []string) error {
 	if errors.Is(fnErr, errSuspendExecution) || errors.Is(fnErr, errCheckpointTerminated) {
 		return errSuspendExecution
@@ -720,18 +1041,38 @@ func replayedChildFailure(name string, options childOptions, fnErr error, fnTrac
 	return options.failure(name, recordOf(fnErr).withTrace(fnTrace))
 }
 
-// childReplayMode determines the execution mode for a child context. A child
-// replays when its first operation is already checkpointed (probe id+"-1").
-// A child whose overall result is SUCCEEDED uses modeReplaySucceededContext
-// so in-flight operations within it block rather than re-execute.
+// childReplayMode determines the execution mode for a child context. A
+// child whose overall result is SUCCEEDED uses modeReplaySucceededContext
+// so in-flight operations within it block rather than re-execute. Any
+// other child replays when an operation is already checkpointed inside it.
+//
+// Two probes find such an operation. The first is the child's first
+// operation, id+"-1"; it is the only probe a FLAT batch item can use,
+// because the operations inside a flat item record the batch, not the
+// item, as their parent. The second asks whether any checkpointed
+// operation records id as its parent, which covers a checkpointed child
+// whose first operation left no checkpoint: a virtual child context
+// ([WithChildVirtual]) with nothing durable inside it, followed by a
+// checkpointed operation.
 func childReplayMode(ec *execContext, id string, op *operation) executionMode {
 	if op != nil && op.status == statusSucceeded {
 		return modeReplaySucceededContext
 	}
-	if ec.state.get(id+"-1") != nil {
+	if ec.state.get(id+"-1") != nil || ec.state.hasChildOf(id) {
 		return modeReplay
 	}
 	return modeExecution
+}
+
+// virtualChildReplayMode determines the execution mode for a virtual child
+// context on ec. The child has no checkpoint of its own, and its
+// operations are recorded where ec's own operations are, so it starts in
+// ec's current mode. A child that inherits modeReplay switches to live
+// execution at its first operation with no checkpoint, as ec itself
+// would; one that inherits modeReplaySucceededContext keeps it, so its
+// unfinished operations park instead of re-executing.
+func virtualChildReplayMode(ec *execContext) executionMode {
+	return executionMode(ec.mode.Load())
 }
 
 // childUpdate assembles the shared fields of a child-context operation
@@ -810,6 +1151,7 @@ func dispatchContextStart(ec *execContext, id, name, subType string, op *operati
 // result.
 func dispatchContextEnd(ec *execContext, start OperationHookInfo, result string, err error) {
 	info := ec.operationHookInfo(start.ID, start.Name, start.Type, start.SubType, false)
+	info.ChildrenOmitted = start.ChildrenOmitted
 	info.StartTimestamp = start.StartTimestamp
 	info.EndTimestamp = checkpointedEndTime(ec.state.get(start.ID))
 	if err != nil {

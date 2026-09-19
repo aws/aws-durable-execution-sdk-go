@@ -172,6 +172,11 @@ type executionState struct {
 	mu         sync.RWMutex
 	operations map[string]*operation
 
+	// childCount counts, per parent wire ID, the operations that record
+	// that parent as their ParentId. It answers hasChildOf without a scan
+	// and is maintained by newExecutionState and merge under mu.
+	childCount map[string]int
+
 	// updated holds the wire IDs of the operations whose status changed
 	// between the previous invocation and this one, as the invocation
 	// payload reports them. It is written once, before the handler runs,
@@ -183,11 +188,23 @@ type executionState struct {
 }
 
 func newExecutionState(ops []*operation) *executionState {
-	m := make(map[string]*operation, len(ops))
-	for _, op := range ops {
-		m[op.id] = op
+	s := &executionState{
+		operations: make(map[string]*operation, len(ops)),
+		childCount: make(map[string]int),
 	}
-	return &executionState{operations: m}
+	for _, op := range ops {
+		s.insert(op)
+	}
+	return s
+}
+
+// insert stores op and, when op is new, counts it for its parent. The
+// caller holds mu, or constructs the state before it is shared.
+func (s *executionState) insert(op *operation) {
+	if _, present := s.operations[op.id]; !present && op.parentID != "" {
+		s.childCount[op.parentID]++
+	}
+	s.operations[op.id] = op
 }
 
 // setUpdatedOperationIDs records the wire IDs of the operations the
@@ -230,13 +247,27 @@ func (s *executionState) getByWireID(wireID string) *operation {
 	return op
 }
 
+// hasChildOf reports whether any checkpointed operation records the
+// operation with the positional ID as its ParentId. A checkpointed child
+// context replays when this holds for it, whatever the position of its
+// first checkpointed operation.
+func (s *executionState) hasChildOf(positionalID string) bool {
+	s.mu.RLock()
+	n := s.childCount[hashID(positionalID)]
+	s.mu.RUnlock()
+	return n > 0
+}
+
 // merge inserts or replaces operations in the map. Callers that hold
 // checkpointer.mu must call merge (not assign to the map directly) so that
 // the lock order checkpointer.mu → executionState.mu is respected.
 func (s *executionState) merge(ops []*operation) {
 	s.mu.Lock()
+	if s.childCount == nil {
+		s.childCount = make(map[string]int)
+	}
 	for _, op := range ops {
-		s.operations[op.id] = op
+		s.insert(op)
 	}
 	s.mu.Unlock()
 }

@@ -25,6 +25,42 @@ that supplies a different subtype for a checkpointed child context
 returns a `*NonDeterministicReplayError`. Keep it constant across
 invocations and deployments.
 
+### Added: `WithChildVirtual`
+
+`durable.WithChildVirtual()` is a `ChildOption` for `RunInChildContext`,
+`RunInChildContextAsync`, and `Go`. It makes the child context virtual:
+the child groups and names the operations inside it like any child
+context, but nothing is checkpointed for the wrapper, so the execution
+history holds no `ContextStarted`, `ContextSucceeded`, or `ContextFailed`
+event for it. The operations inside record the nearest checkpointed
+ancestor as their parent and are numbered under the child's position, so
+adding or removing the option around existing operations changes their
+identity on replay.
+
+This is the standalone form of the virtual context `WithNesting(NestingFlat)`
+already gives the items of a `Map` or `Parallel`; the two produce the same
+checkpoint shape. Because the wrapper leaves no record, the child body runs
+on every invocation that reaches it, the operations inside replay from
+their own checkpoints, and a suspending operation inside it resumes in a
+later invocation. The child starts in its parent's replay state and, like
+the parent, switches to live execution at its first operation with no
+checkpoint. The result is round-tripped through the child's `Serdes`
+on every run and has no size limit. A failure is a `*ChildContextError`,
+or the mapped error, on every run. Plugins observe a virtual child as they
+observe a checkpointed one: a start before `WrapChildContextFn` wraps the
+body and an end once the body has an outcome, on every invocation that
+reaches it. Because nothing is recorded, the start and the end report
+`IsReplay` true on every invocation; `WrapChildContextFn` receives
+`IsReplay` false when the child executes live and true when it replays the
+operations inside it. The
+operations inside it report the enclosing context's `ParentID`, so the
+child adds no level to the depth `WithPluginChildOperationsDepth` counts.
+A virtual child context inside another virtual child context is a
+configuration error; one inside a `NestingFlat` item is supported.
+
+The `child-context-virtual` and `child-context-serdes-virtual` examples
+now use the option; before, they showed concurrent child contexts.
+
 ### Added (experimental plugin API): `WithPluginChildOperationsDepth`
 
 `WithPluginChildOperationsDepth(depth)` bounds the depth in the operation
@@ -40,7 +76,8 @@ Depth counts the operations between an operation and the root: an
 operation claimed on the handler's `Context` has depth 0, an operation
 inside a child context has the depth of that context's operation plus one,
 a `Map` or `Parallel` item has the depth of its batch plus one, and the
-operations inside the item one more. `NestingFlat` items add no level.
+operations inside the item one more. `NestingFlat` items and `WithChildVirtual`
+children add no level.
 
 `OperationHookInfo` gains `ChildrenOmitted`, set on the operations at the
 configured depth, so a consumer can tell that the operations inside one

@@ -594,7 +594,11 @@ const (
 	// with no per-item context events. A flat item is not an operation,
 	// so it dispatches no operation lifecycle hooks: plugins observe the
 	// batch's own start and end and the operations inside each item,
-	// which name the batch as ParentID.
+	// which name the batch as ParentID. A flat item is the virtual child
+	// context [WithChildVirtual] creates standalone, made by the batch
+	// for each item, with one difference: a standalone virtual child
+	// context dispatches lifecycle hooks of its own and a flat item does
+	// not. See that option for how a virtual context replays.
 	NestingFlat
 )
 
@@ -669,7 +673,10 @@ func WithBatchResultSerdes(s Serdes) BatchOption {
 }
 
 // WithNesting sets the nesting mode for the batch. [NestingFlat] causes
-// items to run in virtual contexts without per-item context events.
+// items to run in virtual contexts without per-item context events. It is
+// the per-batch form of [WithChildVirtual], which makes one standalone
+// child context virtual; the two produce the same checkpoint shape for
+// the operations they contain.
 func WithNesting(m NestingMode) BatchOption {
 	return batchOptionFunc(func(o *batchOptions) { o.nesting = m })
 }

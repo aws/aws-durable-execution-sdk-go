@@ -1,9 +1,11 @@
 // Command child-context-serdes-virtual demonstrates
-// [durable.RunInChildContextAsync] with a custom [durable.WithChildSerdes]
-// option. The async child context (virtual context) runs concurrently and
-// returns a [*durable.Future] whose result is serialized through the
-// custom serdes, verifying that the serdes round-trip works on the
-// asynchronous child context path.
+// [durable.RunInChildContextAsync] with [durable.WithChildVirtual] and a
+// custom [durable.WithChildSerdes]. A virtual child context is never
+// checkpointed, so nothing is stored for its result; the SDK still passes
+// the result through the child's serdes on every run, so the value the
+// caller sees is the same live and on replay. The uppercasing serdes below
+// makes that round trip visible: the handler returns the uppercased value
+// although the step inside produced lowercase.
 package main
 
 import (
@@ -36,6 +38,7 @@ func handler(ctx durable.Context, _ any) (string, error) {
 				return "hello from virtual", nil
 			})
 		},
+		durable.WithChildVirtual(),
 		durable.WithChildSerdes(uppercaseSerdes{}))
 
 	return f.Result()

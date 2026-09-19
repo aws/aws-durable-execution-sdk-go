@@ -1,11 +1,5 @@
 [
   {
-    "type": "CONTEXT",
-    "subType": "RunInChildContext",
-    "name": "virtual-child",
-    "status": "SUCCEEDED"
-  },
-  {
     "type": "STEP",
     "subType": "Step",
     "name": "inner-step",
