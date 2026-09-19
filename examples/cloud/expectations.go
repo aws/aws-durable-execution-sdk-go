@@ -410,6 +410,7 @@ var expectations = map[string]expectation{
 	"serde-callback-deserializer":   {result: `{"first":"HELLO FIRST","second":"HELLO SECOND"}`},
 	"serde-circular-references":     {result: `{"defaultSerdes":{"failed":true,"isStepError":true,"isSerdesError":true,"operation":"build-graph-default","reportsCycle":true},"customSerdes":{"rootId":"order-1","itemIds":["line-1","line-2"],"parentsPointToRoot":true}}`},
 	"serde-custom-config":           {result: `{"summary":"Order ORD-12345: $0.00 (processed)","id":"ORD-12345","amount":0,"status":"processed"}`},
+	"serde-filesystem":              {result: `{"id":"RPT-001","status":"generated","bodyLength":140000}`},
 	"serde-filesystem-overflow":     {result: `{"smallOrderId":"ORD-42","largeLength":307200}`},
 	"serde-preview-field-selection": {result: `{"id":"cust-9","email":"decoy@example.com","customerEmail":"person@example.com","auditLength":2000}`},
 	"serde-preview-truncation":      {result: `{"id":"acct-123","tier":"gold","notesLength":500}`},

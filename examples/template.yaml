@@ -2124,6 +2124,23 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 60
 
+  SerdeFilesystemFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-serde-filesystem
+      CodeUri: .aws-sam/build-artifacts/serde-filesystem/
+      Handler: bootstrap
+      Description: Filesystem serdes in always mode with hashed path layout and a masked preview
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
   SerdeFilesystemOverflowFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -2835,6 +2852,9 @@ Outputs:
   SerdeStructWithTimesFunction:
     Description: Serde Struct With Times Function ARN
     Value: !GetAtt SerdeStructWithTimesFunction.Arn
+  SerdeFilesystemFunction:
+    Description: Serde Filesystem Function ARN
+    Value: !GetAtt SerdeFilesystemFunction.Arn
   SerdeFilesystemOverflowFunction:
     Description: Serde Filesystem Overflow Function ARN
     Value: !GetAtt SerdeFilesystemOverflowFunction.Arn

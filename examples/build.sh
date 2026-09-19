@@ -140,6 +140,7 @@ EXAMPLES="
   serde-custom-config
   serde-circular-references
   serde-struct-with-times
+  serde-filesystem
   serde-filesystem-overflow
   serde-preview-truncation
   serde-preview-field-selection

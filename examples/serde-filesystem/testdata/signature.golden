@@ -1,0 +1,14 @@
+[
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "generate-report",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "summarize-report",
+    "status": "SUCCEEDED"
+  }
+]

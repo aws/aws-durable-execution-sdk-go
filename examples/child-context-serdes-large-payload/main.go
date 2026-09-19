@@ -26,6 +26,17 @@ type Output struct {
 }
 
 func handler(ctx durable.Context, _ any) (Output, error) {
+	// The filesystem serdes documents that Lambda's /tmp is the wrong place
+	// for production use: a replay can land on a different execution
+	// environment, which cannot read a file written to another
+	// environment's /tmp. Production points the serdes at a durable, shared
+	// mount such as EFS or S3 Files.
+	//
+	// This example never reads across invocations. A step returns its
+	// result deserialized from the bytes the serdes just wrote, so the
+	// file is written and read back inside one invocation. That makes a
+	// local temporary directory sufficient here. A handler that resumes
+	// after a wait or a callback needs a real mount.
 	basePath := os.Getenv("SERDES_BASE_PATH")
 	if basePath == "" {
 		basePath = "/tmp/durable-serdes"

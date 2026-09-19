@@ -166,6 +166,7 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [serde-custom-config](serde-custom-config/main.go) | WithSerdes (handler-level) | SUCCEEDED |
 | [serde-circular-references](serde-circular-references/main.go) | Step, SerdesError on a reference cycle, WithStepSerdes (cycle-breaking) | SUCCEEDED |
 | [serde-struct-with-times](serde-struct-with-times/main.go) | Step, time.Time round trip, WithStepSerdes (Unix-millisecond wire format) | SUCCEEDED |
+| [serde-filesystem](serde-filesystem/main.go) | ConfigureSerdes, NewFileSystemSerdes (FileSystemSerdesModeAlways, FileSystemPathEncodingHash, GeneratePreview with masking) | SUCCEEDED |
 | [serde-filesystem-overflow](serde-filesystem-overflow/main.go) | ConfigureSerdes, NewFileSystemSerdes (FileSystemSerdesModeOverflow) | SUCCEEDED |
 | [serde-preview-truncation](serde-preview-truncation/main.go) | NewFileSystemSerdes, GeneratePreview, BuildPreview (include-all, exclude, truncation) | SUCCEEDED |
 | [serde-preview-field-selection](serde-preview-field-selection/main.go) | NewFileSystemSerdes, GeneratePreview, BuildPreview (exclude-all, path matching, masking) | SUCCEEDED |
@@ -183,16 +184,23 @@ also works handler-wide with `WithSerdes`, but then every operation result
 in the handler must be that one type.
 
 A filesystem serdes stores only a file reference in the checkpoint. In
+the default `FileSystemSerdesModeAlways` every value is written to a file;
+`serde-filesystem` shows it with `FileSystemPathEncodingHash`, which names
+each execution's directory by a hash of the execution ARN. In
 `FileSystemSerdesModeOverflow` a value small enough for the checkpoint is
 stored inline instead, and only a larger value is written to a file;
-`serde-filesystem-overflow` shows one of each. Setting
+`serde-filesystem-overflow` shows one of each. The base path must be a
+durable, shared mount such as EFS or S3 Files, not Lambda's `/tmp`; each
+filesystem example documents why a local directory is nonetheless
+sufficient for that example. Setting
 `FileSystemSerdesConfig.GeneratePreview` adds a compact preview of the
 value next to that reference, so the operation log shows what was stored.
 `durable.BuildPreview` builds one from a `PreviewConfig` with include,
 exclude, and mask selectors and a byte cap; `serde-preview-truncation` and
-`serde-preview-field-selection` show both base modes. A preview is advisory
-metadata: masking or excluding a field there does not remove it from the
-offloaded file.
+`serde-preview-field-selection` show both base modes, and
+`serde-preview-field-selection` and `serde-filesystem` each mask a
+sensitive field. A preview is advisory metadata: masking or excluding a
+field there does not remove it from the offloaded file.
 
 ### Showcase & Edge Cases
 
