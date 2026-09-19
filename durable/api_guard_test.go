@@ -3,6 +3,9 @@ package durable_test
 import (
 	"bytes"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -172,9 +175,19 @@ func TestGuardedStructsHaveLeadingBlankField(t *testing.T) {
 		reflect.TypeFor[durable.WaitDecision](),
 		reflect.TypeFor[durable.WaitConfig[string]](),
 		reflect.TypeFor[durable.FileSystemSerdesConfig](),
+		reflect.TypeFor[durable.SerdesConfig](),
+		reflect.TypeFor[durable.LogConfig](),
+		reflect.TypeFor[durable.PreviewConfig](),
+		reflect.TypeFor[durable.PreviewField](),
+		reflect.TypeFor[durable.BatchProgress](),
+		reflect.TypeFor[durable.BatchItemProgress](),
+		reflect.TypeFor[durable.CompletionDecision](),
 	}
 	guard := reflect.TypeFor[[0]func()]()
+	listed := map[string]bool{}
 	for _, typ := range types {
+		name, _, _ := strings.Cut(typ.Name(), "[")
+		listed[name] = true
 		if typ.NumField() == 0 {
 			t.Errorf("%s: no fields", typ)
 			continue
@@ -187,4 +200,71 @@ func TestGuardedStructsHaveLeadingBlankField(t *testing.T) {
 			t.Errorf("%s: is comparable, want the guard to remove comparability", typ)
 		}
 	}
+	// The list above must name every guarded exported struct in the
+	// package source, so a new guarded type cannot be left unverified and a
+	// guard cannot be removed from a type by also dropping it from the
+	// list unnoticed.
+	for _, name := range guardedExportedStructs(t) {
+		if !listed[name] {
+			t.Errorf("%s: declares the guard but is missing from this test's list", name)
+		}
+	}
+}
+
+// guardedExportedStructs parses the package's non-test source files and
+// returns the names of exported struct types whose first field is the
+// blank [0]func() guard.
+func guardedExportedStructs(t *testing.T) []string {
+	t.Helper()
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	fset := token.NewFileSet()
+	for _, file := range files {
+		if strings.HasSuffix(file, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, file, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, decl := range f.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.TYPE {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				ts, ok := spec.(*ast.TypeSpec)
+				if !ok {
+					continue
+				}
+				st, ok := ts.Type.(*ast.StructType)
+				if !ok || !ts.Name.IsExported() || len(st.Fields.List) == 0 {
+					continue
+				}
+				if isBlankGuardField(st.Fields.List[0]) {
+					names = append(names, ts.Name.Name)
+				}
+			}
+		}
+	}
+	return names
+}
+
+// isBlankGuardField reports whether f is the field `_ [0]func()`.
+func isBlankGuardField(f *ast.Field) bool {
+	if len(f.Names) != 1 || f.Names[0].Name != "_" {
+		return false
+	}
+	arr, ok := f.Type.(*ast.ArrayType)
+	if !ok {
+		return false
+	}
+	if n, ok := arr.Len.(*ast.BasicLit); !ok || n.Value != "0" {
+		return false
+	}
+	fn, ok := arr.Elt.(*ast.FuncType)
+	return ok && fn.Params.NumFields() == 0 && fn.Results.NumFields() == 0
 }

@@ -38,9 +38,11 @@ func TestHandler(t *testing.T) {
 		t.Errorf("abandoned = %v, want [slow slower straggler]", out.Abandoned)
 	}
 
-	// The abandoned branches stay STARTED while the steps inside them
-	// still complete, because the batch waits for work in flight before
-	// returning. Concurrent branches checkpoint in scheduling-dependent
-	// order, so the signature is compared as a set.
-	extest.AssertSignature(t, result, extest.Unordered)
+	// The Parallel completes after two successes. An abandoned branch that
+	// has already started its step finishes it; one that has not yet
+	// started it unwinds without starting it. Which case each abandoned
+	// branch falls into depends on scheduling, so the golden lists the
+	// operations every run produces: the batch, all five branch contexts,
+	// and the two steps that succeed.
+	extest.AssertSignature(t, result, extest.Subset)
 }

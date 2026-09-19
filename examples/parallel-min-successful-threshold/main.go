@@ -6,9 +6,10 @@
 // branches still running are abandoned: their results are not awaited and
 // each is reported with status STARTED, counted in TotalCount but neither
 // as a success nor as a failure. The batch still lets the work already in
-// flight finish before it returns, so no branch outlives the invocation;
-// the abandoned branches' steps therefore complete, but their branch
-// contexts are never marked complete.
+// flight finish before it returns, so no branch outlives the invocation.
+// An abandoned branch whose step is already running finishes that step;
+// one that has not yet reached its step never starts it. Either way the
+// abandoned branch contexts are never marked complete.
 //
 // The output names the branches in each group, so the early completion is
 // visible in the result and not only in the counts.

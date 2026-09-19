@@ -539,6 +539,74 @@ func TestDefaultHandlerExpandsErrorAttributes(t *testing.T) {
 	}
 }
 
+// TestDefaultHandlerErrorTypeForEverySDKError checks errorType and
+// stackTrace derivation for each SDK error type: a recorded ErrorType
+// wins, a type without one logs its wire name, and recorded frames are
+// emitted whichever type carries them.
+func TestDefaultHandlerErrorTypeForEverySDKError(t *testing.T) {
+	frames := []string{"frame-1", "frame-2"}
+	cause := errors.New("boom")
+	tests := []struct {
+		name       string
+		err        error
+		wantType   string
+		wantFrames bool
+	}{
+		{"OperationError recorded", &OperationError{Name: "o", ErrorType: "Custom", Message: "m", StackTrace: frames, Err: cause}, "Custom", true},
+		{"OperationError bare", &OperationError{Name: "o", Message: "m"}, "OperationError", false},
+		{"StepError recorded", &StepError{Name: "s", ErrorType: "Custom", Message: "m", StackTrace: frames, Err: cause}, "Custom", true},
+		{"StepError bare", &StepError{Name: "s", Message: "m"}, "StepError", false},
+		{"StepInterruptedError", &StepInterruptedError{Name: "s"}, "StepInterruptedError", false},
+		{"InvokeError recorded", &InvokeError{Name: "i", ErrorType: "Custom", Message: "m", StackTrace: frames, Err: cause}, "Custom", true},
+		{"InvokeError bare", &InvokeError{Name: "i", Message: "m"}, "InvokeError", false},
+		{"CallbackError recorded", &CallbackError{Name: "c", ErrorType: "Custom", Message: "m", StackTrace: frames, Err: cause}, "Custom", true},
+		{"CallbackError bare", &CallbackError{Name: "c", Message: "m"}, "CallbackError", false},
+		{"CallbackExternalError recorded", &CallbackExternalError{CallbackError{Name: "c", ErrorType: "Custom", Message: "m", StackTrace: frames}}, "Custom", true},
+		{"CallbackExternalError bare", &CallbackExternalError{CallbackError{Name: "c", Message: "m"}}, "CallbackExternalError", false},
+		{"CallbackTimeoutError", &CallbackTimeoutError{CallbackError: CallbackError{Name: "c"}}, "CallbackTimeoutError", false},
+		{"CallbackSubmitterError", &CallbackSubmitterError{CallbackError{Name: "c", Err: cause}}, "CallbackSubmitterError", false},
+		{"ChildContextError recorded", &ChildContextError{Name: "cc", ErrorType: "Custom", Message: "m", StackTrace: frames, Err: cause}, "Custom", true},
+		{"ChildContextError bare", &ChildContextError{Name: "cc", Message: "m"}, "ChildContextError", false},
+		{"WaitForConditionError recorded", &WaitForConditionError{Name: "w", ErrorType: "Custom", Message: "m", StackTrace: frames, Err: cause}, "Custom", true},
+		{"WaitForConditionError bare", &WaitForConditionError{Name: "w", Message: "m"}, "WaitForConditionError", false},
+		{"RetryError recorded", &RetryError{Name: "r", ErrorType: "Custom", Message: "m", StackTrace: frames, Err: cause}, "Custom", true},
+		{"RetryError bare", &RetryError{Name: "r", Message: "m"}, "RetryError", false},
+		{"CombinatorError", &CombinatorError{Name: "any", Errors: []error{cause}}, "PromiseCombinatorError", false},
+		{"BatchError", &BatchError{Name: "b", Errors: []error{cause}}, "BatchError", false},
+		{"SerdesError", &SerdesError{Operation: "marshal", Err: cause}, "SerdesError", false},
+		{"NonDeterministicReplayError", &NonDeterministicReplayError{Name: "s", StepID: "1", ExpectedType: "Step"}, "NonDeterministicReplayError", false},
+		{"ResultTooLargeError", &ResultTooLargeError{Name: "s"}, "ResultTooLargeError", false},
+		{"CheckpointError", &CheckpointError{Err: cause}, "CheckpointError", false},
+		{"replayed failure", &replayedError{errType: "Recorded", message: "m"}, "Recorded", false},
+		{"WithErrorData wrapper is transparent", WithErrorData(&StepError{Name: "s", ErrorType: "Custom", Message: "m", StackTrace: frames}, "d"), "Custom", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			logger := slog.New(newDefaultLogHandler(&buf, slog.LevelInfo))
+			logger.Error("failed", "err", tt.err)
+			records := parseLogLines(t, buf.String())
+			if len(records) != 1 {
+				t.Fatalf("got %d records, want 1", len(records))
+			}
+			rec := records[0]
+			if rec["errorType"] != tt.wantType {
+				t.Errorf("errorType = %v, want %s", rec["errorType"], tt.wantType)
+			}
+			if rec["errorMessage"] != tt.err.Error() {
+				t.Errorf("errorMessage = %v, want %q", rec["errorMessage"], tt.err.Error())
+			}
+			got, hasFrames := rec["stackTrace"].([]any)
+			if hasFrames != tt.wantFrames {
+				t.Fatalf("stackTrace present = %v, want %v", hasFrames, tt.wantFrames)
+			}
+			if tt.wantFrames && (len(got) != len(frames) || got[0] != frames[0]) {
+				t.Errorf("stackTrace = %v, want %v", got, frames)
+			}
+		})
+	}
+}
+
 func TestLogLevelFromEnv(t *testing.T) {
 	tests := []struct {
 		value string

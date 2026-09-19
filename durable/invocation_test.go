@@ -10,7 +10,7 @@ func TestDurableHandlerInvokeLifecycle(t *testing.T) {
 	// Payload for a first invocation: execution operation only, carrying
 	// the customer event.
 	payload := `{
-		"DurableExecutionArn": "arn:aws:lambda:us-west-2:123456789012:function:fn:1/durable-execution/abc",
+		"DurableExecutionArn": "arn:aws:lambda:us-west-2:account-id:function:fn:1/durable-execution/abc",
 		"CheckpointToken": "token-0",
 		"InitialExecutionState": {
 			"Operations": [{

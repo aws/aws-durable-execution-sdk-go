@@ -40,16 +40,6 @@
     "status": "SUCCEEDED"
   },
   {
-    "type": "STEP",
-    "subType": "Step",
-    "status": "SUCCEEDED"
-  },
-  {
-    "type": "STEP",
-    "subType": "Step",
-    "status": "SUCCEEDED"
-  },
-  {
     "type": "WAIT",
     "subType": "Wait",
     "name": "wait",

@@ -4,7 +4,7 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 
 ## Prerequisites
 
-- Go 1.24+
+- Go 1.25+
 - AWS SAM CLI
 - AWS credentials configured for a target account and region
 
@@ -98,8 +98,9 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 |---------|------------------------|------------------------|
 | [map-basic](map-basic/main.go) | Map, WithMaxConcurrency | SUCCEEDED |
 | [map-empty](map-empty/main.go) | Map (empty input) | SUCCEEDED |
-| [map-large-scale](map-large-scale/main.go) | Map (100 items) | SUCCEEDED |
+| [map-large-scale](map-large-scale/main.go) | Map (50 items, ~100KB each), WithMaxConcurrency | SUCCEEDED |
 | [map-error-preservation](map-error-preservation/main.go) | Map, error ordering | SUCCEEDED |
+| [map-error-type-preservation](map-error-type-preservation/main.go) | Map, errors.As on ChildContextError and StepError across replay | SUCCEEDED |
 | [map-min-successful](map-min-successful/main.go) | Map, WithCompletion (min successful) | SUCCEEDED |
 | [map-tolerated-failure-count](map-tolerated-failure-count/main.go) | Map, ToleratedFailureCount | SUCCEEDED |
 | [map-failure-threshold](map-failure-threshold/main.go) | Map, fail-fast threshold | SUCCEEDED |
@@ -175,6 +176,7 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [logger-log-levels](logger-log-levels/main.go) | Context.Logger, all log levels | SUCCEEDED |
 | [logger-slog-handler](logger-slog-handler/main.go) | WithLogHandler, application slog.Handler | SUCCEEDED |
 | [plugin-lifecycle](plugin-lifecycle/main.go) | WithPlugins, hook lifecycle ordering | SUCCEEDED |
+| [insight-plugin](insight-plugin/main.go) | WithPlugins, insight.New (Workflow Insight plugin) | SUCCEEDED |
 
 A serdes written for one result type can use `durable.SerdesOf`, which
 adapts typed marshal and unmarshal functions to the untyped `Serdes`

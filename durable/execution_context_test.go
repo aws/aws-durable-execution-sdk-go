@@ -11,7 +11,7 @@ func newTestContext(t *testing.T, ops []*operation) *execContext {
 	t.Helper()
 	return newExecContext(
 		context.Background(),
-		"arn:aws:lambda:us-west-2:123456789012:function:fn:1/durable-execution/test",
+		"arn:aws:lambda:us-west-2:account-id:function:fn:1/durable-execution/test",
 		invocationInfo{requestID: "req-1"},
 		slog.DiscardHandler,
 		newExecutionState(ops),

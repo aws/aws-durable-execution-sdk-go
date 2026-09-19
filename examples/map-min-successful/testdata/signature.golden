@@ -38,12 +38,6 @@
   {
     "type": "STEP",
     "subType": "Step",
-    "name": "process-4",
-    "status": "SUCCEEDED"
-  },
-  {
-    "type": "STEP",
-    "subType": "Step",
     "name": "process-0",
     "status": "SUCCEEDED"
   },
@@ -51,18 +45,6 @@
     "type": "STEP",
     "subType": "Step",
     "name": "process-1",
-    "status": "SUCCEEDED"
-  },
-  {
-    "type": "STEP",
-    "subType": "Step",
-    "name": "process-2",
-    "status": "SUCCEEDED"
-  },
-  {
-    "type": "STEP",
-    "subType": "Step",
-    "name": "process-3",
     "status": "SUCCEEDED"
   },
   {

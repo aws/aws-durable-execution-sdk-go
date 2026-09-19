@@ -92,15 +92,14 @@ func errorAttrs(err error) slog.Attr {
 }
 
 // errorStackTrace returns the frames recorded on err, if the SDK recorded
-// any. Only the SDK's own failure types carry frames.
+// any. Only the SDK's own failure types carry frames. Every such type
+// exposes them through operationError, so the frames are read there rather
+// than from a per-type list that new failure types could fall out of. The
+// value itself is inspected, not a wrapped cause: the frames belong to the
+// failure that was logged.
 func errorStackTrace(err error) []string {
-	switch e := err.(type) { //nolint:errorlint // the recorded frames belong to this value, not to a wrapped cause
-	case *OperationError:
-		return e.StackTrace
-	case *StepError:
-		return e.StackTrace
-	case *ChildContextError:
-		return e.StackTrace
+	if oe, ok := unwrapErrorData(err).(interface{ operationError() *OperationError }); ok {
+		return oe.operationError().StackTrace
 	}
 	return nil
 }
@@ -559,23 +558,30 @@ func operationLogAttrs(id, name string, attempt int) []slog.Attr {
 	return append(contextLogAttrs(id, name), slog.Int(logKeyAttempt, attempt))
 }
 
-// errorTypeName returns the type name recorded for err in log records: the
-// error type an SDK failure recorded, else the error's Go type name as
-// [userErrorTypeName] derives it.
+// errorTypeName returns the type name recorded for err in log records. The
+// rule, applied to the value itself rather than to a wrapped cause:
+//
+//  1. An SDK failure that recorded an ErrorType reports that recorded
+//     type, read through operationError. A [StepError] whose body returned
+//     a ValidationError therefore logs "ValidationError".
+//  2. Any other SDK error type reports its wire name from
+//     [sdkWireErrorType], so the log agrees with the checkpoint record: a
+//     [CombinatorError] logs "PromiseCombinatorError".
+//  3. A replayed failure reports the type its record holds.
+//  4. Everything else reports its Go type name as [userErrorTypeName]
+//     derives it.
 func errorTypeName(err error) string {
-	switch e := err.(type) { //nolint:errorlint // the recorded type belongs to this value, not to a wrapped cause
-	case *OperationError:
-		if e.ErrorType != "" {
-			return e.ErrorType
+	err = unwrapErrorData(err)
+	if oe, ok := err.(interface{ operationError() *OperationError }); ok {
+		if recorded := oe.operationError().ErrorType; recorded != "" {
+			return recorded
 		}
-	case *StepError:
-		if e.ErrorType != "" {
-			return e.ErrorType
-		}
-	case *ChildContextError:
-		if e.ErrorType != "" {
-			return e.ErrorType
-		}
+	}
+	if name, ok := sdkWireErrorType(err); ok {
+		return name
+	}
+	if re, ok := err.(*replayedError); ok { //nolint:errorlint // the recorded type belongs to this value, not to a wrapped cause
+		return re.errType
 	}
 	return userErrorTypeName(err)
 }

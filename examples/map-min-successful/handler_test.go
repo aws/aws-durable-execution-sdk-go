@@ -29,7 +29,8 @@ func TestHandler(t *testing.T) {
 		t.Errorf("expected TotalCount=5, got %d", output.TotalCount)
 	}
 
-	// Concurrent branches checkpoint in scheduling-dependent order, so the
-	// signature is compared as a set.
-	extest.AssertSignature(t, result, extest.Unordered)
+	// The Map completes after two successes, so an abandoned iteration may
+	// or may not have started its step. The golden lists the operations
+	// every run produces.
+	extest.AssertSignature(t, result, extest.Subset)
 }

@@ -26,7 +26,7 @@ Open a [GitHub issue](../../issues/new) describing:
 
 ### Prerequisites
 
-- Go 1.24 or later
+- Go 1.25 or later
 - [golangci-lint](https://golangci-lint.run/welcome/install/) (for linting and formatting)
 
 ### Clone and Build

@@ -331,6 +331,41 @@ func TestCompletionReasonOf(t *testing.T) {
 	}
 }
 
+// TestBatchErrorNestedReasonRebuild asserts that a rebuilt outer BatchError
+// keeps its own reason when its first failed item is a BatchError with a
+// different reason, and when the batch name itself spells a reason.
+func TestBatchErrorNestedReasonRebuild(t *testing.T) {
+	inner := &BatchError{Name: "inner", Reason: CompletionFailureToleranceExceeded, Errors: []error{errors.New("x")}}
+	tests := []struct {
+		name string
+		orig *BatchError
+	}{
+		{"custom-failed outer over tolerance-exceeded inner", &BatchError{Name: "outer", Reason: CompletionCustomFailed, Errors: []error{inner}}},
+		{"all-completed outer over tolerance-exceeded inner", &BatchError{Name: "outer", Reason: CompletionAllCompleted, Errors: []error{inner}}},
+		{"name spells another reason", &BatchError{Name: "FAILURE_TOLERANCE_EXCEEDED", Reason: CompletionCustomFailed, Errors: []error{errors.New("x")}}},
+		{"name holds a quote and a colon", &BatchError{Name: `say "hi": now`, Reason: CompletionMinSuccessfulReached, Errors: []error{inner}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := completionReasonOf(tt.orig.Error()); got != tt.orig.Reason {
+				t.Errorf("completionReasonOf(%q) = %v, want %v", tt.orig.Error(), got, tt.orig.Reason)
+			}
+			rebuilt := ErrorFromObject(errorObject(tt.orig))
+			var berr *BatchError
+			if !errors.As(rebuilt, &berr) {
+				t.Fatalf("rebuilt = %T, want *BatchError", rebuilt)
+			}
+			if berr.Reason != tt.orig.Reason || berr.Error() != tt.orig.Error() {
+				t.Errorf("rebuilt reason = %v (%q), want %v with message preserved", berr.Reason, berr.Error(), tt.orig.Reason)
+			}
+		})
+	}
+	// A message of another shape falls back to the earliest reason named.
+	if got := completionReasonOf("batch failed: CUSTOM_COMPLETION_FAILED after ALL_COMPLETED"); got != CompletionCustomFailed {
+		t.Errorf("fallback reason = %v, want %v", got, CompletionCustomFailed)
+	}
+}
+
 // TestBatchMinSuccessfulReachedIsNotAnError asserts that reaching
 // MinSuccessful early returns err == nil with unstarted items omitted.
 func TestBatchMinSuccessfulReachedIsNotAnError(t *testing.T) {

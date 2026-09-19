@@ -6,6 +6,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
 )
@@ -34,8 +35,10 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 		return Result{}, err
 	}
 
-	// Stage 2: Race — fast wins.
+	// Stage 2: Race — the first future to settle wins. The slow step sleeps so
+	// the fast step settles first on every run.
 	r1 := durable.StepAsync(ctx, "race-slow", func(_ durable.StepContext) (string, error) {
+		time.Sleep(2 * time.Second)
 		return "Slow result", nil
 	})
 	r2 := durable.StepAsync(ctx, "race-fast", func(_ durable.StepContext) (string, error) {

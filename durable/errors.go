@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -874,22 +875,52 @@ func reconstructSDKError(wireType string, op OperationError, sentinel error) err
 	return leaf
 }
 
+// batchErrorPrefix opens every message a [BatchError] produces; the quoted
+// batch name follows it, then " failed: ", then the reason.
+const batchErrorPrefix = "durable: batch "
+
+// completionReasons lists every defined [CompletionReason], for parsing
+// recorded messages.
+var completionReasons = []CompletionReason{
+	CompletionAllCompleted,
+	CompletionMinSuccessfulReached,
+	CompletionFailureToleranceExceeded,
+	CompletionCustomSucceeded,
+	CompletionCustomFailed,
+}
+
 // completionReasonOf recovers the [CompletionReason] named in a recorded
 // [BatchError] message. It returns zero when the message names no known
 // reason.
+//
+// The message of a nested batch failure holds several reasons: the outer
+// batch's own, then the first failed item's, which may itself be a
+// BatchError with a different reason. The outer reason is the one that
+// belongs to the value being rebuilt. So the message is parsed by its
+// structure first: the quoted name is skipped with [strconv.QuotedPrefix]
+// (a name may itself contain a reason word or a quote), and the token that
+// follows " failed: " is the reason. A message of another shape falls back
+// to the reason that appears earliest in the text.
 func completionReasonOf(message string) CompletionReason {
-	for _, r := range []CompletionReason{
-		CompletionAllCompleted,
-		CompletionMinSuccessfulReached,
-		CompletionFailureToleranceExceeded,
-		CompletionCustomSucceeded,
-		CompletionCustomFailed,
-	} {
-		if strings.Contains(message, r.String()) {
-			return r
+	if rest, ok := strings.CutPrefix(message, batchErrorPrefix); ok {
+		if quoted, err := strconv.QuotedPrefix(rest); err == nil {
+			if rest, ok = strings.CutPrefix(rest[len(quoted):], " failed: "); ok {
+				token, _, _ := strings.Cut(rest, ":")
+				for _, r := range completionReasons {
+					if token == r.String() {
+						return r
+					}
+				}
+			}
 		}
 	}
-	return 0
+	earliest, at := CompletionReason(0), -1
+	for _, r := range completionReasons {
+		if i := strings.Index(message, r.String()); i >= 0 && (at < 0 || i < at) {
+			earliest, at = r, i
+		}
+	}
+	return earliest
 }
 
 // ErrorFromObject rebuilds the typed error a recorded failure represents.
@@ -1201,7 +1232,7 @@ func (e *BatchError) Error() string {
 	if len(e.Errors) == 1 {
 		noun = "item"
 	}
-	msg := fmt.Sprintf("durable: batch %q failed: %s: %d %s failed", e.Name, e.Reason, len(e.Errors), noun)
+	msg := fmt.Sprintf("%s%q failed: %s: %d %s failed", batchErrorPrefix, e.Name, e.Reason, len(e.Errors), noun)
 	if len(e.Errors) > 0 {
 		msg += ", first: " + e.Errors[0].Error()
 	}
