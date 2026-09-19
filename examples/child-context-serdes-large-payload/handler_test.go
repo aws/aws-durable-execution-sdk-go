@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
+	"github.com/aws/aws-durable-execution-sdk-go/examples/internal/extest"
 )
 
 func TestHandlerDefaultPath(t *testing.T) {
@@ -35,6 +36,10 @@ func TestHandlerDefaultPath(t *testing.T) {
 	if len(entries) == 0 {
 		t.Error("expected filesystem serdes to write files under the default path")
 	}
+
+	// The serdes path changes where payloads are stored, not which
+	// operations run, so both paths share the golden.
+	extest.AssertSignature(t, result, extest.Ordered)
 }
 
 func TestHandler(t *testing.T) {
@@ -75,4 +80,6 @@ func TestHandler(t *testing.T) {
 	if len(entries) == 0 {
 		t.Error("expected filesystem serdes to write files under the base path, but directory is empty")
 	}
+
+	extest.AssertSignature(t, result, extest.Ordered)
 }

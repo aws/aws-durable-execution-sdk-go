@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
+	"github.com/aws/aws-durable-execution-sdk-go/examples/internal/extest"
 )
 
 func TestHandler(t *testing.T) {
@@ -40,7 +41,7 @@ func TestHandler(t *testing.T) {
 		t.Errorf("expected 3 parallel results, got %d", len(output.ParallelResults))
 	}
 
-	// NOTE: Golden signature assertion is skipped for this example because
-	// Map and Parallel with maxConcurrency > 1 produce non-deterministic
-	// operation ordering across runs.
+	// Concurrent branches checkpoint in scheduling-dependent order, so the
+	// signature is compared as a set.
+	extest.AssertSignature(t, result, extest.Unordered)
 }

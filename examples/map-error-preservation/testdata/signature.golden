@@ -1,0 +1,41 @@
+[
+  {
+    "type": "CONTEXT",
+    "subType": "Map",
+    "name": "map-with-errors",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "MapIteration",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "MapIteration",
+    "status": "FAILED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "MapIteration",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "process-item-2",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "process-item-0",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "process-item-1",
+    "status": "FAILED"
+  }
+]

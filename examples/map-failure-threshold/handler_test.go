@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
+	"github.com/aws/aws-durable-execution-sdk-go/examples/internal/extest"
 )
 
 func TestHandler(t *testing.T) {
@@ -30,4 +31,9 @@ func TestHandler(t *testing.T) {
 	if output.TotalCount != 5 {
 		t.Errorf("expected TotalCount=5, got %d", output.TotalCount)
 	}
+
+	// The Map completes as soon as the third failure trips the threshold,
+	// so the two succeeding items may or may not have checkpointed. The
+	// golden lists the three failures and the operations around them.
+	extest.AssertSignature(t, result, extest.Subset)
 }

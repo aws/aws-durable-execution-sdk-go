@@ -7,17 +7,13 @@ import (
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
+	"github.com/aws/aws-durable-execution-sdk-go/examples/internal/extest"
 )
 
 func TestHandler(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping large-scale map test in short mode")
 	}
-
-	// Known issue: the SDK has a concurrent map access race in
-	// executionState.get when running Map with high concurrency (10) and
-	// many items (50). Skip until the SDK race is resolved.
-	t.Skip("skipping: known concurrent map race in SDK batch execution (state.go:139)")
 
 	runner := durabletest.NewLocalRunner(handler)
 	result := runner.RunUntilComplete(t, nil)
@@ -42,4 +38,8 @@ func TestHandler(t *testing.T) {
 	if output.Summary.MaxConcurrency != 10 {
 		t.Errorf("expected MaxConcurrency=10, got %d", output.Summary.MaxConcurrency)
 	}
+
+	// Concurrent branches checkpoint in scheduling-dependent order, so the
+	// signature is compared as a set.
+	extest.AssertSignature(t, result, extest.Unordered)
 }

@@ -1,0 +1,18 @@
+[
+  {
+    "type": "CONTEXT",
+    "subType": "WaitForCallback",
+    "name": "failure-callback",
+    "status": "FAILED"
+  },
+  {
+    "type": "CALLBACK",
+    "subType": "Callback",
+    "status": "FAILED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED"
+  }
+]

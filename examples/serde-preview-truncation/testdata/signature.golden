@@ -1,0 +1,14 @@
+[
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "build-record",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "read-record",
+    "status": "SUCCEEDED"
+  }
+]

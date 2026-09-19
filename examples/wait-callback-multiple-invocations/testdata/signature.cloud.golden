@@ -1,0 +1,52 @@
+[
+  {
+    "type": "WAIT",
+    "subType": "Wait",
+    "name": "wait-invocation-1",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "WaitForCallback",
+    "name": "first-callback",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CALLBACK",
+    "subType": "Callback",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "process-callback-data",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "WAIT",
+    "subType": "Wait",
+    "name": "wait-invocation-2",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "WaitForCallback",
+    "name": "second-callback",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CALLBACK",
+    "subType": "Callback",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED"
+  }
+]

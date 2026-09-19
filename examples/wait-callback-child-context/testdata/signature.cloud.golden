@@ -1,0 +1,46 @@
+[
+  {
+    "type": "CONTEXT",
+    "subType": "WaitForCallback",
+    "name": "parent-callback-op",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CALLBACK",
+    "subType": "Callback",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "RunInChildContext",
+    "name": "child-context-with-callback",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "WAIT",
+    "subType": "Wait",
+    "name": "child-wait",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "WaitForCallback",
+    "name": "child-callback-op",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CALLBACK",
+    "subType": "Callback",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED"
+  }
+]

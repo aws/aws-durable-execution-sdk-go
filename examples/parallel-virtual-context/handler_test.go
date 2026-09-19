@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
+	"github.com/aws/aws-durable-execution-sdk-go/examples/internal/extest"
 )
 
 func TestHandler(t *testing.T) {
@@ -43,13 +44,10 @@ func TestHandler(t *testing.T) {
 		}
 	}
 
-	// Assert the checkpoint shape: the Parallel parent context MUST exist.
-	durabletest.AssertSignatureContains(t, result, []durabletest.OperationSignature{
-		{Type: "CONTEXT", SubType: "Parallel", Name: "parallel-tasks-virtual", Status: "SUCCEEDED"},
-		{Type: "STEP", SubType: "Step", Name: "fetch", Status: "SUCCEEDED"},
-		{Type: "STEP", SubType: "Step", Name: "process", Status: "SUCCEEDED"},
-		{Type: "STEP", SubType: "Step", Name: "validate", Status: "SUCCEEDED"},
-	})
+	// The Parallel parent context and every branch step must be present.
+	// Branches complete in scheduling-dependent order, so the signature is
+	// compared as a set.
+	extest.AssertSignature(t, result, extest.Unordered)
 
 	// THE DISTINGUISHING ASSERTION: flat nesting must suppress all
 	// per-branch context operations. Under normal nesting these would

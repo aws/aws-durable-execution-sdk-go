@@ -1,0 +1,62 @@
+[
+  {
+    "type": "CONTEXT",
+    "subType": "WaitForCallback",
+    "name": "approval-1",
+    "status": "FAILED"
+  },
+  {
+    "type": "CALLBACK",
+    "subType": "Callback",
+    "status": "TIMED_OUT"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "WAIT",
+    "subType": "Wait",
+    "name": "retry-wait-1",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "WaitForCallback",
+    "name": "approval-2",
+    "status": "FAILED"
+  },
+  {
+    "type": "CALLBACK",
+    "subType": "Callback",
+    "status": "TIMED_OUT"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "WAIT",
+    "subType": "Wait",
+    "name": "retry-wait-2",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "WaitForCallback",
+    "name": "approval-3",
+    "status": "FAILED"
+  },
+  {
+    "type": "CALLBACK",
+    "subType": "Callback",
+    "status": "TIMED_OUT"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED"
+  }
+]

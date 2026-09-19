@@ -1,0 +1,74 @@
+[
+  {
+    "type": "CONTEXT",
+    "subType": "Parallel",
+    "name": "failure-count-branches",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "ParallelBranch",
+    "name": "branch-1",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "ParallelBranch",
+    "name": "branch-2",
+    "status": "FAILED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "ParallelBranch",
+    "name": "branch-3",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "ParallelBranch",
+    "name": "branch-4",
+    "status": "FAILED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "ParallelBranch",
+    "name": "branch-5",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "branch-5",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "branch-2",
+    "status": "FAILED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "branch-4",
+    "status": "FAILED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "branch-3",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "branch-1",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "WAIT",
+    "subType": "Wait",
+    "name": "wait",
+    "status": "SUCCEEDED"
+  }
+]

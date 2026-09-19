@@ -6,13 +6,13 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
+	"github.com/aws/aws-durable-execution-sdk-go/examples/internal/extest"
 )
 
 // lockedBuffer is a goroutine-safe buffer for the handler's output.
@@ -50,7 +50,7 @@ func TestHandler(t *testing.T) {
 		t.Errorf("expected %q, got %q", "done", output)
 	}
 
-	durabletest.AssertGoldenSignature(t, result, filepath.Join("testdata", "signature.golden"))
+	extest.AssertSignature(t, result, extest.Ordered)
 
 	// Each line is one JSON record with the handler's own field names and
 	// the SDK's identifiers as structured attributes. Lines before the

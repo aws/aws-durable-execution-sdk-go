@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
+	"github.com/aws/aws-durable-execution-sdk-go/examples/internal/extest"
 )
 
 func TestHandler(t *testing.T) {
@@ -29,6 +30,13 @@ func TestHandler(t *testing.T) {
 		if output.Value == "" {
 			t.Error("expected non-empty value on success")
 		}
+
+		// The golden records the default (success) path, which is the one
+		// the deployed example runs. Any returns on the first success, so
+		// which of the other futures reach a checkpoint, and in what state,
+		// depends on scheduling. The golden lists the operations every run
+		// produces.
+		extest.AssertSignature(t, result, extest.Subset)
 	})
 
 	// Test all-fail case: CombinatorError wraps all individual errors.
@@ -50,9 +58,9 @@ func TestHandler(t *testing.T) {
 		if output.Error == "" {
 			t.Error("expected non-empty error message on all-fail")
 		}
-	})
 
-	// NOTE: Golden signature assertion is skipped for this example because
-	// StepAsync futures may produce non-deterministic operation ordering
-	// due to concurrent goroutine scheduling.
+		// Every future fails before Any returns, so all of them reach a
+		// checkpoint, in scheduling-dependent order.
+		extest.AssertSignatureFile(t, result, extest.Unordered, "testdata/signature.all-fail.golden")
+	})
 }

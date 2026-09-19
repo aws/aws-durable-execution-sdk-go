@@ -4,10 +4,10 @@
 package main
 
 import (
-	"path/filepath"
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
+	"github.com/aws/aws-durable-execution-sdk-go/examples/internal/extest"
 )
 
 func TestHandler(t *testing.T) {
@@ -38,5 +38,5 @@ func TestHandler(t *testing.T) {
 	// Pure sequential nesting with no parallelism is deterministic: each
 	// RunInChildContext claims its operation ID synchronously on the
 	// calling goroutine before entering the child body.
-	durabletest.AssertGoldenSignature(t, result, filepath.Join("testdata", "signature.golden"))
+	extest.AssertSignature(t, result, extest.Ordered)
 }

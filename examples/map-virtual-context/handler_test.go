@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
+	"github.com/aws/aws-durable-execution-sdk-go/examples/internal/extest"
 )
 
 func TestHandler(t *testing.T) {
@@ -49,9 +50,8 @@ func TestHandler(t *testing.T) {
 		{Type: "CONTEXT", SubType: "MapIteration", Status: "STARTED"},
 	})
 
-	// The parent Map context itself must still be present with status
-	// SUCCEEDED — only per-item contexts are suppressed.
-	durabletest.AssertSignatureContains(t, result, []durabletest.OperationSignature{
-		{Type: "CONTEXT", SubType: "Map", Name: "process-items", Status: "SUCCEEDED"},
-	})
+	// The parent Map context and every item operation must still be present;
+	// only the per-item contexts are suppressed. Items complete in
+	// scheduling-dependent order, so the signature is compared as a set.
+	extest.AssertSignature(t, result, extest.Unordered)
 }

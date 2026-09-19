@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
+	"github.com/aws/aws-durable-execution-sdk-go/examples/internal/extest"
 )
 
 // runAcrossSuspension drives the handler through its suspension so the
@@ -70,6 +71,15 @@ func TestHandler(t *testing.T) {
 			result := runAcrossSuspension(t, Event{Nesting: nesting})
 			assertSummarized(t, result, true)
 			assertFullRebuild(t, result)
+			// Map items complete in scheduling-dependent order, so the
+			// signatures are compared as sets. The default nesting has
+			// the shared golden; NORMAL nesting adds a child context per
+			// item and has its own.
+			if nesting == "FLAT" {
+				extest.AssertSignature(t, result, extest.Unordered)
+			} else {
+				extest.AssertSignatureFile(t, result, extest.Unordered, "testdata/signature.normal.golden")
+			}
 		})
 	}
 }
@@ -80,6 +90,9 @@ func TestHandlerNoDurableOperation(t *testing.T) {
 	result := runAcrossSuspension(t, Event{Nesting: "FLAT", NoDurableOperation: true})
 	assertSummarized(t, result, true)
 	assertFullRebuild(t, result)
+
+	// Without a step per item only the batch and the wait remain.
+	extest.AssertSignatureFile(t, result, extest.Unordered, "testdata/signature.no-durable-operation.golden")
 }
 
 func TestHandlerSmallPayload(t *testing.T) {
@@ -88,4 +101,8 @@ func TestHandlerSmallPayload(t *testing.T) {
 	result := runAcrossSuspension(t, Event{Nesting: "FLAT", ItemPayloadSize: 16})
 	assertSummarized(t, result, false)
 	assertFullRebuild(t, result)
+
+	// The payload size changes how the map result is checkpointed, not
+	// which operations run, so both sizes share the golden.
+	extest.AssertSignature(t, result, extest.Unordered)
 }

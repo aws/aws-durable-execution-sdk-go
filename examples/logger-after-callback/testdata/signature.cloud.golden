@@ -1,0 +1,24 @@
+[
+  {
+    "type": "CONTEXT",
+    "subType": "WaitForCallback",
+    "name": "my-callback",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CALLBACK",
+    "subType": "Callback",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "post-callback-step",
+    "status": "SUCCEEDED"
+  }
+]

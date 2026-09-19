@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
+	"github.com/aws/aws-durable-execution-sdk-go/examples/internal/extest"
 )
 
 func TestHandler(t *testing.T) {
@@ -60,12 +61,7 @@ func TestHandler(t *testing.T) {
 		t.Errorf("expected CompletionReason=ALL_COMPLETED, got %s", output.CompletionReason)
 	}
 
-	// Verify the final invocation signature contains the Parallel context
-	// and the chained invoke operation. Step and Wait operations may or
-	// may not appear in the final invocation's signature depending on
-	// whether they were terminally checkpointed in an earlier invocation.
-	durabletest.AssertSignatureContains(t, result, []durabletest.OperationSignature{
-		{Type: "CONTEXT", SubType: "Parallel", Name: "heterogeneous-branches", Status: "SUCCEEDED"},
-		{Type: "CHAINED_INVOKE", SubType: "ChainedInvoke", Name: "child-function", Status: "SUCCEEDED"},
-	})
+	// The branches run concurrently and checkpoint in scheduling-dependent
+	// order, so the signature is compared as a set.
+	extest.AssertSignature(t, result, extest.Unordered)
 }

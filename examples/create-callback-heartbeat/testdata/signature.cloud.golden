@@ -1,0 +1,14 @@
+[
+  {
+    "type": "CALLBACK",
+    "subType": "Callback",
+    "name": "long-running-task",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "send-heartbeat-and-complete",
+    "status": "SUCCEEDED"
+  }
+]

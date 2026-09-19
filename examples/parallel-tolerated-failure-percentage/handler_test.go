@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
+	"github.com/aws/aws-durable-execution-sdk-go/examples/internal/extest"
 )
 
 func TestHandler(t *testing.T) {
@@ -61,9 +62,6 @@ func TestHandler(t *testing.T) {
 	// The two failing branches always run to completion (they trip the
 	// threshold), so their step failures are always checkpointed. The
 	// succeeding branches may be abandoned before their step is recorded,
-	// so they are not asserted here.
-	durabletest.AssertSignatureContains(t, result, []durabletest.OperationSignature{
-		{Type: "STEP", SubType: "Step", Name: "branch-2", Status: "FAILED"},
-		{Type: "STEP", SubType: "Step", Name: "branch-4", Status: "FAILED"},
-	})
+	// so the golden lists only the failures.
+	extest.AssertSignature(t, result, extest.Subset)
 }

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
+	"github.com/aws/aws-durable-execution-sdk-go/examples/internal/extest"
 )
 
 func TestHandler(t *testing.T) {
@@ -26,4 +27,6 @@ func TestHandler(t *testing.T) {
 	if output != "HELLO FROM VIRTUAL" {
 		t.Errorf("expected 'HELLO FROM VIRTUAL' (uppercased by custom serdes), got %q", output)
 	}
+
+	extest.AssertSignature(t, result, extest.Ordered)
 }

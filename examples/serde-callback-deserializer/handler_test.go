@@ -9,6 +9,7 @@ import (
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
+	"github.com/aws/aws-durable-execution-sdk-go/examples/internal/extest"
 )
 
 func TestHandler(t *testing.T) {
@@ -28,6 +29,8 @@ func TestHandler(t *testing.T) {
 	if result.Status != durabletest.Failed {
 		t.Fatalf("expected Failed (submitter needs real AWS), got %s", result.Status)
 	}
+
+	extest.AssertSignature(t, result, extest.Ordered)
 }
 
 // verificationHandler creates a callback and returns whatever the callback
@@ -76,4 +79,8 @@ func TestDeserializerTransformation(t *testing.T) {
 	if out != "HELLO WORLD" {
 		t.Errorf("expected uppercased result %q, got %q", "HELLO WORLD", out)
 	}
+
+	// This scenario runs the verification handler, not the example's;
+	// its golden records the resolved callback.
+	extest.AssertSignatureFile(t, result, extest.Ordered, "testdata/signature.verification.golden")
 }

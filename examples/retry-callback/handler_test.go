@@ -27,6 +27,10 @@ func TestHandler(t *testing.T) {
 		if result.Error == nil || result.Error.Type != "CallbackTimeoutError" {
 			t.Fatalf("expected CallbackTimeoutError, got %+v", result.Error)
 		}
+		// Every attempt times out, so the deployed run checkpoints three
+		// callbacks; the local run below resolves the first. Each mode has
+		// its own golden.
+		extest.AssertSignatureFile(t, result, extest.Ordered, extest.CloudGoldenPath)
 		return
 	}
 
@@ -60,6 +64,6 @@ func TestHandler(t *testing.T) {
 		t.Errorf("expected Attempts=1, got %d", output.Attempts)
 	}
 
-	// NOTE: Golden signature assertion is skipped because callback timing
-	// and retry patterns can produce non-deterministic signatures.
+	// The local golden records the first callback being approved.
+	extest.AssertSignature(t, result, extest.Ordered)
 }

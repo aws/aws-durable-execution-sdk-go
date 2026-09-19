@@ -1,0 +1,14 @@
+[
+  {
+    "type": "CALLBACK",
+    "subType": "Callback",
+    "name": "custom-serdes-callback",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "send-custom-data",
+    "status": "SUCCEEDED"
+  }
+]

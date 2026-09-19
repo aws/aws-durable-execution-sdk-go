@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
+	"github.com/aws/aws-durable-execution-sdk-go/examples/internal/extest"
 )
 
 func TestHandler(t *testing.T) {
@@ -114,4 +115,6 @@ func TestHandler(t *testing.T) {
 	if out.CallbackErrorInfo.OpErrorName != "failing-callback" {
 		t.Errorf("CallbackErrorInfo.OpErrorName = %q, want %q", out.CallbackErrorInfo.OpErrorName, "failing-callback")
 	}
+
+	extest.AssertSignature(t, result, extest.Ordered)
 }

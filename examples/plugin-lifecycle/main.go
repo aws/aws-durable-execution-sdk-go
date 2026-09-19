@@ -34,6 +34,16 @@ func (r *recorder) record(e hookEvent) {
 	r.mu.Unlock()
 }
 
+// reset discards the events of earlier invocations. A warm Lambda
+// container keeps package-level state between invocations, so without it
+// the output would carry the hooks of every invocation the container has
+// served.
+func (r *recorder) reset() {
+	r.mu.Lock()
+	r.events = nil
+	r.mu.Unlock()
+}
+
 func (r *recorder) snapshot() []hookEvent {
 	r.mu.Lock()
 	cp := make([]hookEvent, len(r.events))
@@ -48,6 +58,7 @@ var rec = &recorder{}
 // plugin records every lifecycle hook invocation into rec.
 var plugin = durable.Plugin{
 	OnInvocationStart: func(_ context.Context, _ durable.InvocationHookInfo) {
+		rec.reset()
 		rec.record(hookEvent{Hook: "OnInvocationStart"})
 	},
 	OnInvocationEnd: func(_ context.Context, _ durable.InvocationEndHookInfo) {

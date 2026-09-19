@@ -3,7 +3,7 @@
 
 //go:build cloud
 
-// Cloud smoke test for the deployed examples.
+// Cloud test matrix for the deployed examples.
 //
 // Each example function is invoked with the shared event payload and its
 // durable execution is polled until it reaches a terminal state. The
@@ -12,8 +12,14 @@
 // example declares in expectations.go. The example list is parsed from
 // build.sh so there is a single source of truth.
 //
-// This test is the fast smoke test for the deployed stack: one invocation
-// per example with the shared event, and one expectation per example. The
+// The execution's operation signature is then compared with the golden
+// file the example's local handler test asserts, using the comparison
+// mode that test declares (see extest.ParseHandlerTest). An example whose
+// deployed run differs by design records the deployed sequence in
+// testdata/signature.cloud.golden; see extest.AssertCloudSignature for
+// how that file is created and kept honest.
+//
+// This test runs one invocation per example with the shared event. The
 // per-example tests under examples/<name>/handler_test.go carry each
 // example's full assertions and run against the same deployed functions
 // when the runner is switched to cloud mode (see examples/internal/extest).
@@ -40,6 +46,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
+
+	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
+	"github.com/aws/aws-durable-execution-sdk-go/examples/internal/extest"
 )
 
 // pollInterval is how often a pending durable execution is re-checked.
@@ -115,7 +124,8 @@ func TestExamples(t *testing.T) {
 					aws.ToString(out.FunctionError), string(out.Payload))
 			}
 
-			final := waitForTerminal(ctx, t, client, aws.ToString(out.DurableExecutionArn))
+			arn := aws.ToString(out.DurableExecutionArn)
+			final := waitForTerminal(ctx, t, client, arn)
 			got := outcome{
 				failed: final.Status != types.ExecutionStatusSucceeded,
 				result: aws.ToString(final.Result),
@@ -124,8 +134,28 @@ func TestExamples(t *testing.T) {
 				got.errorType = aws.ToString(final.Error.ErrorType)
 			}
 			exp.assert(t, got)
+
+			assertSignature(t, client, name, arn)
 		})
 	}
+}
+
+// assertSignature compares the operation signature of the finished
+// execution with the golden the example's handler test asserts, in the
+// mode that test declares for the default golden.
+func assertSignature(t *testing.T, client *lambda.Client, name, arn string) {
+	t.Helper()
+	dir := "../" + name
+	ht, err := extest.ParseHandlerTest(dir + "/handler_test.go")
+	if err != nil {
+		t.Fatalf("read signature declaration: %v", err)
+	}
+	mode, err := ht.ModeFor(extest.GoldenPath)
+	if err != nil {
+		t.Fatalf("read signature declaration: %v", err)
+	}
+	result := durabletest.NewCloudRunner(client, name).RunWithArn(t, arn)
+	extest.AssertCloudSignature(t, result, mode, dir)
 }
 
 // waitForTerminal polls the durable execution until it leaves RUNNING or

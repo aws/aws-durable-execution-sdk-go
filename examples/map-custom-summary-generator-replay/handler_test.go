@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
+	"github.com/aws/aws-durable-execution-sdk-go/examples/internal/extest"
 )
 
 // runAcrossSuspension drives the handler through its suspension on the
@@ -87,6 +88,10 @@ func TestHandler(t *testing.T) {
 	if !strings.HasPrefix(record.Summary, customSummaryPrefix) {
 		t.Errorf("record summary = %q, want the custom summary starting with %q", record.Summary, customSummaryPrefix)
 	}
+
+	// Concurrent branches checkpoint in scheduling-dependent order, so the
+	// signature is compared as a set.
+	extest.AssertSignature(t, result, extest.Unordered)
 }
 
 func TestHandlerSmallPayload(t *testing.T) {
@@ -106,4 +111,8 @@ func TestHandlerSmallPayload(t *testing.T) {
 	if strings.Contains(op.ContextDetails.Result, customSummaryPrefix) {
 		t.Errorf("small result payload carries the summary: %s", op.ContextDetails.Result)
 	}
+
+	// The payload size changes how the map result is checkpointed, not
+	// which operations run, so both sizes share the golden.
+	extest.AssertSignature(t, result, extest.Unordered)
 }

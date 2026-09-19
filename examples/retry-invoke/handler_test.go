@@ -5,7 +5,6 @@ package main
 
 import (
 	"encoding/json"
-	"path/filepath"
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
@@ -81,5 +80,5 @@ func TestHandler(t *testing.T) {
 		t.Errorf("expected message %q, got %q", "success on attempt 3", response.Message)
 	}
 
-	durabletest.AssertGoldenSignature(t, result, filepath.Join("testdata", "signature.golden"))
+	extest.AssertSignature(t, result, extest.Ordered)
 }

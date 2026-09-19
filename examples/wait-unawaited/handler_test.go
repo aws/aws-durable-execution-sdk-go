@@ -26,12 +26,10 @@ func TestHandler(t *testing.T) {
 		t.Errorf("expected %q, got %q", "result", output)
 	}
 
-	// The "complete" step must always be present.
-	// The "background-wait" (fired via WaitAsync) may or may not appear
-	// depending on goroutine timing — it is fire-and-forget.
-	durabletest.AssertSignatureContains(t, result, []durabletest.OperationSignature{
-		{Type: "STEP", SubType: "Step", Name: "complete", Status: "SUCCEEDED"},
-	})
+	// The "complete" step must always be present. The "background-wait"
+	// (fired via WaitAsync) may or may not reach a checkpoint before the
+	// handler returns, so the golden lists only the step.
+	extest.AssertSignature(t, result, extest.Subset)
 
 	// Verify that if background-wait appears, it has the expected shape.
 	sig := durabletest.EventSignature(result)

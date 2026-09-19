@@ -29,4 +29,6 @@ func TestHandler(t *testing.T) {
 	if output.Name != "test-record" {
 		t.Errorf("expected Name=%q, got %q", "test-record", output.Name)
 	}
+
+	extest.AssertSignature(t, result, extest.Ordered)
 }

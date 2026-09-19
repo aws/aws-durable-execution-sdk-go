@@ -10,6 +10,7 @@ import (
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
+	"github.com/aws/aws-durable-execution-sdk-go/examples/internal/extest"
 	"github.com/aws/aws-durable-execution-sdk-go/insight"
 )
 
@@ -81,4 +82,6 @@ func TestHandler(t *testing.T) {
 	if op.DurationMs == nil || *op.DurationMs < 0 {
 		t.Errorf("expected operation to carry non-negative timing (DurationMs), got %v", op.DurationMs)
 	}
+
+	extest.AssertSignature(t, result, extest.Ordered)
 }

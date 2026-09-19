@@ -11,6 +11,7 @@ import (
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
+	"github.com/aws/aws-durable-execution-sdk-go/examples/internal/extest"
 )
 
 // envelope is the checkpoint envelope the filesystem serdes writes when the
@@ -103,4 +104,6 @@ func TestHandler(t *testing.T) {
 	if !strings.Contains(string(contents), "do-not-log-me") {
 		t.Error("offloaded file should hold the full value, including the excluded field")
 	}
+
+	extest.AssertSignature(t, result, extest.Ordered)
 }

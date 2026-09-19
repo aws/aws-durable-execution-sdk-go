@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
+	"github.com/aws/aws-durable-execution-sdk-go/examples/internal/extest"
 )
 
 func TestHandler(t *testing.T) {
@@ -26,4 +27,8 @@ func TestHandler(t *testing.T) {
 	if result.Status != durabletest.Succeeded {
 		t.Fatalf("expected Succeeded, got %s", result.Status)
 	}
+
+	// Concurrent branches checkpoint in scheduling-dependent order, so the
+	// signature is compared as a set.
+	extest.AssertSignature(t, result, extest.Unordered)
 }

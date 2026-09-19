@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
+	"github.com/aws/aws-durable-execution-sdk-go/examples/internal/extest"
 )
 
 // envelope is the checkpoint envelope the filesystem serdes writes when the
@@ -112,4 +113,6 @@ func TestHandler(t *testing.T) {
 	if !strings.Contains(string(contents), "123-45-6789") {
 		t.Error("offloaded file should hold the full value, including the masked field")
 	}
+
+	extest.AssertSignature(t, result, extest.Ordered)
 }

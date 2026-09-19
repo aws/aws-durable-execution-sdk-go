@@ -8,6 +8,7 @@ import (
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
+	"github.com/aws/aws-durable-execution-sdk-go/examples/internal/extest"
 )
 
 func TestHandler(t *testing.T) {
@@ -60,4 +61,6 @@ func TestHandler(t *testing.T) {
 			t.Errorf("event[%d]: expected attempt %d, got %d", i, want.Attempt, got.Attempt)
 		}
 	}
+
+	extest.AssertSignature(t, result, extest.Ordered)
 }

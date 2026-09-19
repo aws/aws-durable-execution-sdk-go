@@ -1,0 +1,42 @@
+[
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "before",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "RunInChildContext",
+    "name": "cb-wrap",
+    "status": "FAILED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "RunInChildContext",
+    "name": "all",
+    "status": "FAILED"
+  },
+  {
+    "type": "WAIT",
+    "subType": "Wait",
+    "name": "wait-1s",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "WaitForCallback",
+    "name": "callback",
+    "status": "FAILED"
+  },
+  {
+    "type": "CALLBACK",
+    "subType": "Callback",
+    "status": "STARTED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "status": "FAILED"
+  }
+]

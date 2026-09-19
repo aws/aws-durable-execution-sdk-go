@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
+	"github.com/aws/aws-durable-execution-sdk-go/examples/internal/extest"
 )
 
 func TestHandler(t *testing.T) {
@@ -23,7 +24,8 @@ func TestHandler(t *testing.T) {
 		t.Fatalf("expected Failed (submitter needs real AWS), got %s", result.Status)
 	}
 
-	// NOTE: Golden signature assertion is skipped for this example because:
-	// 1. Concurrent Go child contexts produce non-deterministic operation ordering.
-	// 2. The test exercises cloud-only submitter behavior.
+	// Whichever submitter fails first fails the All; the other branch is
+	// left in a scheduling-dependent state. The golden lists the operations
+	// every local run produces.
+	extest.AssertSignature(t, result, extest.Subset)
 }

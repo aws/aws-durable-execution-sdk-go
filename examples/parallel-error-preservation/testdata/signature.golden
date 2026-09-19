@@ -1,0 +1,32 @@
+[
+  {
+    "type": "CONTEXT",
+    "subType": "Parallel",
+    "name": "parallel-with-errors",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "ParallelBranch",
+    "name": "success-task",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "ParallelBranch",
+    "name": "failing-task",
+    "status": "FAILED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "failing-task",
+    "status": "FAILED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "success-task",
+    "status": "SUCCEEDED"
+  }
+]

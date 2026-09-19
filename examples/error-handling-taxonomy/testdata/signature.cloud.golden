@@ -1,0 +1,26 @@
+[
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "failing-step",
+    "status": "FAILED"
+  },
+  {
+    "type": "CHAINED_INVOKE",
+    "subType": "ChainedInvoke",
+    "name": "failing-invoke",
+    "status": "FAILED"
+  },
+  {
+    "type": "CALLBACK",
+    "subType": "Callback",
+    "name": "failing-callback",
+    "status": "FAILED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "send-callback-failure",
+    "status": "SUCCEEDED"
+  }
+]

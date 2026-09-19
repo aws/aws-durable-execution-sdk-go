@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
+	"github.com/aws/aws-durable-execution-sdk-go/examples/internal/extest"
 )
 
 func TestHandler(t *testing.T) {
@@ -42,7 +43,8 @@ func TestHandler(t *testing.T) {
 		t.Error("expected non-empty AnyResult")
 	}
 
-	// NOTE: Golden signature assertion is skipped for this example because
-	// StepAsync futures may produce non-deterministic operation ordering
-	// due to concurrent goroutine scheduling.
+	// Race and Any return before their losing futures settle, so those steps
+	// may or may not reach a checkpoint. The golden lists the operations
+	// every run produces.
+	extest.AssertSignature(t, result, extest.Subset)
 }

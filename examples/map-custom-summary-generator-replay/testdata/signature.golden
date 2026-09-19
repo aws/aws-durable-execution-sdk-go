@@ -1,0 +1,38 @@
+[
+  {
+    "type": "CONTEXT",
+    "subType": "Map",
+    "name": "summarized-map",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "MapIteration",
+    "name": "item-0",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "MapIteration",
+    "name": "item-1",
+    "status": "STARTED"
+  },
+  {
+    "type": "WAIT",
+    "subType": "Wait",
+    "name": "slow-item",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "MapIteration",
+    "name": "item-2",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "WAIT",
+    "subType": "Wait",
+    "name": "after-map",
+    "status": "SUCCEEDED"
+  }
+]

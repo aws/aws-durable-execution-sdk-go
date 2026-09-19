@@ -5,11 +5,11 @@ package main
 
 import (
 	"encoding/json"
-	"path/filepath"
 	"reflect"
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
+	"github.com/aws/aws-durable-execution-sdk-go/examples/internal/extest"
 )
 
 func assertOutput(t *testing.T, result *durabletest.TestResult, wantLength int) {
@@ -64,12 +64,16 @@ func TestHandler(t *testing.T) {
 	if want := (Summary{Marker: customSummaryMarker, TotalCount: 3, SuccessCount: 3}); summary != want {
 		t.Errorf("summary = %+v, want %+v", summary, want)
 	}
+
+	// Branches run concurrently, so operation order varies between runs.
+	// The payload size changes how the result is checkpointed, not which
+	// operations run, so both sizes share the golden.
+	extest.AssertSignature(t, result, extest.Unordered)
 }
 
 func TestHandlerSmallPayload(t *testing.T) {
 	// A small payload stays within one checkpoint: the full result is
-	// stored and no summary is produced. This case also records the
-	// event signature, which a large-payload run would bloat.
+	// stored and no summary is produced.
 	runner := durabletest.NewLocalRunner(handler)
 	result := runner.RunUntilComplete(t, Event{BranchPayloadSize: 10})
 	if result.Status != durabletest.Succeeded {
@@ -86,5 +90,5 @@ func TestHandlerSmallPayload(t *testing.T) {
 	}
 
 	// Branches run concurrently, so operation order varies between runs.
-	durabletest.AssertGoldenSignatureUnordered(t, result, filepath.Join("testdata", "signature.golden"))
+	extest.AssertSignature(t, result, extest.Unordered)
 }

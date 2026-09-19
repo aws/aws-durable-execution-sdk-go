@@ -4,7 +4,6 @@
 package main
 
 import (
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -27,5 +26,5 @@ func TestHandler(t *testing.T) {
 		t.Errorf("expected error to contain %q, got %q", "persistent failure", result.Error.Message)
 	}
 
-	durabletest.AssertGoldenSignature(t, result, filepath.Join("testdata", "signature.golden"))
+	extest.AssertSignature(t, result, extest.Ordered)
 }

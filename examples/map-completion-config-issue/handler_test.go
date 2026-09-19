@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
+	"github.com/aws/aws-durable-execution-sdk-go/examples/internal/extest"
 )
 
 func TestHandler(t *testing.T) {
@@ -52,4 +53,9 @@ func TestHandler(t *testing.T) {
 	if output.HasFailures != (output.FailedCount > 0) {
 		t.Errorf("HasFailures=%v inconsistent with FailedCount=%d", output.HasFailures, output.FailedCount)
 	}
+
+	// The Map completes once MinSuccessful is reached, so an in-flight item
+	// may or may not have checkpointed its step. The golden lists the
+	// operations every run produces.
+	extest.AssertSignature(t, result, extest.Subset)
 }

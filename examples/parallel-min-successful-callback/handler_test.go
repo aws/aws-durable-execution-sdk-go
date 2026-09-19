@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
+	"github.com/aws/aws-durable-execution-sdk-go/examples/internal/extest"
 )
 
 func TestHandler(t *testing.T) {
@@ -39,6 +40,8 @@ func TestHandler(t *testing.T) {
 		t.Errorf("expected CompletionReason MIN_SUCCESSFUL_REACHED, got %q", output.CompletionReason)
 	}
 
-	// NOTE: Golden signature assertion is skipped for this example because
-	// Parallel operations produce non-deterministic operation ordering.
+	// The Parallel completes after three successes, so the callback branches
+	// may or may not have reached a checkpoint. The golden lists the
+	// operations every run produces.
+	extest.AssertSignature(t, result, extest.Subset)
 }

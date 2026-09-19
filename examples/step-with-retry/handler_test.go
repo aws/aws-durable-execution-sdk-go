@@ -24,4 +24,6 @@ func TestHandler(t *testing.T) {
 	if output != "step succeeded" {
 		t.Errorf("expected %q, got %q", "step succeeded", output)
 	}
+
+	extest.AssertSignature(t, result, extest.Ordered)
 }

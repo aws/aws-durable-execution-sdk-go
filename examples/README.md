@@ -257,24 +257,131 @@ elapsed times.
 Examples are migrated to the helper in batches by operation family. The
 Step & Retry and Wait & WaitForCondition families are migrated; the
 remaining families still construct `durabletest.NewLocalRunner` directly
-and run locally in both modes.
+and run locally in both modes; the cloud test matrix below checks the
+operation signature of every deployed example regardless.
 
-## Cloud smoke test
+### Operation signature goldens
 
-`cloud/cloud_test.go` is the fast smoke test for a deployed stack. It
-invokes every deployed example once with `event.json`, waits for the
-terminal state, and checks the terminal state, the result of a succeeding
-example, or the error type of a failing example against
-`cloud/expectations.go`. That file is the single table of expected
-outcomes; the "Expected Terminal State" column in the tables above
-mirrors it. A result that legitimately varies between runs (a timestamp,
-a measured duration, a count that depends on scheduling) is checked by a
-predicate that states why. The unit test in `cloud/expectations_test.go`
-fails when an example in `build.sh` has no entry, so a new example cannot
-pass the smoke test by default.
+Every durable example checks the shape of its operation log against
+`testdata/signature.golden`, a JSON list of the type, subtype, name, and
+status of each checkpointed operation in checkpoint order (see
+`durabletest.EventSignature`). The signature holds no timestamps, tokens,
+identifiers, or ARNs, so one file serves both the local runner and the
+deployed function. A change that alters the checkpoint structure without
+changing the final result fails the test. `non-durable` and
+`callback-sender` are plain Lambda functions with no operation log and
+have no golden.
 
-The smoke test is kept alongside the per-example cloud mode above because
-it is one invocation per example with the shared event and runs in about
+`internal/extest/coverage_test.go` parses every `handler_test.go` (see
+`extest.ParseHandlerTest`) and fails when:
+
+- the test does not assert `testdata/signature.golden` with exactly one
+  mode;
+- a `Test` function or `t.Run` subtest runs the handler, directly or
+  through a helper, without asserting a signature;
+- a golden file the test names is missing, a `testdata/signature*.golden`
+  file is not named by the test, or a golden holds anything but operation
+  signatures.
+
+Each `handler_test.go` records how its golden is compared by the mode it
+passes to `extest.AssertSignature`, with a comment giving the reason when
+the mode is not `Ordered`. The mode and the golden path must be written as
+`extest` constants or a string literal, so the choice is visible in the
+source:
+
+| Mode | Comparison | Used when |
+|------|------------|-----------|
+| `extest.Ordered` | Same operations in the same order | Operations run sequentially (the default) |
+| `extest.Unordered` | Same operations and counts, any order | Map, Parallel, Go, or Async branches checkpoint in scheduling-dependent order |
+| `extest.Subset` | Every listed operation is present; others are tolerated | An operation is optional: a fire-and-forget `WaitAsync`, or branches left unstarted by early completion (`Race`, `Any`, `Select`, `MinSuccessful`, a failure threshold) |
+
+A test scenario whose operations differ from the default scenario's
+asserts its own file with `extest.AssertSignatureFile`, named
+`testdata/signature.<scenario>.golden` (for example
+`future-any/testdata/signature.all-fail.golden`). Scenarios that change
+only payload sizes or storage paths share the default golden, because the
+signature does not record payloads.
+
+To regenerate a golden after an intended change, run the example's test
+with `UPDATE_GOLDEN=1` and commit the result:
+
+```bash
+UPDATE_GOLDEN=1 go test ./simple-step
+```
+
+In `Subset` mode the regenerated file lists every operation that run
+produced; delete the optional ones before committing, because a later run
+that lacks them would fail. `internal/extest/signature_test.go` shows each
+mode passing and, in a child process, failing on a deliberate change to the
+operation sequence.
+
+#### Cloud goldens
+
+The cloud test matrix (`cloud/cloud_test.go`, next section) invokes every
+deployed example and compares the execution's signature with the same
+golden the local test asserts, in the mode the local test declares. An
+example whose deployed run differs from its local run by design records
+the deployed sequence in `testdata/signature.cloud.golden`; the matrix
+then requires the deployed run to match that file and fails when the
+deployed run matches the local golden again, so a cloud golden cannot
+outlive the difference it documents. The deployed run differs for these
+reasons:
+
+- The callback examples resolve their callbacks by calling the callback
+  API from a step. Locally that call has no service to reach, so the step
+  fails and the callback stays `STARTED`; in the cloud both succeed.
+- `interrupted-no-retry` runs a step longer than the deployed function's
+  timeout, so the step is `FAILED` in the cloud. The local runner has no
+  function timeout.
+- `concurrent-operations`, `parallel-wait`, and
+  `map-custom-summary-generator-replay` run waits of different lengths in
+  concurrent branches. The local runner completes every pending timer at
+  once; in the cloud the shorter timer resumes the execution and the
+  longer waits are still `STARTED` when it completes.
+- `parallel-heterogeneous` invokes a companion function that the deployed
+  stack does not provide, so the invoke branch is `FAILED` in the cloud.
+
+To record a cloud golden, run the matrix with `UPDATE_GOLDEN=1`. It never
+rewrites `testdata/signature.golden`, which belongs to the local test; it
+writes the cloud file when the deployed run differs, and reports a cloud
+file the deployed run has made redundant:
+
+```bash
+FUNCTION_NAME_PREFIX=myprefix- UPDATE_GOLDEN=1 go test -tags cloud ./cloud -run 'TestExamples/create-callback-simple$'
+```
+
+An example whose `handler_test.go` runs in cloud mode through
+`extest.New` asserts the cloud file itself with
+`extest.AssertSignatureFile(t, result, mode, extest.CloudGoldenPath)`
+under `runner.Cloud()`, as `retry-callback` and `interrupted-no-retry`
+do, and regenerates it the same way:
+
+```bash
+DURABLE_EXAMPLES_RUNNER=cloud FUNCTION_NAME_PREFIX=myprefix- UPDATE_GOLDEN=1 go test ./retry-callback
+```
+
+Companion functions (`invoke-simple-target`, `retry-invoke-target`, and
+the other invoke targets) are exercised in the cloud through the examples
+that invoke them and are not in the matrix; their goldens are asserted
+locally.
+
+## Cloud test matrix
+
+`cloud/cloud_test.go` runs every deployed example once with `event.json`,
+waits for the terminal state, checks the terminal state, the result of a
+succeeding example, or the error type of a failing example against
+`cloud/expectations.go`, and compares the execution's operation signature
+with the example's golden (see "Cloud goldens" above).
+`cloud/expectations.go` is the single table of expected outcomes; the
+"Expected Terminal State" column in the tables above mirrors it. A result
+that legitimately varies between runs (a timestamp, a measured duration, a
+count that depends on scheduling) is checked by a predicate that states
+why. The unit test in `cloud/expectations_test.go` fails when an example
+in `build.sh` has no entry, so a new example cannot pass the matrix by
+default.
+
+The matrix is kept alongside the per-example cloud mode above because it
+is one invocation per example with the shared event and runs in about
 three minutes; `.github/workflows/cloud-tests.yml` runs both. Deploy with
 a stack name and `FunctionNamePrefix` of your own so that concurrent
 deployments from different branches do not overwrite each other. Then set

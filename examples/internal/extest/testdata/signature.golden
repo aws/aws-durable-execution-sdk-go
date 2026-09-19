@@ -1,0 +1,14 @@
+[
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "first",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "second",
+    "status": "SUCCEEDED"
+  }
+]

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
+	"github.com/aws/aws-durable-execution-sdk-go/examples/internal/extest"
 )
 
 func TestHandler(t *testing.T) {
@@ -26,4 +27,6 @@ func TestHandler(t *testing.T) {
 	if res.Status != durabletest.Failed {
 		t.Fatalf("expected Failed (submitter needs real AWS), got %s", res.Status)
 	}
+
+	extest.AssertSignature(t, res, extest.Ordered)
 }

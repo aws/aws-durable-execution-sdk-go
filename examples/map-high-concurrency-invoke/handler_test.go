@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
+	"github.com/aws/aws-durable-execution-sdk-go/examples/internal/extest"
 )
 
 func TestHandler(t *testing.T) {
@@ -69,10 +70,7 @@ func TestHandler(t *testing.T) {
 		}
 	}
 
-	// Verify the map context and chained invoke operations are present in
-	// the operation signature. Use unordered assertion since map item
-	// completion order is nondeterministic.
-	durabletest.AssertSignatureContains(t, result, []durabletest.OperationSignature{
-		{Type: "CONTEXT", SubType: "Map", Name: "process-items", Status: "SUCCEEDED"},
-	})
+	// Map items complete in scheduling-dependent order, so the signature is
+	// compared as a set.
+	extest.AssertSignature(t, result, extest.Unordered)
 }

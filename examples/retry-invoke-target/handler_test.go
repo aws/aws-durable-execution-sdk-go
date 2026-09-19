@@ -4,10 +4,10 @@
 package main
 
 import (
-	"path/filepath"
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
+	"github.com/aws/aws-durable-execution-sdk-go/examples/internal/extest"
 )
 
 func TestHandler(t *testing.T) {
@@ -32,7 +32,7 @@ func TestHandler(t *testing.T) {
 		t.Errorf("expected message %q, got %q", "success on attempt 3", out.Message)
 	}
 
-	durabletest.AssertGoldenSignature(t, result, filepath.Join("testdata", "signature.golden"))
+	extest.AssertSignature(t, result, extest.Ordered)
 }
 
 func TestHandler_Failure(t *testing.T) {
@@ -48,4 +48,8 @@ func TestHandler_Failure(t *testing.T) {
 	if result.Error == nil {
 		t.Fatal("expected error details")
 	}
+
+	// The target checkpoints no operation of its own on either path;
+	// the golden records that the failing path adds none.
+	extest.AssertSignatureFile(t, result, extest.Ordered, "testdata/signature.failure.golden")
 }
