@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Added: the `insight` and `analysis` modules are released with the SDK
+
+Each release tags the root module `vX.Y.Z` and the nested modules
+`insight/vX.Y.Z` and `analysis/vX.Y.Z` at the same commit, so
+`go get github.com/aws/aws-durable-execution-sdk-go/insight@vX.Y.Z` and
+`go install github.com/aws/aws-durable-execution-sdk-go/analysis/cmd/durablelint@vX.Y.Z`
+resolve. `insight/vX.Y.Z` declares a dependency on the root module
+`vX.Y.Z`; keep the two at the same version. See "Releasing" in
+`CONTRIBUTING.md`.
+
 ### Added: `ConfigureLogging` reconfigures the logger inside the handler
 
 `ConfigureLogging(ctx, LogConfig{...})` replaces the `slog.Handler` behind

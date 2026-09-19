@@ -1,0 +1,103 @@
+name: Release
+
+# Releases the root module and the published nested modules (insight,
+# analysis) at one version. The job runs scripts/release.sh, which pins each
+# nested module to the root version being released, commits the pins, and
+# creates the tags the Go toolchain expects (vX.Y.Z and <dir>/vX.Y.Z). The
+# root module tag is pushed first; the nested module tags follow only after a
+# throwaway consumer has built the nested modules against the published root
+# module. See CONTRIBUTING.md, "Releasing".
+#
+# Releases come from the default branch only. The workflow refuses any other
+# ref chosen at dispatch time.
+#
+# A rerun resumes a release that stopped part way. The release script keeps
+# tags of this version that already point at the release commit and creates
+# the missing ones, so rerunning the workflow on the release commit pushes
+# whatever was not pushed before.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, for example v0.2.0 or v0.2.0-beta.1"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: release ${{ inputs.version }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the release commit and the tags
+    concurrency:
+      group: go-release
+      cancel-in-progress: false
+    env:
+      VERSION: ${{ inputs.version }}
+      RELEASE_BRANCH: ${{ github.event.repository.default_branch }}
+    steps:
+      # Runs before checkout so that a wrong ref does nothing at all.
+      - name: Require the default branch
+        env:
+          SELECTED_REF: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          if [ "$REF_TYPE" != branch ] || [ "$SELECTED_REF" != "$RELEASE_BRANCH" ]; then
+            echo "::error::releases run from the default branch '$RELEASE_BRANCH' only; got $REF_TYPE '$SELECTED_REF'"
+            exit 1
+          fi
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          # The release script checks where this version's tags point, so
+          # it needs the full tag list.
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: insight/go.sum
+
+      - name: Pin, commit, and tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          sh scripts/release.sh "$VERSION"
+
+      - name: Push the release commit and the root module tag
+        run: git push origin "HEAD:$RELEASE_BRANCH" "$VERSION"
+
+      # The nested modules now pin a root version that exists. Build them
+      # from this checkout against that root version from the module proxy.
+      # The proxy serves a new tag shortly after the push; retry until it does.
+      - name: Verify the nested modules against the published root module
+        run: |
+          for attempt in 1 2 3 4 5 6; do
+            if sh scripts/verify-consumable.sh; then exit 0; fi
+            echo "attempt $attempt failed; retrying in 30s"
+            sleep 30
+          done
+          exit 1
+
+      # Only the tags of this version at the release commit. Tags that a
+      # previous run pushed are already up to date on the remote.
+      - name: Push the nested module tags
+        run: |
+          tags=$(git tag --points-at HEAD --list "*/$VERSION")
+          [ -n "$tags" ] || { echo "::error::no nested module tags for $VERSION at HEAD"; exit 1; }
+          git push origin $tags
+
+      - name: Verify the published nested modules
+        run: |
+          for attempt in 1 2 3 4 5 6; do
+            if sh scripts/verify-consumable.sh --released "$VERSION"; then exit 0; fi
+            echo "attempt $attempt failed; retrying in 30s"
+            sleep 30
+          done
+          exit 1

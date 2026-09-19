@@ -3,7 +3,7 @@ module github.com/aws/aws-durable-execution-sdk-go/examples
 go 1.24
 
 require (
-	github.com/aws/aws-durable-execution-sdk-go v0.0.0
+	github.com/aws/aws-durable-execution-sdk-go v0.1.0
 	github.com/aws/aws-lambda-go v1.54.0
 	github.com/aws/aws-sdk-go-v2 v1.42.1
 	github.com/aws/aws-sdk-go-v2/config v1.32.30

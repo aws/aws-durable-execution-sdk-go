@@ -7,6 +7,9 @@
 #
 # Modules default to all five: . insight conformance examples analysis
 # (e.g. `scripts/ci-local.sh examples` to check only the examples module).
+# With no module argument the repository-level checks also run: the release
+# script tests and the external-consumability check of the published nested
+# modules.
 #
 # Requires: Go and golangci-lint at the versions pinned in .mise.toml
 # (`mise install` sets both up).
@@ -63,5 +66,14 @@ for mod in $MODULES; do
         rm -f "$bin"
     fi
 done
+
+# Repository-level checks (only when no module list was given).
+if [ $# -eq 0 ]; then
+    echo "==> release tooling"
+    echo " -> scripts/release_test.sh"
+    sh "$ROOT/scripts/release_test.sh"
+    echo " -> scripts/verify-consumable.sh --root-from-checkout"
+    sh "$ROOT/scripts/verify-consumable.sh" --root-from-checkout
+fi
 
 echo "All checks passed."

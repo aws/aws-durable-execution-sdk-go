@@ -3,7 +3,7 @@ module github.com/aws/aws-durable-execution-sdk-go/insight
 go 1.24
 
 require (
-	github.com/aws/aws-durable-execution-sdk-go v0.0.0
+	github.com/aws/aws-durable-execution-sdk-go v0.1.0
 	github.com/aws/aws-sdk-go-v2 v1.42.1
 	github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs v1.79.1
 	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.44.1
