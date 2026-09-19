@@ -403,20 +403,29 @@ func TestPluginEnrichLogContextPanicSwallowed(t *testing.T) {
 	}
 }
 
-// TestPluginOperationHooksNotFiredForPendingOps verifies that operation-level
-// hooks are NOT fired for operations that are still pending (waiting for
-// backend to complete them).
+// TestPluginOperationHooksNotFiredForPendingOps verifies that an operation
+// replayed while still pending dispatches no end hook: the operation has no
+// terminal outcome yet, so the invocation suspends without one. The start
+// hook does fire, as a replayed start, because the operation's start is
+// checkpointed.
 func TestPluginOperationHooksNotFiredForPendingOps(t *testing.T) {
-	var opStartCalled atomic.Bool
+	var starts []OperationHookInfo
+	var endCalled atomic.Bool
+	var mu sync.Mutex
 	plugin := Plugin{
-		OnOperationStart: func(_ context.Context, _ OperationHookInfo) {
-			opStartCalled.Store(true)
+		OnOperationStart: func(_ context.Context, info OperationHookInfo) {
+			mu.Lock()
+			starts = append(starts, info)
+			mu.Unlock()
+		},
+		OnOperationEnd: func(_ context.Context, _ OperationHookInfo) {
+			endCalled.Store(true)
 		},
 	}
 
 	handler := Wrap(func(ctx Context, event string) (string, error) {
 		// Wait: if STARTED status is already checkpointed, it suspends
-		// without firing operation hooks (timer hasn't fired yet).
+		// again (the timer has not fired).
 		return "", Wait(ctx, "", 60*time.Second)
 	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
 
@@ -432,9 +441,17 @@ func TestPluginOperationHooksNotFiredForPendingOps(t *testing.T) {
 	}
 	assertPluginResponseStatus(t, resp, invocationPending)
 
-	// Operation hooks must NOT fire for the pending wait.
-	if opStartCalled.Load() {
-		t.Fatal("OnOperationStart should not fire for pending operations")
+	mu.Lock()
+	defer mu.Unlock()
+	if len(starts) != 1 {
+		t.Fatalf("expected 1 replayed OnOperationStart for the pending wait, got %d", len(starts))
+	}
+	if !starts[0].IsReplay || starts[0].Status != PluginOperationStarted {
+		t.Fatalf("expected replayed STARTED start, got IsReplay=%v Status=%q", starts[0].IsReplay, starts[0].Status)
+	}
+	// The end hook must NOT fire for the pending wait.
+	if endCalled.Load() {
+		t.Fatal("OnOperationEnd should not fire for pending operations")
 	}
 }
 

@@ -124,6 +124,14 @@ func InvokeAsync[O, I any](ctx Context, name, functionID string, input I, opts .
 
 // runInvoke performs the invoke logic for a previously-claimed operation ID.
 // It is shared by both the blocking [Invoke] and the async [InvokeAsync].
+//
+// Operation lifecycle hooks: an invoke dispatches at most one start and at
+// most one end per invocation. A live invoke dispatches a start after its
+// START checkpoint and then suspends, with no end. An invoke replayed while
+// the invoked execution is unsettled dispatches a replayed start and
+// suspends. An invoke replayed with a terminal status dispatches only a
+// replayed end with the checkpointed timestamps and outcome: its start was
+// dispatched by the invocation that recorded it.
 func runInvoke[O, I any](ec *execContext, id, name, functionID string, input I, options invokeOptions) (O, error) {
 	var zero O
 
@@ -135,11 +143,19 @@ func runInvoke[O, I any](ec *execContext, id, name, functionID string, input I, 
 		return zero, ec.parkUnfinishedReplay(op, id, string(OperationTypeChainedInvoke), operationSubTypeChainedInvoke, name)
 	}
 	if op != nil {
+		info := ec.operationHookInfo(id, name, string(OperationTypeChainedInvoke), operationSubTypeChainedInvoke, true)
+		info.StartTimestamp = op.startTimestamp
 		switch op.status {
 		case statusSucceeded:
 			if op.invoke == nil {
 				return zero, fmt.Errorf("durable: invoke %q: checkpointed %s operation has no invoke details", name, op.status)
 			}
+			// The invoke reached its terminal state when the checkpoint
+			// recorded it, so its end is dispatched before the result is
+			// deserialized: a failing result Serdes does not suppress it.
+			info.Result = op.invoke.result
+			info.EndTimestamp = op.endTimestamp
+			dispatchOperationEnd(ec, info, PluginOperationSucceeded)
 			var out O
 			if err := options.resultSerdes.Unmarshal(ec.Context, ec.serdesCtx(id), []byte(op.invoke.result), &out); err != nil {
 				return zero, newSerdesError(name, serdesDirectionUnmarshal, err)
@@ -147,10 +163,17 @@ func runInvoke[O, I any](ec *execContext, id, name, functionID string, input I, 
 			return out, nil
 
 		case statusFailed, statusTimedOut, statusStopped, statusCancelled:
-			return zero, invokeErrorFromCheckpoint(name, functionID, op)
+			invErr := invokeErrorFromCheckpoint(name, functionID, op)
+			info.Error = invErr.Err
+			info.EndTimestamp = op.endTimestamp
+			dispatchOperationEnd(ec, info, toPluginOperationStatus(op.status))
+			return zero, invErr
 
 		case statusStarted, statusPending, statusReady:
-			// The invoked execution has not settled: keep waiting.
+			// The invoked execution has not settled: the start is
+			// replayed and the end belongs to the invocation that
+			// observes the outcome. Keep waiting.
+			dispatchOperationStart(ec, info, toPluginOperationStatus(op.status))
 			ec.blocked.Store(true)
 			ec.suspend.commitPending(ec.abandon)
 			return zero, errSuspendExecution
@@ -192,6 +215,12 @@ func runInvoke[O, I any](ec *execContext, id, name, functionID string, input I, 
 		}
 		return zero, err
 	}
+
+	// The invoke is recorded. Its start timestamp comes from the checkpoint
+	// response when the response carried the record, else from the clock.
+	info := ec.operationHookInfo(id, name, string(OperationTypeChainedInvoke), operationSubTypeChainedInvoke, false)
+	info.StartTimestamp = checkpointedStartTime(ec.state.get(id))
+	dispatchOperationStart(ec, info, PluginOperationStarted)
 
 	// The invoked function runs as its own durable execution: suspend and
 	// resume when it settles.

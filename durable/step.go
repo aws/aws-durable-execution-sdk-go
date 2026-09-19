@@ -166,87 +166,32 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 				return zero, fmt.Errorf("durable: step %q: checkpointed %s operation has no step details", name, op.status)
 			}
 			// Fire operation hooks for replayed terminal operations.
-			dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
-				if p.OnOperationStart != nil {
-					p.OnOperationStart(ec, OperationHookInfo{
-						ExecutionArn:   ec.executionArn,
-						ID:             id,
-						Name:           name,
-						Type:           string(OperationTypeStep),
-						SubType:        operationSubTypeStep,
-						Status:         PluginOperationSucceeded,
-						Attempt:        op.step.attempt,
-						IsReplay:       true,
-						ParentID:       ec.parentWireID(),
-						StartTimestamp: op.startTimestamp,
-						Result:         op.step.result,
-					})
-				}
-			})
+			info := ec.operationHookInfo(id, name, string(OperationTypeStep), operationSubTypeStep, true)
+			info.Attempt = op.step.attempt
+			info.StartTimestamp = op.startTimestamp
+			info.Result = op.step.result
+			dispatchOperationStart(ec, info, PluginOperationSucceeded)
 			var out O
 			if err := options.serdes.Unmarshal(ec.Context, ec.serdesCtx(id), []byte(op.step.result), &out); err != nil {
 				return zero, newSerdesError(name, serdesDirectionUnmarshal, err)
 			}
-			dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
-				if p.OnOperationEnd != nil {
-					p.OnOperationEnd(ec, OperationHookInfo{
-						ExecutionArn:   ec.executionArn,
-						ID:             id,
-						Name:           name,
-						Type:           string(OperationTypeStep),
-						SubType:        operationSubTypeStep,
-						Status:         PluginOperationSucceeded,
-						Attempt:        op.step.attempt,
-						IsReplay:       true,
-						ParentID:       ec.parentWireID(),
-						StartTimestamp: op.startTimestamp,
-						EndTimestamp:   op.endTimestamp,
-						Result:         op.step.result,
-					})
-				}
-			})
+			info.EndTimestamp = op.endTimestamp
+			dispatchOperationEnd(ec, info, PluginOperationSucceeded)
 			return out, nil
 
 		case statusFailed:
 			if op.step == nil {
 				return zero, fmt.Errorf("durable: step %q: checkpointed %s operation has no step details", name, op.status)
 			}
-			dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
-				if p.OnOperationStart != nil {
-					p.OnOperationStart(ec, OperationHookInfo{
-						ExecutionArn:   ec.executionArn,
-						ID:             id,
-						Name:           name,
-						Type:           string(OperationTypeStep),
-						SubType:        operationSubTypeStep,
-						Status:         PluginOperationFailed,
-						Attempt:        op.step.attempt,
-						IsReplay:       true,
-						ParentID:       ec.parentWireID(),
-						StartTimestamp: op.startTimestamp,
-						Error:          op.step.record().standIn(nil),
-					})
-				}
-			})
+			info := ec.operationHookInfo(id, name, string(OperationTypeStep), operationSubTypeStep, true)
+			info.Attempt = op.step.attempt
+			info.StartTimestamp = op.startTimestamp
+			info.Error = op.step.record().standIn(nil)
+			dispatchOperationStart(ec, info, PluginOperationFailed)
 			stepErr := newStepError(name, op.step.attempt, op.step.record())
-			dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
-				if p.OnOperationEnd != nil {
-					p.OnOperationEnd(ec, OperationHookInfo{
-						ExecutionArn:   ec.executionArn,
-						ID:             id,
-						Name:           name,
-						Type:           string(OperationTypeStep),
-						SubType:        operationSubTypeStep,
-						Status:         PluginOperationFailed,
-						Attempt:        op.step.attempt,
-						IsReplay:       true,
-						ParentID:       ec.parentWireID(),
-						StartTimestamp: op.startTimestamp,
-						EndTimestamp:   op.endTimestamp,
-						Error:          stepErr.Err,
-					})
-				}
-			})
+			info.EndTimestamp = op.endTimestamp
+			info.Error = stepErr.Err
+			dispatchOperationEnd(ec, info, PluginOperationFailed)
 			return zero, stepErr
 
 		case statusPending:
@@ -273,22 +218,10 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 
 	// OnOperationStart for live execution.
 	startTime := time.Now()
-	dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
-		if p.OnOperationStart != nil {
-			p.OnOperationStart(ec, OperationHookInfo{
-				ExecutionArn:   ec.executionArn,
-				ID:             id,
-				Name:           name,
-				Type:           string(OperationTypeStep),
-				SubType:        operationSubTypeStep,
-				Status:         PluginOperationStarted,
-				Attempt:        attempt,
-				IsReplay:       isReplay,
-				ParentID:       ec.parentWireID(),
-				StartTimestamp: startTime,
-			})
-		}
-	})
+	liveInfo := ec.operationHookInfo(id, name, string(OperationTypeStep), operationSubTypeStep, isReplay)
+	liveInfo.Attempt = attempt
+	liveInfo.StartTimestamp = startTime
+	dispatchOperationStart(ec, liveInfo, PluginOperationStarted)
 
 	// The attempt counts as executing from its START checkpoint through
 	// the checkpoint of its outcome, so an invocation whose handler blocks
@@ -301,42 +234,12 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 
 	// OnOperationEnd for live execution.
 	if err == nil {
-		dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
-			if p.OnOperationEnd != nil {
-				p.OnOperationEnd(ec, OperationHookInfo{
-					ExecutionArn:   ec.executionArn,
-					ID:             id,
-					Name:           name,
-					Type:           string(OperationTypeStep),
-					SubType:        operationSubTypeStep,
-					Status:         PluginOperationSucceeded,
-					Attempt:        attempt,
-					IsReplay:       isReplay,
-					ParentID:       ec.parentWireID(),
-					StartTimestamp: startTime,
-					EndTimestamp:   time.Now(),
-				})
-			}
-		})
+		liveInfo.EndTimestamp = time.Now()
+		dispatchOperationEnd(ec, liveInfo, PluginOperationSucceeded)
 	} else if !errors.Is(err, errSuspendExecution) {
-		dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
-			if p.OnOperationEnd != nil {
-				p.OnOperationEnd(ec, OperationHookInfo{
-					ExecutionArn:   ec.executionArn,
-					ID:             id,
-					Name:           name,
-					Type:           string(OperationTypeStep),
-					SubType:        operationSubTypeStep,
-					Status:         PluginOperationFailed,
-					Attempt:        attempt,
-					IsReplay:       isReplay,
-					ParentID:       ec.parentWireID(),
-					StartTimestamp: startTime,
-					EndTimestamp:   time.Now(),
-					Error:          err,
-				})
-			}
-		})
+		liveInfo.EndTimestamp = time.Now()
+		liveInfo.Error = err
+		dispatchOperationEnd(ec, liveInfo, PluginOperationFailed)
 	}
 	// If errSuspendExecution: operation is still pending, no OnOperationEnd.
 

@@ -416,6 +416,62 @@ func invokePluginSafely(p *Plugin, call func(*Plugin)) {
 	call(p)
 }
 
+// operationHookInfo returns the OperationHookInfo shared by every
+// operation lifecycle hook dispatched for one operation on c: the
+// execution ARN, the parent context's wire ID, the operation's identity,
+// and whether the operation is replayed from a checkpoint. The caller sets
+// the timestamps and, where they apply, Attempt, Result, and Error before
+// passing the info to dispatchOperationStart or dispatchOperationEnd.
+func (c *execContext) operationHookInfo(id, name, opType, subType string, isReplay bool) OperationHookInfo {
+	return OperationHookInfo{
+		ExecutionArn: c.executionArn,
+		ID:           id,
+		Name:         name,
+		Type:         opType,
+		SubType:      subType,
+		IsReplay:     isReplay,
+		ParentID:     c.parentWireID(),
+	}
+}
+
+// dispatchOperationStart notifies every plugin's OnOperationStart hook that
+// the operation info describes has begun, reporting status. Dispatch goes
+// through dispatchNotification, so a panicking hook is recovered and never
+// affects execution, and a nil dispatcher is a no-op.
+//
+// Each operation dispatches at most one start per invocation. A live
+// operation reports PluginOperationStarted. An operation replayed before it
+// has settled reports its checkpointed status, so a plugin can tell a
+// replayed start from a live one by info.IsReplay and by the status. Each
+// operation decides whether a terminal replay also dispatches a start; see
+// the operation's own documentation.
+func dispatchOperationStart(ec *execContext, info OperationHookInfo, status PluginOperationStatus) {
+	info.Status = status
+	dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
+		if p.OnOperationStart != nil {
+			p.OnOperationStart(ec, info)
+		}
+	})
+}
+
+// dispatchOperationEnd notifies every plugin's OnOperationEnd hook that the
+// operation info describes has reached the terminal status. Dispatch goes
+// through dispatchNotification, so a panicking hook is recovered and never
+// affects execution, and a nil dispatcher is a no-op.
+//
+// Each operation dispatches at most one end per invocation, and only once
+// it has a terminal outcome. An operation that suspends the invocation has
+// no outcome yet, so it dispatches no end; the invocation that observes
+// its terminal checkpoint dispatches the end, with info.IsReplay set.
+func dispatchOperationEnd(ec *execContext, info OperationHookInfo, status PluginOperationStatus) {
+	info.Status = status
+	dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
+		if p.OnOperationEnd != nil {
+			p.OnOperationEnd(ec, info)
+		}
+	})
+}
+
 // wrapBody is the wrapped work a wrap hook receives: it runs the body with
 // the context the hook supplies.
 type wrapBody = func(context.Context) (any, error)

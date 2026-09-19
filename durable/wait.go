@@ -96,6 +96,13 @@ func WaitAsync(ctx Context, name string, d time.Duration, opts ...WaitOption) *F
 // runWait performs the wait logic for a previously-claimed operation ID.
 // Separated from [Wait] so that both the blocking and async variants share
 // the same core.
+//
+// Operation lifecycle hooks: a wait dispatches at most one start and at most
+// one end per invocation. A live wait dispatches a start after its START
+// checkpoint and then suspends, with no end. A wait replayed while still
+// STARTED dispatches a replayed start and suspends. A wait replayed as
+// SUCCEEDED dispatches only a replayed end with the checkpointed timestamps:
+// its start was dispatched by the invocation that recorded it.
 func runWait(ec *execContext, id, name string, d time.Duration) error {
 	op := ec.state.get(id)
 	if err := validateReplayConsistency(op, string(OperationTypeWait), operationSubTypeWait, name); err != nil {
@@ -107,8 +114,17 @@ func runWait(ec *execContext, id, name string, d time.Duration) error {
 	if op != nil {
 		switch op.status {
 		case statusSucceeded:
+			info := ec.operationHookInfo(id, name, string(OperationTypeWait), operationSubTypeWait, true)
+			info.StartTimestamp = op.startTimestamp
+			info.EndTimestamp = op.endTimestamp
+			dispatchOperationEnd(ec, info, PluginOperationSucceeded)
 			return nil
 		case statusStarted:
+			// The timer has not fired. The start is replayed; the end
+			// belongs to the invocation that observes the completion.
+			info := ec.operationHookInfo(id, name, string(OperationTypeWait), operationSubTypeWait, true)
+			info.StartTimestamp = op.startTimestamp
+			dispatchOperationStart(ec, info, PluginOperationStarted)
 			ec.blocked.Store(true)
 			ec.suspend.commitPending(ec.abandon)
 			return errSuspendExecution
@@ -144,7 +160,24 @@ func runWait(ec *execContext, id, name string, d time.Duration) error {
 		return err
 	}
 
+	// The wait is recorded. Its start timestamp comes from the checkpoint
+	// response when the response carried the record, else from the clock.
+	info := ec.operationHookInfo(id, name, string(OperationTypeWait), operationSubTypeWait, false)
+	info.StartTimestamp = checkpointedStartTime(ec.state.get(id))
+	dispatchOperationStart(ec, info, PluginOperationStarted)
+
 	ec.blocked.Store(true)
 	ec.suspend.commitPending(ec.abandon)
 	return errSuspendExecution
+}
+
+// checkpointedStartTime returns op's start timestamp when op exists and
+// carries one, else the current time. Used for the start hook of a live
+// operation right after its START checkpoint: the checkpoint response may
+// or may not carry the operation record with its timestamp.
+func checkpointedStartTime(op *operation) time.Time {
+	if op != nil && !op.startTimestamp.IsZero() {
+		return op.startTimestamp
+	}
+	return time.Now()
 }
