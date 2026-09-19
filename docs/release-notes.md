@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Added: `WithChildSubType`
+
+`durable.WithChildSubType(subType)` is a `ChildOption` for
+`RunInChildContext`, `RunInChildContextAsync`, and `Go`. It sets the
+subtype the child context records in its checkpoints and reports in
+`OperationHookInfo.SubType`, so a plugin or a reader of the execution
+history can tell one kind of caller-defined grouping from another. Without
+the option a child context records `OperationSubTypeRunInChildContext`, as
+before.
+
+The value must be 1 to 32 characters from A-Z, a-z, 0-9, hyphen, and
+underscore; an empty value selects the default. The subtypes the SDK
+records for its own operations (`Step`, `Wait`, `Callback`,
+`ChainedInvoke`, `WaitForCallback`, `WaitForCondition`, `Map`,
+`MapIteration`, `Parallel`, `ParallelBranch`) are reserved. A value outside
+these rules is a configuration error the operation returns before it
+claims an operation ID.
+
+The subtype is part of the operation's identity on replay: an invocation
+that supplies a different subtype for a checkpointed child context
+returns a `*NonDeterministicReplayError`. Keep it constant across
+invocations and deployments.
+
 ### Added (experimental plugin API): `WithPluginChildOperationsDepth`
 
 `WithPluginChildOperationsDepth(depth)` bounds the depth in the operation

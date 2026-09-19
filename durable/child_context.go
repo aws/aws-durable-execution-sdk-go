@@ -93,6 +93,36 @@ func WithChildSummary[O any](fn func(result O) string) ChildOption {
 	return childOptionFunc(func(o *childOptions) { o.summary = fn })
 }
 
+// WithChildSubType sets the operation subtype recorded for a
+// [RunInChildContext], [RunInChildContextAsync], or [Go] operation.
+// Without it the operation records [OperationSubTypeRunInChildContext].
+// The subtype is written to the checkpoint and reported in
+// [OperationHookInfo].SubType, so a plugin or a reader of the execution
+// history can tell one kind of caller-defined grouping from another:
+//
+//	durable.RunInChildContext(ctx, "order-42", processOrder,
+//		durable.WithChildSubType("OrderSaga"))
+//
+// subType must be 1 to 32 characters from the set A-Z, a-z, 0-9, hyphen,
+// and underscore; an empty subType selects the default. The subtypes the
+// SDK records for its own operations, the OperationSubType constants
+// other than [OperationSubTypeRunInChildContext], are reserved: a child
+// context cannot be labelled as a [Step], a [Map] iteration, or any other
+// SDK operation, because plugins and tooling identify those operations by
+// subtype alone. A value outside these rules is a configuration error the
+// operation returns before it claims an operation ID.
+//
+// The subtype is part of the operation's identity on replay. Every
+// invocation of the execution must supply the same subtype for the same
+// operation; an invocation that finds a different subtype in the
+// checkpoint returns a [*NonDeterministicReplayError]. A subtype must
+// therefore not depend on the input, on time, or on any other value that
+// can differ between invocations, and changing it in a deployment breaks
+// the executions that are in flight.
+func WithChildSubType(subType string) ChildOption {
+	return childOptionFunc(func(o *childOptions) { o.subType = subType })
+}
+
 type childOptions struct {
 	serdes      Serdes
 	errorMapper func(err *ChildContextError) error
@@ -101,6 +131,67 @@ type childOptions struct {
 	// ChildOption is not generic. childSummaryFunc asserts it against the
 	// operation's result type.
 	summary any
+
+	// subType is the [WithChildSubType] value; empty when the option was
+	// not supplied. childSubType resolves and validates it.
+	subType string
+}
+
+// maxOperationSubTypeLength is the longest operation subtype the service
+// accepts.
+const maxOperationSubTypeLength = 32
+
+// childSubType returns the subtype a child context named name records:
+// the default when the option was not supplied, else the configured value
+// once it is validated. A value the service would reject, or one reserved
+// for an SDK operation, is a configuration error.
+func childSubType(name string, options childOptions) (string, error) {
+	s := options.subType
+	if s == "" {
+		return OperationSubTypeRunInChildContext, nil
+	}
+	if len(s) > maxOperationSubTypeLength {
+		return "", fmt.Errorf("durable: child context %q: WithChildSubType value is %d characters, the limit is %d",
+			name, len(s), maxOperationSubTypeLength)
+	}
+	for i := 0; i < len(s); i++ {
+		if !isSubTypeChar(s[i]) {
+			return "", fmt.Errorf("durable: child context %q: WithChildSubType value %q has character %q at index %d, want A-Z, a-z, 0-9, hyphen, or underscore",
+				name, s, s[i], i)
+		}
+	}
+	if isReservedChildSubType(s) {
+		return "", fmt.Errorf("durable: child context %q: WithChildSubType value %q is the subtype of an SDK operation and is reserved",
+			name, s)
+	}
+	return s, nil
+}
+
+// isSubTypeChar reports whether c is a byte the service accepts in an
+// operation subtype. The accepted set is ASCII, so checking bytes also
+// rejects every multi-byte UTF-8 sequence.
+func isSubTypeChar(c byte) bool {
+	return c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '_'
+}
+
+// isReservedChildSubType reports whether s is a subtype the SDK records
+// for an operation of its own. [OperationSubTypeRunInChildContext] is the
+// default for a child context and is not reserved.
+func isReservedChildSubType(s string) bool {
+	switch s {
+	case OperationSubTypeStep,
+		OperationSubTypeWait,
+		OperationSubTypeCallback,
+		OperationSubTypeChainedInvoke,
+		OperationSubTypeWaitForCallback,
+		OperationSubTypeWaitForCondition,
+		OperationSubTypeMap,
+		OperationSubTypeMapIteration,
+		OperationSubTypeParallel,
+		OperationSubTypeParallelBranch:
+		return true
+	}
+	return false
 }
 
 // childSummaryFunc returns the summary function configured for a child
@@ -181,6 +272,10 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 	if err != nil {
 		return zero, err
 	}
+	subType, err := childSubType(name, options)
+	if err != nil {
+		return zero, err
+	}
 
 	id, err := ec.claimOperation()
 	if err != nil {
@@ -188,11 +283,11 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 	}
 
 	op := ec.state.get(id)
-	if err := validateReplayConsistency(op, string(OperationTypeContext), OperationSubTypeRunInChildContext, name); err != nil {
+	if err := validateReplayConsistency(op, string(OperationTypeContext), subType, name); err != nil {
 		return zero, err
 	}
 	if ec.unfinishedInSucceededContext(op) {
-		return zero, ec.parkUnfinishedReplay(op, id, string(OperationTypeContext), OperationSubTypeRunInChildContext, name)
+		return zero, ec.parkUnfinishedReplay(op, id, string(OperationTypeContext), subType, name)
 	}
 	if op != nil {
 		switch op.status {
@@ -204,7 +299,7 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 			// recorded it, so its end is dispatched before the result is
 			// rebuilt: neither a failing result Serdes nor a failing
 			// re-execution suppresses it.
-			dispatchReplayedContextEnd(ec, id, name, OperationSubTypeRunInChildContext, op, nil)
+			dispatchReplayedContextEnd(ec, id, name, subType, op, nil)
 			// ReplayChildren mode: the result was too large to
 			// checkpoint, so re-execute the child body to reconstruct it.
 			// fn runs on the calling goroutine, as on the first run. A
@@ -226,7 +321,7 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 
 		case statusFailed:
 			failure := options.failure(name, childFailureRecord(op))
-			dispatchReplayedContextEnd(ec, id, name, OperationSubTypeRunInChildContext, op, failure)
+			dispatchReplayedContextEnd(ec, id, name, subType, op, failure)
 			return zero, failure
 
 		case statusStarted, statusPending, statusReady, statusCancelled, statusTimedOut, statusStopped:
@@ -237,7 +332,7 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 	}
 
 	if op == nil {
-		update := childUpdate(ec, id, name, OperationActionStart)
+		update := childUpdate(ec, id, name, subType, OperationActionStart)
 		if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
 			if errors.Is(err, errCheckpointTerminated) {
 				return zero, errSuspendExecution
@@ -254,7 +349,7 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 
 	// The start is dispatched before the wrap hooks run, with the same
 	// info the hooks receive, so a plugin can correlate the two.
-	opInfo := dispatchContextStart(ec, id, name, OperationSubTypeRunInChildContext, op)
+	opInfo := dispatchContextStart(ec, id, name, subType, op)
 
 	// WrapChildContextFn wraps the child body execution. The context the
 	// hooks supply becomes the child context's parent; the child is not
@@ -302,7 +397,7 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 			return zero, errSuspendExecution
 		}
 		rec := recordOf(fnErr).withTrace(fnTrace)
-		update := childUpdate(ec, id, name, OperationActionFail)
+		update := childUpdate(ec, id, name, subType, OperationActionFail)
 		update.Error = errorObjectFromRecord(rec)
 		if cerr := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); cerr != nil {
 			if errors.Is(cerr, errCheckpointTerminated) {
@@ -319,7 +414,7 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 	if err != nil {
 		return zero, newSerdesError(name, serdesDirectionMarshal, err)
 	}
-	update := childUpdate(ec, id, name, OperationActionSucceed)
+	update := childUpdate(ec, id, name, subType, OperationActionSucceed)
 	if len(serialized) > checkpointSizeLimitBytes {
 		// Large payload: checkpoint with ReplayChildren so the backend
 		// preserves child operations for reconstruction. The payload is
@@ -374,6 +469,10 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 	if err != nil {
 		return newFailedFuture[O](err)
 	}
+	subType, err := childSubType(name, options)
+	if err != nil {
+		return newFailedFuture[O](err)
+	}
 
 	// Claim the operation ID synchronously on the calling goroutine to
 	// preserve deterministic ID minting order across concurrent Go calls.
@@ -384,19 +483,19 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 
 	// Check if the operation is already checkpointed (terminal).
 	op := ec.state.get(id)
-	if err := validateReplayConsistency(op, string(OperationTypeContext), OperationSubTypeRunInChildContext, name); err != nil {
+	if err := validateReplayConsistency(op, string(OperationTypeContext), subType, name); err != nil {
 		return newFailedFuture[O](err)
 	}
 	if ec.unfinishedInSucceededContext(op) {
 		return newUnfinishedReplayFuture[O](ec.suspend)
 	}
 	if op != nil && op.status.terminal() {
-		return resolveTerminalChild[O](ec, op, id, name, options, fn)
+		return resolveTerminalChild[O](ec, op, id, name, subType, options, fn)
 	}
 
 	// Checkpoint START if this is the first invocation of this child.
 	if op == nil {
-		update := childUpdate(ec, id, name, OperationActionStart)
+		update := childUpdate(ec, id, name, subType, OperationActionStart)
 		if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
 			if errors.Is(err, errCheckpointTerminated) {
 				return newFailedFuture[O](errSuspendExecution)
@@ -431,7 +530,7 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 		child := ec.childWith(id, name, currentGoroutineOwner(), mode, defaults)
 		child.adoptBranchToken(tok)
 
-		opInfo := dispatchContextStart(ec, id, name, OperationSubTypeRunInChildContext, op)
+		opInfo := dispatchContextStart(ec, id, name, subType, op)
 
 		// Recover panics in the child function so they settle the
 		// future as a failure rather than crashing the process.
@@ -458,7 +557,7 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 			// Checkpoint the failure. If checkpointing fails, the
 			// settle error is the checkpoint failure.
 			rec := recordOf(fnErr).withTrace(fnTrace)
-			update := childUpdate(ec, id, name, OperationActionFail)
+			update := childUpdate(ec, id, name, subType, OperationActionFail)
 			update.Error = errorObjectFromRecord(rec)
 			if cerr := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); cerr != nil {
 				// Terminated checkpointer means the invocation is
@@ -483,7 +582,7 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 			fut.settle(result, newSerdesError(name, serdesDirectionMarshal, serr))
 			return
 		}
-		update := childUpdate(ec, id, name, OperationActionSucceed)
+		update := childUpdate(ec, id, name, subType, OperationActionSucceed)
 		if len(serialized) > checkpointSizeLimitBytes {
 			update.ContextOptions = &ContextOptions{ReplayChildren: aws.Bool(true)}
 			payload, perr := childSummaryPayload(name, summary, result)
@@ -526,8 +625,9 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 // its result. It is the replay-safe substitute for the go statement inside
 // durable functions, and shorthand for [RunInChildContextAsync]: opts are
 // forwarded unchanged, so [WithChildSerdes] applies to the child result,
-// [WithChildSummary] to its checkpoint when the result is oversized, and
-// [WithChildErrorMapper] to its failure.
+// [WithChildSummary] to its checkpoint when the result is oversized,
+// [WithChildSubType] to its recorded subtype, and [WithChildErrorMapper]
+// to its failure.
 //
 // The child's operation identity is claimed before Go returns, so
 // consecutive Go calls from one goroutine are replay-deterministic. Inside
@@ -541,14 +641,15 @@ func Go[O any](ctx Context, name string, fn func(Context) (O, error), opts ...Ch
 // status in the checkpoint log. It returns a pre-settled future, except in
 // ReplayChildren mode, where the child body runs again on its own goroutine
 // and the future settles when it finishes. The replayed end is dispatched
-// here, before the result is rebuilt, as in [RunInChildContext].
-func resolveTerminalChild[O any](ec *execContext, op *operation, id, name string, options childOptions, fn func(Context) (O, error)) *Future[O] {
+// here, before the result is rebuilt, as in [RunInChildContext]. subType is
+// the operation's resolved subtype.
+func resolveTerminalChild[O any](ec *execContext, op *operation, id, name, subType string, options childOptions, fn func(Context) (O, error)) *Future[O] {
 	switch op.status {
 	case statusSucceeded:
 		if op.childCtx == nil {
 			return newFailedFuture[O](fmt.Errorf("durable: child context %q: checkpointed %s operation has no context details", name, op.status))
 		}
-		dispatchReplayedContextEnd(ec, id, name, OperationSubTypeRunInChildContext, op, nil)
+		dispatchReplayedContextEnd(ec, id, name, subType, op, nil)
 		// ReplayChildren mode: re-execute the child body to reconstruct
 		// the large result that was not checkpointed.
 		if op.childCtx.replayChildren {
@@ -562,7 +663,7 @@ func resolveTerminalChild[O any](ec *execContext, op *operation, id, name string
 
 	case statusFailed:
 		failure := options.failure(name, childFailureRecord(op))
-		dispatchReplayedContextEnd(ec, id, name, OperationSubTypeRunInChildContext, op, failure)
+		dispatchReplayedContextEnd(ec, id, name, subType, op, failure)
 		return newFailedFuture[O](failure)
 
 	default:
@@ -634,12 +735,13 @@ func childReplayMode(ec *execContext, id string, op *operation) executionMode {
 }
 
 // childUpdate assembles the shared fields of a child-context operation
-// update. IDs are hashed to their wire form.
-func childUpdate(ec *execContext, id, name string, action OperationAction) OperationUpdate {
+// update. subType is the operation's resolved subtype. IDs are hashed to
+// their wire form.
+func childUpdate(ec *execContext, id, name, subType string, action OperationAction) OperationUpdate {
 	update := OperationUpdate{
 		Id:      aws.String(hashID(id)),
 		Type:    OperationTypeContext,
-		SubType: aws.String(OperationSubTypeRunInChildContext),
+		SubType: aws.String(subType),
 		Action:  action,
 	}
 	if name != "" {

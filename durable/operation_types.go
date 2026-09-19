@@ -9,7 +9,9 @@ package durable
 // operation and distinguishes functions that share a type: [Map],
 // [Parallel], [RunInChildContext], and [WaitForCallback] all record
 // [OperationTypeContext] operations, and each Map item or Parallel branch
-// is itself a context operation with its own subtype.
+// is itself a context operation with its own subtype. A child context is
+// the one operation whose subtype the caller may set, with
+// [WithChildSubType].
 //
 // These constants are the values the SDK writes to the SubType field of
 // each checkpointed operation and reports in [OperationHookInfo].SubType.
@@ -34,9 +36,10 @@ const (
 	// [InvokeAsync] operation. Its type is [OperationTypeChainedInvoke].
 	OperationSubTypeChainedInvoke = "ChainedInvoke"
 
-	// OperationSubTypeRunInChildContext is the subtype of a
-	// [RunInChildContext], [RunInChildContextAsync], or [Go] operation.
-	// Its type is [OperationTypeContext].
+	// OperationSubTypeRunInChildContext is the default subtype of a
+	// [RunInChildContext], [RunInChildContextAsync], or [Go] operation;
+	// [WithChildSubType] records a caller-defined subtype instead. Its
+	// type is [OperationTypeContext].
 	OperationSubTypeRunInChildContext = "RunInChildContext"
 
 	// OperationSubTypeWaitForCallback is the subtype of the context
