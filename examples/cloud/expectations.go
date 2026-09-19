@@ -230,6 +230,7 @@ func checkForceCheckpointStepRetry(t testing.TB, result string) {
 // in examples/README.md.
 var expectations = map[string]expectation{
 	"attempt-fallback": {result: `{"supplier":"supplier-c","attempt":3,"status":"backordered"}`},
+	"block-example":    {result: `{"nestedStep":"nested step result","nestedBlock":"nested block result"}`},
 	"chained-invoke":   {result: `{"orderId":"ORD-12345","stages":[{"orderId":"ORD-12345","stage":"validate","status":"completed"},{"orderId":"ORD-12345","stage":"process","status":"completed"},{"orderId":"ORD-12345","stage":"confirm","status":"completed"}],"complete":true}`},
 
 	"child-context-basic":                 {result: `"child step completed"`},
@@ -407,10 +408,12 @@ var expectations = map[string]expectation{
 
 	"serde-basic":                   {result: `{"user":{"firstName":"","lastName":"","email":""},"greeting":"Hello, I'm  . My email is "}`},
 	"serde-callback-deserializer":   {result: `{"first":"HELLO FIRST","second":"HELLO SECOND"}`},
+	"serde-circular-references":     {result: `{"defaultSerdes":{"failed":true,"isStepError":true,"isSerdesError":true,"operation":"build-graph-default","reportsCycle":true},"customSerdes":{"rootId":"order-1","itemIds":["line-1","line-2"],"parentsPointToRoot":true}}`},
 	"serde-custom-config":           {result: `{"summary":"Order ORD-12345: $0.00 (processed)","id":"ORD-12345","amount":0,"status":"processed"}`},
 	"serde-filesystem-overflow":     {result: `{"smallOrderId":"ORD-42","largeLength":307200}`},
 	"serde-preview-field-selection": {result: `{"id":"cust-9","email":"decoy@example.com","customerEmail":"person@example.com","auditLength":2000}`},
 	"serde-preview-truncation":      {result: `{"id":"acct-123","tier":"gold","notesLength":500}`},
+	"serde-struct-with-times":       {result: `{"defaultSerdes":{"title":"Durable Functions 101","createdAt":"2020-01-01T00:00:00Z","publishedAt":"2020-01-02T00:00:00Z","isPublished":true,"ageHours":48,"archivedAtIsNil":true,"equalsOriginal":true},"epochSerdes":{"title":"Durable Functions 101","createdAt":"2020-01-01T00:00:00Z","publishedAt":"2020-01-02T00:00:00Z","isPublished":true,"ageHours":48,"archivedAtIsNil":true,"equalsOriginal":true}}`},
 
 	"simple-execution": {
 		nondeterministic: "timestamp is the wall-clock time of the invocation",

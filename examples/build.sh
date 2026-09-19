@@ -54,6 +54,7 @@ EXAMPLES="
   child-context-failing-step
   child-context-checkpoint-size-limit
   child-context-nested-blocks
+  block-example
   child-ops-preservation
   child-ops-invalid-depth
   callback-sender
@@ -137,6 +138,8 @@ EXAMPLES="
   serde-basic
   serde-callback-deserializer
   serde-custom-config
+  serde-circular-references
+  serde-struct-with-times
   serde-filesystem-overflow
   serde-preview-truncation
   serde-preview-field-selection

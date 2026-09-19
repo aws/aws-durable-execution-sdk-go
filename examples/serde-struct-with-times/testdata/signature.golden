@@ -1,0 +1,26 @@
+[
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "create-article",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "create-article-epoch",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "WAIT",
+    "subType": "Wait",
+    "name": "replay",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "inspect-articles",
+    "status": "SUCCEEDED"
+  }
+]

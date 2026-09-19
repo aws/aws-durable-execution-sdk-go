@@ -58,6 +58,7 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [child-context-failing-step](child-context-failing-step/main.go) | RunInChildContext, Step failure | SUCCEEDED |
 | [child-context-checkpoint-size-limit](child-context-checkpoint-size-limit/main.go) | RunInChildContext, size limit | SUCCEEDED |
 | [child-context-nested-blocks](child-context-nested-blocks/main.go) | RunInChildContext, nested parent/child/grandchild | SUCCEEDED |
+| [block-example](block-example/main.go) | RunInChildContext (nested), Step, Wait, struct result | SUCCEEDED |
 | [child-ops-preservation](child-ops-preservation/main.go) | RunInChildContext, operation ordering | SUCCEEDED |
 | [child-ops-invalid-depth](child-ops-invalid-depth/main.go) | RunInChildContext, depth validation | FAILED |
 
@@ -163,6 +164,8 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [serde-basic](serde-basic/main.go) | Step, WithStepSerdes, SerdesOf | SUCCEEDED |
 | [serde-callback-deserializer](serde-callback-deserializer/main.go) | WithCallbackDeserializer, custom callback deserialization | SUCCEEDED |
 | [serde-custom-config](serde-custom-config/main.go) | WithSerdes (handler-level) | SUCCEEDED |
+| [serde-circular-references](serde-circular-references/main.go) | Step, SerdesError on a reference cycle, WithStepSerdes (cycle-breaking) | SUCCEEDED |
+| [serde-struct-with-times](serde-struct-with-times/main.go) | Step, time.Time round trip, WithStepSerdes (Unix-millisecond wire format) | SUCCEEDED |
 | [serde-filesystem-overflow](serde-filesystem-overflow/main.go) | ConfigureSerdes, NewFileSystemSerdes (FileSystemSerdesModeOverflow) | SUCCEEDED |
 | [serde-preview-truncation](serde-preview-truncation/main.go) | NewFileSystemSerdes, GeneratePreview, BuildPreview (include-all, exclude, truncation) | SUCCEEDED |
 | [serde-preview-field-selection](serde-preview-field-selection/main.go) | NewFileSystemSerdes, GeneratePreview, BuildPreview (exclude-all, path matching, masking) | SUCCEEDED |
@@ -204,6 +207,42 @@ offloaded file.
 | [comprehensive-operations](comprehensive-operations/main.go) | Step, Wait, Map, Parallel | SUCCEEDED |
 | [handler-error](handler-error/main.go) | (handler-level error) | FAILED |
 | [order-fulfillment](order-fulfillment/main.go) | Step, Wait, Parallel, RunInChildContext | SUCCEEDED |
+
+## Reference parity
+
+This set mirrors the examples shipped with the reference JavaScript SDK
+(`packages/aws-durable-execution-sdk-js-examples/src/examples/` in that
+repository). Examples are matched by behaviour, not by name: the reference
+groups examples in nested directories (`run-in-child-context/basic`,
+`promise/all`, `step/named`), while every Go example is one flat directory
+(`child-context-basic`, `future-all`, `named-step`). `parity-map.txt` records
+the correspondence, one reference handler per line, and `parity.sh` checks it
+against a clone of the reference repository:
+
+```bash
+./parity.sh ../../aws-durable-execution-sdk-js
+```
+
+It prints one line per reference example with no Go counterpart (`unmapped`
+when the map has no row for it, `missing` when the mapped Go example does not
+exist yet, `stale` when a row names a reference example that no longer
+exists) and exits 0 only when there is no gap. Run it when the reference adds
+an example, and add a row for every new handler.
+
+A few examples deliberately differ from the reference because the language
+does:
+
+- **Reference cycles.** The reference SDK logs a cyclic object graph with a
+  cycle-safe stringifier. Go's `encoding/json` rejects a cycle with an
+  error, so `serde-circular-references` shows the resulting `SerdesError`
+  from a step and a custom serdes that flattens the graph so it checkpoints.
+- **Timestamps.** The reference SDK needs a dedicated serdes to turn ISO
+  strings back into `Date` objects after replay. `time.Time` marshals and
+  unmarshals itself, so `serde-struct-with-times` shows the default serdes
+  round-tripping the fields and a custom serdes changing the wire format.
+- **Logger.** The reference SDK has two Powertools Logger examples. There
+  is no Powertools for Go, so `logger-slog-handler` covers both with a
+  user-supplied `slog.Handler` passed through `WithLogHandler`.
 
 ## Build
 

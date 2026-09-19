@@ -644,6 +644,23 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 60
 
+  BlockExampleFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-block-example
+      CodeUri: .aws-sam/build-artifacts/block-example/
+      Handler: bootstrap
+      Description: Composed child contexts with a nested step and wait (block example)
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
   ChildOpsPreservationFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -2073,6 +2090,40 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 120
 
+  SerdeCircularReferencesFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-serde-circular-references
+      CodeUri: .aws-sam/build-artifacts/serde-circular-references/
+      Handler: bootstrap
+      Description: Cyclic result rejected by default serdes, checkpointed by a flattening serdes
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  SerdeStructWithTimesFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-serde-struct-with-times
+      CodeUri: .aws-sam/build-artifacts/serde-struct-with-times/
+      Handler: bootstrap
+      Description: time.Time fields round-tripped by default and by a Unix-millisecond serdes
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
   SerdeFilesystemOverflowFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -2529,6 +2580,9 @@ Outputs:
   ChildContextNestedBlocksFunction:
     Description: Child Context Nested Blocks Function ARN
     Value: !GetAtt ChildContextNestedBlocksFunction.Arn
+  BlockExampleFunction:
+    Description: Block Example Function ARN
+    Value: !GetAtt BlockExampleFunction.Arn
   ChildOpsPreservationFunction:
     Description: Child Ops Preservation Function ARN
     Value: !GetAtt ChildOpsPreservationFunction.Arn
@@ -2775,6 +2829,12 @@ Outputs:
   SerdeCustomConfigFunction:
     Description: Serde Custom Config Function ARN
     Value: !GetAtt SerdeCustomConfigFunction.Arn
+  SerdeCircularReferencesFunction:
+    Description: Serde Circular References Function ARN
+    Value: !GetAtt SerdeCircularReferencesFunction.Arn
+  SerdeStructWithTimesFunction:
+    Description: Serde Struct With Times Function ARN
+    Value: !GetAtt SerdeStructWithTimesFunction.Arn
   SerdeFilesystemOverflowFunction:
     Description: Serde Filesystem Overflow Function ARN
     Value: !GetAtt SerdeFilesystemOverflowFunction.Arn

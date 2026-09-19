@@ -1,0 +1,25 @@
+[
+  {
+    "type": "CONTEXT",
+    "subType": "RunInChildContext",
+    "name": "parent-block",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "nested-step",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "RunInChildContext",
+    "name": "nested-block",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "WAIT",
+    "subType": "Wait",
+    "status": "SUCCEEDED"
+  }
+]

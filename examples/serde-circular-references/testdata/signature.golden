@@ -1,0 +1,26 @@
+[
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "build-graph-default",
+    "status": "FAILED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "build-graph-flattened",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "WAIT",
+    "subType": "Wait",
+    "name": "replay",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "inspect-graph",
+    "status": "SUCCEEDED"
+  }
+]
