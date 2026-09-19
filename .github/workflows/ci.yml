@@ -78,23 +78,35 @@ jobs:
   # The published nested modules (insight, analysis) must be consumable
   # from outside the repository, and the release script that pins and tags
   # them must keep working. See CONTRIBUTING.md, "Releasing".
+  #
+  # One leg per nested module, with Go taken from that module's go.mod. The
+  # modules declare different minimums (analysis needs Go 1.25 for
+  # golang.org/x/tools; the SDK modules need Go 1.24), and setup-go pins
+  # GOTOOLCHAIN=local, so the toolchain cannot upgrade itself. Each leg
+  # therefore checks a consumer on the oldest Go the module itself allows.
   consumable:
-    name: consumable (nested modules)
+    name: consumable (${{ matrix.module }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [insight, analysis]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.0.0
         with:
-          go-version-file: go.mod
-          cache-dependency-path: insight/go.sum
+          go-version-file: ${{ matrix.module }}/go.mod
+          cache-dependency-path: ${{ matrix.module }}/go.sum
 
+      # Toolchain-independent (the fixture declares go 1.24) and fast, so it
+      # simply runs in every leg.
       - name: Test the release script
         run: sh scripts/release_test.sh
 
-      # A throwaway module imports each nested module by its published
-      # path. Both the nested module and the root module come from this
-      # checkout, so the check does not depend on a published root version.
-      - name: Build a throwaway consumer of the nested modules
-        run: sh scripts/verify-consumable.sh --root-from-checkout
+      # A throwaway module imports the nested module by its published path.
+      # Both the nested module and the root module come from this checkout,
+      # so the check does not depend on a published root version.
+      - name: Build a throwaway consumer of the nested module
+        run: sh scripts/verify-consumable.sh --root-from-checkout ${{ matrix.module }}

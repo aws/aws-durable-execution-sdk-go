@@ -26,7 +26,9 @@ Open a [GitHub issue](../../issues/new) describing:
 
 ### Prerequisites
 
-- Go 1.25 or later
+- Go 1.25 or later. The SDK modules declare `go 1.24` and build with Go
+  1.24; development needs Go 1.25 because the `analysis` module
+  (`golang.org/x/tools`) and golangci-lint 2.12.2 require it.
 - [golangci-lint](https://golangci-lint.run/welcome/install/) (for linting and formatting)
 
 ### Clone and Build

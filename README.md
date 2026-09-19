@@ -67,7 +67,7 @@ func main() {
 
 ## Setup
 
-Requires Go 1.25 or later.
+Requires Go 1.24 or later.
 
 Build a static binary for deployment to AWS Lambda (`provided.al2023` runtime):
 
