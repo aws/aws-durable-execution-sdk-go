@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"reflect"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -117,6 +118,7 @@ func Map[I, O any](ctx Context, name string, items []I, fn func(ctx Context, ite
 	}
 	if op != nil && op.status.terminal() {
 		result, err := replayTerminalBatch[I, O](ec, op, id, name, items, fn, options, operationSubTypeMap, operationSubTypeMapIteration)
+		dispatchReplayedContextEnd(ec, id, name, operationSubTypeMap, op, replayedBatchFailure(op, err))
 		if err != nil {
 			return BatchResult[O]{}, err
 		}
@@ -131,6 +133,7 @@ func Map[I, O any](ctx Context, name string, items []I, fn func(ctx Context, ite
 			return BatchResult[O]{}, err
 		}
 	}
+	start := dispatchContextStart(ec, id, name, operationSubTypeMap, op)
 
 	totalItems := len(items)
 	if totalItems == 0 {
@@ -139,11 +142,11 @@ func Map[I, O any](ctx Context, name string, items []I, fn func(ctx Context, ite
 			Items:  nil,
 			Reason: CompletionAllCompleted,
 		}
-		return checkpointBatchSuccess(ec, id, name, operationSubTypeMap, result, options)
+		return checkpointBatchSuccess(ec, start, result, options)
 	}
 
 	// Execute items with bounded concurrency and completion checking.
-	result, err := executeBatchItems[I, O](ec, id, name, totalItems, options, operationSubTypeMap, operationSubTypeMapIteration, func(childCtx Context, index int) (O, []string, error) {
+	result, err := executeBatchItems[I, O](ec, start, totalItems, options, operationSubTypeMapIteration, func(childCtx Context, index int) (O, []string, error) {
 		return runBatchItemFunc(childCtx, index, fn, func() (O, error) {
 			return fn(childCtx, items[index], index)
 		})
@@ -215,6 +218,7 @@ func Parallel[O any](ctx Context, name string, branches []Branch[O], opts ...Bat
 		result, err := replayTerminalBatch[struct{}, O](ec, op, id, name, placeholders, func(ctx Context, _ struct{}, index int) (O, error) {
 			return branches[index].Func(ctx)
 		}, options, operationSubTypeParallel, operationSubTypeParallelBranch)
+		dispatchReplayedContextEnd(ec, id, name, operationSubTypeParallel, op, replayedBatchFailure(op, err))
 		if err != nil {
 			return BatchResult[O]{}, err
 		}
@@ -229,6 +233,7 @@ func Parallel[O any](ctx Context, name string, branches []Branch[O], opts ...Bat
 			return BatchResult[O]{}, err
 		}
 	}
+	start := dispatchContextStart(ec, id, name, operationSubTypeParallel, op)
 
 	totalItems := len(branches)
 	if totalItems == 0 {
@@ -236,10 +241,10 @@ func Parallel[O any](ctx Context, name string, branches []Branch[O], opts ...Bat
 			Items:  nil,
 			Reason: CompletionAllCompleted,
 		}
-		return checkpointBatchSuccess(ec, id, name, operationSubTypeParallel, result, options)
+		return checkpointBatchSuccess(ec, start, result, options)
 	}
 
-	result, err := executeBatchItems[struct{}, O](ec, id, name, totalItems, options, operationSubTypeParallel, operationSubTypeParallelBranch, func(childCtx Context, index int) (O, []string, error) {
+	result, err := executeBatchItems[struct{}, O](ec, start, totalItems, options, operationSubTypeParallelBranch, func(childCtx Context, index int) (O, []string, error) {
 		return runBatchItemFunc(childCtx, index, branches[index].Func, func() (O, error) {
 			return branches[index].Func(childCtx)
 		})
@@ -586,12 +591,18 @@ type NestingMode int
 // Nesting modes.
 const (
 	// NestingNormal (default) runs each item in its own child context,
-	// producing per-item ContextStarted/ContextSucceeded events.
+	// producing per-item ContextStarted/ContextSucceeded events. Each item
+	// is a checkpointed operation whose parent is the batch, and each
+	// dispatches its own operation lifecycle hooks to plugins with the
+	// batch as ParentID; see [Plugin].
 	NestingNormal NestingMode = iota
 
 	// NestingFlat runs each item in a virtual context: operations inside
 	// the item are checkpointed directly under the parent batch context,
-	// with no per-item context events.
+	// with no per-item context events. A flat item is not an operation,
+	// so it dispatches no operation lifecycle hooks: plugins observe the
+	// batch's own start and end and the operations inside each item,
+	// which name the batch as ParentID.
 	NestingFlat
 )
 
@@ -995,18 +1006,21 @@ func runBatchItemFunc[O any](childCtx Context, index int, userFn any, call func(
 }
 
 // executeBatchItems runs the core batch loop: schedule items up to max
-// concurrency, collect results, check completion conditions.
+// concurrency, collect results, check completion conditions. start is the
+// batch's own start event, as dispatchContextStart returned it; its ID and
+// Name identify the batch and its SubType is the batch's wire subtype.
 //
 // The runItem function receives the child context and the item index and
 // must return the item result or error.
 func executeBatchItems[I, O any](
 	ec *execContext,
-	parentID, parentName string,
+	start OperationHookInfo,
 	totalItems int,
 	options batchOptions,
-	parentSubType, childSubType string,
+	childSubType string,
 	runItem batchItemFunc[O],
 ) (BatchResult[O], error) {
+	parentID, parentName := start.ID, start.Name
 	// Items collects results in input order. We allocate for all items
 	// but only fill the ones that actually start.
 	results := make([]BatchItem[O], 0, totalItems)
@@ -1119,6 +1133,11 @@ func executeBatchItems[I, O any](
 
 		accepted := make(map[int]BatchItem[O], totalItems)
 		startedIdx := make(map[int]struct{}, totalItems)
+		// endedIdx holds the items whose worker dispatched an end event:
+		// every item that reported a terminal outcome, counted or not. An
+		// abandoned item outside this set gets its end below, once every
+		// worker has drained.
+		endedIdx := make(map[int]struct{}, totalItems)
 		nextToAdmit := 0
 		inFlight := 0  // goroutines not yet drained from outcomeCh
 		slotsUsed := 0 // concurrency slots held (terminal release only)
@@ -1200,9 +1219,13 @@ func executeBatchItems[I, O any](
 			case reasonLocked:
 				// A terminal outcome that raced the completion decision:
 				// the branch is abandoned (reported started, not counted).
+				// Its worker checkpointed the outcome and dispatched the
+				// end, so no abandoned end follows.
+				endedIdx[out.index] = struct{}{}
 				slotsUsed--
 			default:
 				accepted[out.index] = out.item
+				endedIdx[out.index] = struct{}{}
 				slotsUsed--
 				decided, stop, derr := decider.terminal(out.index, out.item.Status)
 				if derr != nil {
@@ -1262,16 +1285,25 @@ func executeBatchItems[I, O any](
 
 		// Assemble in input order: terminal outcomes are counted;
 		// started-but-abandoned branches are reported STARTED; branches
-		// that never started are omitted.
+		// that never started are omitted. An abandoned NORMAL branch
+		// whose worker dispatched no end (it unwound on the abandon
+		// signal or suspended) dispatches its end here, on this
+		// goroutine, after every worker has drained: the end reports
+		// STARTED, the status of the branch's checkpoint and of the
+		// BatchItem that reports it. FLAT items dispatch no events.
 		for i := 0; i < totalItems; i++ {
 			if item, ok := accepted[i]; ok {
 				results = append(results, item)
 				continue
 			}
 			if _, ok := startedIdx[i]; ok {
+				itemName := itemNameForIndex(options, i)
+				if _, ended := endedIdx[i]; !ended && options.nesting != NestingFlat {
+					dispatchBatchItemAbandoned(ec, parentID, preClaimed[i].childID, itemName, childSubType)
+				}
 				results = append(results, BatchItem[O]{
 					Index:  i,
-					Name:   itemNameForIndex(options, i),
+					Name:   itemName,
 					Status: BatchItemStarted,
 				})
 			}
@@ -1283,7 +1315,7 @@ func executeBatchItems[I, O any](
 		Reason: reason,
 	}
 
-	return checkpointBatchSuccess(ec, parentID, parentName, parentSubType, batchResult, options)
+	return checkpointBatchSuccess(ec, start, batchResult, options)
 }
 
 // runPreClaimedBatchItem runs a batch item whose operation ID was already
@@ -1315,7 +1347,7 @@ func runPreClaimedBatchItem[O any](
 
 	// NORMAL mode: child context with full checkpointing.
 	if terminal {
-		return replayTerminalChildItem[O](ec, op, childID, itemName, index, options, childSubType, runItem)
+		return replayTerminalChildItem[O](ec, op, parentID, childID, itemName, index, options, childSubType, runItem)
 	}
 
 	// The child context runs on this goroutine; capture ownership here.
@@ -1324,6 +1356,10 @@ func runPreClaimedBatchItem[O any](
 	child.abandon = abandon
 	child.adoptBranchToken(tok)
 
+	// The item's START was checkpointed by the coordinator when it
+	// admitted the item; op is the item's record before that checkpoint.
+	itemStart := dispatchBatchItemStart(ec, parentID, childID, itemName, childSubType, op)
+
 	result, fnTrace, fnErr := runItem(child, index)
 
 	// The batch may have completed while the item body ran. The batch then
@@ -1331,7 +1367,8 @@ func runPreClaimedBatchItem[O any](
 	// checkpoint must stay STARTED too: a SUCCEEDED or FAILED child record
 	// would disagree with the batch result the parent checkpoint stores.
 	// Unwind the worker the way an abandoned operation does, without a
-	// checkpoint. The coordinator treats this outcome as abandoned.
+	// checkpoint. The coordinator treats this outcome as abandoned and
+	// dispatches the item's end once every worker has drained.
 	if abandon.abandoned() {
 		return BatchItem[O]{}, errSuspendExecution
 	}
@@ -1353,11 +1390,13 @@ func runPreClaimedBatchItem[O any](
 		if cerr := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); cerr != nil {
 			return BatchItem[O]{}, cerr
 		}
+		itemErr := liveBatchItemError(itemName, fnErr, update.Error.StackTrace)
+		dispatchBatchItemEnd(ec, itemStart, "", itemErr)
 		return BatchItem[O]{
 			Index:  index,
 			Name:   itemName,
 			Status: BatchItemFailed,
-			Err:    liveBatchItemError(itemName, fnErr, update.Error.StackTrace),
+			Err:    itemErr,
 		}, nil
 	}
 
@@ -1374,6 +1413,7 @@ func runPreClaimedBatchItem[O any](
 	if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
 		return BatchItem[O]{}, err
 	}
+	dispatchBatchItemEnd(ec, itemStart, aws.ToString(update.Payload), nil)
 	var out O
 	if err := options.itemSerdes.Unmarshal(ec.Context, ec.serdesCtx(childID), serialized, &out); err != nil {
 		return BatchItem[O]{}, newSerdesError(batchItemOpName(itemName, index), serdesDirectionUnmarshal, err)
@@ -1539,7 +1579,7 @@ func runNestedBatchItem[O any](
 		return BatchItem[O]{}, err
 	}
 	if op != nil && op.status.terminal() {
-		return replayTerminalChildItem[O](ec, op, childID, itemName, index, options, childSubType, runItem)
+		return replayTerminalChildItem[O](ec, op, parentID, childID, itemName, index, options, childSubType, runItem)
 	}
 
 	// Checkpoint child context START.
@@ -1552,6 +1592,8 @@ func runNestedBatchItem[O any](
 
 	mode := childReplayMode(ec, childID, op)
 	child := ec.child(childID, itemName, ec.owner, mode)
+
+	itemStart := dispatchBatchItemStart(ec, parentID, childID, itemName, childSubType, op)
 
 	result, fnTrace, fnErr := runItem(child, index)
 
@@ -1571,11 +1613,13 @@ func runNestedBatchItem[O any](
 		if cerr := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); cerr != nil {
 			return BatchItem[O]{}, cerr
 		}
+		itemErr := liveBatchItemError(itemName, fnErr, update.Error.StackTrace)
+		dispatchBatchItemEnd(ec, itemStart, "", itemErr)
 		return BatchItem[O]{
 			Index:  index,
 			Name:   itemName,
 			Status: BatchItemFailed,
-			Err:    liveBatchItemError(itemName, fnErr, update.Error.StackTrace),
+			Err:    itemErr,
 		}, nil
 	}
 
@@ -1594,6 +1638,7 @@ func runNestedBatchItem[O any](
 	if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
 		return BatchItem[O]{}, err
 	}
+	dispatchBatchItemEnd(ec, itemStart, aws.ToString(update.Payload), nil)
 
 	// Round-trip through serdes for live == replay consistency.
 	var out O
@@ -1610,11 +1655,14 @@ func runNestedBatchItem[O any](
 }
 
 // replayTerminalChildItem resolves a child item that already has a terminal
-// status in the checkpoint log.
+// status in the checkpoint log, and dispatches the item's replayed end
+// once its outcome is known: after the body re-ran when the item's result
+// was too large to store, else before its stored result is read, so a
+// failing result Serdes does not suppress the end.
 func replayTerminalChildItem[O any](
 	ec *execContext,
 	op *operation,
-	childID, itemName string,
+	parentID, childID, itemName string,
 	index int,
 	options batchOptions,
 	childSubType string,
@@ -1632,6 +1680,7 @@ func replayTerminalChildItem[O any](
 			if err != nil {
 				return BatchItem[O]{}, err
 			}
+			dispatchBatchItemReplayedEnd(ec, parentID, childID, itemName, childSubType, op, nil)
 			return BatchItem[O]{
 				Index:  index,
 				Name:   itemName,
@@ -1639,6 +1688,7 @@ func replayTerminalChildItem[O any](
 				Result: result,
 			}, nil
 		}
+		dispatchBatchItemReplayedEnd(ec, parentID, childID, itemName, childSubType, op, nil)
 		var out O
 		if err := options.itemSerdes.Unmarshal(ec.Context, ec.serdesCtx(childID), []byte(op.childCtx.result), &out); err != nil {
 			return BatchItem[O]{}, newSerdesError(batchItemOpName(itemName, index), serdesDirectionUnmarshal, err)
@@ -1663,6 +1713,7 @@ func replayTerminalChildItem[O any](
 		}
 		cerr := batchItemError(itemName, errType, errMessage, childErrorData{}, errData)
 		cerr.StackTrace = trace
+		dispatchBatchItemReplayedEnd(ec, parentID, childID, itemName, childSubType, op, cerr)
 		return BatchItem[O]{
 			Index:  index,
 			Name:   itemName,
@@ -1708,7 +1759,7 @@ func replayTerminalBatch[I, O any](
 					child := ec.child(id, name, ec.owner, mode)
 					return replayFlatBatchChildrenFromRecord[I, O](child, id, record, items, fn, options)
 				}
-				return replayBatchChildrenFromRecord[I, O](ec, record, items, fn, options, childSubType)
+				return replayBatchChildrenFromRecord[I, O](ec, id, record, items, fn, options, childSubType)
 			}
 			child := ec.child(id, name, ec.owner, mode)
 			return replayBatchChildren[I, O](child, id, name, items, fn, options, parentSubType, childSubType)
@@ -1813,14 +1864,18 @@ func replayBatchChildren[I, O any](
 	return BatchResult[O]{Items: results, Reason: reason}, nil
 }
 
-// checkpointBatchSuccess checkpoints the parent batch context as SUCCEEDED
-// and returns the final BatchResult.
+// checkpointBatchSuccess checkpoints the parent batch context as SUCCEEDED,
+// dispatches the batch's end, and returns the final BatchResult. start is
+// the batch's own start event, as dispatchContextStart returned it. The
+// end reports SUCCEEDED, the batch's checkpointed status even when items
+// failed, and carries the checkpointed payload as Result.
 func checkpointBatchSuccess[O any](
 	ec *execContext,
-	id, name, subType string,
+	start OperationHookInfo,
 	result BatchResult[O],
 	options batchOptions,
 ) (BatchResult[O], error) {
+	id, name, subType := start.ID, start.Name, start.SubType
 	// Every item has reported. From here to the checkpoint of the parent's
 	// completion the batch is an executing span: its outcome belongs to
 	// this invocation, so a handler blocked on a pending operation waits
@@ -1884,6 +1939,7 @@ func checkpointBatchSuccess[O any](
 	if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
 		return BatchResult[O]{}, err
 	}
+	dispatchContextEnd(ec, start, aws.ToString(update.Payload), nil)
 
 	return result, nil
 }
@@ -2449,7 +2505,10 @@ func replayRunItem[I, O any](items []I, fn func(Context, I, int) (O, error)) bat
 // record: it replays exactly the recorded admitted set in index order rather
 // than re-deriving completion from a threshold. Terminal branches are
 // resolved from their own child checkpoints; abandoned branches are reported
-// STARTED without re-running their bodies.
+// STARTED without re-running their bodies. Each branch dispatches its
+// replayed end as it is visited: an abandoned branch reports the STARTED
+// status of its checkpoint, when it has one. parentID is the batch's
+// operation ID.
 //
 // Batch children mint their operation ids as siblings in the enclosing
 // context, claimed in index order. This mirrors that id sequence with a
@@ -2457,6 +2516,7 @@ func replayRunItem[I, O any](items []I, fn func(Context, I, int) (O, error)) bat
 // it once for the whole batch.
 func replayBatchChildrenFromRecord[I, O any](
 	ec *execContext,
+	parentID string,
 	record batchReplayRecord,
 	items []I,
 	fn func(Context, I, int) (O, error),
@@ -2471,6 +2531,9 @@ func replayBatchChildrenFromRecord[I, O any](
 		childID := sib.next()
 		itemName := itemNameForIndex(options, i)
 		if abandoned[i] {
+			if op := ec.state.get(childID); op != nil {
+				dispatchBatchItemReplayedEnd(ec, parentID, childID, itemName, childSubType, op, nil)
+			}
 			results = append(results, BatchItem[O]{
 				Index:  i,
 				Name:   itemName,
@@ -2482,7 +2545,7 @@ func replayBatchChildrenFromRecord[I, O any](
 		if op == nil || !op.status.terminal() {
 			return BatchResult[O]{}, fmt.Errorf("durable: batch item %d: replay record marks it terminal but no terminal checkpoint was found", i)
 		}
-		item, err := replayTerminalChildItem[O](ec, op, childID, itemName, i, options, childSubType, runItem)
+		item, err := replayTerminalChildItem[O](ec, op, parentID, childID, itemName, i, options, childSubType, runItem)
 		if err != nil {
 			return BatchResult[O]{}, err
 		}
@@ -2562,6 +2625,126 @@ func batchChildUpdate(ec *execContext, childID, childName, childSubType, parentI
 		update.Name = aws.String(childName)
 	}
 	return update
+}
+
+// Operation lifecycle hooks of a batch.
+//
+// A batch (Map or Parallel) is a context operation and follows the contract
+// of dispatchContextStart: at most one start and at most one end per
+// invocation, dispatched on the enclosing context, so the batch's ParentID
+// names the context that claimed it. A live batch dispatches STARTED after
+// its START checkpoint and its end after its SUCCEEDED checkpoint. The
+// batch's checkpoint is SUCCEEDED even when items failed, so the end
+// reports SUCCEEDED and carries the checkpointed payload as Result; item
+// failures are visible on the item events and in the returned BatchError.
+// A batch whose item loop returns an error other than suspension has no
+// terminal checkpoint and dispatches no end. A batch replayed from a
+// terminal checkpoint dispatches only a replayed end.
+//
+// In NestingNormal mode each item is a checkpointed child context whose
+// parent is the batch, so its events name the batch as ParentID, not the
+// context that claimed its ID. A live item dispatches STARTED before its
+// body, once its START checkpoint is recorded, and SUCCEEDED or FAILED
+// after its terminal checkpoint. An item re-entered while its checkpoint
+// is still STARTED dispatches a replayed start with that status. An item
+// the batch abandoned on early completion has no terminal checkpoint; the
+// batch dispatches its end once every item worker has drained, with status
+// STARTED, the status of the item's checkpoint and of the BatchItem that
+// reports it. That end is distinguishable from SUCCEEDED and FAILED by its
+// status. An item replayed from a terminal checkpoint dispatches only a
+// replayed end. A batch replayed from its stored aggregate result does not
+// visit its items, so they dispatch nothing; a batch whose result was too
+// large to store replays its items and each dispatches its replayed end.
+// Items run under concurrency dispatch their events from their own
+// goroutines, so hooks may run in parallel; see the goroutine safety note
+// on Plugin.
+//
+// In NestingFlat mode items are virtual contexts with no checkpoint and
+// dispatch no events; see NestingFlat.
+
+// batchItemHookInfo returns the OperationHookInfo of the item childID of
+// the batch parentID. Unlike operationHookInfo, which names the context
+// that claimed the ID, ParentID names the batch, as the item's checkpoint
+// does.
+func batchItemHookInfo(ec *execContext, parentID, childID, itemName, childSubType string, isReplay bool) OperationHookInfo {
+	info := ec.operationHookInfo(childID, itemName, string(OperationTypeContext), childSubType, isReplay)
+	info.ParentID = hashID(parentID)
+	return info
+}
+
+// dispatchBatchItemStart dispatches the start of the item childID of the
+// batch parentID, which is about to run its body, and returns the
+// dispatched info. op is the item's checkpoint as it was before any START
+// checkpoint: nil for a live item, else the STARTED record the item
+// re-enters, which is reported as a replayed start with that status.
+func dispatchBatchItemStart(ec *execContext, parentID, childID, itemName, childSubType string, op *operation) OperationHookInfo {
+	info := batchItemHookInfo(ec, parentID, childID, itemName, childSubType, op != nil)
+	status := PluginOperationStarted
+	if op != nil {
+		info.StartTimestamp = op.startTimestamp
+		status = toPluginOperationStatus(op.status)
+	} else {
+		info.StartTimestamp = checkpointedStartTime(ec.state.get(childID))
+	}
+	info.Status = status
+	dispatchOperationStart(ec, info, status)
+	return info
+}
+
+// dispatchBatchItemEnd dispatches the live end of the item whose start
+// event is start, once its terminal checkpoint is recorded. err is the
+// failure the item reports, nil for a succeeded item whose checkpointed
+// payload is result.
+func dispatchBatchItemEnd(ec *execContext, start OperationHookInfo, result string, err error) {
+	info := start
+	info.IsReplay = false
+	info.EndTimestamp = checkpointedEndTime(ec.state.get(start.ID))
+	if err != nil {
+		info.Error = err
+		dispatchOperationEnd(ec, info, PluginOperationFailed)
+		return
+	}
+	info.Result = result
+	dispatchOperationEnd(ec, info, PluginOperationSucceeded)
+}
+
+// dispatchBatchItemAbandoned dispatches the end of the item childID of the
+// batch parentID, which the batch abandoned on early completion. The item
+// has no terminal checkpoint, so the end reports STARTED: the status of
+// its checkpoint and of the BatchItem that reports it.
+func dispatchBatchItemAbandoned(ec *execContext, parentID, childID, itemName, childSubType string) {
+	info := batchItemHookInfo(ec, parentID, childID, itemName, childSubType, false)
+	info.StartTimestamp = checkpointedStartTime(ec.state.get(childID))
+	info.EndTimestamp = time.Now()
+	dispatchOperationEnd(ec, info, PluginOperationStarted)
+}
+
+// dispatchBatchItemReplayedEnd dispatches the replayed end of the item
+// childID of the batch parentID from its checkpoint op. err is the failure
+// the item reports, nil for a SUCCEEDED item, whose checkpointed payload is
+// reported as Result, and for an abandoned item, whose checkpoint is
+// STARTED.
+func dispatchBatchItemReplayedEnd(ec *execContext, parentID, childID, itemName, childSubType string, op *operation, err error) {
+	info := batchItemHookInfo(ec, parentID, childID, itemName, childSubType, true)
+	info.StartTimestamp = op.startTimestamp
+	info.EndTimestamp = op.endTimestamp
+	if err != nil {
+		info.Error = err
+	} else if op.childCtx != nil {
+		info.Result = op.childCtx.result
+	}
+	dispatchOperationEnd(ec, info, toPluginOperationStatus(op.status))
+}
+
+// replayedBatchFailure returns the error a replayed batch end reports: err,
+// the error replay returned, when the batch's checkpoint op is FAILED, else
+// nil. A SUCCEEDED batch whose stored result cannot be read still reports
+// its checkpointed outcome; the read error goes to the caller separately.
+func replayedBatchFailure(op *operation, err error) error {
+	if op.status == statusFailed {
+		return err
+	}
+	return nil
 }
 
 // itemNameForIndex returns the name for a batch item at the given index.

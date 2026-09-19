@@ -274,21 +274,21 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 			if op == nil {
 				continue
 			}
-			updatedOpsMap[uid] = OperationHookInfo{
-				ExecutionArn:   in.DurableExecutionArn,
-				ID:             uid,
-				Name:           op.name,
-				Type:           op.opType,
-				SubType:        op.subType,
-				Status:         toPluginOperationStatus(op.status),
-				IsReplay:       true,
-				ParentID:       op.parentID,
-				StartTimestamp: op.startTimestamp,
-				EndTimestamp:   op.endTimestamp,
-				Result:         op.operationResult(),
-				Error:          op.operationError(),
-			}
+			updatedOpsMap[uid] = checkpointedOperationInfo(in.DurableExecutionArn, op)
 		}
+	}
+
+	// The full operation set is built only for a plugin that receives an
+	// InvocationHookInfo. It is a snapshot of the state before the handler
+	// runs: checkpoints the handler records later go to the state's own
+	// map, never to this one, so a plugin may keep reading it.
+	var allOpsMap map[string]OperationHookInfo
+	if pd.hasInvocationInfoConsumer() {
+		allOpsMap = make(map[string]OperationHookInfo, state.numOperations())
+		state.rangeOperations(func(op *operation) bool {
+			allOpsMap[op.id] = checkpointedOperationInfo(in.DurableExecutionArn, op)
+			return true
+		})
 	}
 
 	// The root EXECUTION operation is located once, by type, and shared by
@@ -314,6 +314,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		ExecutionInput:          execInput,
 		ExecutionStartTimestamp: execStartTimestamp,
 		UpdatedOperations:       updatedOpsMap,
+		Operations:              allOpsMap,
 	}
 
 	// Item 12: OnInvocationStart fires BEFORE OnOperationChange.

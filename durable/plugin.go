@@ -192,11 +192,29 @@ type InvocationHookInfo struct {
 	// UpdatedOperations contains operations whose status changed
 	// externally between invocations, keyed by operation ID. This
 	// embeds the same data as OnOperationChange to allow plugins that
-	// need both to avoid state ordering dependencies.
+	// need both to avoid state ordering dependencies. It is a subset of
+	// Operations.
 	//
 	// EXPERIMENTAL: this field is experimental and may be changed or
 	// removed in future releases.
 	UpdatedOperations map[string]OperationHookInfo
+
+	// Operations contains every operation known at the start of the
+	// invocation, keyed by operation ID, including the root execution
+	// operation and operations that did not change since the previous
+	// invocation. UpdatedOperations is a subset of it. On the first
+	// invocation it holds the execution operation alone. Each entry
+	// carries the checkpointed status, timestamps, result, and error, with
+	// IsReplay set, as an OnOperationEnd hook would report the operation.
+	//
+	// The map is built before the invocation hooks run and is not
+	// modified afterwards, so a plugin may read it at any time. It is nil
+	// when no registered plugin implements OnInvocationStart or
+	// WrapInvocation, the hooks that receive it.
+	//
+	// EXPERIMENTAL: this field is experimental and may be changed or
+	// removed in future releases.
+	Operations map[string]OperationHookInfo
 }
 
 // InvocationEndHookInfo carries context for the OnInvocationEnd hook.
@@ -760,6 +778,44 @@ func (d *pluginDispatcher) hasLogEnricher() bool {
 		}
 	}
 	return false
+}
+
+// hasInvocationInfoConsumer reports whether at least one registered plugin
+// implements a hook that receives an InvocationHookInfo: OnInvocationStart
+// or WrapInvocation. False for a nil dispatcher. The handler builds
+// InvocationHookInfo.Operations only when this is true.
+func (d *pluginDispatcher) hasInvocationInfoConsumer() bool {
+	if d == nil {
+		return false
+	}
+	for i := range d.plugins {
+		if d.plugins[i].OnInvocationStart != nil || d.plugins[i].WrapInvocation != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// checkpointedOperationInfo returns the OperationHookInfo that describes the
+// checkpointed operation op of the execution executionArn, as the invocation
+// hooks report it: the wire ID, the checkpointed status, timestamps, result,
+// and error, with IsReplay set because the operation was recorded before
+// this invocation.
+func checkpointedOperationInfo(executionArn string, op *operation) OperationHookInfo {
+	return OperationHookInfo{
+		ExecutionArn:   executionArn,
+		ID:             op.id,
+		Name:           op.name,
+		Type:           op.opType,
+		SubType:        op.subType,
+		Status:         toPluginOperationStatus(op.status),
+		IsReplay:       true,
+		ParentID:       op.parentID,
+		StartTimestamp: op.startTimestamp,
+		EndTimestamp:   op.endTimestamp,
+		Result:         op.operationResult(),
+		Error:          op.operationError(),
+	}
 }
 
 // toPluginOperationStatus converts an internal operation status to the
