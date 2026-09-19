@@ -62,8 +62,12 @@ type Plugin struct {
 	// removed in future releases.
 	OnInvocationStart func(ctx context.Context, info InvocationHookInfo)
 
-	// OnInvocationEnd is called once when the invocation ends, including
-	// with status PENDING on suspension.
+	// OnInvocationEnd is called once when the invocation ends, with the
+	// invocation's status: Succeeded or Failed when the execution has
+	// finished, Pending when the invocation suspended on an operation that
+	// completes later, and Retrying when the invocation returned an error
+	// to Lambda and the service will invoke the execution again. See the
+	// [PluginInvocationStatus] constants.
 	//
 	// EXPERIMENTAL: this field is experimental and may be changed or
 	// removed in future releases.
@@ -248,12 +252,41 @@ type PluginInvocationStatus string
 
 // Invocation status constants for plugin hooks.
 //
+// Succeeded and Failed are terminal: the execution has finished and no
+// further invocation follows. Pending and Retrying both mean the execution
+// continues in a later invocation; they differ in why this one ended.
+//
 // EXPERIMENTAL: these constants are experimental and may be changed or
 // removed in future releases.
 const (
+	// PluginInvocationSucceeded reports that the handler returned a result
+	// and the execution has succeeded. ExecutionResult carries the result.
 	PluginInvocationSucceeded PluginInvocationStatus = "SUCCEEDED"
-	PluginInvocationFailed    PluginInvocationStatus = "FAILED"
-	PluginInvocationPending   PluginInvocationStatus = "PENDING"
+
+	// PluginInvocationFailed reports that the execution has failed: the
+	// handler returned an error that is not scoped to the invocation, or
+	// the SDK could not record the result and the failure is scoped to the
+	// execution. ExecutionError carries the error. The execution is not
+	// invoked again.
+	PluginInvocationFailed PluginInvocationStatus = "FAILED"
+
+	// PluginInvocationPending reports that the invocation suspended
+	// normally: the handler is blocked on an operation that completes
+	// later, such as a wait, a callback, or a chained invoke, or the
+	// service stopped accepting this invocation's checkpoints. The
+	// execution resumes in a later invocation once that operation
+	// completes. ExecutionResult and ExecutionError are nil.
+	PluginInvocationPending PluginInvocationStatus = "PENDING"
+
+	// PluginInvocationRetrying reports that the invocation ended by
+	// returning an error to Lambda instead of reporting an outcome for the
+	// execution: the handler returned an error scoped to the invocation, or
+	// the SDK could not serialize or record the handler's result and that
+	// failure is not scoped to the execution. The service invokes the
+	// execution again from its last checkpoint. ExecutionError carries the
+	// error. A plugin that opens a span per execution should leave it open,
+	// as for Pending.
+	PluginInvocationRetrying PluginInvocationStatus = "RETRYING"
 )
 
 // OperationHookInfo carries context for operation-level hooks.

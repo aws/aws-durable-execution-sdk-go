@@ -9,13 +9,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
-// operationSubTypeCallback is the wire subtype for callback operations.
-const operationSubTypeCallback = "Callback"
-
-// operationSubTypeWaitForCallback is the wire subtype for the
-// WaitForCallback child-context wrapper.
-const operationSubTypeWaitForCallback = "WaitForCallback"
-
 // Callback is a pending callback operation. It carries the identifier that
 // an external system uses to submit a result, and it settles when the
 // submission arrives or the timeout elapses.
@@ -75,7 +68,7 @@ func CreateCallback[O any](ctx Context, name string, opts ...CallbackOption) (*C
 	}
 
 	op := ec.state.get(id)
-	if err := validateReplayConsistency(op, string(OperationTypeCallback), operationSubTypeCallback, name); err != nil {
+	if err := validateReplayConsistency(op, string(OperationTypeCallback), OperationSubTypeCallback, name); err != nil {
 		return nil, err
 	}
 	if ec.unfinishedInSucceededContext(op) {
@@ -100,7 +93,7 @@ func CreateCallback[O any](ctx Context, name string, opts ...CallbackOption) (*C
 		// An in-flight callback is always replayed: its start was
 		// dispatched by the invocation that created it.
 		isReplay := !ec.state.updatedSinceLastInvocation(id)
-		info := ec.operationHookInfo(id, name, string(OperationTypeCallback), operationSubTypeCallback, isReplay)
+		info := ec.operationHookInfo(id, name, string(OperationTypeCallback), OperationSubTypeCallback, isReplay)
 		info.StartTimestamp = op.startTimestamp
 		switch op.status {
 		case statusSucceeded:
@@ -168,7 +161,7 @@ func CreateCallback[O any](ctx Context, name string, opts ...CallbackOption) (*C
 	// checkpoint response when the response carried the record, else from
 	// the clock. The callback settles only in a later invocation, so this
 	// one dispatches no end.
-	info := ec.operationHookInfo(id, name, string(OperationTypeCallback), operationSubTypeCallback, false)
+	info := ec.operationHookInfo(id, name, string(OperationTypeCallback), OperationSubTypeCallback, false)
 	info.StartTimestamp = checkpointedStartTime(created)
 	dispatchOperationStart(ec, info, PluginOperationStarted)
 
@@ -221,11 +214,11 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 	serdes := ec.serdesDefaults().serdes
 
 	op := ec.state.get(id)
-	if err := validateReplayConsistency(op, string(OperationTypeContext), operationSubTypeWaitForCallback, name); err != nil {
+	if err := validateReplayConsistency(op, string(OperationTypeContext), OperationSubTypeWaitForCallback, name); err != nil {
 		return zero, err
 	}
 	if ec.unfinishedInSucceededContext(op) {
-		return zero, ec.parkUnfinishedReplay(op, id, string(OperationTypeContext), operationSubTypeWaitForCallback, name)
+		return zero, ec.parkUnfinishedReplay(op, id, string(OperationTypeContext), OperationSubTypeWaitForCallback, name)
 	}
 
 	// Terminal states: the whole WaitForCallback context is settled.
@@ -238,7 +231,7 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 			// The context settled when the checkpoint recorded it, so
 			// its end is dispatched before the result is deserialized: a
 			// failing result Serdes does not suppress it.
-			dispatchReplayedContextEnd(ec, id, name, operationSubTypeWaitForCallback, op, nil)
+			dispatchReplayedContextEnd(ec, id, name, OperationSubTypeWaitForCallback, op, nil)
 			var out O
 			if err := serdes.Unmarshal(ec.Context, ec.serdesCtx(id), []byte(op.childCtx.result), &out); err != nil {
 				return zero, newSerdesError(name, serdesDirectionUnmarshal, err)
@@ -247,7 +240,7 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 
 		case statusFailed:
 			failure := wfcbFailedError(ec, op, id, name)
-			dispatchReplayedContextEnd(ec, id, name, operationSubTypeWaitForCallback, op, failure)
+			dispatchReplayedContextEnd(ec, id, name, OperationSubTypeWaitForCallback, op, failure)
 			return zero, failure
 
 		case statusStarted, statusPending, statusReady:
@@ -273,7 +266,7 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 	// callback and step report this context's wire ID as their ParentID.
 	mode := childReplayMode(ec, id, op)
 	child := ec.child(id, name, ec.owner, mode)
-	opInfo := dispatchContextStart(ec, id, name, operationSubTypeWaitForCallback, op)
+	opInfo := dispatchContextStart(ec, id, name, OperationSubTypeWaitForCallback, op)
 
 	result, fnErr := runWaitForCallbackBody[O](child, name, submitter, options, serdes)
 
@@ -498,7 +491,7 @@ func callbackUpdate(ec *execContext, id, name string, action OperationAction) Op
 	update := OperationUpdate{
 		Id:      aws.String(hashID(id)),
 		Type:    OperationTypeCallback,
-		SubType: aws.String(operationSubTypeCallback),
+		SubType: aws.String(OperationSubTypeCallback),
 		Action:  action,
 	}
 	if name != "" {
@@ -515,7 +508,7 @@ func wfcbContextUpdate(ec *execContext, id, name string, action OperationAction)
 	update := OperationUpdate{
 		Id:      aws.String(hashID(id)),
 		Type:    OperationTypeContext,
-		SubType: aws.String(operationSubTypeWaitForCallback),
+		SubType: aws.String(OperationSubTypeWaitForCallback),
 		Action:  action,
 	}
 	if name != "" {

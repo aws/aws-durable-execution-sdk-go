@@ -29,7 +29,7 @@ func parkOnChild(root *execContext, op *operation) <-chan error {
 	done := make(chan error, 1)
 	child := root.child("1", "", root.owner, modeReplaySucceededContext)
 	go func() {
-		done <- child.parkUnfinishedReplay(op, "1-1", string(OperationTypeStep), operationSubTypeStep, "extra")
+		done <- child.parkUnfinishedReplay(op, "1-1", string(OperationTypeStep), OperationSubTypeStep, "extra")
 	}()
 	return done
 }
@@ -113,7 +113,7 @@ func TestParkUnfinishedReplayOwningBranchReleasesToken(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- branch.parkUnfinishedReplay(nil, "2", string(OperationTypeWait), operationSubTypeWait, "w")
+		done <- branch.parkUnfinishedReplay(nil, "2", string(OperationTypeWait), OperationSubTypeWait, "w")
 	}()
 
 	// Wait for the branch to release its own token.
@@ -160,7 +160,7 @@ func TestParkUnfinishedReplayErrorDescribesOperation(t *testing.T) {
 			name: "started checkpoint",
 			op: &operation{
 				id: hashID("1-1"), status: statusStarted,
-				opType: string(OperationTypeStep), subType: operationSubTypeStep, name: "extra",
+				opType: string(OperationTypeStep), subType: OperationSubTypeStep, name: "extra",
 			},
 			want: "is checkpointed as STARTED",
 		},
@@ -303,7 +303,7 @@ func TestParkUnfinishedReplayContextDoneWithCommitmentSuspends(t *testing.T) {
 	child := root.child("1", "", root.owner, modeReplaySucceededContext)
 	done := make(chan error, 1)
 	go func() {
-		done <- child.parkUnfinishedReplay(nil, "1-1", string(OperationTypeStep), operationSubTypeStep, "extra")
+		done <- child.parkUnfinishedReplay(nil, "1-1", string(OperationTypeStep), OperationSubTypeStep, "extra")
 	}()
 	cancel()
 	select {

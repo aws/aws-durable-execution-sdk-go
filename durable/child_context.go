@@ -10,10 +10,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
-// operationSubTypeRunInChildContext is the wire subtype for child-context
-// operations.
-const operationSubTypeRunInChildContext = "RunInChildContext"
-
 // checkpointSizeLimitBytes is the maximum checkpoint payload size (256KB).
 // Payloads exceeding this trigger ReplayChildren mode: the context result
 // is not stored in the checkpoint; instead the child body is re-executed
@@ -192,11 +188,11 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 	}
 
 	op := ec.state.get(id)
-	if err := validateReplayConsistency(op, string(OperationTypeContext), operationSubTypeRunInChildContext, name); err != nil {
+	if err := validateReplayConsistency(op, string(OperationTypeContext), OperationSubTypeRunInChildContext, name); err != nil {
 		return zero, err
 	}
 	if ec.unfinishedInSucceededContext(op) {
-		return zero, ec.parkUnfinishedReplay(op, id, string(OperationTypeContext), operationSubTypeRunInChildContext, name)
+		return zero, ec.parkUnfinishedReplay(op, id, string(OperationTypeContext), OperationSubTypeRunInChildContext, name)
 	}
 	if op != nil {
 		switch op.status {
@@ -208,7 +204,7 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 			// recorded it, so its end is dispatched before the result is
 			// rebuilt: neither a failing result Serdes nor a failing
 			// re-execution suppresses it.
-			dispatchReplayedContextEnd(ec, id, name, operationSubTypeRunInChildContext, op, nil)
+			dispatchReplayedContextEnd(ec, id, name, OperationSubTypeRunInChildContext, op, nil)
 			// ReplayChildren mode: the result was too large to
 			// checkpoint, so re-execute the child body to reconstruct it.
 			// fn runs on the calling goroutine, as on the first run. A
@@ -230,7 +226,7 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 
 		case statusFailed:
 			failure := options.failure(name, childFailureRecord(op))
-			dispatchReplayedContextEnd(ec, id, name, operationSubTypeRunInChildContext, op, failure)
+			dispatchReplayedContextEnd(ec, id, name, OperationSubTypeRunInChildContext, op, failure)
 			return zero, failure
 
 		case statusStarted, statusPending, statusReady, statusCancelled, statusTimedOut, statusStopped:
@@ -258,7 +254,7 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 
 	// The start is dispatched before the wrap hooks run, with the same
 	// info the hooks receive, so a plugin can correlate the two.
-	opInfo := dispatchContextStart(ec, id, name, operationSubTypeRunInChildContext, op)
+	opInfo := dispatchContextStart(ec, id, name, OperationSubTypeRunInChildContext, op)
 
 	// WrapChildContextFn wraps the child body execution. The context the
 	// hooks supply becomes the child context's parent; the child is not
@@ -388,7 +384,7 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 
 	// Check if the operation is already checkpointed (terminal).
 	op := ec.state.get(id)
-	if err := validateReplayConsistency(op, string(OperationTypeContext), operationSubTypeRunInChildContext, name); err != nil {
+	if err := validateReplayConsistency(op, string(OperationTypeContext), OperationSubTypeRunInChildContext, name); err != nil {
 		return newFailedFuture[O](err)
 	}
 	if ec.unfinishedInSucceededContext(op) {
@@ -435,7 +431,7 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 		child := ec.childWith(id, name, currentGoroutineOwner(), mode, defaults)
 		child.adoptBranchToken(tok)
 
-		opInfo := dispatchContextStart(ec, id, name, operationSubTypeRunInChildContext, op)
+		opInfo := dispatchContextStart(ec, id, name, OperationSubTypeRunInChildContext, op)
 
 		// Recover panics in the child function so they settle the
 		// future as a failure rather than crashing the process.
@@ -552,7 +548,7 @@ func resolveTerminalChild[O any](ec *execContext, op *operation, id, name string
 		if op.childCtx == nil {
 			return newFailedFuture[O](fmt.Errorf("durable: child context %q: checkpointed %s operation has no context details", name, op.status))
 		}
-		dispatchReplayedContextEnd(ec, id, name, operationSubTypeRunInChildContext, op, nil)
+		dispatchReplayedContextEnd(ec, id, name, OperationSubTypeRunInChildContext, op, nil)
 		// ReplayChildren mode: re-execute the child body to reconstruct
 		// the large result that was not checkpointed.
 		if op.childCtx.replayChildren {
@@ -566,7 +562,7 @@ func resolveTerminalChild[O any](ec *execContext, op *operation, id, name string
 
 	case statusFailed:
 		failure := options.failure(name, childFailureRecord(op))
-		dispatchReplayedContextEnd(ec, id, name, operationSubTypeRunInChildContext, op, failure)
+		dispatchReplayedContextEnd(ec, id, name, OperationSubTypeRunInChildContext, op, failure)
 		return newFailedFuture[O](failure)
 
 	default:
@@ -643,7 +639,7 @@ func childUpdate(ec *execContext, id, name string, action OperationAction) Opera
 	update := OperationUpdate{
 		Id:      aws.String(hashID(id)),
 		Type:    OperationTypeContext,
-		SubType: aws.String(operationSubTypeRunInChildContext),
+		SubType: aws.String(OperationSubTypeRunInChildContext),
 		Action:  action,
 	}
 	if name != "" {

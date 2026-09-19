@@ -159,7 +159,7 @@ func TestCheckpointMergeCarriesTimestamps(t *testing.T) {
 			Id:             aws.String(hashID("1")),
 			Status:         OperationStatusSucceeded,
 			Type:           OperationTypeStep,
-			SubType:        aws.String(operationSubTypeStep),
+			SubType:        aws.String(OperationSubTypeStep),
 			Name:           aws.String("s"),
 			StartTimestamp: &start,
 			EndTimestamp:   &end,

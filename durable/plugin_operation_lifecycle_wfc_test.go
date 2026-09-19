@@ -91,7 +91,7 @@ func pollingHandler(p Plugin) func(context.Context, []byte) ([]byte, error) {
 // wfcOp builds the checkpoint of the polling operation "poll" at the root.
 func wfcOp(status string, details *wireStepDetails) wireOperation {
 	op := wireOperation{
-		Id: hashID("1"), Status: status, Type: "STEP", SubType: operationSubTypeWaitForCondition, Name: "poll",
+		Id: hashID("1"), Status: status, Type: "STEP", SubType: OperationSubTypeWaitForCondition, Name: "poll",
 		StepDetails:    details,
 		StartTimestamp: flexTimestamp{Time: lifecycleStart, Valid: true},
 	}
@@ -131,7 +131,7 @@ func TestOperationLifecycleWaitForConditionMultiInvocation(t *testing.T) {
 
 	events, ops, _ := invoke("tok1", nil, invocationPending)
 	assertStrings(t, events, "start:STARTED:1:false", "astart:1:false", "aend:1:SUCCEEDED")
-	assertIdentity(t, ops[0], "1", "poll", string(OperationTypeStep), operationSubTypeWaitForCondition, "")
+	assertIdentity(t, ops[0], "1", "poll", string(OperationTypeStep), OperationSubTypeWaitForCondition, "")
 	assertLiveTimestamps(t, ops[0])
 
 	state := func(attempt int, result string) []wireOperation {
@@ -146,7 +146,7 @@ func TestOperationLifecycleWaitForConditionMultiInvocation(t *testing.T) {
 	events, ops, aends := invoke("tok3", state(2, "2"), invocationSucceeded)
 	assertStrings(t, events, "astart:3:true", "aend:3:SUCCEEDED", "end:SUCCEEDED:3:false")
 	end := ops[0]
-	assertIdentity(t, end, "1", "poll", string(OperationTypeStep), operationSubTypeWaitForCondition, "")
+	assertIdentity(t, end, "1", "poll", string(OperationTypeStep), OperationSubTypeWaitForCondition, "")
 	if end.info.Result != "3" || end.info.Error != nil {
 		t.Errorf("end Result = %q Error = %v, want %q and nil", end.info.Result, end.info.Error, "3")
 	}
@@ -162,7 +162,7 @@ func TestOperationLifecycleWaitForConditionMultiInvocation(t *testing.T) {
 
 	events, ops, _ = invoke("tok4", []wireOperation{lifecycleExecOp(), wfcOp("SUCCEEDED", &wireStepDetails{Attempt: 3, Result: "3"})}, invocationSucceeded)
 	assertStrings(t, events, "end:SUCCEEDED:3:true")
-	assertIdentity(t, ops[0], "1", "poll", string(OperationTypeStep), operationSubTypeWaitForCondition, "")
+	assertIdentity(t, ops[0], "1", "poll", string(OperationTypeStep), OperationSubTypeWaitForCondition, "")
 	assertReplayedTimestamps(t, ops[0], true)
 	if ops[0].info.Result != "3" {
 		t.Errorf("replayed end Result = %q, want %q", ops[0].info.Result, "3")

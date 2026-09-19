@@ -276,7 +276,7 @@ func TestCustomCompletionAbandonedBranchKeepsStartedCheckpoint(t *testing.T) {
 
 	status := map[string]OperationAction{}
 	for _, u := range updateBatch(t, fake) {
-		if aws.ToString(u.SubType) != operationSubTypeParallelBranch {
+		if aws.ToString(u.SubType) != OperationSubTypeParallelBranch {
 			continue
 		}
 		status[aws.ToString(u.Name)] = u.Action
@@ -405,7 +405,7 @@ func TestCustomCompletionFlatOversizedReplayUsesRecord(t *testing.T) {
 	// with the recorded reason and the admitted prefix.
 	var sawParent bool
 	for _, u := range updateBatch(t, fake) {
-		if aws.ToString(u.SubType) != operationSubTypeMap || u.Action != OperationActionSucceed {
+		if aws.ToString(u.SubType) != OperationSubTypeMap || u.Action != OperationActionSucceed {
 			continue
 		}
 		sawParent = true

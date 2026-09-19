@@ -413,7 +413,7 @@ func wfcbTimeoutPayload(recordedMessage string) []byte {
 			Id:      hashID("1"),
 			Name:    "timeout-cb",
 			Type:    string(OperationTypeContext),
-			SubType: operationSubTypeWaitForCallback,
+			SubType: OperationSubTypeWaitForCallback,
 			Status:  "FAILED",
 			ContextDetails: &wireContextDetails{
 				Error: &wireFullError{ErrorType: "CallbackTimeoutError", ErrorMessage: recordedMessage},
@@ -423,7 +423,7 @@ func wfcbTimeoutPayload(recordedMessage string) []byte {
 			Id:       hashID("1-1"),
 			ParentId: hashID("1"),
 			Type:     string(OperationTypeCallback),
-			SubType:  operationSubTypeCallback,
+			SubType:  OperationSubTypeCallback,
 			Status:   "TIMED_OUT",
 			CallbackDetails: &wireCallbackDetails{
 				CallbackId: "cb-1",

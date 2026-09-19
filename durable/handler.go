@@ -514,22 +514,29 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		})
 		resp, respErr = respond(wire.InvocationResponse{Status: wire.StatusPending})
 	case wrapErr != nil:
-		dispatchNotification(pd, func(p *Plugin) {
-			if p.OnInvocationEnd != nil {
-				p.OnInvocationEnd(ctx, InvocationEndHookInfo{
-					ExecutionArn:   in.DurableExecutionArn,
-					Status:         PluginInvocationFailed,
-					ExecutionError: wrapErr,
-				})
-			}
-		})
 		// A failure the handler returned is an ordinary failure of the
 		// execution unless it states a scope. An invocation-scoped
 		// CheckpointError or ClientError ends the invocation with an
 		// error, so the execution resumes in a later invocation from its
 		// last checkpoint. Everything else, including an execution-scoped
-		// error, fails the execution.
-		if failureScope(wrapErr, ErrorScopeExecution) == ErrorScopeInvocation {
+		// error, fails the execution. The status reported to plugins
+		// follows the same split: Retrying when the invocation ends with
+		// an error, Failed when the execution fails.
+		retrying := failureScope(wrapErr, ErrorScopeExecution) == ErrorScopeInvocation
+		status := PluginInvocationFailed
+		if retrying {
+			status = PluginInvocationRetrying
+		}
+		dispatchNotification(pd, func(p *Plugin) {
+			if p.OnInvocationEnd != nil {
+				p.OnInvocationEnd(ctx, InvocationEndHookInfo{
+					ExecutionArn:   in.DurableExecutionArn,
+					Status:         status,
+					ExecutionError: wrapErr,
+				})
+			}
+		})
+		if retrying {
 			return nil, wrapErr
 		}
 		resp, respErr = respond(wire.InvocationResponse{
@@ -545,12 +552,15 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		// failInvocationEnd dispatches the failure-side OnInvocationEnd
 		// hook for errors raised during result finalization, so lifecycle
 		// telemetry observes exactly one terminal hook per invocation.
-		failInvocationEnd := func(err error) {
+		// status is Retrying when the invocation goes on to return err to
+		// Lambda, so the service invokes the execution again, and Failed
+		// when the invocation responds that the execution has failed.
+		failInvocationEnd := func(status PluginInvocationStatus, err error) {
 			dispatchNotification(pd, func(p *Plugin) {
 				if p.OnInvocationEnd != nil {
 					p.OnInvocationEnd(ctx, InvocationEndHookInfo{
 						ExecutionArn:   in.DurableExecutionArn,
-						Status:         PluginInvocationFailed,
+						Status:         status,
 						ExecutionError: err,
 					})
 				}
@@ -559,7 +569,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		serialized, serr := json.Marshal(wrapResult)
 		if serr != nil {
 			err := fmt.Errorf("durable: serialize handler result: %w", serr)
-			failInvocationEnd(err)
+			failInvocationEnd(PluginInvocationRetrying, err)
 			return nil, err
 		}
 		if len(serialized) > lambdaResponseSizeLimit {
@@ -575,7 +585,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 			// form, so it is passed through unhashed.
 			if execOp == nil || execOp.id == "" {
 				err := errors.New("durable: result exceeds response size limit and no execution operation is available to checkpoint it")
-				failInvocationEnd(err)
+				failInvocationEnd(PluginInvocationRetrying, err)
 				return nil, err
 			}
 			executionOpID := execOp.id
@@ -605,17 +615,18 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 					return respond(wire.InvocationResponse{Status: wire.StatusPending})
 				}
 				err := fmt.Errorf("durable: checkpoint oversized result: %w", cerr)
-				failInvocationEnd(err)
 				// The checkpoint is a client call outside the handler, so
 				// a failure with no stated scope is presumed transient
 				// and ends the invocation with an error. An
 				// execution-scoped failure fails the execution instead.
 				if failureScope(err, ErrorScopeInvocation) == ErrorScopeExecution {
+					failInvocationEnd(PluginInvocationFailed, err)
 					return respond(wire.InvocationResponse{
 						Status: wire.StatusFailed,
 						Error:  errorObjectFromError(err, nil),
 					})
 				}
+				failInvocationEnd(PluginInvocationRetrying, err)
 				return nil, err
 			}
 			empty := ""

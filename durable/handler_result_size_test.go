@@ -333,11 +333,12 @@ func TestRootResultOversizedCheckpointBeforePlugin(t *testing.T) {
 }
 
 func TestRootResultCheckpointFailureNoSuccessPlugin(t *testing.T) {
-	// When the oversized-result checkpoint fails, exactly one FAILED
+	// When the oversized-result checkpoint fails, exactly one
 	// OnInvocationEnd hook must fire carrying the returned error, and the
 	// success hook must NOT fire — the result was never durably recorded.
 	// The failure here is invocation-scoped, so the invocation ends with
-	// an error and the hook carries that exact error.
+	// an error, the service will invoke the execution again, and the hook
+	// reports RETRYING with that exact error.
 	large := resultOfSerializedSize(lambdaResponseSizeLimit + 1)
 
 	var hooks []InvocationEndHookInfo
@@ -365,8 +366,8 @@ func TestRootResultCheckpointFailureNoSuccessPlugin(t *testing.T) {
 	if len(hooks) != 1 {
 		t.Fatalf("OnInvocationEnd fired %d times, want exactly 1", len(hooks))
 	}
-	if hooks[0].Status != PluginInvocationFailed {
-		t.Errorf("hook Status = %q, want %q", hooks[0].Status, PluginInvocationFailed)
+	if hooks[0].Status != PluginInvocationRetrying {
+		t.Errorf("hook Status = %q, want %q", hooks[0].Status, PluginInvocationRetrying)
 	}
 	if hooks[0].ExecutionError != err { //nolint:errorlint // identity check is intentional
 		t.Errorf("hook ExecutionError = %v, want the exact returned error %v", hooks[0].ExecutionError, err)
@@ -417,10 +418,11 @@ func TestRootResultCheckpointExecutionScopeFiresFailedHookOnce(t *testing.T) {
 	}
 }
 
-func TestRootResultSerializationFailureFiresFailedHook(t *testing.T) {
-	// When the handler result cannot be serialized, exactly one FAILED
-	// OnInvocationEnd hook must fire carrying the returned error, and the
-	// success hook must NOT fire.
+func TestRootResultSerializationFailureFiresRetryingHook(t *testing.T) {
+	// When the handler result cannot be serialized, the invocation returns
+	// the error to Lambda. Exactly one RETRYING OnInvocationEnd hook must
+	// fire carrying the returned error, and the success hook must NOT
+	// fire.
 	var hooks []InvocationEndHookInfo
 	fake := &fakeLambdaFunc{getState: emptyGetState}
 
@@ -444,18 +446,19 @@ func TestRootResultSerializationFailureFiresFailedHook(t *testing.T) {
 	if len(hooks) != 1 {
 		t.Fatalf("OnInvocationEnd fired %d times, want exactly 1", len(hooks))
 	}
-	if hooks[0].Status != PluginInvocationFailed {
-		t.Errorf("hook Status = %q, want %q", hooks[0].Status, PluginInvocationFailed)
+	if hooks[0].Status != PluginInvocationRetrying {
+		t.Errorf("hook Status = %q, want %q", hooks[0].Status, PluginInvocationRetrying)
 	}
 	if hooks[0].ExecutionError != err { //nolint:errorlint // identity check is intentional
 		t.Errorf("hook ExecutionError = %v, want the exact returned error %v", hooks[0].ExecutionError, err)
 	}
 }
 
-func TestRootResultOversizedNoExecutionOpFiresFailedHook(t *testing.T) {
+func TestRootResultOversizedNoExecutionOpFiresRetryingHook(t *testing.T) {
 	// An oversized result with no execution operation in the initial
-	// state cannot be checkpointed. Exactly one FAILED OnInvocationEnd
-	// hook must fire carrying the returned error.
+	// state cannot be checkpointed, so the invocation returns the error
+	// to Lambda. Exactly one RETRYING OnInvocationEnd hook must fire
+	// carrying the returned error.
 	large := resultOfSerializedSize(lambdaResponseSizeLimit + 1)
 
 	var hooks []InvocationEndHookInfo
@@ -492,8 +495,8 @@ func TestRootResultOversizedNoExecutionOpFiresFailedHook(t *testing.T) {
 	if len(hooks) != 1 {
 		t.Fatalf("OnInvocationEnd fired %d times, want exactly 1", len(hooks))
 	}
-	if hooks[0].Status != PluginInvocationFailed {
-		t.Errorf("hook Status = %q, want %q", hooks[0].Status, PluginInvocationFailed)
+	if hooks[0].Status != PluginInvocationRetrying {
+		t.Errorf("hook Status = %q, want %q", hooks[0].Status, PluginInvocationRetrying)
 	}
 	if hooks[0].ExecutionError != err { //nolint:errorlint // identity check is intentional
 		t.Errorf("hook ExecutionError = %v, want the exact returned error %v", hooks[0].ExecutionError, err)

@@ -231,9 +231,9 @@ func TestSuspendWaitsForCallbackContextCompletion(t *testing.T) {
 	// STARTED; the inner callback ("1-1-1") is SUCCEEDED; the submitter
 	// step ("1-1-2") has not run, so it runs live and is the gated body.
 	state := []wireOperation{
-		{Id: hashID("1"), Name: "cb-branch", Type: string(OperationTypeContext), SubType: operationSubTypeRunInChildContext, Status: "STARTED"},
-		{Id: hashID("1-1"), ParentId: hashID("1"), Name: "cb", Type: string(OperationTypeContext), SubType: operationSubTypeWaitForCallback, Status: "STARTED"},
-		{Id: hashID("1-1-1"), ParentId: hashID("1-1"), Type: string(OperationTypeCallback), SubType: operationSubTypeCallback, Status: "SUCCEEDED",
+		{Id: hashID("1"), Name: "cb-branch", Type: string(OperationTypeContext), SubType: OperationSubTypeRunInChildContext, Status: "STARTED"},
+		{Id: hashID("1-1"), ParentId: hashID("1"), Name: "cb", Type: string(OperationTypeContext), SubType: OperationSubTypeWaitForCallback, Status: "STARTED"},
+		{Id: hashID("1-1-1"), ParentId: hashID("1-1"), Type: string(OperationTypeCallback), SubType: OperationSubTypeCallback, Status: "SUCCEEDED",
 			CallbackDetails: &wireCallbackDetails{CallbackId: "cb-1", Result: `"resolved"`}},
 	}
 	out := runSuspendWithSlowCompletion(t, state, slowCompletion{name: "cb", action: OperationActionSucceed},

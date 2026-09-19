@@ -765,6 +765,52 @@ func TestPluginInvocationEndErrorPopulated(t *testing.T) {
 	}
 }
 
+// TestPluginInvocationEndRetrying verifies that a handler error scoped to
+// the invocation ends the invocation with that error, so the service will
+// invoke the execution again, and that OnInvocationEnd reports RETRYING
+// with the error rather than FAILED.
+func TestPluginInvocationEndRetrying(t *testing.T) {
+	if got, want := string(PluginInvocationRetrying), "RETRYING"; got != want {
+		t.Fatalf("PluginInvocationRetrying = %q, want %q", got, want)
+	}
+
+	var hooks []InvocationEndHookInfo
+	var mu sync.Mutex
+	plugin := Plugin{
+		OnInvocationEnd: func(_ context.Context, info InvocationEndHookInfo) {
+			mu.Lock()
+			hooks = append(hooks, info)
+			mu.Unlock()
+		},
+	}
+
+	handlerErr := &ClientError{Scope: ErrorScopeInvocation, Err: errors.New("transient")}
+	handler := Wrap(func(ctx Context, event string) (string, error) {
+		return "", handlerErr
+	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
+
+	payload := makePluginPayload(t, "arn:test:retry", "tok1", nil)
+	_, err := handler(makePluginContext(), payload)
+	if !errors.Is(err, handlerErr) {
+		t.Fatalf("Invoke error = %v, want the handler's invocation-scoped error", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(hooks) != 1 {
+		t.Fatalf("OnInvocationEnd fired %d times, want exactly 1", len(hooks))
+	}
+	if hooks[0].Status != PluginInvocationRetrying {
+		t.Fatalf("Status = %q, want %q", hooks[0].Status, PluginInvocationRetrying)
+	}
+	if !errors.Is(hooks[0].ExecutionError, handlerErr) {
+		t.Fatalf("ExecutionError = %v, want the handler's error", hooks[0].ExecutionError)
+	}
+	if hooks[0].ExecutionResult != nil {
+		t.Fatalf("ExecutionResult = %v, want nil", hooks[0].ExecutionResult)
+	}
+}
+
 // TestPluginContextThreadedToHooks verifies the context.Context passed to
 // Invoke is visible in notification hooks (value threading).
 func TestPluginContextThreadedToHooks(t *testing.T) {
@@ -848,7 +894,7 @@ func TestPluginOperationHookTimestampsFromCheckpointResponse(t *testing.T) {
 		Id:             aws.String(hashID("2")),
 		Status:         OperationStatusSucceeded,
 		Type:           OperationTypeStep,
-		SubType:        aws.String(operationSubTypeStep),
+		SubType:        aws.String(OperationSubTypeStep),
 		Name:           aws.String("second"),
 		StartTimestamp: &start,
 		EndTimestamp:   &end,

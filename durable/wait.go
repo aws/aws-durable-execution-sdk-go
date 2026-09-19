@@ -8,9 +8,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
-// operationSubTypeWait is the wire subtype for wait operations.
-const operationSubTypeWait = "Wait"
-
 // WaitOption configures a single [Wait] or [WaitAsync] operation.
 //
 // The interface is sealed: only this package can implement it. No option
@@ -105,16 +102,16 @@ func WaitAsync(ctx Context, name string, d time.Duration, opts ...WaitOption) *F
 // its start was dispatched by the invocation that recorded it.
 func runWait(ec *execContext, id, name string, d time.Duration) error {
 	op := ec.state.get(id)
-	if err := validateReplayConsistency(op, string(OperationTypeWait), operationSubTypeWait, name); err != nil {
+	if err := validateReplayConsistency(op, string(OperationTypeWait), OperationSubTypeWait, name); err != nil {
 		return err
 	}
 	if ec.unfinishedInSucceededContext(op) {
-		return ec.parkUnfinishedReplay(op, id, string(OperationTypeWait), operationSubTypeWait, name)
+		return ec.parkUnfinishedReplay(op, id, string(OperationTypeWait), OperationSubTypeWait, name)
 	}
 	if op != nil {
 		switch op.status {
 		case statusSucceeded:
-			info := ec.operationHookInfo(id, name, string(OperationTypeWait), operationSubTypeWait, true)
+			info := ec.operationHookInfo(id, name, string(OperationTypeWait), OperationSubTypeWait, true)
 			info.StartTimestamp = op.startTimestamp
 			info.EndTimestamp = op.endTimestamp
 			dispatchOperationEnd(ec, info, PluginOperationSucceeded)
@@ -122,7 +119,7 @@ func runWait(ec *execContext, id, name string, d time.Duration) error {
 		case statusStarted:
 			// The timer has not fired. The start is replayed; the end
 			// belongs to the invocation that observes the completion.
-			info := ec.operationHookInfo(id, name, string(OperationTypeWait), operationSubTypeWait, true)
+			info := ec.operationHookInfo(id, name, string(OperationTypeWait), OperationSubTypeWait, true)
 			info.StartTimestamp = op.startTimestamp
 			dispatchOperationStart(ec, info, PluginOperationStarted)
 			ec.blocked.Store(true)
@@ -141,7 +138,7 @@ func runWait(ec *execContext, id, name string, d time.Duration) error {
 	update := OperationUpdate{
 		Id:      aws.String(hashID(id)),
 		Type:    OperationTypeWait,
-		SubType: aws.String(operationSubTypeWait),
+		SubType: aws.String(OperationSubTypeWait),
 		Action:  OperationActionStart,
 		WaitOptions: &WaitOptions{
 			WaitSeconds: aws.Int32(waitSec),
@@ -162,7 +159,7 @@ func runWait(ec *execContext, id, name string, d time.Duration) error {
 
 	// The wait is recorded. Its start timestamp comes from the checkpoint
 	// response when the response carried the record, else from the clock.
-	info := ec.operationHookInfo(id, name, string(OperationTypeWait), operationSubTypeWait, false)
+	info := ec.operationHookInfo(id, name, string(OperationTypeWait), OperationSubTypeWait, false)
 	info.StartTimestamp = checkpointedStartTime(ec.state.get(id))
 	dispatchOperationStart(ec, info, PluginOperationStarted)
 

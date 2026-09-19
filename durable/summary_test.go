@@ -52,7 +52,7 @@ func TestChildSummaryStoredForOversizedResult(t *testing.T) {
 		t.Errorf("summary function called %d times, want 1", calls)
 	}
 
-	u := contextSucceedUpdate(t, fake, operationSubTypeRunInChildContext)
+	u := contextSucceedUpdate(t, fake, OperationSubTypeRunInChildContext)
 	if u.ContextOptions == nil || !aws.ToBool(u.ContextOptions.ReplayChildren) {
 		t.Error("expected ContextOptions.ReplayChildren = true")
 	}
@@ -76,7 +76,7 @@ func TestChildSummaryNotCalledForSmallResult(t *testing.T) {
 	if want := `{"Status":"SUCCEEDED","Result":"\"tiny\""}`; resp != want {
 		t.Fatalf("response = %s, want %s", resp, want)
 	}
-	u := contextSucceedUpdate(t, fake, operationSubTypeRunInChildContext)
+	u := contextSucceedUpdate(t, fake, OperationSubTypeRunInChildContext)
 	if got := aws.ToString(u.Payload); got != `"tiny"` {
 		t.Errorf("payload = %q, want the serialized result", got)
 	}
@@ -130,7 +130,7 @@ func TestChildSummaryOversizedIsTruncated(t *testing.T) {
 		}, WithChildSummary(func(string) string { return summary }))
 		return "", err
 	})
-	got := aws.ToString(contextSucceedUpdate(t, fake, operationSubTypeRunInChildContext).Payload)
+	got := aws.ToString(contextSucceedUpdate(t, fake, OperationSubTypeRunInChildContext).Payload)
 	if len(got) > checkpointSizeLimitBytes {
 		t.Fatalf("summary payload is %d bytes, over the %d limit", len(got), checkpointSizeLimitBytes)
 	}
@@ -151,7 +151,7 @@ func TestChildSummaryEmptyLeavesPayloadAbsent(t *testing.T) {
 		}, WithChildSummary(func(string) string { return "" }))
 		return "", err
 	})
-	u := contextSucceedUpdate(t, fake, operationSubTypeRunInChildContext)
+	u := contextSucceedUpdate(t, fake, OperationSubTypeRunInChildContext)
 	if u.Payload != nil {
 		t.Errorf("payload = %q, want absent for an empty summary", *u.Payload)
 	}
@@ -204,7 +204,7 @@ func TestChildSummaryAsyncStoredForOversizedResult(t *testing.T) {
 	if want := fmt.Sprintf(`{"Status":"SUCCEEDED","Result":"\"%d\""}`, len(large)); resp != want {
 		t.Fatalf("response = %s, want %s", resp, want)
 	}
-	u := contextSucceedUpdate(t, fake, operationSubTypeRunInChildContext)
+	u := contextSucceedUpdate(t, fake, OperationSubTypeRunInChildContext)
 	if got, want := aws.ToString(u.Payload), fmt.Sprintf("%d bytes", len(large)); got != want {
 		t.Errorf("payload = %q, want the summary %q", got, want)
 	}
@@ -285,7 +285,7 @@ func batchSummaryLiveThenReplay(t *testing.T, nesting NestingMode) {
 		t.Errorf("summary function called %d times live, want 1", calls)
 	}
 
-	parent := contextSucceedUpdate(t, fake, operationSubTypeMap)
+	parent := contextSucceedUpdate(t, fake, OperationSubTypeMap)
 	if parent.ContextOptions == nil || !aws.ToBool(parent.ContextOptions.ReplayChildren) {
 		t.Fatal("parent SUCCEED did not set ReplayChildren; aggregate did not exceed the limit")
 	}
@@ -320,7 +320,7 @@ func batchSummaryLiveThenReplay(t *testing.T, nesting NestingMode) {
 		}
 	}
 	for _, u := range updateBatch(t, fake) {
-		if aws.ToString(u.SubType) == operationSubTypeMapIteration && u.Action == OperationActionSucceed {
+		if aws.ToString(u.SubType) == OperationSubTypeMapIteration && u.Action == OperationActionSucceed {
 			replayOps = append(replayOps, wireOperation{
 				Id:             aws.ToString(u.Id),
 				ParentId:       aws.ToString(u.ParentId),
@@ -371,7 +371,7 @@ func TestBatchSummaryNotCalledForSmallResult(t *testing.T) {
 		return br.SuccessCount(), nil
 	})
 	assertSucceeded(t, resp)
-	parent := contextSucceedUpdate(t, fake, operationSubTypeMap)
+	parent := contextSucceedUpdate(t, fake, OperationSubTypeMap)
 	if parent.ContextOptions != nil {
 		t.Error("small result should not set ContextOptions")
 	}
@@ -396,7 +396,7 @@ func TestBatchSummaryParallel(t *testing.T) {
 		return br.SuccessCount(), nil
 	})
 	assertSucceeded(t, resp)
-	parent := contextSucceedUpdate(t, fake, operationSubTypeParallel)
+	parent := contextSucceedUpdate(t, fake, OperationSubTypeParallel)
 	var stored map[string]any
 	if err := json.Unmarshal([]byte(aws.ToString(parent.Payload)), &stored); err != nil {
 		t.Fatalf("parent payload is not a JSON record: %v", err)

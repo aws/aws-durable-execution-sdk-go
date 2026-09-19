@@ -2,6 +2,7 @@ package insight
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -231,6 +232,77 @@ func TestPlugin_EmitAlways_EmitsForPendingInvocation(t *testing.T) {
 	}
 	if records[0].EndTimestamp != nil {
 		t.Errorf("record end timestamp = %v, want nil for a still-running execution", records[0].EndTimestamp)
+	}
+}
+
+// TestPlugin_RetryingInvocation_LeavesRecordRunning verifies that a
+// retrying outcome is handled like a pending one in every emit mode: the
+// execution continues in a later invocation, so no record is marked
+// terminal, no end timestamp is set, and the invocation's error is not
+// recorded as the execution's error. EmitOnComplete emits nothing;
+// EmitAlways and EmitOnChange emit one running snapshot.
+func TestPlugin_RetryingInvocation_LeavesRecordRunning(t *testing.T) {
+	cases := []struct {
+		name        string
+		mode        EmitMode
+		wantRecords int
+	}{
+		{name: "default EmitOnComplete", mode: EmitOnComplete, wantRecords: 0},
+		{name: "EmitAlways", mode: EmitAlways, wantRecords: 1},
+		{name: "EmitOnChange", mode: EmitOnChange, wantRecords: 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			exp := &capturingExporter{}
+			ip := New(Config{EmitMode: tc.mode, Exporters: []Exporter{exp}})
+
+			ctx := context.Background()
+			arn := "arn:aws:lambda:us-east-1:123:function:fn:1"
+
+			ip.onInvocationStart(ctx, durable.InvocationHookInfo{
+				ExecutionArn:            arn,
+				ExecutionStartTimestamp: time.Now(),
+			})
+			ip.onInvocationEnd(ctx, durable.InvocationEndHookInfo{
+				ExecutionArn:   arn,
+				Status:         durable.PluginInvocationRetrying,
+				ExecutionError: errors.New("transient"),
+			})
+
+			records := exp.snapshot()
+			if len(records) != tc.wantRecords {
+				t.Fatalf("got %d records for a retrying invocation, want %d", len(records), tc.wantRecords)
+			}
+			for _, rec := range records {
+				if rec.Status != StatusRunning {
+					t.Errorf("record status = %q, want %q", rec.Status, StatusRunning)
+				}
+				if rec.EndTimestamp != nil {
+					t.Errorf("record end timestamp = %v, want nil for a still-running execution", rec.EndTimestamp)
+				}
+				if rec.DurationMs != nil {
+					t.Errorf("record duration = %v, want nil for a still-running execution", *rec.DurationMs)
+				}
+				if rec.Error != nil {
+					t.Errorf("record error = %+v, want nil: the execution has not failed", rec.Error)
+				}
+			}
+
+			// The cumulative record must also stay running, so the next
+			// invocation continues it rather than starting from a
+			// finalized one.
+			ip.mu.Lock()
+			defer ip.mu.Unlock()
+			if ip.record == nil {
+				t.Fatal("cumulative record is nil after a retrying invocation")
+			}
+			if ip.record.Status != StatusRunning {
+				t.Errorf("cumulative record status = %q, want %q", ip.record.Status, StatusRunning)
+			}
+			if ip.record.EndTimestamp != nil {
+				t.Errorf("cumulative record end timestamp = %v, want nil", ip.record.EndTimestamp)
+			}
+		})
 	}
 }
 

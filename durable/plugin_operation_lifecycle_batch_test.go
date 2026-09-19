@@ -69,7 +69,7 @@ func TestOperationLifecycleMapLive(t *testing.T) {
 			batch := eventsForName(evs, "batch")
 			assertSequence(t, batch, "start:batch:STARTED:false", "end:batch:SUCCEEDED:false")
 			for _, ev := range batch {
-				assertIdentity(t, ev, "1", "batch", string(OperationTypeContext), operationSubTypeMap, "")
+				assertIdentity(t, ev, "1", "batch", string(OperationTypeContext), OperationSubTypeMap, "")
 				assertLiveTimestamps(t, ev)
 			}
 			if batch[1].info.Result == "" {
@@ -93,7 +93,7 @@ func TestOperationLifecycleMapLive(t *testing.T) {
 				id := fmt.Sprint(i + 2)
 				assertSequence(t, items[name], "start:"+name+":STARTED:false", "end:"+name+":SUCCEEDED:false")
 				for _, ev := range items[name] {
-					assertIdentity(t, ev, id, name, string(OperationTypeContext), operationSubTypeMapIteration, hashID("1"))
+					assertIdentity(t, ev, id, name, string(OperationTypeContext), OperationSubTypeMapIteration, hashID("1"))
 					assertLiveTimestamps(t, ev)
 				}
 				if want := fmt.Sprint((i + 1) * 2); items[name][1].info.Result != want {
@@ -103,7 +103,7 @@ func TestOperationLifecycleMapLive(t *testing.T) {
 				// runs between the item's start and end.
 				step := eventsForName(evs, fmt.Sprintf("step-%d", i))
 				assertSequence(t, step, fmt.Sprintf("start:step-%d:STARTED:false", i), fmt.Sprintf("end:step-%d:SUCCEEDED:false", i))
-				assertIdentity(t, step[0], id+"-1", fmt.Sprintf("step-%d", i), string(OperationTypeStep), operationSubTypeStep, hashID(id))
+				assertIdentity(t, step[0], id+"-1", fmt.Sprintf("step-%d", i), string(OperationTypeStep), OperationSubTypeStep, hashID(id))
 				assertEventsOrdered(t, evs, items[name][0], step[0], step[1], items[name][1])
 			}
 		})
@@ -162,8 +162,8 @@ func TestOperationLifecycleParallelBranchNames(t *testing.T) {
 		"end:beta:FAILED:false",
 		"end:par:SUCCEEDED:false",
 	)
-	assertIdentity(t, evs[1], "2", "alpha", string(OperationTypeContext), operationSubTypeParallelBranch, hashID("1"))
-	assertIdentity(t, evs[3], "3", "beta", string(OperationTypeContext), operationSubTypeParallelBranch, hashID("1"))
+	assertIdentity(t, evs[1], "2", "alpha", string(OperationTypeContext), OperationSubTypeParallelBranch, hashID("1"))
+	assertIdentity(t, evs[3], "3", "beta", string(OperationTypeContext), OperationSubTypeParallelBranch, hashID("1"))
 	if evs[2].info.Result != `"a"` {
 		t.Errorf("alpha end Result = %q, want %q", evs[2].info.Result, `"a"`)
 	}
@@ -273,10 +273,10 @@ func TestOperationLifecycleBatchFlatNesting(t *testing.T) {
 		"end:batch:SUCCEEDED:false",
 	)
 	for i := range 3 {
-		assertIdentity(t, evs[1+2*i], fmt.Sprintf("1-%d-1", i+1), fmt.Sprintf("step-%d", i), string(OperationTypeStep), operationSubTypeStep, hashID("1"))
+		assertIdentity(t, evs[1+2*i], fmt.Sprintf("1-%d-1", i+1), fmt.Sprintf("step-%d", i), string(OperationTypeStep), OperationSubTypeStep, hashID("1"))
 	}
 	for _, ev := range evs {
-		if ev.info.SubType == operationSubTypeMapIteration {
+		if ev.info.SubType == OperationSubTypeMapIteration {
 			t.Errorf("flat item dispatched %v", summarize([]opEvent{ev}))
 		}
 	}
@@ -307,9 +307,9 @@ func TestOperationLifecycleBatchReplayed(t *testing.T) {
 	}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
 
 	resumeOps := []wireOperation{
-		contextOp("1", "", operationSubTypeMap, "batch", "STARTED", nil),
-		contextOp("2", "1", operationSubTypeMapIteration, "item-0", "SUCCEEDED", &wireContextDetails{Result: "1"}),
-		contextOp("3", "1", operationSubTypeMapIteration, "item-1", "STARTED", nil),
+		contextOp("1", "", OperationSubTypeMap, "batch", "STARTED", nil),
+		contextOp("2", "1", OperationSubTypeMapIteration, "item-0", "SUCCEEDED", &wireContextDetails{Result: "1"}),
+		contextOp("3", "1", OperationSubTypeMapIteration, "item-1", "STARTED", nil),
 		{Id: hashID("3-1"), ParentId: hashID("3"), Status: "SUCCEEDED", Type: "WAIT", SubType: "Wait", Name: "pause",
 			StartTimestamp: flexTimestamp{Time: lifecycleStart, Valid: true}, EndTimestamp: flexTimestamp{Time: lifecycleEnd, Valid: true}},
 	}
@@ -331,12 +331,12 @@ func TestOperationLifecycleBatchReplayed(t *testing.T) {
 		"end:batch:SUCCEEDED:false",
 	)
 	assertReplayedTimestamps(t, second[1], true)
-	assertIdentity(t, second[1], "2", "item-0", string(OperationTypeContext), operationSubTypeMapIteration, hashID("1"))
+	assertIdentity(t, second[1], "2", "item-0", string(OperationTypeContext), OperationSubTypeMapIteration, hashID("1"))
 	if second[1].info.Result != "1" {
 		t.Errorf("replayed item-0 end Result = %q, want %q", second[1].info.Result, "1")
 	}
 	assertReplayedTimestamps(t, second[2], false)
-	assertIdentity(t, second[2], "3", "item-1", string(OperationTypeContext), operationSubTypeMapIteration, hashID("1"))
+	assertIdentity(t, second[2], "3", "item-1", string(OperationTypeContext), OperationSubTypeMapIteration, hashID("1"))
 	assertReplayedTimestamps(t, second[0], false)
 }
 
@@ -349,7 +349,7 @@ func TestOperationLifecycleBatchReplayedTerminal(t *testing.T) {
 	payload := `{"results":[{"index":0,"name":"item-0","status":1,"result":"2"},{"index":1,"name":"item-1","status":1,"result":"4"},{"index":2,"name":"item-2","status":1,"result":"6"}],"reason":1}`
 	ops := []wireOperation{
 		lifecycleExecOp(),
-		contextOp("1", "", operationSubTypeMap, "batch", "SUCCEEDED", &wireContextDetails{Result: payload}),
+		contextOp("1", "", OperationSubTypeMap, "batch", "SUCCEEDED", &wireContextDetails{Result: payload}),
 	}
 	resp, err := handler(makePluginContext(), makePluginPayload(t, "arn:test:lifecycle", "tok1", ops))
 	if err != nil {
@@ -359,7 +359,7 @@ func TestOperationLifecycleBatchReplayedTerminal(t *testing.T) {
 	evs := rec.take()
 
 	assertSequence(t, evs, "end:batch:SUCCEEDED:true")
-	assertIdentity(t, evs[0], "1", "batch", string(OperationTypeContext), operationSubTypeMap, "")
+	assertIdentity(t, evs[0], "1", "batch", string(OperationTypeContext), OperationSubTypeMap, "")
 	assertReplayedTimestamps(t, evs[0], true)
 	if evs[0].info.Result != payload {
 		t.Errorf("replayed batch end Result = %q, want the checkpointed payload", evs[0].info.Result)
@@ -386,10 +386,10 @@ func TestOperationLifecycleBatchReplayedAbandonedFromRecord(t *testing.T) {
 	record := `{"completionReason":2,"totalCount":3,"indexSet":"started","indexes":[1,2]}`
 	ops := []wireOperation{
 		lifecycleExecOp(),
-		contextOp("1", "", operationSubTypeMap, "batch", "SUCCEEDED", &wireContextDetails{Result: record, ReplayChildren: true}),
-		contextOp("2", "1", operationSubTypeMapIteration, "item-0", "SUCCEEDED", &wireContextDetails{Result: `"fast"`}),
-		contextOp("3", "1", operationSubTypeMapIteration, "item-1", "STARTED", nil),
-		contextOp("4", "1", operationSubTypeMapIteration, "item-2", "STARTED", nil),
+		contextOp("1", "", OperationSubTypeMap, "batch", "SUCCEEDED", &wireContextDetails{Result: record, ReplayChildren: true}),
+		contextOp("2", "1", OperationSubTypeMapIteration, "item-0", "SUCCEEDED", &wireContextDetails{Result: `"fast"`}),
+		contextOp("3", "1", OperationSubTypeMapIteration, "item-1", "STARTED", nil),
+		contextOp("4", "1", OperationSubTypeMapIteration, "item-2", "STARTED", nil),
 	}
 	resp, err := handler(makePluginContext(), makePluginPayload(t, "arn:test:lifecycle", "tok1", ops))
 	if err != nil {
@@ -405,7 +405,7 @@ func TestOperationLifecycleBatchReplayedAbandonedFromRecord(t *testing.T) {
 		"end:batch:SUCCEEDED:true",
 	)
 	for i, id := range []string{"2", "3", "4"} {
-		assertIdentity(t, evs[i], id, fmt.Sprintf("item-%d", i), string(OperationTypeContext), operationSubTypeMapIteration, hashID("1"))
+		assertIdentity(t, evs[i], id, fmt.Sprintf("item-%d", i), string(OperationTypeContext), OperationSubTypeMapIteration, hashID("1"))
 	}
 	assertReplayedTimestamps(t, evs[1], false)
 }

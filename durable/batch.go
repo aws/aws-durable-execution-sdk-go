@@ -13,14 +13,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
-// Wire subtypes for batch operations.
-const (
-	operationSubTypeMap            = "Map"
-	operationSubTypeMapIteration   = "MapIteration"
-	operationSubTypeParallel       = "Parallel"
-	operationSubTypeParallelBranch = "ParallelBranch"
-)
-
 // Map processes items concurrently, applying fn to each in its own child
 // context, and returns the collected results. Concurrency and completion
 // behavior are configured with [BatchOption] values.
@@ -110,15 +102,15 @@ func Map[I, O any](ctx Context, name string, items []I, fn func(ctx Context, ite
 
 	// Check if the batch is already checkpointed as a terminal operation.
 	op := ec.state.get(id)
-	if err := validateReplayConsistency(op, string(OperationTypeContext), operationSubTypeMap, name); err != nil {
+	if err := validateReplayConsistency(op, string(OperationTypeContext), OperationSubTypeMap, name); err != nil {
 		return BatchResult[O]{}, err
 	}
 	if ec.unfinishedInSucceededContext(op) {
-		return BatchResult[O]{}, ec.parkUnfinishedReplay(op, id, string(OperationTypeContext), operationSubTypeMap, name)
+		return BatchResult[O]{}, ec.parkUnfinishedReplay(op, id, string(OperationTypeContext), OperationSubTypeMap, name)
 	}
 	if op != nil && op.status.terminal() {
-		result, err := replayTerminalBatch[I, O](ec, op, id, name, items, fn, options, operationSubTypeMap, operationSubTypeMapIteration)
-		dispatchReplayedContextEnd(ec, id, name, operationSubTypeMap, op, replayedBatchFailure(op, err))
+		result, err := replayTerminalBatch[I, O](ec, op, id, name, items, fn, options, OperationSubTypeMap, OperationSubTypeMapIteration)
+		dispatchReplayedContextEnd(ec, id, name, OperationSubTypeMap, op, replayedBatchFailure(op, err))
 		if err != nil {
 			return BatchResult[O]{}, err
 		}
@@ -128,12 +120,12 @@ func Map[I, O any](ctx Context, name string, items []I, fn func(ctx Context, ite
 
 	// Checkpoint the parent Map context START.
 	if op == nil {
-		update := batchParentUpdate(ec, id, name, operationSubTypeMap, OperationActionStart)
+		update := batchParentUpdate(ec, id, name, OperationSubTypeMap, OperationActionStart)
 		if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
 			return BatchResult[O]{}, err
 		}
 	}
-	start := dispatchContextStart(ec, id, name, operationSubTypeMap, op)
+	start := dispatchContextStart(ec, id, name, OperationSubTypeMap, op)
 
 	totalItems := len(items)
 	if totalItems == 0 {
@@ -146,7 +138,7 @@ func Map[I, O any](ctx Context, name string, items []I, fn func(ctx Context, ite
 	}
 
 	// Execute items with bounded concurrency and completion checking.
-	result, err := executeBatchItems[I, O](ec, start, totalItems, options, operationSubTypeMapIteration, func(childCtx Context, index int) (O, []string, error) {
+	result, err := executeBatchItems[I, O](ec, start, totalItems, options, OperationSubTypeMapIteration, func(childCtx Context, index int) (O, []string, error) {
 		return runBatchItemFunc(childCtx, index, fn, func() (O, error) {
 			return fn(childCtx, items[index], index)
 		})
@@ -207,18 +199,18 @@ func Parallel[O any](ctx Context, name string, branches []Branch[O], opts ...Bat
 
 	// Check if the batch is already checkpointed as a terminal operation.
 	op := ec.state.get(id)
-	if err := validateReplayConsistency(op, string(OperationTypeContext), operationSubTypeParallel, name); err != nil {
+	if err := validateReplayConsistency(op, string(OperationTypeContext), OperationSubTypeParallel, name); err != nil {
 		return BatchResult[O]{}, err
 	}
 	if ec.unfinishedInSucceededContext(op) {
-		return BatchResult[O]{}, ec.parkUnfinishedReplay(op, id, string(OperationTypeContext), operationSubTypeParallel, name)
+		return BatchResult[O]{}, ec.parkUnfinishedReplay(op, id, string(OperationTypeContext), OperationSubTypeParallel, name)
 	}
 	if op != nil && op.status.terminal() {
 		placeholders := make([]struct{}, len(branches))
 		result, err := replayTerminalBatch[struct{}, O](ec, op, id, name, placeholders, func(ctx Context, _ struct{}, index int) (O, error) {
 			return branches[index].Func(ctx)
-		}, options, operationSubTypeParallel, operationSubTypeParallelBranch)
-		dispatchReplayedContextEnd(ec, id, name, operationSubTypeParallel, op, replayedBatchFailure(op, err))
+		}, options, OperationSubTypeParallel, OperationSubTypeParallelBranch)
+		dispatchReplayedContextEnd(ec, id, name, OperationSubTypeParallel, op, replayedBatchFailure(op, err))
 		if err != nil {
 			return BatchResult[O]{}, err
 		}
@@ -228,12 +220,12 @@ func Parallel[O any](ctx Context, name string, branches []Branch[O], opts ...Bat
 
 	// Checkpoint the parent Parallel context START.
 	if op == nil {
-		update := batchParentUpdate(ec, id, name, operationSubTypeParallel, OperationActionStart)
+		update := batchParentUpdate(ec, id, name, OperationSubTypeParallel, OperationActionStart)
 		if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
 			return BatchResult[O]{}, err
 		}
 	}
-	start := dispatchContextStart(ec, id, name, operationSubTypeParallel, op)
+	start := dispatchContextStart(ec, id, name, OperationSubTypeParallel, op)
 
 	totalItems := len(branches)
 	if totalItems == 0 {
@@ -244,7 +236,7 @@ func Parallel[O any](ctx Context, name string, branches []Branch[O], opts ...Bat
 		return checkpointBatchSuccess(ec, start, result, options)
 	}
 
-	result, err := executeBatchItems[struct{}, O](ec, start, totalItems, options, operationSubTypeParallelBranch, func(childCtx Context, index int) (O, []string, error) {
+	result, err := executeBatchItems[struct{}, O](ec, start, totalItems, options, OperationSubTypeParallelBranch, func(childCtx Context, index int) (O, []string, error) {
 		return runBatchItemFunc(childCtx, index, branches[index].Func, func() (O, error) {
 			return branches[index].Func(childCtx)
 		})

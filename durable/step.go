@@ -10,9 +10,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
-// operationSubTypeStep is the wire subtype for step operations.
-const operationSubTypeStep = "Step"
-
 // StepSemantics selects a step's execution guarantee across retries.
 type StepSemantics int
 
@@ -144,11 +141,11 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 	var zero O
 	op := ec.state.get(id)
 
-	if err := validateReplayConsistency(op, string(OperationTypeStep), operationSubTypeStep, name); err != nil {
+	if err := validateReplayConsistency(op, string(OperationTypeStep), OperationSubTypeStep, name); err != nil {
 		return zero, err
 	}
 	if ec.unfinishedInSucceededContext(op) {
-		return zero, ec.parkUnfinishedReplay(op, id, string(OperationTypeStep), operationSubTypeStep, name)
+		return zero, ec.parkUnfinishedReplay(op, id, string(OperationTypeStep), OperationSubTypeStep, name)
 	}
 
 	attempt := 1
@@ -166,7 +163,7 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 				return zero, fmt.Errorf("durable: step %q: checkpointed %s operation has no step details", name, op.status)
 			}
 			// Fire operation hooks for replayed terminal operations.
-			info := ec.operationHookInfo(id, name, string(OperationTypeStep), operationSubTypeStep, true)
+			info := ec.operationHookInfo(id, name, string(OperationTypeStep), OperationSubTypeStep, true)
 			info.Attempt = op.step.attempt
 			info.StartTimestamp = op.startTimestamp
 			info.Result = op.step.result
@@ -183,7 +180,7 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 			if op.step == nil {
 				return zero, fmt.Errorf("durable: step %q: checkpointed %s operation has no step details", name, op.status)
 			}
-			info := ec.operationHookInfo(id, name, string(OperationTypeStep), operationSubTypeStep, true)
+			info := ec.operationHookInfo(id, name, string(OperationTypeStep), OperationSubTypeStep, true)
 			info.Attempt = op.step.attempt
 			info.StartTimestamp = op.startTimestamp
 			info.Error = op.step.record().standIn(nil)
@@ -218,7 +215,7 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 
 	// OnOperationStart for live execution.
 	startTime := time.Now()
-	liveInfo := ec.operationHookInfo(id, name, string(OperationTypeStep), operationSubTypeStep, isReplay)
+	liveInfo := ec.operationHookInfo(id, name, string(OperationTypeStep), OperationSubTypeStep, isReplay)
 	liveInfo.Attempt = attempt
 	liveInfo.StartTimestamp = startTime
 	dispatchOperationStart(ec, liveInfo, PluginOperationStarted)
@@ -267,7 +264,7 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 			ID:             id,
 			Name:           name,
 			Type:           string(OperationTypeStep),
-			SubType:        operationSubTypeStep,
+			SubType:        OperationSubTypeStep,
 			Status:         PluginOperationStarted,
 			Attempt:        attempt,
 			IsReplay:       ec.IsReplaying(),
@@ -456,7 +453,7 @@ func stepUpdate(ec *execContext, id, name string, action OperationAction) Operat
 	update := OperationUpdate{
 		Id:      aws.String(hashID(id)),
 		Type:    OperationTypeStep,
-		SubType: aws.String(operationSubTypeStep),
+		SubType: aws.String(OperationSubTypeStep),
 		Action:  action,
 	}
 	if name != "" {

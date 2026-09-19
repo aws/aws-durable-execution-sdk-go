@@ -168,7 +168,7 @@ func TestOperationLifecycleChildContextThreeLevelTree(t *testing.T) {
 				"end:mid:SUCCEEDED:false",
 				"end:outer:SUCCEEDED:false",
 			)
-			ctxType, ctxSub := string(OperationTypeContext), operationSubTypeRunInChildContext
+			ctxType, ctxSub := string(OperationTypeContext), OperationSubTypeRunInChildContext
 			for _, ev := range live {
 				assertLiveTimestamps(t, ev)
 				switch ev.info.Name {
@@ -179,7 +179,7 @@ func TestOperationLifecycleChildContextThreeLevelTree(t *testing.T) {
 				case "inner":
 					assertIdentity(t, ev, "1-1-1", "inner", ctxType, ctxSub, hashID("1-1"))
 				case "leaf":
-					assertIdentity(t, ev, "1-1-1-1", "leaf", string(OperationTypeStep), operationSubTypeStep, hashID("1-1-1"))
+					assertIdentity(t, ev, "1-1-1-1", "leaf", string(OperationTypeStep), OperationSubTypeStep, hashID("1-1-1"))
 				}
 				if ev.hook == "end" && ev.info.Type == ctxType {
 					if ev.info.Result != `"v"` {
@@ -284,7 +284,7 @@ func TestOperationLifecycleChildContextFailure(t *testing.T) {
 			rec := &opRecorder{}
 			got := &errBox{}
 			handler := failingChildHandlers(rec, got)[variant]
-			ctxType, ctxSub := string(OperationTypeContext), operationSubTypeRunInChildContext
+			ctxType, ctxSub := string(OperationTypeContext), OperationSubTypeRunInChildContext
 
 			assertFailedEnd := func(t *testing.T, ev opEvent) {
 				t.Helper()
@@ -468,12 +468,12 @@ func TestOperationLifecycleCreateCallbackSuspendResume(t *testing.T) {
 				first, second := runSuspendResumeUpdated(t, handler, rec, []wireOperation{op}, s.updatedIDs, tc.wantFinal)
 
 				assertSequence(t, first, "start:cb:STARTED:false")
-				assertIdentity(t, first[0], "1", "cb", string(OperationTypeCallback), operationSubTypeCallback, "")
+				assertIdentity(t, first[0], "1", "cb", string(OperationTypeCallback), OperationSubTypeCallback, "")
 				assertLiveTimestamps(t, first[0])
 
 				assertSequence(t, second, fmt.Sprintf("end:cb:%s:%v", tc.wantStatus, s.wantReplay))
 				ev := second[0]
-				assertIdentity(t, ev, "1", "cb", string(OperationTypeCallback), operationSubTypeCallback, "")
+				assertIdentity(t, ev, "1", "cb", string(OperationTypeCallback), OperationSubTypeCallback, "")
 				assertReplayedTimestamps(t, ev, true)
 				if tc.wantErr == nil {
 					if ev.info.Result != `"ok"` || ev.info.Error != nil {
@@ -542,11 +542,11 @@ func assertWaitForCallbackHierarchy(t *testing.T, evs []opEvent) {
 	for _, ev := range evs {
 		switch ev.info.ID {
 		case "1":
-			assertIdentity(t, ev, "1", "wfcb", string(OperationTypeContext), operationSubTypeWaitForCallback, "")
+			assertIdentity(t, ev, "1", "wfcb", string(OperationTypeContext), OperationSubTypeWaitForCallback, "")
 		case "1-1":
-			assertIdentity(t, ev, "1-1", "", string(OperationTypeCallback), operationSubTypeCallback, hashID("1"))
+			assertIdentity(t, ev, "1-1", "", string(OperationTypeCallback), OperationSubTypeCallback, hashID("1"))
 		case "1-2":
-			assertIdentity(t, ev, "1-2", "", string(OperationTypeStep), operationSubTypeStep, hashID("1"))
+			assertIdentity(t, ev, "1-2", "", string(OperationTypeStep), OperationSubTypeStep, hashID("1"))
 		default:
 			t.Errorf("unexpected event %s for operation %q", ev.hook, ev.info.ID)
 		}
@@ -595,7 +595,7 @@ func wfcbResumeOps(status string, details *wireCallbackDetails) []wireOperation 
 	}
 	return []wireOperation{
 		lifecycleExecOp(),
-		contextOp("1", "", operationSubTypeWaitForCallback, "wfcb", "STARTED", nil),
+		contextOp("1", "", OperationSubTypeWaitForCallback, "wfcb", "STARTED", nil),
 		callback,
 		step,
 	}
@@ -647,7 +647,7 @@ func TestOperationLifecycleWaitForCallbackSucceeded(t *testing.T) {
 
 	ops = []wireOperation{
 		lifecycleExecOp(),
-		contextOp("1", "", operationSubTypeWaitForCallback, "wfcb", "SUCCEEDED", &wireContextDetails{Result: `"ok"`}),
+		contextOp("1", "", OperationSubTypeWaitForCallback, "wfcb", "SUCCEEDED", &wireContextDetails{Result: `"ok"`}),
 	}
 	resp, err = handler(makePluginContext(), makePluginPayload(t, "arn:test:lifecycle", "tok3", ops))
 	if err != nil {
@@ -706,7 +706,7 @@ func TestOperationLifecycleWaitForCallbackTimedOut(t *testing.T) {
 
 	// The context's own FAILED record replays as one end; the child
 	// records stay so the same error is rebuilt.
-	ops[1] = contextOp("1", "", operationSubTypeWaitForCallback, "wfcb", "FAILED", &wireContextDetails{Error: timeout})
+	ops[1] = contextOp("1", "", OperationSubTypeWaitForCallback, "wfcb", "FAILED", &wireContextDetails{Error: timeout})
 	resp, err = handler(makePluginContext(), makePluginPayload(t, "arn:test:lifecycle", "tok3", ops))
 	if err != nil {
 		t.Fatal(err)
@@ -760,7 +760,7 @@ func TestOperationLifecycleWaitForCallbackFailedSubmitter(t *testing.T) {
 
 	ops := []wireOperation{
 		lifecycleExecOp(),
-		contextOp("1", "", operationSubTypeWaitForCallback, "wfcb", "FAILED", &wireContextDetails{
+		contextOp("1", "", OperationSubTypeWaitForCallback, "wfcb", "FAILED", &wireContextDetails{
 			Error: &wireFullError{ErrorType: "CallbackSubmitterError", ErrorMessage: submitErr.Error()},
 		}),
 		{
@@ -860,7 +860,7 @@ func TestOperationLifecycleChildContextReplayedSucceededSerdesFailure(t *testing
 			handler := handlers(rec, got)[variant]
 			ops := []wireOperation{
 				lifecycleExecOp(),
-				contextOp("1", "", operationSubTypeRunInChildContext, "child", "SUCCEEDED", &wireContextDetails{Result: `"v"`}),
+				contextOp("1", "", OperationSubTypeRunInChildContext, "child", "SUCCEEDED", &wireContextDetails{Result: `"v"`}),
 			}
 			resp, err := handler(makePluginContext(), makePluginPayload(t, "arn:test:lifecycle", "tok1", ops))
 			if err != nil {
@@ -893,7 +893,7 @@ func TestOperationLifecycleChildContextLiveEndUsesCheckpointTimestamp(t *testing
 	start, end := lifecycleStart, lifecycleEnd
 	client.newState = []Operation{{
 		Id: aws.String(hashID("1")), Status: OperationStatusSucceeded, Type: OperationTypeContext,
-		SubType: aws.String(operationSubTypeRunInChildContext), Name: aws.String("child"),
+		SubType: aws.String(OperationSubTypeRunInChildContext), Name: aws.String("child"),
 		StartTimestamp: &start, EndTimestamp: &end,
 		ContextDetails: &ContextDetails{Result: aws.String(`"v"`)},
 	}}

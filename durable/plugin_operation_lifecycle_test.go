@@ -189,7 +189,7 @@ func TestOperationLifecycleWaitSuspendResume(t *testing.T) {
 
 			assertSequence(t, first, "start:pause:STARTED:false")
 			live := first[0]
-			assertIdentity(t, live, "1", "pause", string(OperationTypeWait), operationSubTypeWait, "")
+			assertIdentity(t, live, "1", "pause", string(OperationTypeWait), OperationSubTypeWait, "")
 			if live.info.StartTimestamp.IsZero() {
 				t.Error("live start: StartTimestamp is zero")
 			}
@@ -203,7 +203,7 @@ func TestOperationLifecycleWaitSuspendResume(t *testing.T) {
 				"end:after:SUCCEEDED:false",
 			)
 			replayedEnd := second[0]
-			assertIdentity(t, replayedEnd, "1", "pause", string(OperationTypeWait), operationSubTypeWait, "")
+			assertIdentity(t, replayedEnd, "1", "pause", string(OperationTypeWait), OperationSubTypeWait, "")
 			if !replayedEnd.info.StartTimestamp.Equal(lifecycleStart) {
 				t.Errorf("replayed end: StartTimestamp = %v, want %v", replayedEnd.info.StartTimestamp, lifecycleStart)
 			}
@@ -315,7 +315,7 @@ func TestOperationLifecycleInvokeSuspendResume(t *testing.T) {
 
 				assertSequence(t, first, "start:call:STARTED:false")
 				live := first[0]
-				assertIdentity(t, live, "1", "call", string(OperationTypeChainedInvoke), operationSubTypeChainedInvoke, "")
+				assertIdentity(t, live, "1", "call", string(OperationTypeChainedInvoke), OperationSubTypeChainedInvoke, "")
 				if live.info.StartTimestamp.IsZero() {
 					t.Error("live start: StartTimestamp is zero")
 				}
@@ -323,7 +323,7 @@ func TestOperationLifecycleInvokeSuspendResume(t *testing.T) {
 				want := string(tc.wantStatus)
 				assertSequence(t, second, "end:call:"+want+":true")
 				ev := second[0]
-				assertIdentity(t, ev, "1", "call", string(OperationTypeChainedInvoke), operationSubTypeChainedInvoke, "")
+				assertIdentity(t, ev, "1", "call", string(OperationTypeChainedInvoke), OperationSubTypeChainedInvoke, "")
 				if !ev.info.StartTimestamp.Equal(lifecycleStart) {
 					t.Errorf("replayed end StartTimestamp = %v, want %v", ev.info.StartTimestamp, lifecycleStart)
 				}
@@ -394,7 +394,7 @@ func TestOperationLifecycleInvokeReplayedSucceededSerdesFailure(t *testing.T) {
 			evs := rec.take()
 			assertSequence(t, evs, "end:call:SUCCEEDED:true")
 			ev := evs[0]
-			assertIdentity(t, ev, "1", "call", string(OperationTypeChainedInvoke), operationSubTypeChainedInvoke, "")
+			assertIdentity(t, ev, "1", "call", string(OperationTypeChainedInvoke), OperationSubTypeChainedInvoke, "")
 			if !ev.info.StartTimestamp.Equal(lifecycleStart) {
 				t.Errorf("replayed end StartTimestamp = %v, want %v", ev.info.StartTimestamp, lifecycleStart)
 			}
@@ -459,7 +459,7 @@ func TestOperationLifecycleParentIDInsideChildContext(t *testing.T) {
 	assertPluginResponseStatus(t, resp, invocationPending)
 	first := eventsForName(rec.take(), "pause")
 	assertSequence(t, first, "start:pause:STARTED:false")
-	assertIdentity(t, first[0], "1-1", "pause", string(OperationTypeWait), operationSubTypeWait, wantParent)
+	assertIdentity(t, first[0], "1-1", "pause", string(OperationTypeWait), OperationSubTypeWait, wantParent)
 
 	ops := []wireOperation{
 		lifecycleExecOp(),
@@ -474,10 +474,10 @@ func TestOperationLifecycleParentIDInsideChildContext(t *testing.T) {
 	second := rec.take()
 	pause := eventsForName(second, "pause")
 	assertSequence(t, pause, "end:pause:SUCCEEDED:true")
-	assertIdentity(t, pause[0], "1-1", "pause", string(OperationTypeWait), operationSubTypeWait, wantParent)
+	assertIdentity(t, pause[0], "1-1", "pause", string(OperationTypeWait), OperationSubTypeWait, wantParent)
 	call := eventsForName(second, "call")
 	assertSequence(t, call, "start:call:STARTED:false")
-	assertIdentity(t, call[0], "1-2", "call", string(OperationTypeChainedInvoke), operationSubTypeChainedInvoke, wantParent)
+	assertIdentity(t, call[0], "1-2", "call", string(OperationTypeChainedInvoke), OperationSubTypeChainedInvoke, wantParent)
 }
 
 // TestOperationLifecycleStepEventsPinned pins the events runStep emits so
@@ -510,7 +510,7 @@ func TestOperationLifecycleStepEventsPinned(t *testing.T) {
 		"end:bad:FAILED:false",
 	)
 	for _, ev := range live {
-		assertIdentity(t, ev, ev.info.ID, ev.info.Name, string(OperationTypeStep), operationSubTypeStep, "")
+		assertIdentity(t, ev, ev.info.ID, ev.info.Name, string(OperationTypeStep), OperationSubTypeStep, "")
 		if ev.info.Attempt != 1 {
 			t.Errorf("live %s %s Attempt = %d, want 1", ev.hook, ev.info.Name, ev.info.Attempt)
 		}
@@ -679,7 +679,7 @@ func TestDispatchOperationHelpersRecoverPanics(t *testing.T) {
 		{}, // no hooks
 	}
 	ec := &execContext{Context: context.Background(), executionArn: "arn", pluginDispatcher: newPluginDispatcher(plugins)}
-	info := ec.operationHookInfo("1", "n", string(OperationTypeWait), operationSubTypeWait, false)
+	info := ec.operationHookInfo("1", "n", string(OperationTypeWait), OperationSubTypeWait, false)
 	dispatchOperationStart(ec, info, PluginOperationStarted)
 	dispatchOperationEnd(ec, info, PluginOperationSucceeded)
 	if starts.Load() != 1 || ends.Load() != 1 {
@@ -709,7 +709,7 @@ func TestDispatchOperationHelpersSetStatus(t *testing.T) {
 		},
 	}
 	ec := &execContext{Context: context.Background(), executionArn: "arn:x", checkpointParent: "7", pluginDispatcher: newPluginDispatcher([]Plugin{p})}
-	info := ec.operationHookInfo("7-1", "n", string(OperationTypeChainedInvoke), operationSubTypeChainedInvoke, true)
+	info := ec.operationHookInfo("7-1", "n", string(OperationTypeChainedInvoke), OperationSubTypeChainedInvoke, true)
 	info.StartTimestamp = lifecycleStart
 	dispatchOperationStart(ec, info, PluginOperationPending)
 	info.EndTimestamp = lifecycleEnd
@@ -726,7 +726,7 @@ func TestDispatchOperationHelpersSetStatus(t *testing.T) {
 		t.Errorf("statuses = %q, %q", s.Status, e.Status)
 	}
 	for _, i := range got {
-		if i.ExecutionArn != "arn:x" || i.ID != "7-1" || i.Name != "n" || i.Type != string(OperationTypeChainedInvoke) || i.SubType != operationSubTypeChainedInvoke || !i.IsReplay || i.ParentID != hashID("7") {
+		if i.ExecutionArn != "arn:x" || i.ID != "7-1" || i.Name != "n" || i.Type != string(OperationTypeChainedInvoke) || i.SubType != OperationSubTypeChainedInvoke || !i.IsReplay || i.ParentID != hashID("7") {
 			t.Errorf("identity fields not preserved: %+v", i)
 		}
 		if !i.StartTimestamp.Equal(lifecycleStart) {

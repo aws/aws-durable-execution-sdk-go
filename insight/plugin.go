@@ -246,10 +246,11 @@ func (p *InsightPlugin) onInvocationStart(_ context.Context, info durable.Invoca
 
 // onInvocationEnd finalizes the record with the terminal outcome and
 // emits to exporters if the emit mode and sampling gates allow. A pending
-// outcome leaves the record running; EmitAlways still emits a snapshot
-// for it, since that mode reports every invocation regardless of outcome.
+// or retrying outcome means the execution continues in a later invocation,
+// so it leaves the record running; EmitAlways still emits a snapshot for
+// it, since that mode reports every invocation regardless of outcome.
 func (p *InsightPlugin) onInvocationEnd(ctx context.Context, info durable.InvocationEndHookInfo) {
-	if info.Status == durable.PluginInvocationPending {
+	if info.Status == durable.PluginInvocationPending || info.Status == durable.PluginInvocationRetrying {
 		if p.emitMode == EmitOnChange {
 			// Drain any in-flight on-change dispatch so records are not
 			// orphaned or contaminate the next invocation.

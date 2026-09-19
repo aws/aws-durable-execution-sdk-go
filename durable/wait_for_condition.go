@@ -9,10 +9,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
-// operationSubTypeWaitForCondition is the wire subtype for wait-for-condition
-// operations.
-const operationSubTypeWaitForCondition = "WaitForCondition"
-
 // defaultConditionWaitStrategy returns the wait strategy used when
 // [ConditionConfig].WaitStrategy is nil. It is the strategy the zero
 // [WaitConfig] builds, so the default and a configured strategy share one
@@ -82,11 +78,11 @@ func WaitForCondition[S any](ctx Context, name string, check func(StepContext, S
 func runWaitForCondition[S any](ec *execContext, id, name string, check func(StepContext, S) (S, error), cfg ConditionConfig[S], serdes Serdes) (S, error) {
 	var zero S
 	op := ec.state.get(id)
-	if err := validateReplayConsistency(op, string(OperationTypeStep), operationSubTypeWaitForCondition, name); err != nil {
+	if err := validateReplayConsistency(op, string(OperationTypeStep), OperationSubTypeWaitForCondition, name); err != nil {
 		return zero, err
 	}
 	if ec.unfinishedInSucceededContext(op) {
-		return zero, ec.parkUnfinishedReplay(op, id, string(OperationTypeStep), operationSubTypeWaitForCondition, name)
+		return zero, ec.parkUnfinishedReplay(op, id, string(OperationTypeStep), OperationSubTypeWaitForCondition, name)
 	}
 
 	// Determine the current attempt number. The checkpointed Attempt
@@ -148,7 +144,7 @@ func runWaitForCondition[S any](ec *execContext, id, name string, check func(Ste
 	// The operation's start belongs to its first attempt. op is nil for a
 	// live first attempt; else a previous invocation checkpointed the START
 	// and recorded no outcome, and the start is replayed with its status.
-	info := ec.operationHookInfo(id, name, string(OperationTypeStep), operationSubTypeWaitForCondition, op != nil)
+	info := ec.operationHookInfo(id, name, string(OperationTypeStep), OperationSubTypeWaitForCondition, op != nil)
 	info.Attempt = attempt
 	info.StartTimestamp = checkpointedStartTime(op)
 	if attempt == 1 {
@@ -186,7 +182,7 @@ func runWaitForCondition[S any](ec *execContext, id, name string, check func(Ste
 // wait-for-condition operation id, whose checkpoint op is terminal: the
 // checkpointed timestamps and the attempt count recorded with the outcome.
 func waitForConditionReplayedInfo(ec *execContext, id, name string, op *operation) OperationHookInfo {
-	info := ec.operationHookInfo(id, name, string(OperationTypeStep), operationSubTypeWaitForCondition, true)
+	info := ec.operationHookInfo(id, name, string(OperationTypeStep), OperationSubTypeWaitForCondition, true)
 	info.Attempt = op.step.attempt
 	info.StartTimestamp = op.startTimestamp
 	info.EndTimestamp = op.endTimestamp
@@ -229,7 +225,7 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 			ID:             id,
 			Name:           name,
 			Type:           string(OperationTypeStep),
-			SubType:        operationSubTypeWaitForCondition,
+			SubType:        OperationSubTypeWaitForCondition,
 			Status:         PluginOperationStarted,
 			Attempt:        attempt,
 			IsReplay:       ec.IsReplaying(),
@@ -414,7 +410,7 @@ func waitForConditionUpdate(ec *execContext, id, name string, action OperationAc
 	update := OperationUpdate{
 		Id:      aws.String(hashID(id)),
 		Type:    OperationTypeStep,
-		SubType: aws.String(operationSubTypeWaitForCondition),
+		SubType: aws.String(OperationSubTypeWaitForCondition),
 		Action:  action,
 	}
 	if name != "" {

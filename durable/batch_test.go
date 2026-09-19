@@ -2417,7 +2417,7 @@ func TestSuspendedBranchHoldsConcurrencySlot(t *testing.T) {
 	childStarts := 0
 	for _, u := range updates {
 		if u.Type == OperationTypeContext && u.Action == OperationActionStart {
-			if aws.ToString(u.SubType) == operationSubTypeMapIteration {
+			if aws.ToString(u.SubType) == OperationSubTypeMapIteration {
 				childStarts++
 			}
 		}

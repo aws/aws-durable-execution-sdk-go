@@ -7,9 +7,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
-// operationSubTypeChainedInvoke is the wire subtype for invoke operations.
-const operationSubTypeChainedInvoke = "ChainedInvoke"
-
 // InvokeOption configures a single invoke operation.
 type InvokeOption interface {
 	applyInvoke(*invokeOptions)
@@ -136,14 +133,14 @@ func runInvoke[O, I any](ec *execContext, id, name, functionID string, input I, 
 	var zero O
 
 	op := ec.state.get(id)
-	if err := validateReplayConsistency(op, string(OperationTypeChainedInvoke), operationSubTypeChainedInvoke, name); err != nil {
+	if err := validateReplayConsistency(op, string(OperationTypeChainedInvoke), OperationSubTypeChainedInvoke, name); err != nil {
 		return zero, err
 	}
 	if ec.unfinishedInSucceededContext(op) {
-		return zero, ec.parkUnfinishedReplay(op, id, string(OperationTypeChainedInvoke), operationSubTypeChainedInvoke, name)
+		return zero, ec.parkUnfinishedReplay(op, id, string(OperationTypeChainedInvoke), OperationSubTypeChainedInvoke, name)
 	}
 	if op != nil {
-		info := ec.operationHookInfo(id, name, string(OperationTypeChainedInvoke), operationSubTypeChainedInvoke, true)
+		info := ec.operationHookInfo(id, name, string(OperationTypeChainedInvoke), OperationSubTypeChainedInvoke, true)
 		info.StartTimestamp = op.startTimestamp
 		switch op.status {
 		case statusSucceeded:
@@ -193,7 +190,7 @@ func runInvoke[O, I any](ec *execContext, id, name, functionID string, input I, 
 	update := OperationUpdate{
 		Id:      aws.String(hashID(id)),
 		Type:    OperationTypeChainedInvoke,
-		SubType: aws.String(operationSubTypeChainedInvoke),
+		SubType: aws.String(OperationSubTypeChainedInvoke),
 		Action:  OperationActionStart,
 		Payload: aws.String(string(payload)),
 		ChainedInvokeOptions: &ChainedInvokeOptions{
@@ -218,7 +215,7 @@ func runInvoke[O, I any](ec *execContext, id, name, functionID string, input I, 
 
 	// The invoke is recorded. Its start timestamp comes from the checkpoint
 	// response when the response carried the record, else from the clock.
-	info := ec.operationHookInfo(id, name, string(OperationTypeChainedInvoke), operationSubTypeChainedInvoke, false)
+	info := ec.operationHookInfo(id, name, string(OperationTypeChainedInvoke), OperationSubTypeChainedInvoke, false)
 	info.StartTimestamp = checkpointedStartTime(ec.state.get(id))
 	dispatchOperationStart(ec, info, PluginOperationStarted)
 

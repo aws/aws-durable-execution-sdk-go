@@ -110,12 +110,12 @@ func TestMapReplayRecordAbandonedOverSizeLimit(t *testing.T) {
 		for _, u := range batch {
 			id := aws.ToString(u.Id)
 			switch aws.ToString(u.SubType) {
-			case operationSubTypeMap:
+			case OperationSubTypeMap:
 				if u.Action == OperationActionSucceed {
 					mapRecord = aws.ToString(u.Payload)
 					mapReplayChildren = u.ContextOptions != nil && aws.ToBool(u.ContextOptions.ReplayChildren)
 				}
-			case operationSubTypeMapIteration:
+			case OperationSubTypeMapIteration:
 				if _, seen := childStatus[id]; !seen {
 					childOrder = append(childOrder, id)
 				}
