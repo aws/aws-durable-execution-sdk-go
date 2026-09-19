@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### Added (experimental plugin API): `WithPluginChildOperationsDepth`
+
+`WithPluginChildOperationsDepth(depth)` bounds the depth in the operation
+tree of the operations reported to plugins. Operations deeper than `depth`
+are omitted from every operation-level notification: the start, end, and
+attempt hooks, the `WrapOperationAttemptFn` and `WrapChildContextFn` wrap
+hooks, and the `Operations` and `UpdatedOperations` maps of the invocation
+hooks. Omission affects notifications only; an omitted operation runs,
+retries, and checkpoints exactly as a reported one. The default reports
+every depth, as before.
+
+Depth counts the operations between an operation and the root: an
+operation claimed on the handler's `Context` has depth 0, an operation
+inside a child context has the depth of that context's operation plus one,
+a `Map` or `Parallel` item has the depth of its batch plus one, and the
+operations inside the item one more. `NestingFlat` items add no level.
+
+`OperationHookInfo` gains `ChildrenOmitted`, set on the operations at the
+configured depth, so a consumer can tell that the operations inside one
+were withheld rather than absent. Every reported operation's parent is also
+reported, so `ParentID` chains stay complete.
+
 ### Breaking (experimental plugin API): wrap hooks pass a context to `fn`
 
 The `fn` argument of `Plugin.WrapInvocation`, `Plugin.WrapOperationAttemptFn`,

@@ -122,8 +122,23 @@ type execContext struct {
 	checkpointer *checkpointer
 
 	// pluginDispatcher dispatches lifecycle hooks to registered plugins.
-	// Nil when no plugins are registered (zero overhead).
+	// Nil when no plugins are registered (zero overhead). Operation-level
+	// hooks go through operationHooks, which also applies the depth bound
+	// below; invocation-level hooks and log enrichment use it directly.
 	pluginDispatcher *pluginDispatcher
+
+	// hookDepth is the depth in the operation tree of the operations
+	// claimed on this context: 0 on the root context, and one more than
+	// the depth of the parent operation for every other context. See
+	// [WithPluginChildOperationsDepth] for how depth is counted.
+	hookDepth int
+
+	// hookDepthBound is one more than the deepest depth whose operations
+	// are reported to plugins, or 0 when every depth is reported. Set on
+	// the root context from [WithPluginChildOperationsDepth] and shared by
+	// every context derived from it. Stored as depth+1 so that the zero
+	// value keeps the default behavior.
+	hookDepthBound int
 
 	// executionStartTime is the checkpointed start timestamp of the root
 	// EXECUTION operation. It is the same value on every invocation of
@@ -609,6 +624,8 @@ func (c *execContext) childWith(entityID, name string, owner goroutineOwner, mod
 		suspend:            c.suspend,
 		checkpointer:       c.checkpointer,
 		pluginDispatcher:   c.pluginDispatcher,
+		hookDepth:          c.hookDepth + 1,
+		hookDepthBound:     c.hookDepthBound,
 		executionStartTime: c.executionStartTime,
 		noStackTraces:      c.noStackTraces,
 		abandon:            c.abandon,
@@ -629,10 +646,70 @@ func (c *execContext) childWith(entityID, name string, owner goroutineOwner, mod
 // parentID, the nearest checkpointed ancestor, as their ParentId. The
 // caller computes mode as for child. name is the item's name for the log
 // scope, as for child.
+//
+// The virtual child adds no level to the operation tree: its operations
+// are children of the batch parentID, so their depth is the depth of the
+// batch's items, whatever context c is; see batchItemDepth.
 func (c *execContext) virtualChild(entityID, name, parentID string, owner goroutineOwner, mode executionMode) *execContext {
 	vc := c.child(entityID, name, owner, mode)
 	vc.checkpointParent = parentID
+	vc.hookDepth = c.batchItemDepth(parentID)
 	return vc
+}
+
+// batchItemChild creates the context for the checkpointed item childID of
+// the batch parentID, as child does, with the depth of the item's
+// operations set from the batch rather than from c. The item's own depth
+// is the depth of the batch plus one; the operations inside it are one
+// deeper. c is either the context that claimed the batch or a context
+// minted for the batch itself; see batchItemDepth.
+func (c *execContext) batchItemChild(childID, name, parentID string, owner goroutineOwner, mode executionMode) *execContext {
+	child := c.child(childID, name, owner, mode)
+	child.hookDepth = c.batchItemDepth(parentID) + 1
+	return child
+}
+
+// batchItemDepth returns the depth in the operation tree of the items of
+// the batch parentID when the batch's item code runs on c. Two contexts
+// run item code. The context that claimed the batch mints the batch's ID
+// from its own ID namespace, so the batch has the depth of c's operations
+// and its items are one deeper. A context minted for the batch itself,
+// whose ID namespace is the batch's ID, has the items as its own
+// operations, so they have c's depth. The two are told apart by whether
+// c's ID prefix is the batch's ID.
+func (c *execContext) batchItemDepth(parentID string) int {
+	if c.ids.prefix == parentID {
+		return c.hookDepth
+	}
+	return c.hookDepth + 1
+}
+
+// hooksAt returns the dispatcher for the operation-level hooks of an
+// operation at depth in the operation tree: the registered plugins when
+// the depth is within the bound set by [WithPluginChildOperationsDepth],
+// nil otherwise. A nil dispatcher makes every dispatch a no-op and every
+// wrap chain run the wrapped work directly, so an operation beyond the
+// bound runs and checkpoints exactly as one within it.
+func (c *execContext) hooksAt(depth int) *pluginDispatcher {
+	if c.hookDepthBound != 0 && depth >= c.hookDepthBound {
+		return nil
+	}
+	return c.pluginDispatcher
+}
+
+// operationHooks returns the dispatcher for the operation-level hooks of
+// an operation claimed on c; see hooksAt.
+func (c *execContext) operationHooks() *pluginDispatcher {
+	return c.hooksAt(c.hookDepth)
+}
+
+// childrenOmittedAt reports whether the operations nested inside an
+// operation at depth are omitted from plugin notifications: true exactly
+// when depth is the deepest depth [WithPluginChildOperationsDepth] reports.
+// An operation deeper than that is not reported at all, so the value is
+// false for it.
+func (c *execContext) childrenOmittedAt(depth int) bool {
+	return c.hookDepthBound != 0 && depth == c.hookDepthBound-1
 }
 
 // branch creates a sibling context for an async operation's goroutine. The
@@ -673,6 +750,8 @@ func (c *execContext) branchWith(owner goroutineOwner, d inheritedDefaults) *exe
 		suspend:            c.suspend,
 		checkpointer:       c.checkpointer,
 		pluginDispatcher:   c.pluginDispatcher,
+		hookDepth:          c.hookDepth,
+		hookDepthBound:     c.hookDepthBound,
 		executionStartTime: c.executionStartTime,
 		noStackTraces:      c.noStackTraces,
 		abandon:            c.abandon,

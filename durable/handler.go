@@ -128,6 +128,12 @@ type handlerOptions struct {
 	// [WithPlugins].
 	plugins []Plugin
 
+	// pluginChildDepth is the deepest operation depth reported to plugins,
+	// meaningful when pluginChildDepthSet is true. Set via
+	// [WithPluginChildOperationsDepth]; unset reports every depth.
+	pluginChildDepth    int
+	pluginChildDepthSet bool
+
 	// noStackTraces disables stack trace capture for failures. Set via
 	// [WithStackTraces]; the zero value keeps capture enabled.
 	noStackTraces bool
@@ -262,6 +268,10 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 
 	isFirstInvocation := state.numOperations() <= 1
 
+	// Both maps below omit the operations beyond the plugin depth bound;
+	// see WithPluginChildOperationsDepth.
+	depthBound := h.options.pluginDepthBound()
+
 	// Build updated operations map for both InvocationHookInfo and
 	// OnOperationChange (Item 11: map[string]OperationHookInfo keyed by ID).
 	var updatedOpsMap map[string]OperationHookInfo
@@ -274,7 +284,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 			if op == nil {
 				continue
 			}
-			updatedOpsMap[uid] = checkpointedOperationInfo(in.DurableExecutionArn, op)
+			addCheckpointedOperationInfo(updatedOpsMap, in.DurableExecutionArn, state, depthBound, op)
 		}
 	}
 
@@ -286,7 +296,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	if pd.hasInvocationInfoConsumer() {
 		allOpsMap = make(map[string]OperationHookInfo, state.numOperations())
 		state.rangeOperations(func(op *operation) bool {
-			allOpsMap[op.id] = checkpointedOperationInfo(in.DurableExecutionArn, op)
+			addCheckpointedOperationInfo(allOpsMap, in.DurableExecutionArn, state, depthBound, op)
 			return true
 		})
 	}
@@ -368,6 +378,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		ec.setSerdesDefaults(d)
 	}
 	ec.pluginDispatcher = pd
+	ec.hookDepthBound = depthBound
 	if h.options.replayLogMode == ReplayLogModeEmit {
 		l := ec.logDefaults()
 		l.emitReplayed = true

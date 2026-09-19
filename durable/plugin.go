@@ -307,9 +307,28 @@ type OperationHookInfo struct {
 	// for top-level (root context) operations. Used by insight to filter
 	// and build the operation tree.
 	//
+	// Every reported operation's parent is itself reported, so a consumer
+	// can follow ParentID from any reported operation up to the root. Under
+	// [WithPluginChildOperationsDepth] the operations nested inside an
+	// operation at the configured depth are not reported; that operation
+	// carries ChildrenOmitted so the consumer can tell the subtree was
+	// truncated rather than absent.
+	//
 	// EXPERIMENTAL: this field is experimental and may be changed or
 	// removed in future releases.
 	ParentID string
+
+	// ChildrenOmitted reports that the operations nested inside this one
+	// are omitted from plugin notifications: the operation lies at the
+	// depth set by [WithPluginChildOperationsDepth], so no hook fires for
+	// anything it contains, and no reported operation names it as
+	// ParentID. False when no depth is set or the operation lies above it.
+	// A consumer that finds no children for an operation with this field
+	// set must treat the subtree as unreported, not as empty.
+	//
+	// EXPERIMENTAL: this field is experimental and may be changed or
+	// removed in future releases.
+	ChildrenOmitted bool
 
 	// StartTimestamp is when this operation began. Set on OnOperationStart
 	// and OnOperationEnd; zero on hooks where not yet known.
@@ -416,6 +435,43 @@ func WithPlugins(plugins ...Plugin) HandlerOption {
 	})
 }
 
+// WithPluginChildOperationsDepth bounds the depth in the operation tree of
+// the operations reported to plugins. Operations deeper than depth are
+// omitted from every operation-level notification: OnOperationStart,
+// OnOperationEnd, OnOperationAttemptStart, OnOperationAttemptEnd, the
+// WrapOperationAttemptFn and WrapChildContextFn wrap hooks, which then run
+// the wrapped work directly, and the Operations and UpdatedOperations maps
+// of the invocation hooks. Omission affects notifications only: an omitted
+// operation runs, retries, and checkpoints exactly as a reported one.
+//
+// Depth counts the operations between an operation and the root of the
+// tree. An operation claimed on the handler's [Context] has depth 0. An
+// operation claimed inside a child context has the depth of that
+// context's operation plus one. A [Map] or [Parallel] item has the depth
+// of its batch plus one, and the operations inside the item one more. An
+// item under [NestingFlat] has no operation of its own, so the operations
+// inside it have the depth of the batch plus one. depth is the deepest
+// depth reported: 0 reports only the operations claimed on the handler's
+// Context, 1 also reports their direct children, and so on.
+//
+// An operation at depth is reported with ChildrenOmitted set on its
+// [OperationHookInfo], so a consumer can tell that the operations inside
+// it were withheld rather than absent. Every reported operation's parent
+// is also reported, so ParentID chains stay complete; see
+// [OperationHookInfo.ParentID].
+//
+// The default reports every depth. depth must not be negative; [Wrap] and
+// [Start] panic on a negative value.
+//
+// EXPERIMENTAL: this function is experimental and may be changed or
+// removed in future releases.
+func WithPluginChildOperationsDepth(depth int) HandlerOption {
+	return handlerOptionFunc(func(o *handlerOptions) {
+		o.pluginChildDepth = depth
+		o.pluginChildDepthSet = true
+	})
+}
+
 // pluginDispatcher dispatches lifecycle hooks to registered plugins
 // concurrently. It implements the 7-point dispatch contract from the spec.
 //
@@ -470,25 +526,30 @@ func invokePluginSafely(p *Plugin, call func(*Plugin)) {
 // operationHookInfo returns the OperationHookInfo shared by every
 // operation lifecycle hook dispatched for one operation on c: the
 // execution ARN, the parent context's wire ID, the operation's identity,
-// and whether the operation is replayed from a checkpoint. The caller sets
-// the timestamps and, where they apply, Attempt, Result, and Error before
-// passing the info to dispatchOperationStart or dispatchOperationEnd.
+// whether the operation is replayed from a checkpoint, and whether the
+// operations inside it are omitted by the plugin depth bound. The caller
+// sets the timestamps and, where they apply, Attempt, Result, and Error
+// before passing the info to dispatchOperationStart or
+// dispatchOperationEnd.
 func (c *execContext) operationHookInfo(id, name, opType, subType string, isReplay bool) OperationHookInfo {
 	return OperationHookInfo{
-		ExecutionArn: c.executionArn,
-		ID:           id,
-		Name:         name,
-		Type:         opType,
-		SubType:      subType,
-		IsReplay:     isReplay,
-		ParentID:     c.parentWireID(),
+		ExecutionArn:    c.executionArn,
+		ID:              id,
+		Name:            name,
+		Type:            opType,
+		SubType:         subType,
+		IsReplay:        isReplay,
+		ParentID:        c.parentWireID(),
+		ChildrenOmitted: c.childrenOmittedAt(c.hookDepth),
 	}
 }
 
 // dispatchOperationStart notifies every plugin's OnOperationStart hook that
-// the operation info describes has begun, reporting status. Dispatch goes
-// through dispatchNotification, so a panicking hook is recovered and never
-// affects execution, and a nil dispatcher is a no-op.
+// the operation info describes, claimed on ec, has begun, reporting status.
+// Dispatch goes through dispatchNotification, so a panicking hook is
+// recovered and never affects execution, and a nil dispatcher is a no-op.
+// An operation beyond the plugin depth bound has a nil dispatcher; see
+// hooksAt.
 //
 // Each operation dispatches at most one start per invocation. A live
 // operation reports PluginOperationStarted. An operation replayed before it
@@ -497,28 +558,44 @@ func (c *execContext) operationHookInfo(id, name, opType, subType string, isRepl
 // operation decides whether a terminal replay also dispatches a start; see
 // the operation's own documentation.
 func dispatchOperationStart(ec *execContext, info OperationHookInfo, status PluginOperationStatus) {
+	dispatchOperationStartTo(ec.operationHooks(), ec, info, status)
+}
+
+// dispatchOperationStartTo is dispatchOperationStart with the dispatcher
+// chosen by the caller, for an operation whose depth differs from that of
+// the operations claimed on ctx: a batch item dispatched from the batch's
+// context. ctx is the context the hooks receive.
+func dispatchOperationStartTo(d *pluginDispatcher, ctx context.Context, info OperationHookInfo, status PluginOperationStatus) {
 	info.Status = status
-	dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
+	dispatchNotification(d, func(p *Plugin) {
 		if p.OnOperationStart != nil {
-			p.OnOperationStart(ec, info)
+			p.OnOperationStart(ctx, info)
 		}
 	})
 }
 
 // dispatchOperationEnd notifies every plugin's OnOperationEnd hook that the
-// operation info describes has reached the terminal status. Dispatch goes
-// through dispatchNotification, so a panicking hook is recovered and never
-// affects execution, and a nil dispatcher is a no-op.
+// operation info describes, claimed on ec, has reached the terminal status.
+// Dispatch goes through dispatchNotification, so a panicking hook is
+// recovered and never affects execution, and a nil dispatcher is a no-op.
+// An operation beyond the plugin depth bound has a nil dispatcher; see
+// hooksAt.
 //
 // Each operation dispatches at most one end per invocation, and only once
 // it has a terminal outcome. An operation that suspends the invocation has
 // no outcome yet, so it dispatches no end; the invocation that observes
 // its terminal checkpoint dispatches the end, with info.IsReplay set.
 func dispatchOperationEnd(ec *execContext, info OperationHookInfo, status PluginOperationStatus) {
+	dispatchOperationEndTo(ec.operationHooks(), ec, info, status)
+}
+
+// dispatchOperationEndTo is dispatchOperationEnd with the dispatcher chosen
+// by the caller; see dispatchOperationStartTo.
+func dispatchOperationEndTo(d *pluginDispatcher, ctx context.Context, info OperationHookInfo, status PluginOperationStatus) {
 	info.Status = status
-	dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
+	dispatchNotification(d, func(p *Plugin) {
 		if p.OnOperationEnd != nil {
-			p.OnOperationEnd(ec, info)
+			p.OnOperationEnd(ctx, info)
 		}
 	})
 }
@@ -833,7 +910,8 @@ func (d *pluginDispatcher) hasInvocationInfoConsumer() bool {
 // checkpointed operation op of the execution executionArn, as the invocation
 // hooks report it: the wire ID, the checkpointed status, timestamps, result,
 // and error, with IsReplay set because the operation was recorded before
-// this invocation.
+// this invocation. ChildrenOmitted is left false; the caller sets it from
+// the operation's depth when a plugin depth bound is in effect.
 func checkpointedOperationInfo(executionArn string, op *operation) OperationHookInfo {
 	return OperationHookInfo{
 		ExecutionArn:   executionArn,
@@ -849,6 +927,50 @@ func checkpointedOperationInfo(executionArn string, op *operation) OperationHook
 		Result:         op.operationResult(),
 		Error:          op.operationError(),
 	}
+}
+
+// checkpointedOperationDepth returns the depth in the operation tree of the
+// checkpointed operation op, capped at limit: the number of operations
+// between op and the root, found by following the wire parent IDs through
+// state, or limit when the chain is at least that long. An operation with
+// no parent, including the execution operation itself and every top-level
+// operation, has depth 0. A parent ID the state does not hold still counts
+// as one level; the walk stops there.
+//
+// The caller only needs to know whether the depth reaches limit, and the
+// exact depth below it. Stopping at limit keeps the walk at most limit
+// steps per operation, so a chain of n nested operations costs O(n*limit)
+// rather than O(n^2), and a cyclic parent chain from malformed execution
+// state terminates. limit must be positive.
+func checkpointedOperationDepth(state *executionState, op *operation, limit int) int {
+	depth := 0
+	for parentID := op.parentID; parentID != "" && depth < limit; {
+		depth++
+		parent := state.getByWireID(parentID)
+		if parent == nil {
+			break
+		}
+		parentID = parent.parentID
+	}
+	return depth
+}
+
+// addCheckpointedOperationInfo adds the OperationHookInfo of the
+// checkpointed operation op to m, keyed by wire ID, when the plugin depth
+// bound reports it, with ChildrenOmitted set when op lies at the bound.
+// bound is the root context's hookDepthBound; 0 reports every operation
+// and skips the depth walk. Otherwise the walk stops at bound, the first
+// depth the bound omits.
+func addCheckpointedOperationInfo(m map[string]OperationHookInfo, executionArn string, state *executionState, bound int, op *operation) {
+	info := checkpointedOperationInfo(executionArn, op)
+	if bound != 0 {
+		depth := checkpointedOperationDepth(state, op, bound)
+		if depth >= bound {
+			return
+		}
+		info.ChildrenOmitted = depth == bound-1
+	}
+	m[op.id] = info
 }
 
 // toPluginOperationStatus converts an internal operation status to the

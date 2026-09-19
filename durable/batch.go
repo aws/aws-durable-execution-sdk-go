@@ -1344,7 +1344,7 @@ func runPreClaimedBatchItem[O any](
 
 	// The child context runs on this goroutine; capture ownership here.
 	mode := childReplayMode(ec, childID, op)
-	child := ec.child(childID, itemName, currentGoroutineOwner(), mode)
+	child := ec.batchItemChild(childID, itemName, parentID, currentGoroutineOwner(), mode)
 	child.abandon = abandon
 	child.adoptBranchToken(tok)
 
@@ -1383,7 +1383,7 @@ func runPreClaimedBatchItem[O any](
 			return BatchItem[O]{}, cerr
 		}
 		itemErr := liveBatchItemError(itemName, fnErr, update.Error.StackTrace)
-		dispatchBatchItemEnd(ec, itemStart, "", itemErr)
+		dispatchBatchItemEnd(ec, parentID, itemStart, "", itemErr)
 		return BatchItem[O]{
 			Index:  index,
 			Name:   itemName,
@@ -1405,7 +1405,7 @@ func runPreClaimedBatchItem[O any](
 	if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
 		return BatchItem[O]{}, err
 	}
-	dispatchBatchItemEnd(ec, itemStart, aws.ToString(update.Payload), nil)
+	dispatchBatchItemEnd(ec, parentID, itemStart, aws.ToString(update.Payload), nil)
 	var out O
 	if err := options.itemSerdes.Unmarshal(ec.Context, ec.serdesCtx(childID), serialized, &out); err != nil {
 		return BatchItem[O]{}, newSerdesError(batchItemOpName(itemName, index), serdesDirectionUnmarshal, err)
@@ -1583,7 +1583,7 @@ func runNestedBatchItem[O any](
 	}
 
 	mode := childReplayMode(ec, childID, op)
-	child := ec.child(childID, itemName, ec.owner, mode)
+	child := ec.batchItemChild(childID, itemName, parentID, ec.owner, mode)
 
 	itemStart := dispatchBatchItemStart(ec, parentID, childID, itemName, childSubType, op)
 
@@ -1606,7 +1606,7 @@ func runNestedBatchItem[O any](
 			return BatchItem[O]{}, cerr
 		}
 		itemErr := liveBatchItemError(itemName, fnErr, update.Error.StackTrace)
-		dispatchBatchItemEnd(ec, itemStart, "", itemErr)
+		dispatchBatchItemEnd(ec, parentID, itemStart, "", itemErr)
 		return BatchItem[O]{
 			Index:  index,
 			Name:   itemName,
@@ -1630,7 +1630,7 @@ func runNestedBatchItem[O any](
 	if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
 		return BatchItem[O]{}, err
 	}
-	dispatchBatchItemEnd(ec, itemStart, aws.ToString(update.Payload), nil)
+	dispatchBatchItemEnd(ec, parentID, itemStart, aws.ToString(update.Payload), nil)
 
 	// Round-trip through serdes for live == replay consistency.
 	var out O
@@ -1667,7 +1667,7 @@ func replayTerminalChildItem[O any](
 		}
 		if op.childCtx.replayChildren {
 			mode := modeReplaySucceededContext
-			child := ec.child(childID, itemName, ec.owner, mode)
+			child := ec.batchItemChild(childID, itemName, parentID, ec.owner, mode)
 			result, _, err := runItem(child, index)
 			if err != nil {
 				return BatchItem[O]{}, err
@@ -2657,11 +2657,21 @@ func batchChildUpdate(ec *execContext, childID, childName, childSubType, parentI
 // batchItemHookInfo returns the OperationHookInfo of the item childID of
 // the batch parentID. Unlike operationHookInfo, which names the context
 // that claimed the ID, ParentID names the batch, as the item's checkpoint
-// does.
+// does, and ChildrenOmitted follows the item's depth, one below the batch.
 func batchItemHookInfo(ec *execContext, parentID, childID, itemName, childSubType string, isReplay bool) OperationHookInfo {
 	info := ec.operationHookInfo(childID, itemName, string(OperationTypeContext), childSubType, isReplay)
 	info.ParentID = hashID(parentID)
+	info.ChildrenOmitted = ec.childrenOmittedAt(ec.batchItemDepth(parentID))
 	return info
+}
+
+// batchItemHooks returns the dispatcher for the hooks of an item of the
+// batch parentID dispatched from ec: nil when the items lie beyond the
+// plugin depth bound. The item functions below dispatch through it rather
+// than through dispatchOperationStart and dispatchOperationEnd, which take
+// the depth of the operations claimed on ec, one level above the items.
+func batchItemHooks(ec *execContext, parentID string) *pluginDispatcher {
+	return ec.hooksAt(ec.batchItemDepth(parentID))
 }
 
 // dispatchBatchItemStart dispatches the start of the item childID of the
@@ -2678,8 +2688,7 @@ func dispatchBatchItemStart(ec *execContext, parentID, childID, itemName, childS
 	} else {
 		info.StartTimestamp = checkpointedStartTime(ec.state.get(childID))
 	}
-	info.Status = status
-	dispatchOperationStart(ec, info, status)
+	dispatchOperationStartTo(batchItemHooks(ec, parentID), ec, info, status)
 	return info
 }
 
@@ -2687,17 +2696,18 @@ func dispatchBatchItemStart(ec *execContext, parentID, childID, itemName, childS
 // event is start, once its terminal checkpoint is recorded. err is the
 // failure the item reports, nil for a succeeded item whose checkpointed
 // payload is result.
-func dispatchBatchItemEnd(ec *execContext, start OperationHookInfo, result string, err error) {
+func dispatchBatchItemEnd(ec *execContext, parentID string, start OperationHookInfo, result string, err error) {
 	info := start
 	info.IsReplay = false
 	info.EndTimestamp = checkpointedEndTime(ec.state.get(start.ID))
+	hooks := batchItemHooks(ec, parentID)
 	if err != nil {
 		info.Error = err
-		dispatchOperationEnd(ec, info, PluginOperationFailed)
+		dispatchOperationEndTo(hooks, ec, info, PluginOperationFailed)
 		return
 	}
 	info.Result = result
-	dispatchOperationEnd(ec, info, PluginOperationSucceeded)
+	dispatchOperationEndTo(hooks, ec, info, PluginOperationSucceeded)
 }
 
 // dispatchBatchItemAbandoned dispatches the end of the item childID of the
@@ -2708,7 +2718,7 @@ func dispatchBatchItemAbandoned(ec *execContext, parentID, childID, itemName, ch
 	info := batchItemHookInfo(ec, parentID, childID, itemName, childSubType, false)
 	info.StartTimestamp = checkpointedStartTime(ec.state.get(childID))
 	info.EndTimestamp = time.Now()
-	dispatchOperationEnd(ec, info, PluginOperationStarted)
+	dispatchOperationEndTo(batchItemHooks(ec, parentID), ec, info, PluginOperationStarted)
 }
 
 // dispatchBatchItemReplayedEnd dispatches the replayed end of the item
@@ -2725,7 +2735,7 @@ func dispatchBatchItemReplayedEnd(ec *execContext, parentID, childID, itemName, 
 	} else if op.childCtx != nil {
 		info.Result = op.childCtx.result
 	}
-	dispatchOperationEnd(ec, info, toPluginOperationStatus(op.status))
+	dispatchOperationEndTo(batchItemHooks(ec, parentID), ec, info, toPluginOperationStatus(op.status))
 }
 
 // replayedBatchFailure returns the error a replayed batch end reports: err,

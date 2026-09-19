@@ -221,22 +221,23 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 
 	attemptInfo := AttemptHookInfo{
 		OperationHookInfo: OperationHookInfo{
-			ExecutionArn:   ec.executionArn,
-			ID:             id,
-			Name:           name,
-			Type:           string(OperationTypeStep),
-			SubType:        OperationSubTypeWaitForCondition,
-			Status:         PluginOperationStarted,
-			Attempt:        attempt,
-			IsReplay:       ec.IsReplaying(),
-			ParentID:       ec.parentWireID(),
-			StartTimestamp: time.Now(),
+			ExecutionArn:    ec.executionArn,
+			ID:              id,
+			Name:            name,
+			Type:            string(OperationTypeStep),
+			SubType:         OperationSubTypeWaitForCondition,
+			Status:          PluginOperationStarted,
+			Attempt:         attempt,
+			IsReplay:        ec.IsReplaying(),
+			ParentID:        ec.parentWireID(),
+			StartTimestamp:  time.Now(),
+			ChildrenOmitted: ec.childrenOmittedAt(ec.hookDepth),
 		},
 		Attempt: attempt,
 	}
 
 	// OnOperationAttemptStart
-	dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
+	dispatchNotification(ec.operationHooks(), func(p *Plugin) {
 		if p.OnOperationAttemptStart != nil {
 			p.OnOperationAttemptStart(ec, attemptInfo)
 		}
@@ -249,7 +250,7 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 	// when it succeeded or capture is disabled.
 	var checkTrace []string
 
-	wrappedResult, wrappedErr := wrapChain(ec.pluginDispatcher, ec,
+	wrappedResult, wrappedErr := wrapChain(ec.operationHooks(), ec,
 		func(p *Plugin) wrapHook {
 			if p.WrapOperationAttemptFn == nil {
 				return nil
@@ -273,7 +274,7 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 	// Execute the check function.
 	if checkErr != nil {
 		// OnOperationAttemptEnd with FAILED outcome.
-		dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
+		dispatchNotification(ec.operationHooks(), func(p *Plugin) {
 			if p.OnOperationAttemptEnd != nil {
 				p.OnOperationAttemptEnd(ec, AttemptEndHookInfo{
 					OperationHookInfo: attemptInfo.OperationHookInfo,
@@ -302,7 +303,7 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 	}
 
 	// OnOperationAttemptEnd with SUCCEEDED outcome (check ran without error).
-	dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
+	dispatchNotification(ec.operationHooks(), func(p *Plugin) {
 		if p.OnOperationAttemptEnd != nil {
 			p.OnOperationAttemptEnd(ec, AttemptEndHookInfo{
 				OperationHookInfo: attemptInfo.OperationHookInfo,

@@ -260,22 +260,23 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 
 	attemptInfo := AttemptHookInfo{
 		OperationHookInfo: OperationHookInfo{
-			ExecutionArn:   ec.executionArn,
-			ID:             id,
-			Name:           name,
-			Type:           string(OperationTypeStep),
-			SubType:        OperationSubTypeStep,
-			Status:         PluginOperationStarted,
-			Attempt:        attempt,
-			IsReplay:       ec.IsReplaying(),
-			ParentID:       ec.parentWireID(),
-			StartTimestamp: time.Now(),
+			ExecutionArn:    ec.executionArn,
+			ID:              id,
+			Name:            name,
+			Type:            string(OperationTypeStep),
+			SubType:         OperationSubTypeStep,
+			Status:          PluginOperationStarted,
+			Attempt:         attempt,
+			IsReplay:        ec.IsReplaying(),
+			ParentID:        ec.parentWireID(),
+			StartTimestamp:  time.Now(),
+			ChildrenOmitted: ec.childrenOmittedAt(ec.hookDepth),
 		},
 		Attempt: attempt,
 	}
 
 	// OnOperationAttemptStart
-	dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
+	dispatchNotification(ec.operationHooks(), func(p *Plugin) {
 		if p.OnOperationAttemptStart != nil {
 			p.OnOperationAttemptStart(ec, attemptInfo)
 		}
@@ -289,7 +290,7 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 	// is disabled.
 	var stepTrace []string
 
-	wrappedResult, wrappedErr := wrapChain(ec.pluginDispatcher, ec,
+	wrappedResult, wrappedErr := wrapChain(ec.operationHooks(), ec,
 		func(p *Plugin) wrapHook {
 			if p.WrapOperationAttemptFn == nil {
 				return nil
@@ -312,7 +313,7 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 
 	if stepErr != nil {
 		// OnOperationAttemptEnd with FAILED outcome.
-		dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
+		dispatchNotification(ec.operationHooks(), func(p *Plugin) {
 			if p.OnOperationAttemptEnd != nil {
 				p.OnOperationAttemptEnd(ec, AttemptEndHookInfo{
 					OperationHookInfo: attemptInfo.OperationHookInfo,
@@ -328,7 +329,7 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 	serialized, err := options.serdes.Marshal(ec.Context, ec.serdesCtx(id), result)
 	if err != nil {
 		wrapped := newSerdesError(name, serdesDirectionMarshal, err)
-		dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
+		dispatchNotification(ec.operationHooks(), func(p *Plugin) {
 			if p.OnOperationAttemptEnd != nil {
 				p.OnOperationAttemptEnd(ec, AttemptEndHookInfo{
 					OperationHookInfo: attemptInfo.OperationHookInfo,
@@ -342,7 +343,7 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 	}
 
 	if sizeErr := checkResultSize(serialized, name); sizeErr != nil {
-		dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
+		dispatchNotification(ec.operationHooks(), func(p *Plugin) {
 			if p.OnOperationAttemptEnd != nil {
 				p.OnOperationAttemptEnd(ec, AttemptEndHookInfo{
 					OperationHookInfo: attemptInfo.OperationHookInfo,
@@ -365,7 +366,7 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 	}
 
 	// OnOperationAttemptEnd with SUCCEEDED outcome.
-	dispatchNotification(ec.pluginDispatcher, func(p *Plugin) {
+	dispatchNotification(ec.operationHooks(), func(p *Plugin) {
 		if p.OnOperationAttemptEnd != nil {
 			p.OnOperationAttemptEnd(ec, AttemptEndHookInfo{
 				OperationHookInfo: attemptInfo.OperationHookInfo,

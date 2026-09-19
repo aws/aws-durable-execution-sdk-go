@@ -260,7 +260,7 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 	// hooks supply becomes the child context's parent; the child is not
 	// visible to any other goroutine before fn runs.
 	var fnTrace []string
-	wrappedResult, wrappedErr := wrapChain(ec.pluginDispatcher, ec,
+	wrappedResult, wrappedErr := wrapChain(ec.operationHooks(), ec,
 		func(p *Plugin) wrapHook {
 			if p.WrapChildContextFn == nil {
 				return nil
