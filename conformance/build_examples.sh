@@ -14,7 +14,7 @@
 #
 # Operations (default: all found in this directory):
 #   step, wait, callback, child, invoke, parallel, wait_for_callback,
-#   wait_for_condition, map
+#   wait_for_condition, map, plugin
 #
 # Examples:
 #   ./build_examples.sh step

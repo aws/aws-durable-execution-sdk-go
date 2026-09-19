@@ -62,6 +62,29 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
 
+  TargetSlow:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/target_slow/
+      Handler: bootstrap
+      Description: Target function that runs past its execution timeout (for timeout tests)
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
+  TargetNonDurable:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/target_non_durable/
+      Handler: bootstrap
+      Description: Target function without durable execution (plain Lambda)
+      Role: !Ref ExecutionRoleArn
+
   # Conformance handlers
 
   InvokeBasic:
@@ -171,6 +194,45 @@ Resources:
       Environment:
         Variables:
           TARGET_FUNCTION_NAME: !Sub "${TargetError.Arn}:$LATEST"
+
+  # The runner defines no requirement for the two timeout handlers, so they
+  # are deployed but not invoked; the reference suites register them the
+  # same way.
+  InvokeTimeout:
+    Type: AWS::Serverless::Function
+    TestingMetadata:
+      TestDescription: []
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/invoke_timeout/
+      Handler: bootstrap
+      Description: Invoke timeout (target runs past its execution timeout)
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+      Environment:
+        Variables:
+          TARGET_FUNCTION_NAME: !Sub "${TargetSlow.Arn}:$LATEST"
+
+  InvokeTimeoutCaught:
+    Type: AWS::Serverless::Function
+    TestingMetadata:
+      TestDescription: []
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/invoke_timeout_caught/
+      Handler: bootstrap
+      Description: Invoke timeout, caught (execution continues)
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+      Environment:
+        Variables:
+          TARGET_FUNCTION_NAME: !Sub "${TargetSlow.Arn}:$LATEST"
 
   InvokeLargePayload:
     Type: AWS::Serverless::Function

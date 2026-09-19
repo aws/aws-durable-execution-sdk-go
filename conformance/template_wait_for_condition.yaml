@@ -19,14 +19,14 @@ Globals:
       SystemLogLevel: INFO
 
 Resources:
-  WaitForConditionBasic:
+  WaitForConditionBasicPoll:
     Type: AWS::Serverless::Function
     TestingMetadata:
       TestDescription: ["6-1"]
     Metadata:
       BuildMethod: makefile
     Properties:
-      CodeUri: publish/wait_for_condition_basic/
+      CodeUri: publish/wait_for_condition_basic_poll/
       Handler: bootstrap
       Description: Wait-for-condition basic (polls until threshold met)
       Role: !Ref ExecutionRoleArn
@@ -34,14 +34,14 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
 
-  WaitForConditionImmediate:
+  WaitForConditionImmediateStop:
     Type: AWS::Serverless::Function
     TestingMetadata:
       TestDescription: ["6-2"]
     Metadata:
       BuildMethod: makefile
     Properties:
-      CodeUri: publish/wait_for_condition_immediate/
+      CodeUri: publish/wait_for_condition_immediate_stop/
       Handler: bootstrap
       Description: Wait-for-condition immediate stop (condition already met)
       Role: !Ref ExecutionRoleArn
@@ -217,13 +217,13 @@ Resources:
   WaitForConditionBasicLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub "/aws/lambda/${WaitForConditionBasic}"
+      LogGroupName: !Sub "/aws/lambda/${WaitForConditionBasicPoll}"
       RetentionInDays: 7
 
   WaitForConditionImmediateLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub "/aws/lambda/${WaitForConditionImmediate}"
+      LogGroupName: !Sub "/aws/lambda/${WaitForConditionImmediateStop}"
       RetentionInDays: 7
 
   WaitForConditionWithNameLogGroup:

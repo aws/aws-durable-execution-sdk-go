@@ -267,6 +267,8 @@ func (m *memoryClient) recordOperationEvent(op *durable.Operation, eventType typ
 		ev.ChainedInvokeSucceededDetails = &types.ChainedInvokeSucceededDetails{Result: eventResult(result)}
 	case types.EventTypeChainedInvokeFailed:
 		ev.ChainedInvokeFailedDetails = &types.ChainedInvokeFailedDetails{Error: eventError(err)}
+	case types.EventTypeChainedInvokeTimedOut:
+		ev.ChainedInvokeTimedOutDetails = &types.ChainedInvokeTimedOutDetails{Error: eventError(err)}
 	default:
 		return
 	}

@@ -411,6 +411,7 @@ func buildContextDetails(u durable.OperationUpdate) *durable.ContextDetails {
 const (
 	statusSucceeded = "SUCCEEDED"
 	statusFailed    = "FAILED"
+	statusTimedOut  = "TIMED_OUT"
 	statusStarted   = "STARTED"
 	statusPending   = "PENDING"
 	statusReady     = "READY"
@@ -419,6 +420,11 @@ const (
 // errTypeCallbackTimedOut is the ErrorType recorded on the CallbackTimedOut
 // event when [LocalRunner.TimeoutCallback] times out a callback.
 const errTypeCallbackTimedOut = "CallbackTimedOut"
+
+// errTypeChainedInvokeTimedOut is the ErrorType recorded on the
+// ChainedInvokeTimedOut event when [LocalRunner.TimeoutChainedInvoke] times
+// out a chained invoke.
+const errTypeChainedInvokeTimedOut = "ChainedInvokeTimedOut"
 
 // operationResult is a value type representing the outcome to apply to an
 // operation, used by callback and chained-invoke helpers.
@@ -652,6 +658,15 @@ func (m *memoryClient) settleInvoke(op *durable.Operation, result operationResul
 		updated.ChainedInvokeDetails = &durable.ChainedInvokeDetails{Error: errObj}
 		now := stampTransition(&updated)
 		m.recordOperationEvent(&updated, types.EventTypeChainedInvokeFailed, nil, errObj, now)
+	case statusTimedOut:
+		updated.Status = durable.OperationStatusTimedOut
+		errObj := &durable.ErrorObject{
+			ErrorType:    strptr(result.errType),
+			ErrorMessage: strptr(result.errMsg),
+		}
+		updated.ChainedInvokeDetails = &durable.ChainedInvokeDetails{Error: errObj}
+		now := stampTransition(&updated)
+		m.recordOperationEvent(&updated, types.EventTypeChainedInvokeTimedOut, nil, errObj, now)
 	default:
 		return fmt.Errorf("durabletest: unsupported chained-invoke result status %q", result.status)
 	}

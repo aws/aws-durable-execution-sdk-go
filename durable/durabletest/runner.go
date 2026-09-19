@@ -327,6 +327,26 @@ func (r *LocalRunner[I, O]) FailChainedInvoke(name, errorType, errorMessage stri
 	})
 }
 
+// TimeoutChainedInvoke transitions a pending chained-invoke operation to
+// TIMED_OUT status, simulating the invoked function's execution running
+// past its timeout before it produced a result. The resulting
+// [*durable.InvokeError] unwraps to [durable.ErrInvokeTimedOut] when the
+// handler re-invokes and encounters the TIMED_OUT status.
+//
+// The invoke is located the same way as in [CompleteChainedInvoke]: in
+// the handler under test or in any registered durable target the runner
+// is running, and the name must be open in exactly one of them.
+//
+// After calling TimeoutChainedInvoke, invoke [Run] or [RunUntilComplete]
+// to allow the handler to observe the timeout and continue execution.
+func (r *LocalRunner[I, O]) TimeoutChainedInvoke(name string) error {
+	return r.exec.completeChainedInvoke(name, operationResult{
+		status:  statusTimedOut,
+		errType: errTypeChainedInvokeTimedOut,
+		errMsg:  "invoked function timed out before it completed",
+	})
+}
+
 // OmitTokenOnCheckpoint makes the n-th checkpoint call from now (1-based)
 // return a response without a checkpoint token. It simulates the service
 // signaling that it will accept no further checkpoints from the current

@@ -6,6 +6,7 @@ package durabletest_test
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
+	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 )
 
 // --- Helpers ---
@@ -658,6 +660,59 @@ func TestChainedInvokeFailure(t *testing.T) {
 	}
 	if result.Error.Type != "InvokeError" {
 		t.Errorf("error type = %q, want %q", result.Error.Type, "InvokeError")
+	}
+}
+
+func TestChainedInvokeTimeout(t *testing.T) {
+	var gotErr error
+	handler := func(ctx durable.Context, event string) (string, error) {
+		result, err := durable.Invoke[string](ctx, "call-child", "arn:aws:lambda:us-east-1:123:function:child", event)
+		if err != nil {
+			gotErr = err
+			return "", err
+		}
+		return result, nil
+	}
+
+	runner := durabletest.NewLocalRunner(handler)
+
+	result := runner.RunUntilComplete(t, "hello")
+	if result.Status != durabletest.Pending {
+		t.Fatalf("expected PENDING, got %s", result.Status)
+	}
+
+	if err := runner.TimeoutChainedInvoke("call-child"); err != nil {
+		t.Fatalf("TimeoutChainedInvoke error: %v", err)
+	}
+	// A second timeout finds no STARTED invoke of that name.
+	if err := runner.TimeoutChainedInvoke("call-child"); err == nil {
+		t.Error("second TimeoutChainedInvoke succeeded, want error")
+	}
+
+	result = runner.RunUntilComplete(t, "hello")
+	if result.Status != durabletest.Failed {
+		t.Fatalf("expected FAILED, got %s", result.Status)
+	}
+	if !errors.Is(gotErr, durable.ErrInvokeTimedOut) {
+		t.Errorf("errors.Is(err, ErrInvokeTimedOut) = false, want true; err = %v", gotErr)
+	}
+	var invErr *durable.InvokeError
+	if !errors.As(gotErr, &invErr) {
+		t.Fatalf("error is %T, want *durable.InvokeError", gotErr)
+	}
+	if invErr.Status != durable.OperationStatusTimedOut {
+		t.Errorf("InvokeError.Status = %s, want TIMED_OUT", invErr.Status)
+	}
+
+	op := result.Operation("call-child")
+	if op == nil {
+		t.Fatal("operation call-child not found")
+	}
+	if op.Status != string(durable.OperationStatusTimedOut) {
+		t.Errorf("operation status = %s, want TIMED_OUT", op.Status)
+	}
+	if !slices.Contains(result.EventTypes(), string(types.EventTypeChainedInvokeTimedOut)) {
+		t.Errorf("event types %v lack ChainedInvokeTimedOut", result.EventTypes())
 	}
 }
 

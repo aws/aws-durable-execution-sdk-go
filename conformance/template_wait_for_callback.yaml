@@ -19,302 +19,302 @@ Globals:
       SystemLogLevel: INFO
 
 Resources:
-  WfcbBasic:
+  WaitForCallbackBasic:
     Type: AWS::Serverless::Function
     Metadata:
       BuildMethod: makefile
     TestingMetadata:
       TestDescription: ["7-1"]
     Properties:
-      CodeUri: publish/wfcb_basic/
+      CodeUri: publish/wait_for_callback_basic/
       Handler: bootstrap
       Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
 
-  WfcbExplicitName:
+  WaitForCallbackExplicitName:
     Type: AWS::Serverless::Function
     Metadata:
       BuildMethod: makefile
     TestingMetadata:
       TestDescription: ["7-2"]
     Properties:
-      CodeUri: publish/wfcb_explicit_name/
+      CodeUri: publish/wait_for_callback_explicit_name/
       Handler: bootstrap
       Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
 
-  WfcbAnonymous:
+  WaitForCallbackAnonymous:
     Type: AWS::Serverless::Function
     Metadata:
       BuildMethod: makefile
     TestingMetadata:
       TestDescription: ["7-3"]
     Properties:
-      CodeUri: publish/wfcb_anonymous/
+      CodeUri: publish/wait_for_callback_anonymous/
       Handler: bootstrap
       Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
 
-  WfcbExternalFailure:
+  WaitForCallbackExternalFailure:
     Type: AWS::Serverless::Function
     Metadata:
       BuildMethod: makefile
     TestingMetadata:
       TestDescription: ["7-4"]
     Properties:
-      CodeUri: publish/wfcb_external_failure/
+      CodeUri: publish/wait_for_callback_external_failure/
       Handler: bootstrap
       Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
 
-  WfcbTimeout:
+  WaitForCallbackTimeout:
     Type: AWS::Serverless::Function
     Metadata:
       BuildMethod: makefile
     TestingMetadata:
       TestDescription: ["7-5"]
     Properties:
-      CodeUri: publish/wfcb_timeout/
+      CodeUri: publish/wait_for_callback_timeout/
       Handler: bootstrap
       Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
 
-  WfcbFailureCaught:
+  WaitForCallbackFailureCaught:
     Type: AWS::Serverless::Function
     Metadata:
       BuildMethod: makefile
     TestingMetadata:
       TestDescription: ["7-6"]
     Properties:
-      CodeUri: publish/wfcb_failure_caught/
+      CodeUri: publish/wait_for_callback_failure_caught/
       Handler: bootstrap
       Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
 
-  WfcbSubmitterRetry:
+  WaitForCallbackSubmitterRetryExhaustion:
     Type: AWS::Serverless::Function
     Metadata:
       BuildMethod: makefile
     TestingMetadata:
       TestDescription: ["7-7"]
     Properties:
-      CodeUri: publish/wfcb_submitter_retry/
+      CodeUri: publish/wait_for_callback_submitter_retry_exhaustion/
       Handler: bootstrap
       Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
 
-  WfcbInChildContext:
+  WaitForCallbackInChildContext:
     Type: AWS::Serverless::Function
     Metadata:
       BuildMethod: makefile
     TestingMetadata:
       TestDescription: ["7-8"]
     Properties:
-      CodeUri: publish/wfcb_in_child_context/
+      CodeUri: publish/wait_for_callback_in_child_context/
       Handler: bootstrap
       Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
 
-  WfcbTwoSequential:
+  WaitForCallbackTwoSequential:
     Type: AWS::Serverless::Function
     Metadata:
       BuildMethod: makefile
     TestingMetadata:
       TestDescription: ["7-9"]
     Properties:
-      CodeUri: publish/wfcb_two_sequential/
+      CodeUri: publish/wait_for_callback_two_sequential/
       Handler: bootstrap
       Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
 
-  WfcbMixedOps:
+  WaitForCallbackMixedOps:
     Type: AWS::Serverless::Function
     Metadata:
       BuildMethod: makefile
     TestingMetadata:
       TestDescription: ["7-10"]
     Properties:
-      CodeUri: publish/wfcb_mixed_ops/
+      CodeUri: publish/wait_for_callback_mixed_ops/
       Handler: bootstrap
       Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
 
-  WfcbJsonResult:
+  WaitForCallbackJsonResult:
     Type: AWS::Serverless::Function
     Metadata:
       BuildMethod: makefile
     TestingMetadata:
       TestDescription: ["7-11"]
     Properties:
-      CodeUri: publish/wfcb_json_result/
+      CodeUri: publish/wait_for_callback_json_result/
       Handler: bootstrap
       Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
 
-  WfcbHeartbeatTimeout:
+  WaitForCallbackHeartbeatTimeout:
     Type: AWS::Serverless::Function
     Metadata:
       BuildMethod: makefile
     TestingMetadata:
       TestDescription: ["7-12"]
     Properties:
-      CodeUri: publish/wfcb_heartbeat_timeout/
+      CodeUri: publish/wait_for_callback_heartbeat_timeout/
       Handler: bootstrap
       Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
 
-  WfcbHeartbeatSuccess:
+  WaitForCallbackHeartbeatThenSuccess:
     Type: AWS::Serverless::Function
     Metadata:
       BuildMethod: makefile
     TestingMetadata:
       TestDescription: ["7-13"]
     Properties:
-      CodeUri: publish/wfcb_heartbeat_success/
+      CodeUri: publish/wait_for_callback_heartbeat_then_success/
       Handler: bootstrap
       Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
 
-  WfcbTimeoutCaught:
+  WaitForCallbackTimeoutCaught:
     Type: AWS::Serverless::Function
     Metadata:
       BuildMethod: makefile
     TestingMetadata:
       TestDescription: ["7-14"]
     Properties:
-      CodeUri: publish/wfcb_timeout_caught/
+      CodeUri: publish/wait_for_callback_timeout_caught/
       Handler: bootstrap
       Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
 
-  WfcbNullResult:
+  WaitForCallbackEmptyResult:
     Type: AWS::Serverless::Function
     Metadata:
       BuildMethod: makefile
     TestingMetadata:
       TestDescription: ["7-15"]
     Properties:
-      CodeUri: publish/wfcb_null_result/
+      CodeUri: publish/wait_for_callback_empty_result/
       Handler: bootstrap
       Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
 
-  WfcbBasicLogGroup:
+  WaitForCallbackBasicLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub "/aws/lambda/${WfcbBasic}"
+      LogGroupName: !Sub "/aws/lambda/${WaitForCallbackBasic}"
       RetentionInDays: 7
 
-  WfcbExplicitNameLogGroup:
+  WaitForCallbackExplicitNameLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub "/aws/lambda/${WfcbExplicitName}"
+      LogGroupName: !Sub "/aws/lambda/${WaitForCallbackExplicitName}"
       RetentionInDays: 7
 
-  WfcbAnonymousLogGroup:
+  WaitForCallbackAnonymousLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub "/aws/lambda/${WfcbAnonymous}"
+      LogGroupName: !Sub "/aws/lambda/${WaitForCallbackAnonymous}"
       RetentionInDays: 7
 
-  WfcbExternalFailureLogGroup:
+  WaitForCallbackExternalFailureLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub "/aws/lambda/${WfcbExternalFailure}"
+      LogGroupName: !Sub "/aws/lambda/${WaitForCallbackExternalFailure}"
       RetentionInDays: 7
 
-  WfcbTimeoutLogGroup:
+  WaitForCallbackTimeoutLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub "/aws/lambda/${WfcbTimeout}"
+      LogGroupName: !Sub "/aws/lambda/${WaitForCallbackTimeout}"
       RetentionInDays: 7
 
-  WfcbFailureCaughtLogGroup:
+  WaitForCallbackFailureCaughtLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub "/aws/lambda/${WfcbFailureCaught}"
+      LogGroupName: !Sub "/aws/lambda/${WaitForCallbackFailureCaught}"
       RetentionInDays: 7
 
-  WfcbSubmitterRetryLogGroup:
+  WaitForCallbackSubmitterRetryExhaustionLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub "/aws/lambda/${WfcbSubmitterRetry}"
+      LogGroupName: !Sub "/aws/lambda/${WaitForCallbackSubmitterRetryExhaustion}"
       RetentionInDays: 7
 
-  WfcbInChildContextLogGroup:
+  WaitForCallbackInChildContextLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub "/aws/lambda/${WfcbInChildContext}"
+      LogGroupName: !Sub "/aws/lambda/${WaitForCallbackInChildContext}"
       RetentionInDays: 7
 
-  WfcbTwoSequentialLogGroup:
+  WaitForCallbackTwoSequentialLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub "/aws/lambda/${WfcbTwoSequential}"
+      LogGroupName: !Sub "/aws/lambda/${WaitForCallbackTwoSequential}"
       RetentionInDays: 7
 
-  WfcbMixedOpsLogGroup:
+  WaitForCallbackMixedOpsLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub "/aws/lambda/${WfcbMixedOps}"
+      LogGroupName: !Sub "/aws/lambda/${WaitForCallbackMixedOps}"
       RetentionInDays: 7
 
-  WfcbJsonResultLogGroup:
+  WaitForCallbackJsonResultLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub "/aws/lambda/${WfcbJsonResult}"
+      LogGroupName: !Sub "/aws/lambda/${WaitForCallbackJsonResult}"
       RetentionInDays: 7
 
-  WfcbHeartbeatTimeoutLogGroup:
+  WaitForCallbackHeartbeatTimeoutLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub "/aws/lambda/${WfcbHeartbeatTimeout}"
+      LogGroupName: !Sub "/aws/lambda/${WaitForCallbackHeartbeatTimeout}"
       RetentionInDays: 7
 
-  WfcbHeartbeatSuccessLogGroup:
+  WaitForCallbackHeartbeatThenSuccessLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub "/aws/lambda/${WfcbHeartbeatSuccess}"
+      LogGroupName: !Sub "/aws/lambda/${WaitForCallbackHeartbeatThenSuccess}"
       RetentionInDays: 7
 
-  WfcbTimeoutCaughtLogGroup:
+  WaitForCallbackTimeoutCaughtLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub "/aws/lambda/${WfcbTimeoutCaught}"
+      LogGroupName: !Sub "/aws/lambda/${WaitForCallbackTimeoutCaught}"
       RetentionInDays: 7
 
-  WfcbNullResultLogGroup:
+  WaitForCallbackEmptyResultLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub "/aws/lambda/${WfcbNullResult}"
+      LogGroupName: !Sub "/aws/lambda/${WaitForCallbackEmptyResult}"
       RetentionInDays: 7

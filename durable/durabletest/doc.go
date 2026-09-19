@@ -61,13 +61,13 @@
 //	result := runner.RunUntilComplete(t, order) // runs both targets; SUCCEEDED
 //
 // Invokes of identifiers that are not registered still block for
-// [LocalRunner.CompleteChainedInvoke] or [LocalRunner.FailChainedInvoke],
-// so the two styles mix within one test. This holds inside registered
-// durable targets too: when a running target invokes an unregistered
-// identifier, the same two methods resolve that invoke, provided its name
-// is open in only one execution. A durable target blocked on a callback
-// leaves the caller's invoke STARTED; resolving that callback is not yet
-// supported through the runner.
+// [LocalRunner.CompleteChainedInvoke], [LocalRunner.FailChainedInvoke], or
+// [LocalRunner.TimeoutChainedInvoke], so the two styles mix within one
+// test. This holds inside registered durable targets too: when a running
+// target invokes an unregistered identifier, the same methods resolve
+// that invoke, provided its name is open in only one execution. A durable
+// target blocked on a callback leaves the caller's invoke STARTED;
+// resolving that callback is not yet supported through the runner.
 //
 // # Inspecting Operations
 //

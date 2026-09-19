@@ -1,0 +1,436 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Durable Execution Conformance Test Examples - Go (Plugin)
+Parameters:
+  ExecutionRoleArn:
+    Type: String
+    Description: IAM role the deployed functions assume
+Globals:
+  Function:
+    Runtime: provided.al2023
+    Timeout: 300
+    MemorySize: 128
+    # The conformance runner correlates CloudWatch records to a durable
+    # execution with a JSON filter on the executionArn field the SDK context
+    # logger attaches and the durableExecutionArn field the plugin handlers
+    # stamp on their records. Those fields only survive under the JSON log
+    # format.
+    LoggingConfig:
+      LogFormat: JSON
+      ApplicationLogLevel: INFO
+      SystemLogLevel: INFO
+
+# A handler whose TestDescription is empty is deployed but not invoked: its
+# requirement is declared under NotImplemented on the first function below,
+# with the plugin API behavior that keeps it from passing. Move the
+# requirement id back into that handler's TestDescription once the behavior
+# changes.
+Resources:
+  PluginInvocationLifecycle:
+    Type: AWS::Serverless::Function
+    TestingMetadata:
+      TestDescription: ["10-1"]
+      NotImplemented:
+        - id: "10-2"
+          reason: "the op field is OperationHookInfo.ID, the operation's positional id, while the history and ParentID carry the checkpointed id"
+        - id: "10-3"
+          reason: "the op field is OperationHookInfo.ID, the operation's positional id, while the history and ParentID carry the checkpointed id"
+        - id: "10-10"
+          reason: "the op field is OperationHookInfo.ID, the operation's positional id, while the history and ParentID carry the checkpointed id"
+        - id: "10-11"
+          reason: "the op field is OperationHookInfo.ID, the operation's positional id, while the history and ParentID carry the checkpointed id"
+        - id: "10-12"
+          reason: "the op field is OperationHookInfo.ID, the operation's positional id, while the history and ParentID carry the checkpointed id"
+        - id: "10-13"
+          reason: "the op field is OperationHookInfo.ID, the operation's positional id, while the history and ParentID carry the checkpointed id"
+        - id: "10-15"
+          reason: "the op field is OperationHookInfo.ID, the operation's positional id, while the history and ParentID carry the checkpointed id"
+        - id: "10-17"
+          reason: "the op field is OperationHookInfo.ID, the operation's positional id, while the history and ParentID carry the checkpointed id"
+        - id: "10-8"
+          reason: "OnOperationChange fires only for operations updated between invocations; a step that completes inside the invocation that started it is not reported"
+        - id: "10-14"
+          reason: "OperationHookInfo.Result is empty on the end hook of a step that succeeds in the current invocation"
+        - id: "10-19"
+          reason: "no handler: InvocationHookInfo carries no request id and InvocationEndHookInfo no first-invocation flag"
+        - id: "10-20"
+          reason: "no handler: field-shape probe outside the handler set this suite mirrors"
+        - id: "10-21"
+          reason: "no handler: field-shape probe outside the handler set this suite mirrors"
+        - id: "10-22"
+          reason: "no handler: OnOperationChange fires only for operations updated between invocations"
+        - id: "10-23"
+          reason: "no handler: the plugin API exposes no children-replay indicator"
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/plugin_invocation_lifecycle/
+      Handler: bootstrap
+      Description: Plugin invocation lifecycle hooks (start and end on a single invocation)
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
+  PluginOperationLifecycle:
+    Type: AWS::Serverless::Function
+    TestingMetadata:
+      TestDescription: []
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/plugin_operation_lifecycle/
+      Handler: bootstrap
+      Description: Plugin operation lifecycle hooks (step start and terminal end)
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
+  PluginAttemptHooksRetry:
+    Type: AWS::Serverless::Function
+    TestingMetadata:
+      TestDescription: []
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/plugin_attempt_hooks_retry/
+      Handler: bootstrap
+      Description: Plugin attempt hooks fire per step attempt with attempt number and outcome
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
+  PluginErrorIsolation:
+    Type: AWS::Serverless::Function
+    TestingMetadata:
+      TestDescription: ["10-4"]
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/plugin_error_isolation/
+      Handler: bootstrap
+      Description: Plugin panics are recovered and never affect the execution outcome
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
+  PluginMultiplePlugins:
+    Type: AWS::Serverless::Function
+    TestingMetadata:
+      TestDescription: ["10-5"]
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/plugin_multiple_plugins/
+      Handler: bootstrap
+      Description: Multiple registered plugins all receive lifecycle hooks
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
+  PluginFirstInvocationFlag:
+    Type: AWS::Serverless::Function
+    TestingMetadata:
+      TestDescription: ["10-6"]
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/plugin_first_invocation_flag/
+      Handler: bootstrap
+      Description: Plugin sees is-first-invocation true once, then false on replay
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
+  PluginTerminalFailure:
+    Type: AWS::Serverless::Function
+    TestingMetadata:
+      TestDescription: ["10-7"]
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/plugin_terminal_failure/
+      Handler: bootstrap
+      Description: Plugin invocation-end hook receives FAILED status when execution fails
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
+  PluginOperationChange:
+    Type: AWS::Serverless::Function
+    TestingMetadata:
+      TestDescription: []
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/plugin_operation_change/
+      Handler: bootstrap
+      Description: Plugin operation-change hook reports updated operations and the full map
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
+  PluginExternalUpdateOnInvoke:
+    Type: AWS::Serverless::Function
+    TestingMetadata:
+      TestDescription: ["10-9"]
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/plugin_external_update_on_invoke/
+      Handler: bootstrap
+      Description: Plugin sees a wait completed externally between invocations as an updated operation
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
+  PluginWaitOperationHooks:
+    Type: AWS::Serverless::Function
+    TestingMetadata:
+      TestDescription: []
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/plugin_wait_operation_hooks/
+      Handler: bootstrap
+      Description: Plugin operation-start and operation-end hooks fire for wait-type operations
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
+  PluginNestedParentLinkage:
+    Type: AWS::Serverless::Function
+    TestingMetadata:
+      TestDescription: []
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/plugin_nested_parent_linkage/
+      Handler: bootstrap
+      Description: Plugin operation hooks report parent id for a step nested in a child context
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
+  PluginParallelBranchHooks:
+    Type: AWS::Serverless::Function
+    TestingMetadata:
+      TestDescription: []
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/plugin_parallel_branch_hooks/
+      Handler: bootstrap
+      Description: Plugin branch function hooks fire per parallel branch with parent linkage
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
+  PluginReplayFlags:
+    Type: AWS::Serverless::Function
+    TestingMetadata:
+      TestDescription: []
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/plugin_replay_flags/
+      Handler: bootstrap
+      Description: Non-terminal operations replay with replay=true; terminal operations are not re-emitted
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
+  PluginTerminalPayloads:
+    Type: AWS::Serverless::Function
+    TestingMetadata:
+      TestDescription: []
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/plugin_terminal_payloads/
+      Handler: bootstrap
+      Description: Operation-end info carries the checkpointed result on success and the error on failure
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
+  PluginRetryExhaustion:
+    Type: AWS::Serverless::Function
+    TestingMetadata:
+      TestDescription: []
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/plugin_retry_exhaustion/
+      Handler: bootstrap
+      Description: Attempt hooks fire for every attempt until exhaustion, then operation-end reports FAILED
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
+  PluginSuspensionInvocationEnd:
+    Type: AWS::Serverless::Function
+    TestingMetadata:
+      TestDescription: ["10-16"]
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/plugin_suspension_invocation_end/
+      Handler: bootstrap
+      Description: Invocation-end fires for every invocation, non-terminal on suspension and terminal at completion
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
+  PluginFaultyAndHealthy:
+    Type: AWS::Serverless::Function
+    TestingMetadata:
+      TestDescription: []
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/plugin_faulty_and_healthy/
+      Handler: bootstrap
+      Description: A plugin that panics in every hook never blocks another plugin's hooks or the execution
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
+  PluginWaitReplayFlag:
+    Type: AWS::Serverless::Function
+    TestingMetadata:
+      TestDescription: ["10-18"]
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/plugin_wait_replay_flag/
+      Handler: bootstrap
+      Description: A wait still pending during a replay re-fires operation-start with replay=true
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
+  PluginInvocationLifecycleLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${PluginInvocationLifecycle}"
+      RetentionInDays: 7
+
+  PluginOperationLifecycleLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${PluginOperationLifecycle}"
+      RetentionInDays: 7
+
+  PluginAttemptHooksRetryLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${PluginAttemptHooksRetry}"
+      RetentionInDays: 7
+
+  PluginErrorIsolationLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${PluginErrorIsolation}"
+      RetentionInDays: 7
+
+  PluginMultiplePluginsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${PluginMultiplePlugins}"
+      RetentionInDays: 7
+
+  PluginFirstInvocationFlagLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${PluginFirstInvocationFlag}"
+      RetentionInDays: 7
+
+  PluginTerminalFailureLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${PluginTerminalFailure}"
+      RetentionInDays: 7
+
+  PluginOperationChangeLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${PluginOperationChange}"
+      RetentionInDays: 7
+
+  PluginExternalUpdateOnInvokeLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${PluginExternalUpdateOnInvoke}"
+      RetentionInDays: 7
+
+  PluginWaitOperationHooksLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${PluginWaitOperationHooks}"
+      RetentionInDays: 7
+
+  PluginNestedParentLinkageLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${PluginNestedParentLinkage}"
+      RetentionInDays: 7
+
+  PluginParallelBranchHooksLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${PluginParallelBranchHooks}"
+      RetentionInDays: 7
+
+  PluginReplayFlagsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${PluginReplayFlags}"
+      RetentionInDays: 7
+
+  PluginTerminalPayloadsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${PluginTerminalPayloads}"
+      RetentionInDays: 7
+
+  PluginRetryExhaustionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${PluginRetryExhaustion}"
+      RetentionInDays: 7
+
+  PluginSuspensionInvocationEndLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${PluginSuspensionInvocationEnd}"
+      RetentionInDays: 7
+
+  PluginFaultyAndHealthyLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${PluginFaultyAndHealthy}"
+      RetentionInDays: 7
+
+  PluginWaitReplayFlagLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${PluginWaitReplayFlag}"
+      RetentionInDays: 7
