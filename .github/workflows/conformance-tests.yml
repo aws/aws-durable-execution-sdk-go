@@ -7,7 +7,7 @@ name: Conformance Tests
 
 on:
   push:
-    branches: [alpha]
+    branches: [main]
     paths:
       - "durable/**"
       - "conformance/**"
@@ -15,7 +15,7 @@ on:
       - "go.sum"
       - ".github/workflows/conformance-tests.yml"
   pull_request:
-    branches: [alpha]
+    branches: [main]
     paths:
       - "durable/**"
       - "conformance/**"

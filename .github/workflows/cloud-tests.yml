@@ -9,9 +9,9 @@ name: Cloud tests
 
 on:
   push:
-    branches: [alpha]
+    branches: [main]
   pull_request:
-    branches: [alpha]
+    branches: [main]
   workflow_dispatch:
     inputs:
       region:
