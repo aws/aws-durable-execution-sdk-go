@@ -1,7 +1,7 @@
 // Command parallel-min-successful-threshold demonstrates the MinSuccessful
 // completion policy of [durable.Parallel] with branches that complete at
-// staggered times. Two branches finish quickly, two take noticeably longer,
-// and one is much slower than the rest. With MinSuccessful set to 2 the
+// staggered times. Two branches finish within tens of milliseconds; the
+// other three take two to four seconds. With MinSuccessful set to 2 the
 // batch completes as soon as the two quick branches succeed. The three
 // branches still running are abandoned: their results are not awaited and
 // each is reported with status STARTED, counted in TotalCount but neither
@@ -37,15 +37,21 @@ type branch struct {
 	latency time.Duration
 }
 
-// branches are ordered fastest to slowest. The gaps between groups are
-// wide, so the two quick branches always finish before any other branch
-// starts to finish.
+// branches are ordered fastest to slowest.
+//
+// A branch counts as succeeded when the checkpoint of its step's outcome is
+// acknowledged. Checkpoints are batched: a call that is retried (up to
+// three attempts, 100 ms and 200 ms apart) holds back every checkpoint
+// queued behind it, and the branches acknowledged by one call reach the
+// completion decision in any order. So the gap between the second and the
+// third branch must exceed the longest stall one call can cause. Two
+// seconds does, with the same margin the future-race example relies on.
 var branches = []branch{
 	{"fast", 10 * time.Millisecond},
 	{"quick", 50 * time.Millisecond},
-	{"slow", 500 * time.Millisecond},
-	{"slower", 750 * time.Millisecond},
-	{"straggler", 2 * time.Second},
+	{"slow", 2 * time.Second},
+	{"slower", 3 * time.Second},
+	{"straggler", 4 * time.Second},
 }
 
 func handler(ctx durable.Context, _ any) (Output, error) {
