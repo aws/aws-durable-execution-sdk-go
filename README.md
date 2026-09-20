@@ -1,7 +1,7 @@
 # AWS Durable Execution SDK for Go
 
-A durable function is a Lambda function whose progress the service
-checkpoints as it runs. The SDK records the result of each operation when the
+A [durable function](https://docs.aws.amazon.com/lambda/latest/dg/durable-functions.html)
+is a Lambda function whose progress the service checkpoints as it runs. The SDK records the result of each operation when the
 operation completes. An invocation ends when the handler suspends on a timer,
 on an external signal, or on the function timeout. The service then invokes
 the function again. On that invocation the SDK replays the recorded results
@@ -29,8 +29,9 @@ go mod init example.com/first-durable-function
 go get github.com/aws/aws-durable-execution-sdk-go
 ```
 
-The repository has no release tags. `go get` therefore records a
-pseudo-version of the latest commit on `main`, such as
+The repository has no release tags, because this is an experimental
+pre-release. The first release will be tagged `v1.0.0`. Until then `go get`
+records a pseudo-version of the latest commit on `main`, such as
 `v0.0.0-20260920051622-7f3b62f70004`. Run
 `go get github.com/aws/aws-durable-execution-sdk-go@latest` to move to a
 newer commit.
@@ -236,9 +237,8 @@ future first and propagate the suspension afterwards. The
 
 Return an error from an operation unchanged unless the handler treats it
 as a business outcome. A non-nil error is one of two things. Either it is a
-documented terminal failure of that operation, such as
-`*durable.StepError`, or it is the signal that the invocation is
-suspending. A terminal failure matches its public type with `errors.As`.
+terminal failure of that operation, such as `*durable.StepError`, or it is
+the signal that the invocation is suspending. A terminal failure matches its public type with `errors.As`.
 The suspension signal matches no public type. So an error that matches no
 public type must be returned as it is.
 
@@ -789,11 +789,12 @@ To use your own logging library, pass its `slog.Handler` to
 `WithLogHandler`. The SDK attaches the fields above through the handler's
 `WithAttrs` method as structured attributes, wraps the handler with replay
 suppression, and adds the fields a plugin returns from
-`Plugin.EnrichLogContext` as record attributes. Plugin fields never
-overwrite the SDK's fields or the attributes you pass. Keys are compared by
+`Plugin.EnrichLogContext` as record attributes. When two sources use the
+same key, the SDK's own fields win, then the attributes you attach with the
+record or with `Logger.With`, then plugin fields. When several plugins
+return the same key, the plugin registered last wins. Keys are compared by
 qualified path, so a plugin field under an open `slog` group collides only
-with your attributes at that same path. See the `EnrichLogContext`
-documentation for the full precedence.
+with your attributes at that same path.
 
 To choose the handler from inside the handler body, for example from the
 event payload, call `ConfigureLogging`. It replaces the handler for the
@@ -879,10 +880,11 @@ function and may pass it a derived context, which becomes the parent of the
 context the user code observes. `WithPluginChildOperationsDepth` bounds how
 deep in the operation tree hooks are reported.
 
-The `durable.Plugin` documentation states, for every hook, when it fires,
-whether it fires on replay, its order relative to the other hooks, and the
-goroutine that dispatches it. With one plugin registered a notification hook
-runs on that goroutine. With several, each plugin's hook runs on a goroutine
+Each hook has a defined firing time, replay behavior, order relative to
+the other hooks, and dispatch goroutine. Run
+`go doc github.com/aws/aws-durable-execution-sdk-go/durable Plugin` to
+read them per hook. With one plugin registered a notification hook runs on
+the goroutine that dispatches the event. With several, each plugin's hook runs on a goroutine
 the dispatch joins, so the plugins' hooks for one event run in parallel.
 Hooks of concurrent operations run in parallel too, so a plugin must be
 safe for concurrent use. The
@@ -894,8 +896,8 @@ The plugin API is stable. Within a major version of the module, a release
 may add hook fields to `Plugin`, add fields to the hook info types, and add
 status or outcome constants. A release does not remove or rename an
 exported identifier of the plugin API, change a hook's signature, or change
-the documented dispatch semantics. A change of that kind requires a new
-major version. Construct `Plugin` and the hook info types with keyed fields
+when a hook fires or on which goroutine. A change of that kind requires a
+new major version. Construct `Plugin` and the hook info types with keyed fields
 so that added fields do not break your code, and tolerate status values you
 do not know. Each addition is listed in
 [docs/release-notes.md](docs/release-notes.md). The policy holds from the
