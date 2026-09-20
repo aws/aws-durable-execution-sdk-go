@@ -2,28 +2,21 @@
 
 ## Unreleased
 
-### Stable: the plugin instrumentation API
+### Plugin instrumentation API: dispatch contract documented
 
-The plugin instrumentation API is no longer experimental. `durable.Plugin`,
+The plugin instrumentation API stays experimental. `durable.Plugin`,
 `durable.WithPlugins`, `durable.WithPluginChildOperationsDepth`, the hook
-info types, and the status and outcome constants are covered by the
-compatibility policy in the Plugin API section of the README: within a
-major version a release may add hook fields, info fields, and constants,
-and does not remove or rename an identifier, change a hook's signature, or
-change the documented dispatch semantics. The `EXPERIMENTAL` markers are
-removed from the godoc.
+info types, and the status and outcome constants carry `EXPERIMENTAL`
+markers in the godoc and may change or be removed without notice.
 
-The `durable.Plugin` documentation now states the dispatch contract in one
-place: for every hook, when it fires, whether it fires on replay, its order
-relative to the other hooks, and the goroutine that dispatches it, with
-the single-plugin and multi-plugin cases told apart. It also states the
-concurrency contract: hooks of concurrent operations run in parallel, and
-so do the hooks of different plugins for one event, so every hook must be
-safe for concurrent use. A package test drives every hook from concurrent
-branches under the race detector.
-
-The wrap-hook change and the depth option below are the last changes to the
-plugin API made under the experimental marker.
+The `durable.Plugin` godoc now states the dispatch contract in one place.
+For every hook it gives when the hook fires, whether it fires on replay,
+its order relative to the other hooks, and the goroutine that dispatches
+it, with the single-plugin and multi-plugin cases told apart. It also
+states the concurrency contract. Hooks of concurrent operations run in
+parallel, and so do the hooks of different plugins for one event, so every
+hook must be safe for concurrent use. A package test drives every hook from
+concurrent branches under the race detector.
 
 ### Added: `WithChildSubType`
 

@@ -8,36 +8,24 @@ import (
 	"time"
 )
 
-// Plugin configures an instrumentation plugin that observes durable
-// execution lifecycle events. Plugins implement only the hooks they need by
+// Plugin configures an EXPERIMENTAL instrumentation plugin that observes
+// durable execution lifecycle events. Plugins implement only the hooks they need by
 // setting non-nil function fields; nil fields are skipped with zero
 // overhead. Register plugins with [WithPlugins]. Construct a Plugin with
 // keyed fields: a minor release may add hook fields.
 //
-// # Compatibility
+// # Experimental
 //
-// The plugin API is stable. It comprises this type, [WithPlugins],
+// The plugin API is experimental. It comprises this type, [WithPlugins],
 // [WithPluginChildOperationsDepth], the hook info types
 // ([InvocationHookInfo], [InvocationEndHookInfo], [OperationHookInfo],
 // [AttemptHookInfo], [AttemptEndHookInfo], [OperationChangeHookInfo]), and
 // the [PluginInvocationStatus], [PluginOperationStatus], and
-// [PluginAttemptOutcome] constants. Within a major version of the module
-// the SDK may add hook fields to Plugin, add fields to the hook info types,
-// and add constants. It does not remove or rename an exported identifier of
-// the plugin API, change a hook's signature, or change the dispatch
-// semantics documented on this type and on each hook. A change of that
-// kind requires a new major version. A plugin that constructs Plugin and
-// the hook info types with keyed fields therefore compiles, and keeps its
-// documented behavior, against every later release of the same major
-// version. An unkeyed literal of one of these types stops compiling when a
-// field is added, so the promise does not extend to it. The policy holds at
-// v0 as well as at v1 and later. The release notes record each addition to
+// [PluginAttemptOutcome] constants. Any of it may change or be removed in a
+// later release without notice. Construct Plugin and the hook info types
+// with keyed fields, because fields may be added, and tolerate status and
+// outcome values you do not know. The release notes record each change to
 // the plugin API.
-//
-// A new hook info field is zero on hooks and paths that do not set it, and
-// a new status or outcome constant is delivered only to plugins that run
-// against a release that defines it. A plugin that switches on a status
-// should tolerate values it does not know.
 //
 // # Dispatch
 //
@@ -149,6 +137,9 @@ import (
 // The error fn returns may be the SDK's internal signal that the invocation
 // is suspending. A wrap hook must return fn's result and error unchanged;
 // a hook that replaces the error breaks suspension and replay.
+//
+// EXPERIMENTAL: this type is experimental and may be changed or removed in
+// future releases.
 type Plugin struct {
 	// OnInvocationStart is called once at the start of each Lambda
 	// invocation of the execution, before the user handler runs. It is
@@ -343,6 +334,9 @@ type Plugin struct {
 
 // InvocationHookInfo carries context for invocation-level hooks. A minor
 // release may add fields; construct it with keyed fields.
+//
+// EXPERIMENTAL: this type is experimental and may be changed or removed in
+// future releases.
 type InvocationHookInfo struct {
 	ExecutionArn      string
 	IsFirstInvocation bool
@@ -380,6 +374,9 @@ type InvocationHookInfo struct {
 
 // InvocationEndHookInfo carries context for the OnInvocationEnd hook. A
 // minor release may add fields; construct it with keyed fields.
+//
+// EXPERIMENTAL: this type is experimental and may be changed or removed in
+// future releases.
 type InvocationEndHookInfo struct {
 	ExecutionArn string
 	Status       PluginInvocationStatus
@@ -394,6 +391,9 @@ type InvocationEndHookInfo struct {
 }
 
 // PluginInvocationStatus is the invocation outcome visible to plugins.
+//
+// EXPERIMENTAL: this type is experimental and may be changed or removed in
+// future releases.
 type PluginInvocationStatus string
 
 // Invocation status constants for plugin hooks.
@@ -434,6 +434,9 @@ const (
 
 // OperationHookInfo carries context for operation-level hooks. A minor
 // release may add fields; construct it with keyed fields.
+//
+// EXPERIMENTAL: this type is experimental and may be changed or removed in
+// future releases.
 type OperationHookInfo struct {
 	ExecutionArn string
 	ID           string
@@ -484,6 +487,9 @@ type OperationHookInfo struct {
 
 // PluginOperationStatus is an operation's lifecycle status visible to
 // plugins.
+//
+// EXPERIMENTAL: this type is experimental and may be changed or removed in
+// future releases.
 type PluginOperationStatus string
 
 // Operation status constants for plugin hooks. A later release may add
@@ -502,6 +508,9 @@ const (
 
 // AttemptHookInfo carries context for attempt-level hooks. A minor release
 // may add fields; construct it with keyed fields.
+//
+// EXPERIMENTAL: this type is experimental and may be changed or removed in
+// future releases.
 type AttemptHookInfo struct {
 	OperationHookInfo
 	Attempt int
@@ -509,6 +518,9 @@ type AttemptHookInfo struct {
 
 // AttemptEndHookInfo carries context for the OnOperationAttemptEnd hook. A
 // minor release may add fields; construct it with keyed fields.
+//
+// EXPERIMENTAL: this type is experimental and may be changed or removed in
+// future releases.
 type AttemptEndHookInfo struct {
 	OperationHookInfo
 	Attempt int
@@ -517,6 +529,9 @@ type AttemptEndHookInfo struct {
 }
 
 // PluginAttemptOutcome is the result of an operation attempt.
+//
+// EXPERIMENTAL: this type is experimental and may be changed or removed in
+// future releases.
 type PluginAttemptOutcome string
 
 // Attempt outcome constants for plugin hooks.
@@ -527,6 +542,9 @@ const (
 
 // OperationChangeHookInfo carries context for OnOperationChange. A minor
 // release may add fields; construct it with keyed fields.
+//
+// EXPERIMENTAL: this type is experimental and may be changed or removed in
+// future releases.
 type OperationChangeHookInfo struct {
 	ExecutionArn      string
 	UpdatedOperations map[string]OperationHookInfo
@@ -535,7 +553,10 @@ type OperationChangeHookInfo struct {
 // WithPlugins registers instrumentation plugins with the handler. Plugins
 // are appended in call order, and the order decides how the wrap hooks
 // compose: the first registered plugin is outermost. See [Plugin] for the
-// dispatch and concurrency contract and the compatibility policy.
+// dispatch and concurrency contract.
+//
+// EXPERIMENTAL: this function is experimental and may be changed or removed
+// in future releases.
 func WithPlugins(plugins ...Plugin) HandlerOption {
 	return handlerOptionFunc(func(o *handlerOptions) {
 		o.plugins = append(o.plugins, plugins...)
@@ -571,6 +592,9 @@ func WithPlugins(plugins ...Plugin) HandlerOption {
 //
 // The default reports every depth. depth must not be negative; [Wrap] and
 // [Start] panic on a negative value.
+//
+// EXPERIMENTAL: this function is experimental and may be changed or removed
+// in future releases.
 func WithPluginChildOperationsDepth(depth int) HandlerOption {
 	return handlerOptionFunc(func(o *handlerOptions) {
 		o.pluginChildDepth = depth

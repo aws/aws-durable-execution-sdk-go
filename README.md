@@ -14,9 +14,6 @@ spans minutes or a month fits in one ordinary Go function.
 > may change without notice, and the final version may look different from
 > what you see today.
 
-The plugin instrumentation API is the one exception to that notice. It
-follows the compatibility policy in the [Plugin API](#plugin-api) section.
-
 The SDK requires Go 1.24 or later.
 
 ## Your first durable function
@@ -843,6 +840,10 @@ group opened with `WithGroup` is kept. At construction the option is
 
 ## Plugin API
 
+The plugin instrumentation API is experimental. Its hooks, info types,
+constants, and dispatch behavior may change or be removed without notice.
+[docs/release-notes.md](docs/release-notes.md) records each change.
+
 The plugin instrumentation API gives observability and tracing integrations
 hooks into the lifecycle of an execution. A `durable.Plugin` is a struct of
 optional hook functions. Set the ones you need and register the plugin with
@@ -887,24 +888,10 @@ read them per hook. With one plugin registered a notification hook runs on
 the goroutine that dispatches the event. With several, each plugin's hook runs on a goroutine
 the dispatch joins, so the plugins' hooks for one event run in parallel.
 Hooks of concurrent operations run in parallel too, so a plugin must be
-safe for concurrent use. The
-[insight](insight/README.md) module is a complete plugin built on this API.
-
-### Compatibility policy
-
-The plugin API is stable. Within a major version of the module, a release
-may add hook fields to `Plugin`, add fields to the hook info types, and add
-status or outcome constants. A release does not remove or rename an
-exported identifier of the plugin API, change a hook's signature, or change
-when a hook fires or on which goroutine. A change of that kind requires a
-new major version. Construct `Plugin` and the hook info types with keyed fields
-so that added fields do not break your code, and tolerate status values you
-do not know. Each addition is listed in
-[docs/release-notes.md](docs/release-notes.md). The policy holds from the
-first release that carries it, including releases at v0. The warning at the
-top of this file states that the SDK can change without notice. This API
-is the exception it names. The warning against production use still applies
-to the SDK as a whole.
+safe for concurrent use. Construct `Plugin` and the hook info types with
+keyed fields, because fields may be added, and tolerate status values you
+do not know. The [insight](insight/README.md) module is a complete plugin
+built on this API.
 
 ## Examples
 

@@ -240,9 +240,9 @@ is no registry upload.
 - `insight/vX.Y.Z` declares a dependency on the root module `vX.Y.Z`, the
   version it was built and tested with. Go treats a declared version as a
   minimum: a consumer that also requires a newer root module gets the newer
-  one. The plugin API the two share is stable within a major version, so a
-  newer root module keeps working with an older `insight`; keep both at
-  the same version anyway, because that is the pairing the release tested.
+  one. The plugin API the two share is experimental and may change between
+  releases, so keep both at the same version. That is the pairing the
+  release tested.
 - `analysis/vX.Y.Z` has no dependency on the root module; its version
   only records which release it belongs to.
 
