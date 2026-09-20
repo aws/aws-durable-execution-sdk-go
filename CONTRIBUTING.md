@@ -140,7 +140,9 @@ insight, conformance, examples, analysis):
 5. `go test -race ./...`
 
 The examples module also runs `go vet -tags cloud ./cloud` to check the
-cloud test harness compiles. The analysis module also builds `durablelint`
+cloud test harness compiles, and its `readme` package compiles every Go
+code block of the root `README.md` against the checkout and runs the ones
+that declare tests. The analysis module also builds `durablelint`
 and runs it over the examples and conformance modules, which must report
 nothing. See [analysis/README.md](analysis/README.md) for the analyzer.
 
