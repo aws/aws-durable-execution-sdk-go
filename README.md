@@ -6,8 +6,9 @@ operation completes. An invocation ends when the handler suspends on a timer,
 on an external signal, or on the function timeout. The service then invokes
 the function again. On that invocation the SDK replays the recorded results
 instead of running the completed work again, and the handler continues from
-the first operation that has no recorded result. So an orchestration that
-spans minutes or a month fits in one ordinary Go function.
+the first operation that has no recorded result. The overall orchestration
+can run for up to a year, because the durable execution spans multiple
+Lambda invocations and consumes no compute while it waits.
 
 > [!WARNING]
 > This is an experimental preview, not intended for production use. The API
