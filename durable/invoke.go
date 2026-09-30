@@ -64,12 +64,15 @@ func Invoke[O, I any](ctx Context, name, functionID string, input I, opts ...Inv
 		o.applyInvoke(&options)
 	}
 
+	mark := ec.operationMark()
 	id, err := ec.claimOperation()
 	if err != nil {
 		return zero, err
 	}
 
-	return runInvoke[O, I](ec, id, name, functionID, input, options)
+	out, err := runInvoke[O, I](ec, id, name, functionID, input, options)
+	ec.refreshReplayModeAfterOperation(mark, err)
+	return out, err
 }
 
 // InvokeAsync is [Invoke], except that the result is delivered through the
@@ -81,6 +84,13 @@ func Invoke[O, I any](ctx Context, name, functionID string, input I, opts ...Inv
 // settled with errSuspendExecution so goroutines blocked on [Future.Result]
 // unwind.
 func InvokeAsync[O, I any](ctx Context, name, functionID string, input I, opts ...InvokeOption) *Future[O] {
+	// The returned future leaves replay when the handler reads it and
+	// the code after it is new. See bindFuture.
+	mark := operationMarkOf(ctx)
+	return bindFuture(ctx, mark, invokeAsync[O](ctx, name, functionID, input, opts...))
+}
+
+func invokeAsync[O, I any](ctx Context, name, functionID string, input I, opts ...InvokeOption) *Future[O] {
 	ec, ok := ctx.(*execContext)
 	if !ok {
 		return newFailedFuture[O](fmt.Errorf("durable: InvokeAsync %q: Context was not created by the SDK", name))

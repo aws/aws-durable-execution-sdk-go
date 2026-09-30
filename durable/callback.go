@@ -52,6 +52,17 @@ func (c *Callback[O]) Result() (O, error) {
 // configure the submitter step of [WaitForCallback], such as
 // [WithSubmitterRetry], have no effect here and do not compile.
 func CreateCallback[O any](ctx Context, name string, opts ...CallbackOption) (*Callback[O], error) {
+	// The returned future leaves replay when the handler reads it and
+	// the code after it is new. See bindFuture.
+	mark := operationMarkOf(ctx)
+	cb, err := createCallback[O](ctx, name, opts...)
+	if cb != nil {
+		cb.future = bindFuture(ctx, mark, cb.future)
+	}
+	return cb, err
+}
+
+func createCallback[O any](ctx Context, name string, opts ...CallbackOption) (*Callback[O], error) {
 	ec, ok := ctx.(*execContext)
 	if !ok {
 		return nil, fmt.Errorf("durable: CreateCallback %q: Context was not created by the SDK", name)
@@ -188,6 +199,15 @@ func CreateCallback[O any](ctx Context, name string, opts ...CallbackOption) (*C
 // callback it creates, plus [WaitForCallbackOption] values such as
 // [WithSubmitterRetry] that configure the submitter step.
 func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepContext, callbackID string) error, opts ...WaitForCallbackOption) (O, error) {
+	// Leave replay as this returns if the code after it is new. See
+	// refreshReplayModeAfterOperation.
+	mark := operationMarkOf(ctx)
+	out, err := waitForCallback[O](ctx, name, submitter, opts...)
+	refreshReplayModeOnReturn(ctx, mark, err)
+	return out, err
+}
+
+func waitForCallback[O any](ctx Context, name string, submitter func(ctx StepContext, callbackID string) error, opts ...WaitForCallbackOption) (O, error) {
 	var zero O
 	ec, ok := ctx.(*execContext)
 	if !ok {
@@ -350,7 +370,7 @@ func runWaitForCallbackBody[O any](child *execContext, name string, submitter fu
 	if options.retryStrategy != nil {
 		stepOpts = append(stepOpts, WithRetry(options.retryStrategy))
 	}
-	_, stepErr := Step[Void](child, "", func(sc StepContext) (Void, error) {
+	_, stepErr := stepWithoutReplayCheck[Void](child, "", func(sc StepContext) (Void, error) {
 		return Void{}, submitter(sc, callbackID)
 	}, stepOpts...)
 	if stepErr != nil {

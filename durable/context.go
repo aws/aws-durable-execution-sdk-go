@@ -59,7 +59,10 @@ type Context interface {
 	// child context, and each concurrent branch from [Go], [Map], or
 	// [Parallel]) consults its own replay state, so a branch that is still
 	// replaying stays suppressed even after a sibling branch has reached
-	// live execution.
+	// live execution. A line is never suppressed on its first run. A line
+	// between the creation of an asynchronous operation and the Result
+	// that reads it can be written twice; see the README section
+	// "Replayed log records".
 	Logger() *slog.Logger
 
 	// IsReplaying reports whether the execution is currently replaying

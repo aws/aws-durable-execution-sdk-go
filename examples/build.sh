@@ -130,7 +130,9 @@ EXAMPLES="
   concurrent-callback-submitter
   concurrent-callback-wait
   logger-after-wait
+  logger-after-invoke
   logger-after-callback
+  logger-after-future
   logger-log-levels
   logger-slog-handler
   plugin-lifecycle

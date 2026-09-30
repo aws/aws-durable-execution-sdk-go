@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Fixed: log lines after a replayed operation were dropped
+
+A line logged right after `Step`, `Wait`, `Invoke`, `RunInChildContext`,
+`WaitForCondition`, or `Retry` returned a checkpointed result was dropped
+on its first run, and `IsReplaying` reported true there. The context left
+replay only when it claimed the next operation, so a line with no
+operation after it was never logged. The context now leaves replay when
+one of these operations returns a value or a terminal error and the
+operation after it has no checkpoint. A line before the operation is
+still suppressed on replay. `WaitForCallback`, `Callback.Result`,
+`Future.Result`, `Map`, `Parallel`, `Select`, and the combinators do not
+run the check yet ([#103](https://github.com/aws/aws-durable-execution-sdk-go/issues/103)).
+
 ### Plugin instrumentation API: dispatch contract documented
 
 The plugin instrumentation API stays experimental. `durable.Plugin`,

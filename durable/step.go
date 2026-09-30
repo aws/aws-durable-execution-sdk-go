@@ -71,6 +71,21 @@ func (f stepOptionFunc) applyStep(o *stepOptions) { f(o) }
 // elapses. If fn fails after exhausting its retry strategy, Step returns a
 // [*StepError].
 func Step[O any](ctx Context, name string, fn func(StepContext) (O, error), opts ...StepOption) (O, error) {
+	ec, ok := ctx.(*execContext)
+	if !ok {
+		return stepWithoutReplayCheck(ctx, name, fn, opts...)
+	}
+	mark := ec.operationMark()
+	out, err := stepWithoutReplayCheck(ctx, name, fn, opts...)
+	ec.refreshReplayModeAfterOperation(mark, err)
+	return out, err
+}
+
+// stepWithoutReplayCheck is [Step] without the replay mode check after
+// the step returns. [WaitForCallback] runs its submitter through it.
+// WaitForCallback is not yet covered by that check. So the step it runs
+// inside its child context leaves the child's mode as it was before.
+func stepWithoutReplayCheck[O any](ctx Context, name string, fn func(StepContext) (O, error), opts ...StepOption) (O, error) {
 	var zero O
 	ec, ok := ctx.(*execContext)
 	if !ok {
@@ -97,6 +112,13 @@ func Step[O any](ctx Context, name string, fn func(StepContext) (O, error), opts
 // On invocation suspension, the returned future is settled with
 // errSuspendExecution so goroutines blocked on [Future.Result] unwind.
 func StepAsync[O any](ctx Context, name string, fn func(StepContext) (O, error), opts ...StepOption) *Future[O] {
+	// The returned future leaves replay when the handler reads it and
+	// the code after it is new. See bindFuture.
+	mark := operationMarkOf(ctx)
+	return bindFuture(ctx, mark, stepAsync(ctx, name, fn, opts...))
+}
+
+func stepAsync[O any](ctx Context, name string, fn func(StepContext) (O, error), opts ...StepOption) *Future[O] {
 	ec, ok := ctx.(*execContext)
 	if !ok {
 		return newFailedFuture[O](fmt.Errorf("durable: StepAsync %q: Context was not created by the SDK", name))

@@ -282,12 +282,15 @@ func TestChildLoggerIsolatedFromSiblingReplayTransition(t *testing.T) {
 
 func TestGoBranchReplaySuppressionIsPerBranch(t *testing.T) {
 	// Two Go branches replay from a checkpoint log. Branch "a" has one
-	// checkpointed step and reaches live execution on its second step.
-	// Branch "b" has two checkpointed steps and waits until "a" is live
-	// before logging: at that point "b" is still replaying, so its line
-	// must be suppressed. Once "b" runs its own live step, its line is
-	// emitted. The handler is user-supplied, so this also shows that
-	// suppression wraps a supplied handler.
+	// checkpointed step. It logs "a-replaying" before that step, while it
+	// replays. The step returns and the next ID in "a" has no checkpoint,
+	// so "a" leaves replay and logs "a-live". Branch "b" has two
+	// checkpointed steps. It waits until "a" is live and logs between its
+	// two checkpointed steps: "b" is still replaying there, so its line
+	// must be suppressed. After its second step the next ID in "b" has no
+	// checkpoint, so its next line is emitted. The handler is
+	// user-supplied, so this also shows that suppression wraps a supplied
+	// handler.
 	fake := &fakeLambda{}
 	rec := newRecordingHandler()
 	payload := childPayload(`"x"`,
@@ -301,33 +304,33 @@ func TestGoBranchReplaySuppressionIsPerBranch(t *testing.T) {
 
 	h := Wrap(func(ctx Context, _ string) (string, error) {
 		a := Go(ctx, "a", func(c Context) (string, error) {
-			if _, err := Step(c, "a1", func(StepContext) (string, error) { return "a1", nil }); err != nil {
-				return "", err
-			}
 			c.Logger().Info("a-replaying")
-			if _, err := Step(c, "a2", func(StepContext) (string, error) { return "a2", nil }); err != nil {
+			if _, err := Step(c, "a1", func(StepContext) (string, error) { return "a1", nil }); err != nil {
 				return "", err
 			}
 			c.Logger().Info("a-live")
 			close(aLive)
+			if _, err := Step(c, "a2", func(StepContext) (string, error) { return "a2", nil }); err != nil {
+				return "", err
+			}
 			return "a", nil
 		})
 		b := Go(ctx, "b", func(c Context) (string, error) {
 			if _, err := Step(c, "b1", func(StepContext) (string, error) { return "b1", nil }); err != nil {
 				return "", err
 			}
+			<-aLive
+			if !c.IsReplaying() {
+				t.Error("branch b must still be replaying between its checkpointed steps")
+			}
+			c.Logger().Info("b-still-replaying")
 			if _, err := Step(c, "b2", func(StepContext) (string, error) { return "b2", nil }); err != nil {
 				return "", err
 			}
-			<-aLive
-			if !c.IsReplaying() {
-				t.Error("branch b must still be replaying after its checkpointed steps")
-			}
-			c.Logger().Info("b-still-replaying")
+			c.Logger().Info("b-live")
 			if _, err := Step(c, "b3", func(StepContext) (string, error) { return "b3", nil }); err != nil {
 				return "", err
 			}
-			c.Logger().Info("b-live")
 			return "b", nil
 		})
 		if _, err := a.Result(); err != nil {

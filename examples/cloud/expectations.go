@@ -321,7 +321,9 @@ var expectations = map[string]expectation{
 	"large-payload":        {result: `{"success":true,"totalSize":307200,"chunkCount":6}`},
 
 	"logger-after-callback": {result: `{"message":"done","callbackId":"self-resolved","result":"callback-resolved"}`},
-	"logger-after-wait":     {result: `"done"`},
+	"logger-after-future":   {result: `{"message":"done","loggedAfterWait":1,"loggedAfterCallback":1,"replayingAtLine":false,"resumedInReplay":true}`},
+	"logger-after-invoke":   {result: `{"message":"done","target":{"status":"completed","input":{"message":"hello"}},"logged":1,"replayingAtLine":false,"resumedInReplay":true}`},
+	"logger-after-wait":     {result: `{"message":"done","logged":1,"replayingAtLine":false,"resumedInReplay":true}`},
 	"logger-log-levels":     {result: `"done"`},
 	"logger-slog-handler":   {result: `"done"`},
 

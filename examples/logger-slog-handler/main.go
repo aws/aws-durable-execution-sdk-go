@@ -65,9 +65,10 @@ func handler(ctx durable.Context, _ any) (string, error) {
 	ctx.Logger().Error("Error message: Something went wrong (simulated)")
 
 	// Records emitted before the wait are suppressed when the second
-	// invocation replays them. The context leaves replay when it claims
-	// the first operation that has no checkpoint, so the line after the
-	// wait is logged once the child context below has been claimed.
+	// invocation replays them. The wait returns its checkpointed result
+	// in that invocation, and no earlier invocation ran the code after
+	// it, so the context leaves replay as the wait returns. Every line
+	// after the wait is logged once, in the second invocation.
 	ctx.Logger().Info("Before wait operation")
 	if err := durable.Wait(ctx, "pause", 1*time.Second); err != nil {
 		return "", err

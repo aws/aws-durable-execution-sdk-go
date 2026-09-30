@@ -44,6 +44,13 @@ type Future[O any] struct {
 	// awaiting it: a losing pending callback must not force the
 	// invocation to PENDING while a winner is returned.
 	deferredSuspension bool
+
+	// replayCtx is the context whose operation created the future, or nil.
+	// Result runs the replay check on it when it returns, because the code
+	// after Result may run for the first time in this invocation (see
+	// refreshReplayModeAfterOperation). bindFuture sets it before the
+	// future is returned to the handler, and it is never changed after.
+	replayCtx *execContext
 }
 
 // Result blocks until the operation settles, then returns its outcome.
@@ -53,6 +60,9 @@ func (f *Future[O]) Result() (O, error) {
 		f.preResultOnce.Do(f.preResult)
 	}
 	<-f.done
+	if f.replayCtx != nil {
+		f.replayCtx.refreshReplayModeAfterResult(f.err)
+	}
 	return f.value, f.err
 }
 

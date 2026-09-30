@@ -77,6 +77,15 @@ import (
 // the failure. Replaying a checkpointed batch returns the same result and
 // the same [BatchError], rebuilt from the stored items and reason.
 func Map[I, O any](ctx Context, name string, items []I, fn func(ctx Context, item I, index int) (O, error), opts ...BatchOption) (BatchResult[O], error) {
+	// Leave replay as this returns if the code after it is new. See
+	// refreshReplayModeAfterOperation.
+	mark := operationMarkOf(ctx)
+	out, err := mapItems(ctx, name, items, fn, opts...)
+	refreshReplayModeOnReturn(ctx, mark, err)
+	return out, err
+}
+
+func mapItems[I, O any](ctx Context, name string, items []I, fn func(ctx Context, item I, index int) (O, error), opts ...BatchOption) (BatchResult[O], error) {
 	ec, ok := ctx.(*execContext)
 	if !ok {
 		return BatchResult[O]{}, fmt.Errorf("durable: Map %q: Context was not created by the SDK", name)
@@ -164,6 +173,15 @@ func Map[I, O any](ctx Context, name string, items []I, fn func(ctx Context, ite
 // [BatchResult]. The batch's checkpoint records the operation as SUCCEEDED
 // regardless, and replay returns the same error.
 func Parallel[O any](ctx Context, name string, branches []Branch[O], opts ...BatchOption) (BatchResult[O], error) {
+	// Leave replay as this returns if the code after it is new. See
+	// refreshReplayModeAfterOperation.
+	mark := operationMarkOf(ctx)
+	out, err := parallel(ctx, name, branches, opts...)
+	refreshReplayModeOnReturn(ctx, mark, err)
+	return out, err
+}
+
+func parallel[O any](ctx Context, name string, branches []Branch[O], opts ...BatchOption) (BatchResult[O], error) {
 	ec, ok := ctx.(*execContext)
 	if !ok {
 		return BatchResult[O]{}, fmt.Errorf("durable: Parallel %q: Context was not created by the SDK", name)

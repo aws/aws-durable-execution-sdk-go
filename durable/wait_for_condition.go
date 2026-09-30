@@ -51,12 +51,15 @@ func WaitForCondition[S any](ctx Context, name string, check func(StepContext, S
 		serdes = ec.serdesDefaults().serdes
 	}
 
+	mark := ec.operationMark()
 	id, err := ec.claimOperation()
 	if err != nil {
 		return zero, err
 	}
 
-	return runWaitForCondition(ec, id, name, check, cfg, serdes)
+	out, err := runWaitForCondition(ec, id, name, check, cfg, serdes)
+	ec.refreshReplayModeAfterOperation(mark, err)
+	return out, err
 }
 
 // runWaitForCondition drives one wait-for-condition operation from its

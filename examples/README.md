@@ -171,8 +171,10 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [serde-filesystem-overflow](serde-filesystem-overflow/main.go) | ConfigureSerdes, NewFileSystemSerdes (FileSystemSerdesModeOverflow) | SUCCEEDED |
 | [serde-preview-truncation](serde-preview-truncation/main.go) | NewFileSystemSerdes, GeneratePreview, BuildPreview (include-all, exclude, truncation) | SUCCEEDED |
 | [serde-preview-field-selection](serde-preview-field-selection/main.go) | NewFileSystemSerdes, GeneratePreview, BuildPreview (exclude-all, path matching, masking) | SUCCEEDED |
-| [logger-after-wait](logger-after-wait/main.go) | Wait, Context.Logger, replay suppression | SUCCEEDED |
+| [logger-after-wait](logger-after-wait/main.go) | Wait, Context.Logger, ConfigureLogging, replay suppression | SUCCEEDED |
+| [logger-after-invoke](logger-after-invoke/main.go) | Invoke, Context.Logger, ConfigureLogging, replay suppression | SUCCEEDED |
 | [logger-after-callback](logger-after-callback/main.go) | WaitForCallback, Context.Logger | SUCCEEDED |
+| [logger-after-future](logger-after-future/main.go) | WaitAsync, CreateCallback, Future.Result, replay suppression | SUCCEEDED |
 | [logger-log-levels](logger-log-levels/main.go) | Context.Logger, all log levels | SUCCEEDED |
 | [logger-slog-handler](logger-slog-handler/main.go) | WithLogHandler, application slog.Handler | SUCCEEDED |
 | [plugin-lifecycle](plugin-lifecycle/main.go) | WithPlugins, hook lifecycle ordering | SUCCEEDED |

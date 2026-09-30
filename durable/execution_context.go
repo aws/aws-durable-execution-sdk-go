@@ -2,6 +2,7 @@ package durable
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync/atomic"
@@ -17,7 +18,9 @@ const (
 	modeExecution executionMode = iota + 1
 
 	// modeReplay returns checkpointed results without re-executing, until
-	// the first operation with no checkpoint is reached.
+	// the first operation with no checkpoint is reached, or until control
+	// returns to the handler and the next operation has no checkpoint (see
+	// refreshReplayModeAfterOperation).
 	modeReplay
 
 	// modeReplaySucceededContext replays inside a child context whose
@@ -485,6 +488,138 @@ func (c *execContext) refreshReplayMode() {
 		return
 	}
 	c.mode.Store(int32(modeExecution))
+}
+
+// refreshReplayModeAfterOperation runs when a blocking operation returns
+// to the code that called it. err is the error the operation returns.
+//
+// The replay mode decides which log records are suppressed, so the point
+// where a context leaves replay decides whether a line is written once,
+// twice, or not at all. The rule below never suppresses a line on its
+// first run. In return, a line can be written twice in one case, which
+// step 4 describes.
+//
+//  1. A context claims operation IDs in the order its code reaches the
+//     operations, in every invocation.
+//  2. So when the next ID already has a checkpoint, an earlier invocation
+//     reached the operation after this point. That invocation also ran all
+//     the code before it. Staying in replay is correct.
+//  3. When the next ID has no checkpoint, no earlier invocation got as far
+//     as the next operation. The code from here to that operation has not
+//     run before, with one exception. An asynchronous operation created
+//     earlier ([CreateCallback], the Async variants, [Go]) can make an
+//     earlier invocation suspend at its Result, after it ran code past the
+//     last operation it claimed. The checkpoints do not record how far
+//     that code got.
+//  4. So the context leaves replay here. In the exception, the lines the
+//     earlier invocation already wrote are written again. Staying in
+//     replay instead would suppress lines that run for the first time, and
+//     nothing would ever write them.
+//
+// refreshReplayMode alone runs only when an operation is claimed, which is
+// too late for the code between a returning operation and the next claim.
+// So this check runs wherever control returns to the handler: after every
+// blocking operation, after a combinator or batch, and after
+// [Future.Result] (see refreshReplayModeAfterResult).
+//
+// mark is the value operationMark returned before the operation started.
+//
+// The check is skipped in four cases:
+//
+//  1. err is the suspension signal. The previous invocation reached the
+//     same point and already ran the code that follows.
+//  2. The invocation is already suspending, or the context is blocked or
+//     abandoned. The code that follows cannot reach the next operation in
+//     this invocation, so it runs again in a later one. Staying in replay
+//     keeps it from being logged twice.
+//  3. The calling goroutine does not own the context. The mode and the ID
+//     counter belong to the owning goroutine, as in claimOperation.
+//  4. The operation claimed no ID on this context, for example because it
+//     rejected its arguments before claiming. Then it awaited nothing, so
+//     the code that follows is no nearer the next operation than the code
+//     before the call. That code may sit between [CreateCallback] and
+//     [Callback.Result], where the next ID has no checkpoint although the
+//     previous invocation already ran it. Switching to live there would run
+//     it a second time.
+func (c *execContext) refreshReplayModeAfterOperation(mark int, err error) {
+	if errors.Is(err, errSuspendExecution) || errors.Is(err, errCheckpointTerminated) {
+		return
+	}
+	if mark < 0 || c.claimable() != nil {
+		return
+	}
+	if c.ids.counter == mark {
+		return
+	}
+	c.refreshReplayMode()
+}
+
+// refreshReplayModeAfterResult is the check of refreshReplayModeAfterOperation
+// for [Future.Result] and [Callback.Result]. err is the error Result
+// returns.
+//
+// The future claimed its ID when it was created, so the "claimed no ID"
+// case cannot apply: a future that failed before claiming is never bound to
+// a context (see bindFuture). The other skips apply unchanged. Result may
+// run on any goroutine, but claimable fails on a goroutine that does not
+// own the context, so the mode and the ID counter are read only by their
+// owner.
+func (c *execContext) refreshReplayModeAfterResult(err error) {
+	if errors.Is(err, errSuspendExecution) || errors.Is(err, errCheckpointTerminated) {
+		return
+	}
+	if c.claimable() != nil {
+		return
+	}
+	c.refreshReplayMode()
+}
+
+// operationMarkOf returns ctx's operationMark, or -1 when ctx was not
+// created by the SDK.
+func operationMarkOf(ctx Context) int {
+	if ec, ok := ctx.(*execContext); ok {
+		return ec.operationMark()
+	}
+	return -1
+}
+
+// refreshReplayModeOnReturn runs refreshReplayModeAfterOperation for an
+// operation that ctx started. It is for operations that are implemented in
+// terms of other operations (combinators, batches, WaitForCallback): they
+// read mark with operationMarkOf before they start and call this as they
+// return.
+func refreshReplayModeOnReturn(ctx Context, mark int, err error) {
+	if ec, ok := ctx.(*execContext); ok {
+		ec.refreshReplayModeAfterOperation(mark, err)
+	}
+}
+
+// bindFuture makes f run the replay check of refreshReplayModeAfterResult
+// on ctx when the handler awaits it. mark is the operationMark read before
+// the operation that returns f started. f is bound only when that operation
+// claimed an ID on ctx. An operation that rejected its arguments before
+// claiming awaited nothing, so its Result must not move the context out of
+// replay (case 4 of refreshReplayModeAfterOperation).
+func bindFuture[O any](ctx Context, mark int, f *Future[O]) *Future[O] {
+	ec, ok := ctx.(*execContext)
+	if !ok || f == nil || mark < 0 || ec.ids.counter == mark {
+		return f
+	}
+	f.replayCtx = ec
+	return f
+}
+
+// operationMark returns the number of operation IDs this context has
+// claimed so far. A blocking operation reads it before it starts and passes
+// it to refreshReplayModeAfterOperation, which compares it with the count
+// after the operation returns. The counter belongs to the owning goroutine.
+// So operationMark returns -1 on any other goroutine, and the check after
+// the operation is then skipped.
+func (c *execContext) operationMark() int {
+	if c.owner.check() != nil {
+		return -1
+	}
+	return c.ids.counter
 }
 
 // unfinishedInSucceededContext reports whether the checkpointed operation

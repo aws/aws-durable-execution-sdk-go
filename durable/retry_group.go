@@ -78,9 +78,19 @@ func (f retryOptionFunc) applyRetryOption(o *retryOptions) { f(o) }
 // for unnamed attempt and backoff operations.
 func Retry[O any](ctx Context, name string, fn func(ctx Context, attempt int) (O, error), strategy RetryStrategy, opts ...RetryOption) (O, error) {
 	var zero O
-	if _, ok := ctx.(*execContext); !ok {
+	ec, ok := ctx.(*execContext)
+	if !ok {
 		return zero, fmt.Errorf("durable: Retry %q: Context was not created by the SDK", name)
 	}
+	mark := ec.operationMark()
+	out, err := runRetry(ctx, name, fn, strategy, opts...)
+	ec.refreshReplayModeAfterOperation(mark, err)
+	return out, err
+}
+
+// runRetry is the attempt loop of [Retry].
+func runRetry[O any](ctx Context, name string, fn func(ctx Context, attempt int) (O, error), strategy RetryStrategy, opts ...RetryOption) (O, error) {
+	var zero O
 	if fn == nil {
 		return zero, fmt.Errorf("durable: Retry %q: fn must not be nil", name)
 	}

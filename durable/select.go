@@ -46,6 +46,15 @@ type selectOutcome[O any] struct {
 // operation, because no branch could ever win. Duplicate branch names are
 // rejected the same way, because the winner would be ambiguous.
 func Select[O any](ctx Context, name string, branches []Branch[O], opts ...ChildOption) (winner string, value O, err error) {
+	// Leave replay as this returns if the code after it is new. See
+	// refreshReplayModeAfterOperation.
+	mark := operationMarkOf(ctx)
+	winner, value, err = selectFirst(ctx, name, branches, opts...)
+	refreshReplayModeOnReturn(ctx, mark, err)
+	return winner, value, err
+}
+
+func selectFirst[O any](ctx Context, name string, branches []Branch[O], opts ...ChildOption) (string, O, error) {
 	var zero O
 	if len(branches) == 0 {
 		return "", zero, fmt.Errorf("durable: Select %q: no branches", name)
@@ -58,7 +67,7 @@ func Select[O any](ctx Context, name string, branches []Branch[O], opts ...Child
 		seen[b.Name] = struct{}{}
 	}
 
-	out, err := RunInChildContext(ctx, name, func(childCtx Context) (selectOutcome[O], error) {
+	out, err := runInChildContext(ctx, name, func(childCtx Context) (selectOutcome[O], error) {
 		var none selectOutcome[O]
 
 		// Every branch runs in its own child context. The futures are

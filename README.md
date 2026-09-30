@@ -827,6 +827,15 @@ first ran. Suppression is decided per branch. A `Go` branch that is still
 replaying stays quiet while a sibling that has reached live execution logs
 normally.
 
+A line that runs for the first time is always written. In one case a line
+can be written twice. The line runs after an asynchronous operation was
+created, with `CreateCallback`, an Async variant, or `Go`, and before that
+operation's `Result` is read. An invocation that suspends at that `Result`
+has already run the line. The next invocation cannot tell how far the
+earlier one got, so it writes the line again rather than risk losing it.
+Read the `Result` before logging, or log from inside a step, to get the
+line once.
+
 To see the records of the replayed portion when diagnosing a replay
 problem, select `ReplayLogModeEmit` with `WithReplayLogMode` at
 construction or with `ConfigureLogging` inside the handler. Replayed

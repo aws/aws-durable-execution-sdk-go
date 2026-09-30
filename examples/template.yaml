@@ -1954,6 +1954,26 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 120
 
+  LoggerAfterInvokeFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-logger-after-invoke
+      CodeUri: .aws-sam/build-artifacts/logger-after-invoke/
+      Handler: bootstrap
+      Description: Replay-aware logging across an invoke suspend/resume boundary
+      Role: !Ref ExecutionRoleArn
+      Environment:
+        Variables:
+          FUNCTION_NAME_PREFIX: !Ref FunctionNamePrefix
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
   LoggerAfterCallbackFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -1966,6 +1986,23 @@ Resources:
       CodeUri: .aws-sam/build-artifacts/logger-after-callback/
       Handler: bootstrap
       Description: Replay-aware logging across a callback suspend/resume boundary
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  LoggerAfterFutureFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-logger-after-future
+      CodeUri: .aws-sam/build-artifacts/logger-after-future/
+      Handler: bootstrap
+      Description: Replay-aware logging after Future.Result and Callback.Result
       Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
@@ -2822,9 +2859,15 @@ Outputs:
   LoggerAfterWaitFunction:
     Description: Logger After Wait Function ARN
     Value: !GetAtt LoggerAfterWaitFunction.Arn
+  LoggerAfterInvokeFunction:
+    Description: Logger After Invoke Function ARN
+    Value: !GetAtt LoggerAfterInvokeFunction.Arn
   LoggerAfterCallbackFunction:
     Description: Logger After Callback Function ARN
     Value: !GetAtt LoggerAfterCallbackFunction.Arn
+  LoggerAfterFutureFunction:
+    Description: Logger After Future Function ARN
+    Value: !GetAtt LoggerAfterFutureFunction.Arn
   LoggerLogLevelsFunction:
     Description: Logger Log Levels Function ARN
     Value: !GetAtt LoggerLogLevelsFunction.Arn

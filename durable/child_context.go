@@ -196,6 +196,32 @@ type childOptions struct {
 	// virtual is set by [WithChildVirtual]: the child is not checkpointed
 	// itself. See runVirtualChild and runVirtualChildAsync.
 	virtual bool
+
+	// virtualReport is set only by [RunInChildContext]. When the child is
+	// virtual, runVirtualChild writes to it once fn returns. See
+	// virtualChildReport.
+	virtualReport *virtualChildReport
+}
+
+// virtualChildReport tells [RunInChildContext] how a virtual child context
+// ended.
+//
+// A virtual child records no checkpoint of its own. So its body runs on
+// every invocation, and its ID is absent from the checkpoint log even when
+// an earlier invocation ran the body. The parent therefore cannot infer
+// from its next ID alone that the code after the child runs for the first
+// time. The child's own mode answers that question. The child starts in
+// the parent's mode. It leaves replay only when one of its operations has
+// no checkpoint, or when an operation inside it returns and the next ID
+// in the child has no checkpoint. If the child is still replaying when fn
+// returns, the previous invocation already ran the code that follows. So
+// the parent must stay in replay.
+type virtualChildReport struct {
+	// ran is true once fn returned.
+	ran bool
+	// live is true when the child context was in live execution when fn
+	// returned.
+	live bool
 }
 
 // maxOperationSubTypeLength is the longest operation subtype the service
@@ -319,6 +345,35 @@ func (o *childOptions) failure(name string, rec errorRecord) error {
 // fails, RunInChildContext returns a [*ChildContextError], or the error
 // a [WithChildErrorMapper] mapper derives from it.
 func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, error), opts ...ChildOption) (O, error) {
+	ec, ok := ctx.(*execContext)
+	if !ok {
+		return runInChildContext(ctx, name, fn, opts...)
+	}
+	mark := ec.operationMark()
+	report := &virtualChildReport{}
+	out, err := runInChildContext(ctx, name, fn, append(opts[:len(opts):len(opts)], reportVirtualChild(report))...)
+	if report.ran && !report.live {
+		// A virtual child that is still replaying says the previous
+		// invocation already ran the code after it. See
+		// virtualChildReport.
+		return out, err
+	}
+	ec.refreshReplayModeAfterOperation(mark, err)
+	return out, err
+}
+
+// reportVirtualChild returns the option through which [RunInChildContext]
+// learns how a virtual child context ended. A checkpointed child ignores it.
+func reportVirtualChild(report *virtualChildReport) ChildOption {
+	return childOptionFunc(func(o *childOptions) { o.virtualReport = report })
+}
+
+// runInChildContext is [RunInChildContext] without the replay mode check
+// after the child returns. The combinators and [Select] build on it. Those
+// operations await futures that were started before the previous
+// suspension, so they need their own rule for when the context leaves
+// replay, and they do not get the check here.
+func runInChildContext[O any](ctx Context, name string, fn func(Context) (O, error), opts ...ChildOption) (O, error) {
 	var zero O
 	ec, ok := ctx.(*execContext)
 	if !ok {
@@ -520,6 +575,13 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 // On invocation suspension, the returned future is settled with
 // errSuspendExecution so goroutines blocked on [Future.Result] unwind.
 func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O, error), opts ...ChildOption) *Future[O] {
+	// The returned future leaves replay when the handler reads it and
+	// the code after it is new. See bindFuture.
+	mark := operationMarkOf(ctx)
+	return bindFuture(ctx, mark, runInChildContextAsync(ctx, name, fn, opts...))
+}
+
+func runInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O, error), opts ...ChildOption) *Future[O] {
 	ec, ok := ctx.(*execContext)
 	if !ok {
 		return newFailedFuture[O](fmt.Errorf("durable: RunInChildContextAsync %q: Context was not created by the SDK", name))
@@ -771,6 +833,10 @@ func runVirtualChild[O any](ec *execContext, name, subType string, options child
 		r, e := fn(child)
 		if e != nil {
 			fnTrace = ec.returnedErrorTrace(fn, e, 0)
+		}
+		if report := options.virtualReport; report != nil {
+			report.ran = true
+			report.live = executionMode(child.mode.Load()) == modeExecution
 		}
 		return r, e
 	})

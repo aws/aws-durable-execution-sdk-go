@@ -1,37 +1,53 @@
-// Command logger-after-wait demonstrates replay-aware logging across a
-// wait's suspend/resume boundary.
+// Command logger-after-invoke demonstrates replay-aware logging across an
+// Invoke's suspend/resume boundary.
 //
-// The first invocation logs "before-wait" and suspends at the wait. The
-// second invocation replays the handler from the start. It suppresses
-// "before-wait", because the first invocation already wrote that line. The
-// wait then returns its checkpointed result. No earlier invocation ran the
-// code after the wait, so the context leaves replay as the wait returns.
-// So "after-wait" is logged once, in the second invocation, and
-// ctx.IsReplaying() reports false on that line.
+// The first invocation logs "before-invoke", starts the invoke-simple-target
+// companion, and suspends. The service invokes the handler again when the
+// target completes. That invocation replays the handler from the start. It
+// suppresses "before-invoke", because the first invocation already wrote
+// that line. Invoke then returns the target's checkpointed result. No
+// earlier invocation ran the code after the Invoke, so the context leaves
+// replay as Invoke returns. So "after-invoke" is logged once, in the second
+// invocation, and ctx.IsReplaying() reports false on that line.
 //
-// The handler counts the "after-wait" records its log handler receives in
+// The handler counts the "after-invoke" records its log handler receives in
 // the current invocation and returns the count. It also returns
 // ctx.IsReplaying() as read at the start of the handler and right before
-// the line. The start value is true on the invocation that returns,
-// which shows that the line ran in a resumed invocation.
+// the line. The start value is true on the invocation that returns, which
+// shows that the line ran in a resumed invocation.
+//
+// The target function name comes from the event, falling back to the
+// FUNCTION_NAME_PREFIX environment variable for cloud deployments, as in
+// invoke-simple.
 package main
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"sync/atomic"
-	"time"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
 )
 
-// lineMessage is the message of the line logged right after the wait.
-const lineMessage = "after-wait"
+// lineMessage is the message of the line logged right after the Invoke.
+const lineMessage = "after-invoke"
+
+// Input optionally names the target function.
+type Input struct {
+	FunctionName string `json:"functionName"`
+}
+
+// targetInput is the payload sent to the target function.
+type targetInput struct {
+	Message string `json:"message"`
+}
 
 // result is the handler output.
 type result struct {
-	Message string `json:"message"`
+	Message string          `json:"message"`
+	Target  json.RawMessage `json:"target"`
 	// Logged is the number of lineMessage records the log handler
 	// received in the invocation that returned this result.
 	Logged int64 `json:"logged"`
@@ -41,7 +57,7 @@ type result struct {
 	ResumedInReplay bool `json:"resumedInReplay"`
 }
 
-func handler(ctx durable.Context, _ any) (result, error) {
+func handler(ctx durable.Context, event Input) (result, error) {
 	// A new counter for every invocation: Lambda reuses the process, so
 	// package state would carry counts across invocations.
 	counter := newCountingHandler(slog.NewJSONHandler(os.Stderr, nil), lineMessage)
@@ -50,8 +66,18 @@ func handler(ctx durable.Context, _ any) (result, error) {
 	}
 	resumedInReplay := ctx.IsReplaying()
 
-	ctx.Logger().Info("before-wait")
-	if err := durable.Wait(ctx, "pause", 5*time.Second); err != nil {
+	functionName := event.FunctionName
+	if functionName == "" {
+		prefix := os.Getenv("FUNCTION_NAME_PREFIX")
+		if prefix == "" {
+			prefix = "v2-"
+		}
+		functionName = prefix + "go-invoke-simple-target:$LATEST"
+	}
+
+	ctx.Logger().Info("before-invoke")
+	target, err := durable.Invoke[json.RawMessage](ctx, "invoke", functionName, targetInput{Message: "hello"})
+	if err != nil {
 		return result{}, err
 	}
 
@@ -60,6 +86,7 @@ func handler(ctx durable.Context, _ any) (result, error) {
 
 	return result{
 		Message:         "done",
+		Target:          target,
 		Logged:          counter.count.Load(),
 		ReplayingAtLine: replayingAtLine,
 		ResumedInReplay: resumedInReplay,

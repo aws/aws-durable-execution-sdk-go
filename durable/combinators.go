@@ -21,7 +21,16 @@ import (
 //
 // Empty input returns an empty slice immediately (matching Promise.all([])).
 func All[O any](ctx Context, name string, fs []*Future[O], opts ...ChildOption) ([]O, error) {
-	return RunInChildContext(ctx, name, func(_ Context) ([]O, error) {
+	// Leave replay as this returns if the code after it is new. See
+	// refreshReplayModeAfterOperation.
+	mark := operationMarkOf(ctx)
+	out, err := all(ctx, name, fs, opts...)
+	refreshReplayModeOnReturn(ctx, mark, err)
+	return out, err
+}
+
+func all[O any](ctx Context, name string, fs []*Future[O], opts ...ChildOption) ([]O, error) {
+	return runInChildContext(ctx, name, func(_ Context) ([]O, error) {
 		if err := awaitBarrier(asAwaitables(fs), true); err != nil {
 			return nil, err
 		}
@@ -85,7 +94,16 @@ func (f *Future[O]) await() error {
 //	receipt, _ := fa.Result()
 //	ok, _ := fb.Result()
 func Join(ctx Context, name string, fs []Awaitable, opts ...ChildOption) error {
-	_, err := RunInChildContext(ctx, name, func(_ Context) (Void, error) {
+	// Leave replay as this returns if the code after it is new. See
+	// refreshReplayModeAfterOperation.
+	mark := operationMarkOf(ctx)
+	err := join(ctx, name, fs, opts...)
+	refreshReplayModeOnReturn(ctx, mark, err)
+	return err
+}
+
+func join(ctx Context, name string, fs []Awaitable, opts ...ChildOption) error {
+	_, err := runInChildContext(ctx, name, func(_ Context) (Void, error) {
 		return Void{}, awaitBarrier(fs, false)
 	}, opts...)
 	return err
@@ -153,7 +171,16 @@ func asAwaitables[O any](fs []*Future[O]) []Awaitable {
 //
 // Empty input returns an empty slice immediately.
 func AllSettled[O any](ctx Context, name string, fs []*Future[O], opts ...ChildOption) ([]Settled[O], error) {
-	return RunInChildContext(ctx, name, func(_ Context) ([]Settled[O], error) {
+	// Leave replay as this returns if the code after it is new. See
+	// refreshReplayModeAfterOperation.
+	mark := operationMarkOf(ctx)
+	out, err := allSettled(ctx, name, fs, opts...)
+	refreshReplayModeOnReturn(ctx, mark, err)
+	return out, err
+}
+
+func allSettled[O any](ctx Context, name string, fs []*Future[O], opts ...ChildOption) ([]Settled[O], error) {
+	return runInChildContext(ctx, name, func(_ Context) ([]Settled[O], error) {
 		results := make([]Settled[O], len(fs))
 		var sawSuspend bool
 		for i, f := range fs {
@@ -192,7 +219,16 @@ func AllSettled[O any](ctx Context, name string, fs []*Future[O], opts ...ChildO
 // Empty input fails immediately with a [*CombinatorError] (no futures can
 // succeed), matching Promise.any([]).
 func Any[O any](ctx Context, name string, fs []*Future[O], opts ...ChildOption) (O, error) {
-	return RunInChildContext(ctx, name, func(childCtx Context) (O, error) {
+	// Leave replay as this returns if the code after it is new. See
+	// refreshReplayModeAfterOperation.
+	mark := operationMarkOf(ctx)
+	out, err := anyOf(ctx, name, fs, opts...)
+	refreshReplayModeOnReturn(ctx, mark, err)
+	return out, err
+}
+
+func anyOf[O any](ctx Context, name string, fs []*Future[O], opts ...ChildOption) (O, error) {
+	return runInChildContext(ctx, name, func(childCtx Context) (O, error) {
 		var zero O
 		if len(fs) == 0 {
 			return zero, &CombinatorError{Name: name, Errors: nil}
@@ -298,7 +334,16 @@ func Any[O any](ctx Context, name string, fs []*Future[O], opts ...ChildOption) 
 // Empty input suspends (no future will ever settle), matching
 // Promise.race([]) which returns a forever-pending promise.
 func Race[O any](ctx Context, name string, fs []*Future[O], opts ...ChildOption) (O, error) {
-	return RunInChildContext(ctx, name, func(childCtx Context) (O, error) {
+	// Leave replay as this returns if the code after it is new. See
+	// refreshReplayModeAfterOperation.
+	mark := operationMarkOf(ctx)
+	out, err := race(ctx, name, fs, opts...)
+	refreshReplayModeOnReturn(ctx, mark, err)
+	return out, err
+}
+
+func race[O any](ctx Context, name string, fs []*Future[O], opts ...ChildOption) (O, error) {
+	return runInChildContext(ctx, name, func(childCtx Context) (O, error) {
 		var zero O
 		if len(fs) == 0 {
 			// No futures to settle. Match Promise.race([]):

@@ -97,6 +97,28 @@ positional ID has a checkpoint entry. If it does, the operation returns the
 stored result. If not, the context transitions to live execution mode for
 that operation and all subsequent ones.
 
+The same check runs when `Step`, `Wait`, `Invoke`, `RunInChildContext`,
+`WaitForCondition`, or `Retry` returns a value or a terminal error to the
+caller (`refreshReplayModeAfterOperation`). At that point the next ID
+belongs to the operation after the one that returned. If it has no
+checkpoint, no earlier invocation reached that operation, so the code in
+between runs for the first time. The context switches to live execution
+before that code runs, so its log lines are written and `IsReplaying`
+reports false there. The check does not run when the operation returns the
+suspension signal, because the previous invocation reached the same point
+and already ran the code that follows. It also does not run when the
+operation claimed no operation ID, for example because it rejected its
+arguments. Such a call awaited nothing, so the code after it is no nearer
+the next operation than the code before it.
+
+A `RunInChildContext` with `WithChildVirtual` gets one more rule. A virtual
+child records no checkpoint, so its ID is absent from the checkpoint log
+even when an earlier invocation ran its body. So the parent runs the check
+only when the virtual child context itself left replay before its function
+returned. A virtual child that is still replaying at that point means the
+previous invocation already ran the code after it, so the parent stays in
+replay.
+
 ## Suspension
 
 The `suspendSignal` coordinates suspension across the invocation. It has

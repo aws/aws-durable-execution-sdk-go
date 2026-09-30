@@ -39,12 +39,15 @@ func Wait(ctx Context, name string, d time.Duration, opts ...WaitOption) error {
 		o.applyWait(&options)
 	}
 
+	mark := ec.operationMark()
 	id, err := ec.claimOperation()
 	if err != nil {
 		return err
 	}
 
-	return runWait(ec, id, name, d)
+	err = runWait(ec, id, name, d)
+	ec.refreshReplayModeAfterOperation(mark, err)
+	return err
 }
 
 // WaitAsync is [Wait], except that the wait completes through the returned
@@ -53,6 +56,13 @@ func Wait(ctx Context, name string, d time.Duration, opts ...WaitOption) error {
 // On invocation suspension, the returned future is settled with
 // errSuspendExecution so goroutines blocked on [Future.Result] unwind.
 func WaitAsync(ctx Context, name string, d time.Duration, opts ...WaitOption) *Future[Void] {
+	// The returned future leaves replay when the handler reads it and
+	// the code after it is new. See bindFuture.
+	mark := operationMarkOf(ctx)
+	return bindFuture(ctx, mark, waitAsync(ctx, name, d, opts...))
+}
+
+func waitAsync(ctx Context, name string, d time.Duration, opts ...WaitOption) *Future[Void] {
 	ec, ok := ctx.(*execContext)
 	if !ok {
 		return newFailedFuture[Void](fmt.Errorf("durable: WaitAsync %q: Context was not created by the SDK", name))
