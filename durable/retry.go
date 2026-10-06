@@ -72,7 +72,7 @@ type RetryStrategy func(RetryAttempt) RetryDecision
 
 // ErrorMatcher reports whether a failed attempt's error is retryable. It is
 // used in [RetryConfig.RetryableErrors] and
-// [LinearRetryConfig.RetryableErrors]. [ErrorIs], [ErrorAs],
+// [LinearRetryConfig.RetryableErrors]. [ErrorIs], [ErrorAs], [ErrorTypeIs],
 // [ErrorContains], and [ErrorMatches] build matchers for the common cases;
 // any func(error) bool is a matcher.
 //
@@ -83,6 +83,14 @@ type ErrorMatcher func(err error) bool
 // ErrorIs returns a matcher that reports whether an error matches target
 // under [errors.Is], so wrapped errors match. It is intended for sentinel
 // errors such as io.EOF.
+//
+// ErrorIs matches the live error a [Step] body returns, or the error [Retry]
+// passes to the strategy when [WithAttemptChildContext] is false, on the
+// first run and on replay. It does not match the reconstructed
+// [*ChildContextError] that a default [Retry] attempt produces, because a
+// child context records only the wire ErrorType and the message. Use
+// [ErrorTypeIs], [ErrorContains], or [ErrorMatches] to match inside a
+// default [Retry].
 //
 // ErrorIs(nil) returns a nil matcher, which [NewRetryStrategy] and
 // [LinearBackoff] reject.
@@ -100,6 +108,14 @@ func ErrorIs(target error) ErrorMatcher {
 //
 //	durable.ErrorAs[*TransientError]()
 //	durable.ErrorAs[net.Error]()
+//
+// ErrorAs matches the live error a [Step] body returns, or the error [Retry]
+// passes to the strategy when [WithAttemptChildContext] is false, on the
+// first run and on replay. It does not match the reconstructed
+// [*ChildContextError] that a default [Retry] attempt produces, because a
+// child context records only the wire ErrorType and the message. Use
+// [ErrorTypeIs], [ErrorContains], or [ErrorMatches] to match inside a
+// default [Retry].
 func ErrorAs[T error]() ErrorMatcher {
 	return func(err error) bool {
 		var target T
@@ -112,6 +128,28 @@ func ErrorAs[T error]() ErrorMatcher {
 // every error.
 func ErrorContains(substr string) ErrorMatcher {
 	return func(err error) bool { return strings.Contains(err.Error(), substr) }
+}
+
+// ErrorTypeIs returns an ErrorMatcher that matches an error by its recorded
+// wire ErrorType. It reports a match when [errors.As] finds an
+// [*OperationError] in err whose ErrorType equals name, or, failing that,
+// when the SDK derives name as the wire ErrorType of err.
+//
+// ErrorTypeIs keys on the recorded ErrorType string. A child context
+// checkpoints that string, and it is the same on the first run and on
+// replay. So ErrorTypeIs matches both a [Step] body's live error and the
+// [*ChildContextError] that a default [Retry] attempt produces, on both
+// paths. Use ErrorTypeIs, [ErrorContains], or [ErrorMatches] to match an
+// error type inside a default [Retry]; [ErrorAs] and [ErrorIs] match only
+// where the strategy sees a live error.
+func ErrorTypeIs(name string) ErrorMatcher {
+	return func(err error) bool {
+		var oe *OperationError
+		if errors.As(err, &oe) && oe.ErrorType == name {
+			return true
+		}
+		return wireErrorType(err) == name
+	}
 }
 
 // ErrorMatches returns a matcher that reports whether an error's message,
@@ -209,11 +247,16 @@ type RetryConfig struct {
 	// with the attempts made so far. Entries must not be nil.
 	//
 	// Build matchers with [ErrorIs] for sentinel errors, [ErrorAs] for
-	// error types, and [ErrorContains] or [ErrorMatches] for message
-	// patterns:
+	// live error types, [ErrorTypeIs] for the recorded wire ErrorType, and
+	// [ErrorContains] or [ErrorMatches] for message patterns. Matching
+	// inside a default [Retry] is by [ErrorTypeIs], [ErrorContains], or
+	// [ErrorMatches]; [ErrorAs] and [ErrorIs] match only where the strategy
+	// sees a live error (a plain [Step], or [Retry] with
+	// [WithAttemptChildContext] false):
 	//
 	//	durable.RetryConfig{
 	//		RetryableErrors: []durable.ErrorMatcher{
+	//			durable.ErrorTypeIs("TransientError"),
 	//			durable.ErrorAs[*TransientError](),
 	//			durable.ErrorIs(io.ErrUnexpectedEOF),
 	//			durable.ErrorContains("throttl"),

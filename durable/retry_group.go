@@ -51,11 +51,14 @@ func (f retryOptionFunc) applyRetryOption(o *retryOptions) { f(o) }
 // [*ChildContextError], and that error is what strategy receives as
 // [RetryAttempt.Err]; its ErrorType names the error that escaped fn. The
 // error is rebuilt from the recorded failure on the first invocation and
-// on replay alike, so strategy sees the same input on both.
-// [WithAttemptChildContext] turns the per-attempt child context off. Then
-// fn runs in ctx, its operations are recorded at the top level, and
-// strategy receives the error fn returned. [WithAttemptChildOptions]
-// configures the per-attempt child context.
+// on replay alike, so strategy sees the same input on both. Declarative
+// matching against that error is by recorded type with [ErrorTypeIs] and
+// by message with [ErrorContains] or [ErrorMatches], not by [ErrorAs] or
+// [ErrorIs], which match only a live error. [WithAttemptChildContext]
+// turns the per-attempt child context off. Then fn runs in ctx, its
+// operations are recorded at the top level, and strategy receives the
+// error fn returned. [WithAttemptChildOptions] configures the
+// per-attempt child context.
 //
 // After a failed attempt strategy decides whether to retry and after what
 // delay. A retry waits for the delay with [Wait], in an operation named

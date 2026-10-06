@@ -45,6 +45,16 @@ the client error's own type and message in the `FAILED` response:
 `ErrorType` is `ClientError`. Before, it recorded `ErrorType` `Error` and
 the message `durable: load execution state: ...`.
 
+### Added: ErrorTypeIs matcher for recorded wire ErrorType
+
+[ErrorTypeIs] matches an error by its recorded wire ErrorType string. Use it
+(with [ErrorContains] or [ErrorMatches]) to declare which errors are
+retryable inside a default [Retry]: each attempt runs in a child context,
+so the strategy sees a reconstructed [*ChildContextError] whose
+[ErrorAs]/[ErrorIs] identity is gone but whose ErrorType and message
+survive. [ErrorAs] and [ErrorIs] still match live errors from a plain
+[Step], or from [Retry] with [WithAttemptChildContext] false.
+
 ### Changed: an operation that finishes during the invocation resumes it
 
 An awaited operation that finishes while the same invocation is still
