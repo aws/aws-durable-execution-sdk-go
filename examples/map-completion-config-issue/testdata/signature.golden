@@ -20,11 +20,5 @@
     "subType": "Step",
     "name": "process-item-0",
     "status": "SUCCEEDED"
-  },
-  {
-    "type": "STEP",
-    "subType": "Step",
-    "name": "process-item-2",
-    "status": "SUCCEEDED"
   }
 ]

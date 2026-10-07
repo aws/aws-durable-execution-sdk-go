@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### Changed: the local test runner validates checkpoints and reports completions as the service does
+
+The `durabletest` local runner now rejects every checkpoint update the
+service rejects, with the service's error code and message. A step result
+or `WaitForCondition` state over 262144 bytes, an error object over 262144
+bytes, an `Invoke` input over 1048576 bytes, a handler result over 6291456
+bytes, and a wait of zero seconds now fail the execution with a
+`CheckpointError`. Before, the runner stored them, and the execution
+reached `SUCCEEDED` or `PENDING` locally but failed against the service.
+
+The runner now fails an execution whose handler answers `PENDING` with no
+pending operation four times in a row. The error type is
+`InvalidParameterValueException` and the message is `Cannot return PENDING
+status with no pending operations.`. Before, `RunUntilComplete` returned
+the `PENDING` result.
+
+The runner now reports an operation's completion during an invocation. Its
+in-memory client keeps a virtual clock, which starts with the execution
+and which wall-clock time does not move. A wait or a step retry that
+becomes due while a step or a child context runs is reported in the
+response to the checkpoint request that reports that work finished, or to
+a poll. A callback resolved while the handler runs is reported in the
+response to the next checkpoint request. A registered function runs when
+its invoke starts, and the invoke's START response reports its outcome. So
+the handler continues in the same invocation, as it does under the
+service. Before, these completions were reported only between invocations,
+so tests needed more invocations than the service does.
+`CompletePendingTimers` still completes every pending timer at once.
+The operation and event timestamps in a `TestResult` come from the virtual
+clock, so the wall-clock time a step body takes no longer appears in them.
+
 ### Changed: payload sizes are left to the service, as in the JavaScript SDK
 
 The SDK no longer checks a step result, a `WaitForCondition` state, or an

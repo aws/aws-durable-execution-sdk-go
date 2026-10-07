@@ -15,13 +15,13 @@
     "type": "CONTEXT",
     "subType": "ParallelBranch",
     "name": "retrying",
-    "status": "FAILED"
+    "status": "SUCCEEDED"
   },
   {
     "type": "STEP",
     "subType": "Step",
     "name": "retrying-step",
-    "status": "FAILED"
+    "status": "SUCCEEDED"
   },
   {
     "type": "STEP",

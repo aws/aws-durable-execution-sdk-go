@@ -758,6 +758,17 @@ as many times as the execution needs. Between invocations it completes
 pending timers and step retries, and it returns when the execution
 finishes or blocks on external action.
 
+The runner checks each checkpoint against the service's limits and
+rejects the same updates the service rejects, with the service's error
+code and message. Examples are a step result over 262144 bytes and a wait
+of zero seconds. It also fails an execution whose handler answers
+`PENDING` four times in a row with no pending operation, as the service
+does. It reports an operation's completion during an invocation the same
+way the service does. A wait or step retry that becomes due while other
+work runs, a callback resolved while the handler runs, and an invoke of a
+registered function are reported in a checkpoint response, so the handler
+continues in the same invocation.
+
 ```go
 func TestHandler(t *testing.T) {
 	handler := func(ctx durable.Context, n int) (int, error) {

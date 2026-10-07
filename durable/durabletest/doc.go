@@ -57,6 +57,39 @@
 // invocations until the execution reaches a terminal status or is blocked
 // awaiting external resolution (callbacks, chained invokes).
 //
+// The in-memory client validates each checkpoint against the service's
+// limits and rejects an update the service rejects, with the service's
+// error code and message: a step result or WaitForCondition state over
+// 262144 bytes, an error object over 262144 bytes, an invoke input over
+// 1048576 bytes, a handler result checkpointed on the execution over
+// 6291456 bytes, and a zero-second wait. The SDK handles the
+// rejection as it handles the service's: it fails the execution with a
+// [*durable.CheckpointError].
+//
+// The client also reports an operation's completion in the invocation that
+// observes it, not only between invocations. It keeps a virtual clock,
+// which it uses for every timestamp it records. The clock is set when the
+// execution starts, and wall-clock time does not move it. A wait records
+// its scheduled end time and a step retry its next attempt time on this
+// clock. The clock moves forward only on a request where the handler spent
+// time: a poll, which the SDK sends while a goroutine is blocked, or a
+// request that reports a step attempt or a child context finished. A
+// request that only starts work, such as a step's START, moves nothing. On
+// such a request the client moves the clock to the earliest due time among
+// the waits and step retries that earlier requests started, and reports
+// each one then due in that request's response: a wait as SUCCEEDED, a
+// step retry or condition check as READY. A callback resolved
+// with [LocalRunner.SendCallbackSuccess] or [LocalRunner.SendCallbackFailure]
+// and an invoke settled by a registered function are reported in the
+// response to the next checkpoint request. The handler then continues in
+// the same invocation, as it does under the service. A wait the handler
+// awaits with no other work under way still suspends the invocation.
+//
+// The runner rejects a PENDING response that reports no pending operation,
+// as the service does. It invokes the handler again, and the fourth such
+// response in a row fails the execution with an
+// InvalidParameterValueException.
+//
 // # External Resolution
 //
 // For handlers that use callbacks or chained invokes, use RunUntilComplete
@@ -81,8 +114,10 @@
 // a [Function] built with [DurableFunction] or [PlainFunction]. A durable
 // target runs as its own local execution with its own checkpoint log, so
 // it suspends and resumes like the handler under test; a plain target is
-// called once with the decoded input. The target's result or error is
-// recorded on the invoke, and the caller reads it on its next invocation.
+// called once with the decoded input. The target runs when the invoke's
+// START checkpoint arrives. Its result or error is recorded on the invoke
+// and reported in the response to that checkpoint, so the caller reads it
+// in the same invocation.
 // Registered targets may invoke other registered identifiers, up to
 // [MaxInvokeDepth] levels deep:
 //

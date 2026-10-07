@@ -54,6 +54,11 @@ func TestSelectReplayKeepsWinnerWhenTimingReverses(t *testing.T) {
 			}},
 		})
 		close(hold)
+		// The held branch's result reaches the client before the wait
+		// starts. A checkpoint request sent while the wait is pending
+		// would report the wait finished in this invocation, and the
+		// replay this test checks would not happen.
+		time.Sleep(50 * time.Millisecond)
 		if err != nil {
 			return selectRun{}, err
 		}
@@ -121,6 +126,11 @@ func TestSelectReplayKeepsFailedWinner(t *testing.T) {
 			}},
 		})
 		close(hold)
+		// The slow branch's result reaches the client before the wait
+		// starts. A checkpoint request sent while the wait is pending
+		// would report the wait finished in this invocation, and the
+		// replay this test checks would not happen.
+		time.Sleep(50 * time.Millisecond)
 		obs := observation{Winner: winner}
 		var childErr *durable.ChildContextError
 		if errors.As(err, &childErr) {

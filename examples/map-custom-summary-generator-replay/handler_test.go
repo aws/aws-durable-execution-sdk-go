@@ -95,11 +95,12 @@ func TestHandler(t *testing.T) {
 		t.Errorf("record summary = %q, want the custom summary starting with %q", record.Summary, customSummaryPrefix)
 	}
 
-	// The map completes early on MinSuccessful while item 1 is still in
-	// flight, so item 1 may or may not have created its slow-item wait
-	// before the batch abandoned it. Subset lists the operations every run
-	// produces and tolerates that inner wait when a run records it; item 1
-	// itself is always reported STARTED, so it stays in the golden.
+	// The map completes early on MinSuccessful. The local runner reports
+	// item 1's slow-item wait finished as soon as another item
+	// checkpoints, so item 1 is either still in flight or one of the two
+	// successes, and item 2 is then the in-flight one or a success.
+	// Subset lists the operations every run produces and tolerates the
+	// scheduling-dependent items.
 	extest.AssertSignature(t, result, extest.Subset)
 }
 

@@ -80,20 +80,22 @@ func NewLocalRunner[I, O any](handler durable.Handler[I, O], opts ...durable.Han
 // [durable.Invoke]. Build fn with [DurableFunction] or [PlainFunction].
 // Registering the same identifier again replaces the earlier target.
 //
-// When an invocation of the handler under test ends with an open invoke of
-// a registered identifier, [Run] and [RunUntilComplete] execute the
-// registered target before returning. A durable target runs as its own
-// local execution with its own checkpoint log: it suspends and resumes on
-// its own timers, and when it settles its result or error is recorded on
-// the caller's invoke operation. A non-durable target is called once. The
-// caller observes the outcome on its next invocation, exactly as it would
-// after [CompleteChainedInvoke] or [FailChainedInvoke]: a success returns
-// the decoded result and a failure returns a [*durable.InvokeError].
+// When the handler under test starts an invoke of a registered identifier,
+// the runner executes the registered target as the invoke's START
+// checkpoint arrives. A durable target runs as its own local execution
+// with its own checkpoint log: it suspends and resumes on its own timers,
+// and when it settles its result or error is recorded on the caller's
+// invoke operation. A non-durable target is called once. The response to
+// the START checkpoint reports the outcome, so the caller observes it in
+// the same invocation, as it would observe [CompleteChainedInvoke] or
+// [FailChainedInvoke]: a success returns the decoded result and a failure
+// returns a [*durable.InvokeError].
 //
 // Registered targets may themselves invoke registered identifiers, up to
 // [MaxInvokeDepth] levels deep. A durable target that blocks on external
-// action, such as a callback, leaves the caller's invoke STARTED; the
-// runner drives the target again on the caller's next invocation.
+// action, such as a callback, leaves the caller's invoke STARTED; when an
+// invocation of the caller ends with that invoke still open, [Run] and
+// [RunUntilComplete] drive the target again before returning.
 //
 // Invokes of identifiers that are not registered are unaffected: they stay
 // STARTED until resolved with [CompleteChainedInvoke] or
@@ -136,9 +138,10 @@ func (r *LocalRunner[I, O]) Reset() {
 // re-invokes with the accumulated checkpoint state, simulating the Lambda
 // re-invocation loop.
 //
-// After the handler returns, Run executes any registered function the
-// handler invoked (see [RegisterFunction]). The returned operations reflect
-// the state after those targets ran. A registered durable target is driven
+// A registered function the handler invokes runs when the invoke starts
+// (see [RegisterFunction]). After the handler returns, Run drives again any
+// registered durable target that is still open. The returned operations
+// reflect the state after those targets ran. A registered durable target is driven
 // for up to the invocation cap ([DefaultMaxInvocations]) within one Run; if
 // it exhausts the cap without settling, [TestResult.CapReached] is true.
 //
@@ -174,6 +177,18 @@ func (r *LocalRunner[I, O]) Run(event I) (*TestResult, error) {
 // method returns the PENDING result without spinning — this indicates that
 // external action (callback submission, chained-invoke completion) is
 // required before progress can continue.
+//
+// A PENDING response that reports no pending operation is one the service
+// rejects. A pending operation is a wait, callback, or chained invoke in
+// STARTED status, or a step in STARTED, PENDING, or READY status. After
+// such a response RunUntilComplete invokes the handler again, as the
+// service does, and the fourth such response in a row fails the execution:
+// [TestResult.Status] is [Failed] and [TestResult.Error] has Type
+// "InvalidParameterValueException" and Message "Cannot return PENDING
+// status with no pending operations.". A PENDING response with a pending
+// operation resets the count. A response that follows a checkpoint whose
+// token was withheld (see [LocalRunner.OmitTokenOnCheckpoint]) is not
+// counted.
 //
 // The invocation cap defaults to [DefaultMaxInvocations] (100) and can be
 // changed with [WithMaxInvocations]. The same cap applies to each registered
@@ -217,7 +232,7 @@ func (r *LocalRunner[I, O]) result(response []byte, capReached bool) (*TestResul
 }
 
 // CompletePendingTimers completes every operation that is blocked on a
-// timer, regardless of its configured duration. Exactly two kinds of
+// timer at once, regardless of its scheduled time. Exactly two kinds of
 // operations are affected:
 //
 //   - A step awaiting a retry timer (PENDING) becomes ready for
@@ -227,8 +242,18 @@ func (r *LocalRunner[I, O]) result(response []byte, capReached bool) (*TestResul
 //     (SUCCEEDED).
 //
 // No other operations are touched: callbacks and chained invokes remain
-// blocked until resolved explicitly. There is no virtual clock — timers do
-// not fire selectively by duration.
+// blocked until resolved explicitly.
+//
+// The in-memory client keeps a virtual clock, set when the execution
+// starts and not moved by wall-clock time. A wait records its scheduled end
+// time and a step retry its next attempt time on that clock.
+// CompletePendingTimers fires every pending timer regardless of its
+// scheduled time, and moves the clock forward to the latest of those
+// times. A timed operation is also reported without this call: on a poll,
+// or on a request that reports a step attempt or a child context finished,
+// the client moves its clock to the earliest due time among the timers
+// earlier requests started and reports each operation then due in the
+// response, so the handler continues in the same invocation.
 //
 // Returns true if any operation was completed.
 func (r *LocalRunner[I, O]) CompletePendingTimers() bool {
@@ -387,12 +412,9 @@ func (r *LocalRunner[I, O]) OmitTokenOnCheckpoint(n int) {
 	r.client.omitTokenOnCheckpoint(n)
 }
 
-// allOperationsRaw returns all stored operations (including execution type)
-// in insertion order for building the invocation payload.
-func (m *memoryClient) allOperationsRaw() []operationSnapshot {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
+// snapshotLocked returns all stored operations except execution operations,
+// in insertion order. The caller must hold m.mu.
+func (m *memoryClient) snapshotLocked() []operationSnapshot {
 	ops := make([]operationSnapshot, 0, len(m.operations))
 	for _, id := range m.opOrder {
 		op, ok := m.operations[id]

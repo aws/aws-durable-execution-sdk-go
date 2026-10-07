@@ -514,10 +514,13 @@ func TestFormatTreeLocalRunTimings(t *testing.T) {
 	if result.Status != durabletest.Succeeded {
 		t.Fatalf("status = %s, want SUCCEEDED", result.Status)
 	}
-	after := time.Now()
+	// The runner's clock moves forward by the wait's minute when it
+	// completes the wait, so the window ends one minute after the wall
+	// clock does.
+	after := time.Now().Add(time.Minute)
 
 	// Every operation settled, so every row has a start, an end, and a
-	// non-negative duration within the test's own wall-clock window.
+	// non-negative duration within the test's window.
 	for _, name := range []string{"outer", "work", "pause", "approve"} {
 		op := result.Operation(name)
 		if op == nil {
@@ -534,9 +537,10 @@ func TestFormatTreeLocalRunTimings(t *testing.T) {
 			t.Errorf("%s: EndTime %v precedes StartTime %v", name, op.EndTime, op.StartTime)
 		}
 	}
-	// The step's start precedes its end by at least the time it slept.
-	if work := result.Operation("work"); work.EndTime.Sub(work.StartTime) < 2*time.Millisecond {
-		t.Errorf("work duration = %v, want at least 2ms", work.EndTime.Sub(work.StartTime))
+	// The runner's clock is virtual: the time the step body slept does not
+	// move it, so the step starts and ends at the same instant.
+	if work := result.Operation("work"); !work.EndTime.Equal(work.StartTime) {
+		t.Errorf("work duration = %v, want 0 (wall-clock time does not move the virtual clock)", work.EndTime.Sub(work.StartTime))
 	}
 	// The wait and the callback settled after the step, in program order.
 	if pause := result.Operation("pause"); pause.StartTime.Before(result.Operation("work").EndTime) {

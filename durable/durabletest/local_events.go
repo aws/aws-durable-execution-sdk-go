@@ -20,7 +20,7 @@ const localExecutionOperationID = "exec-op"
 
 // recordEvent appends one history event to the client's event log. Event
 // IDs increase by one per event, starting at 1. at is the event's
-// timestamp: the wall-clock time of the transition the event describes,
+// timestamp: the time of the transition on the client's clock the event describes,
 // which is also the time stamped on the operation record (see
 // stampTransition), so the event log and the operation timestamps agree.
 // The caller fills in the event's type, operation identity, and details.
@@ -41,7 +41,8 @@ func (m *memoryClient) allEvents() []types.Event {
 }
 
 // recordExecutionStarted records the ExecutionStarted event for the
-// execution's first invocation. It is a no-op after the first call.
+// execution's first invocation and sets the client's virtual clock to the
+// moment the execution starts. It is a no-op after the first call.
 func (m *memoryClient) recordExecutionStarted(input string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -49,13 +50,14 @@ func (m *memoryClient) recordExecutionStarted(input string) {
 		return
 	}
 	m.executionStarted = true
+	m.clock = time.Now().UTC()
 	m.recordEvent(types.Event{
 		EventType: types.EventTypeExecutionStarted,
 		Id:        aws.String(localExecutionOperationID),
 		ExecutionStartedDetails: &types.ExecutionStartedDetails{
 			Input: &types.EventInput{Payload: aws.String(input)},
 		},
-	}, time.Now())
+	}, m.nowLocked())
 }
 
 // recordInvocationCompleted records the InvocationCompleted event for one
@@ -75,7 +77,7 @@ func (m *memoryClient) recordInvocationCompleted(requestID string, start, end ti
 	m.recordEvent(types.Event{
 		EventType:                  types.EventTypeInvocationCompleted,
 		InvocationCompletedDetails: details,
-	}, time.Now())
+	}, m.nowLocked())
 }
 
 // recordExecutionEnded records the execution's terminal event from the
@@ -105,7 +107,7 @@ func (m *memoryClient) recordExecutionEnded(status string, result *string, err *
 			EventType:                 types.EventTypeExecutionSucceeded,
 			Id:                        aws.String(localExecutionOperationID),
 			ExecutionSucceededDetails: &types.ExecutionSucceededDetails{Result: eventResult(result)},
-		}, time.Now())
+		}, m.nowLocked())
 	case statusFailed:
 		m.executionEnded = true
 		if err == nil && cp != nil && cp.action == durable.OperationActionFail {
@@ -115,7 +117,7 @@ func (m *memoryClient) recordExecutionEnded(status string, result *string, err *
 			EventType:              types.EventTypeExecutionFailed,
 			Id:                     aws.String(localExecutionOperationID),
 			ExecutionFailedDetails: &types.ExecutionFailedDetails{Error: eventError(err)},
-		}, time.Now())
+		}, m.nowLocked())
 	}
 }
 

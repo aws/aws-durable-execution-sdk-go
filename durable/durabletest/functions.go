@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
-	"time"
+	"sync"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
 	"github.com/aws/aws-durable-execution-sdk-go/durable/internal/wire"
@@ -129,16 +129,55 @@ type localExecution struct {
 	// children holds the child executions started for registered durable
 	// targets, keyed by the CHAINED_INVOKE operation ID in this execution.
 	// A child that has not settled stays here and is driven again on the
-	// next invocation of this execution.
+	// next invocation of this execution. childMu guards it, because a
+	// test may look up an open invoke while a target runs.
 	children map[string]*localExecution
+	childMu  sync.Mutex
 
 	// invocations counts the handler invocations performed so far. It
 	// numbers the request ID of each invocation.
 	invocations int
+
+	// afterBeginInvocation, when set, runs after the invocation payload is
+	// built and before the handler runs. Tests use it to change state in
+	// that interval.
+	afterBeginInvocation func()
+
+	// emptyPending counts the consecutive invocations that responded
+	// PENDING while no operation was pending. See
+	// maxEmptyPendingResponses.
+	emptyPending int
+
+	// dispatchMu serializes the runs of registered targets: those a
+	// checkpoint request starts while the handler runs, and those run
+	// after the handler returns. It guards the fields below.
+	dispatchMu sync.Mutex
+
+	// maxInvocations is the invocation cap of the current Run or
+	// RunUntilComplete, applied to a registered durable target started
+	// while the handler runs.
+	maxInvocations int
+
+	// dispatched holds the chained invokes whose registered target ran
+	// during the current invocation. The runner does not run them again
+	// when the invocation ends.
+	dispatched map[string]bool
+
+	// dispatchCap is set when a durable target started during the
+	// current invocation reached the invocation cap.
+	dispatchCap bool
+
+	// dispatchErr is the first runner failure of a target started during
+	// the current invocation.
+	dispatchErr error
 }
 
+// maxEmptyPendingResponses is the number of consecutive PENDING responses
+// with no pending operation after which the service fails the execution.
+const maxEmptyPendingResponses = 4
+
 func newLocalExecution(handler func(context.Context, []byte) ([]byte, error), client *memoryClient, registry *functionRegistry, arn string, depth int) *localExecution {
-	return &localExecution{
+	e := &localExecution{
 		handler:  handler,
 		client:   client,
 		registry: registry,
@@ -146,6 +185,8 @@ func newLocalExecution(handler func(context.Context, []byte) ([]byte, error), cl
 		depth:    depth,
 		children: make(map[string]*localExecution),
 	}
+	client.startInvokes = e.runStartedInvokes
+	return e
 }
 
 // reset returns the execution to the state of a newly created one: an
@@ -153,8 +194,11 @@ func newLocalExecution(handler func(context.Context, []byte) ([]byte, error), cl
 // zero. The handler, registry, ARN, and depth are unchanged.
 func (e *localExecution) reset() {
 	e.client.reset()
+	e.childMu.Lock()
 	e.children = make(map[string]*localExecution)
+	e.childMu.Unlock()
 	e.invocations = 0
+	e.emptyPending = 0
 }
 
 // invokeOutcome reports what one invocation of an execution did.
@@ -170,6 +214,11 @@ type invokeOutcome struct {
 	// capReached is true when a child execution exhausted the invocation
 	// cap without settling.
 	capReached bool
+
+	// empty is true when the invocation responded PENDING while no
+	// operation was pending. The service invokes the handler again after
+	// such a response.
+	empty bool
 }
 
 // invoke performs one invocation cycle: it builds the invocation payload
@@ -181,25 +230,69 @@ type invokeOutcome struct {
 // every invocation, and ExecutionSucceeded or ExecutionFailed after the
 // invocation whose response ends the execution.
 func (e *localExecution) invoke(eventJSON []byte, maxInvocations int) (invokeOutcome, error) {
-	payload, err := e.buildPayload(eventJSON)
+	e.client.recordExecutionStarted(string(eventJSON))
+
+	ops, token := e.client.beginInvocation()
+	payload, err := e.buildPayload(eventJSON, ops, token)
 	if err != nil {
 		return invokeOutcome{}, fmt.Errorf("build invocation payload: %w", err)
 	}
+	if e.afterBeginInvocation != nil {
+		e.afterBeginInvocation()
+	}
 
-	e.client.recordExecutionStarted(string(eventJSON))
 	e.invocations++
 	requestID := fmt.Sprintf("%s%d", localRequestIDPrefix, e.invocations)
 
-	start := time.Now()
+	e.dispatchMu.Lock()
+	e.maxInvocations = maxInvocations
+	e.dispatched = make(map[string]bool)
+	e.dispatchCap = false
+	e.dispatchErr = nil
+	e.dispatchMu.Unlock()
+
+	start := e.client.now()
 	response, err := e.handler(context.Background(), payload)
-	end := time.Now()
+	end := e.client.now()
 	if err != nil {
 		return invokeOutcome{}, fmt.Errorf("handler.Invoke returned error: %w", err)
+	}
+
+	e.dispatchMu.Lock()
+	startedCap, startedErr := e.dispatchCap, e.dispatchErr
+	e.dispatchMu.Unlock()
+	if startedErr != nil {
+		return invokeOutcome{}, startedErr
 	}
 
 	resp, err := parseResponse(response)
 	if err != nil {
 		return invokeOutcome{}, err
+	}
+	empty := false
+	if resp.Status == wire.StatusPending && !e.client.withheldToken() && !e.client.hasPendingOperation() {
+		empty = true
+		e.emptyPending++
+	} else {
+		e.emptyPending = 0
+	}
+	if empty && e.emptyPending >= maxEmptyPendingResponses {
+		// The service rejects a PENDING response that reports no
+		// pending operation, and fails the execution once it has
+		// received maxEmptyPendingResponses of them in a row.
+		resp = wire.InvocationResponse{
+			Status: wire.StatusFailed,
+			Error: &wire.ErrorObject{
+				ErrorType:    errCodeInvalidParameterValue,
+				ErrorMessage: msgPendingWithNothingPending,
+			},
+		}
+		response, err = json.Marshal(resp)
+		if err != nil {
+			return invokeOutcome{}, fmt.Errorf("encode invocation response: %w", err)
+		}
+		empty = false
+		e.emptyPending = 0
 	}
 	respErr := responseError(resp)
 	e.client.recordInvocationCompleted(requestID, start, end, respErr)
@@ -209,7 +302,50 @@ func (e *localExecution) invoke(eventJSON []byte, maxInvocations int) (invokeOut
 	if err != nil {
 		return invokeOutcome{}, err
 	}
-	return invokeOutcome{response: response, progressed: progressed, capReached: capReached}, nil
+	return invokeOutcome{
+		response:   response,
+		progressed: progressed,
+		capReached: capReached || startedCap,
+		empty:      empty,
+	}, nil
+}
+
+// runStartedInvokes runs the registered targets of the chained invokes a
+// checkpoint request has just started, while the handler runs. A target
+// that settles has its outcome recorded on the invoke, and the response to
+// that checkpoint request reports it. A target that does not settle, a
+// durable target blocked on external action, leaves the invoke STARTED;
+// the runner drives it again on a later invocation. Invokes of identifiers
+// that are not registered are left STARTED.
+func (e *localExecution) runStartedInvokes(invs []openInvoke) {
+	e.dispatchMu.Lock()
+	defer e.dispatchMu.Unlock()
+	for _, inv := range invs {
+		fn, ok := e.registry.lookup(inv.target.functionID)
+		if !ok {
+			continue
+		}
+		if e.dispatched == nil {
+			e.dispatched = make(map[string]bool)
+		}
+		e.dispatched[inv.id] = true
+		result, done, childCap, err := e.runTarget(inv, fn, e.maxInvocations)
+		if err != nil {
+			if e.dispatchErr == nil {
+				e.dispatchErr = fmt.Errorf("invoke %q of %q: %w", inv.name, inv.target.functionID, err)
+			}
+			continue
+		}
+		if childCap {
+			e.dispatchCap = true
+		}
+		if !done {
+			continue
+		}
+		if err := e.client.settleInvokeByID(inv.id, result); err != nil && e.dispatchErr == nil {
+			e.dispatchErr = err
+		}
+	}
 }
 
 // localRequestIDPrefix prefixes the request ID the local runner assigns to
@@ -260,6 +396,12 @@ func (e *localExecution) driveUntilSettled(eventJSON []byte, maxInvocations int)
 		if outcome.capReached {
 			return response, true, nil
 		}
+		if outcome.empty {
+			// The service rejects the response and invokes the handler
+			// again; invoke fails the execution once the rejections
+			// reach maxEmptyPendingResponses.
+			continue
+		}
 
 		// Complete what would complete on its own with the passage of
 		// time (retry timers, wait expirations). If nothing completed and
@@ -279,9 +421,14 @@ func (e *localExecution) driveUntilSettled(eventJSON []byte, maxInvocations int)
 // identifiers are left STARTED for [LocalRunner.CompleteChainedInvoke] or
 // [LocalRunner.FailChainedInvoke].
 func (e *localExecution) dispatchInvokes(maxInvocations int) (bool, bool, error) {
+	e.dispatchMu.Lock()
+	defer e.dispatchMu.Unlock()
 	settled := false
 	capReached := false
 	for _, inv := range e.client.openInvokes() {
+		if e.dispatched[inv.id] {
+			continue
+		}
 		fn, ok := e.registry.lookup(inv.target.functionID)
 		if !ok {
 			continue
@@ -325,12 +472,14 @@ func (e *localExecution) runTarget(inv openInvoke, fn Function, maxInvocations i
 		return operationResult{status: statusSucceeded, result: string(data)}, true, false, nil
 	}
 
+	e.childMu.Lock()
 	child := e.children[inv.id]
 	if child == nil {
 		client := newMemoryClient()
 		child = newLocalExecution(fn.durable(client), client, e.registry, e.arn+"/"+inv.id, e.depth+1)
 		e.children[inv.id] = child
 	}
+	e.childMu.Unlock()
 
 	response, capReached, err := child.driveUntilSettled([]byte(inv.target.payload), maxInvocations)
 	if err != nil {
@@ -343,14 +492,14 @@ func (e *localExecution) runTarget(inv openInvoke, fn Function, maxInvocations i
 
 	switch resp.Status {
 	case wire.StatusSucceeded:
-		delete(e.children, inv.id)
+		e.removeChild(inv.id)
 		result := operationResult{status: statusSucceeded}
 		if resp.Result != nil {
 			result.result = *resp.Result
 		}
 		return result, true, false, nil
 	case wire.StatusFailed:
-		delete(e.children, inv.id)
+		e.removeChild(inv.id)
 		result := operationResult{status: statusFailed, errType: "Error", errMsg: "invoked function failed"}
 		if resp.Error != nil {
 			result.errType = resp.Error.ErrorType
@@ -364,6 +513,14 @@ func (e *localExecution) runTarget(inv openInvoke, fn Function, maxInvocations i
 		// stays in children and is driven again on the next invocation.
 		return operationResult{}, false, capReached, nil
 	}
+}
+
+// removeChild discards the child execution of the invoke id once its
+// target has settled.
+func (e *localExecution) removeChild(id string) {
+	e.childMu.Lock()
+	delete(e.children, id)
+	e.childMu.Unlock()
 }
 
 // openInvokeMatch locates one STARTED chained invoke: the execution whose
@@ -386,7 +543,10 @@ func (e *localExecution) findOpenInvokes(name string) []openInvokeMatch {
 		}
 	}
 	for _, inv := range open {
-		if child := e.children[inv.id]; child != nil {
+		e.childMu.Lock()
+		child := e.children[inv.id]
+		e.childMu.Unlock()
+		if child != nil {
 			matches = append(matches, child.findOpenInvokes(name)...)
 		}
 	}
@@ -416,14 +576,14 @@ func (e *localExecution) completeChainedInvoke(name string, result operationResu
 	}
 }
 
-// buildPayload constructs the durable invocation input from the current
-// checkpoint log. The payload shape matches what the Lambda durable
-// execution service delivers to a handler.
-func (e *localExecution) buildPayload(eventJSON []byte) ([]byte, error) {
+// buildPayload constructs the durable invocation input from a snapshot of
+// the checkpoint log and the checkpoint token taken with it. The payload
+// shape matches what the Lambda durable execution service delivers to a
+// handler.
+func (e *localExecution) buildPayload(eventJSON []byte, allOps []operationSnapshot, token string) ([]byte, error) {
 	// Build the operations list for the initial state: starts with the
 	// execution operation carrying the customer input, followed by all
 	// checkpointed operations.
-	allOps := e.client.allOperationsRaw()
 	wireOps := make([]wire.Operation, 0, len(allOps)+1)
 
 	// Execution operation always first.
@@ -443,7 +603,7 @@ func (e *localExecution) buildPayload(eventJSON []byte) ([]byte, error) {
 
 	input := wire.InvocationInput{
 		DurableExecutionArn: e.arn,
-		CheckpointToken:     e.client.currentToken(),
+		CheckpointToken:     token,
 		InitialExecutionState: wire.InitialExecutionState{
 			Operations: wireOps,
 		},

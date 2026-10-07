@@ -90,25 +90,21 @@ func TestRegisteredDurableTargetRunExecutesTarget(t *testing.T) {
 	runner := durabletest.NewLocalRunner(callerHandler)
 	runner.RegisterFunction(pricingFn, durabletest.DurableFunction(pricing))
 
-	// The first invocation suspends on the invoke; the target runs before
-	// Run returns, so the operation is already settled.
+	// The target runs when the invoke starts, and the response to the
+	// invoke's START checkpoint reports it settled. So one Run completes
+	// the execution in one invocation.
 	first, err := runner.Run(priceRequest{SKU: "a", Quantity: 7})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Status != durabletest.Pending {
-		t.Fatalf("first status = %s, want PENDING", first.Status)
+	if first.Status != durabletest.Succeeded {
+		t.Fatalf("first status = %s, want SUCCEEDED", first.Status)
 	}
 	if op := first.Operation("quote"); op == nil || op.Status != "SUCCEEDED" {
 		t.Fatalf("quote after first Run = %+v, want SUCCEEDED", op)
 	}
-
-	second, err := runner.Run(priceRequest{SKU: "a", Quantity: 7})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if second.Status != durabletest.Succeeded {
-		t.Fatalf("second status = %s, want SUCCEEDED", second.Status)
+	if n := len(first.Invocations); n != 1 {
+		t.Errorf("invocations = %d, want 1", n)
 	}
 }
 

@@ -58,7 +58,9 @@ func TestHandler(t *testing.T) {
 	}
 
 	// The Map completes once MinSuccessful is reached, so an in-flight item
-	// may or may not have checkpointed its step. The golden lists the
-	// operations every run produces.
+	// may or may not have checkpointed its step. A failed attempt's retry
+	// becomes due as soon as another item checkpoints, so which item
+	// provides the second success depends on scheduling. The golden lists
+	// the operations every run produces.
 	extest.AssertSignature(t, result, extest.Subset)
 }

@@ -56,6 +56,33 @@ type memoryClient struct {
 	executionStarted bool
 	executionEnded   bool
 
+	// clock is the client's virtual clock. It is set when the execution
+	// starts and moves forward only when the client advances it: to report
+	// a timed operation finished while the handler ran other work (see
+	// advanceTimersLocked), or to force every pending timer
+	// (completePendingTimers). Wall-clock time does not move it. Every
+	// timestamp the client records comes from this clock.
+	clock time.Time
+
+	// changed holds, in order, the IDs of operations whose status changed
+	// outside a checkpoint request (a callback resolved, a chained invoke
+	// settled, a timer forced) and that no checkpoint response has
+	// reported yet. The next checkpoint response reports them, so the
+	// handler observes the change in the invocation that is running.
+	changed []string
+
+	// tokenWithheld is set when a response withheld the checkpoint token
+	// during the current invocation. The invocation then ends PENDING
+	// because the service asked it to, not because it awaits an
+	// operation.
+	tokenWithheld bool
+
+	// startInvokes, when set, runs the registered targets of chained
+	// invokes a checkpoint request starts. Checkpoint calls it without
+	// holding mu, after it has stored the START updates, and reports in
+	// its response every invoke the targets settled.
+	startInvokes func([]openInvoke)
+
 	// checkpointedEnd holds the outcome the handler checkpointed on the
 	// execution operation, which it does when a result is too large to
 	// return inline. The terminal event is not recorded at checkpoint
@@ -113,21 +140,137 @@ func (m *memoryClient) resetLocked() {
 	m.executionStarted = false
 	m.executionEnded = false
 	m.checkpointedEnd = nil
+	m.clock = time.Now().UTC()
+	m.changed = nil
+	m.tokenWithheld = false
 }
 
-// Checkpoint applies operation updates, rotates the checkpoint token, and
-// returns the updated operations. Per the backend contract, the token
-// rotates on every successful checkpoint response.
+// nowLocked returns the client's virtual clock. Caller must hold m.mu.
+func (m *memoryClient) nowLocked() time.Time {
+	return m.clock
+}
+
+// now returns the client's clock; see nowLocked.
+func (m *memoryClient) now() time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.nowLocked()
+}
+
+// advanceToLocked moves the client's clock forward to t. A t that is not
+// after the current time leaves the clock as it is. Caller must hold m.mu.
+func (m *memoryClient) advanceToLocked(t time.Time) {
+	if t.After(m.clock) {
+		m.clock = t
+	}
+}
+
+// markChangedLocked records that the operation id changed outside a
+// checkpoint request, so the next checkpoint response reports it. Caller
+// must hold m.mu.
+func (m *memoryClient) markChangedLocked(id string) {
+	for _, c := range m.changed {
+		if c == id {
+			return
+		}
+	}
+	m.changed = append(m.changed, id)
+}
+
+// beginInvocation takes the state an invocation payload carries and clears
+// the per-invocation state, under one lock. It returns every stored
+// operation except the execution operation, and the current checkpoint
+// token.
+//
+// The payload carries every operation, so a change that no checkpoint
+// response reported is delivered with it, and the pending change list is
+// cleared. The snapshot and the clear happen under the same lock. So a
+// change made concurrently, for example a callback resolved by the test,
+// is either in the snapshot or in the change list the next checkpoint
+// response reports. It is never lost between the two.
+func (m *memoryClient) beginInvocation() ([]operationSnapshot, string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ops := m.snapshotLocked()
+	m.changed = nil
+	m.tokenWithheld = false
+	return ops, m.token
+}
+
+// Checkpoint validates the operation updates against the service's limits,
+// applies them, rotates the checkpoint token, and returns the operations
+// whose records changed. Per the backend contract, the token rotates on
+// every successful checkpoint response.
+//
+// A request with an update the service rejects returns the service's error
+// and stores nothing.
+//
+// Like the service, the response also reports operations that changed
+// since the last response without a request of the handler: a callback
+// resolved, a chained invoke settled by a registered target, and a timed
+// operation the client's clock has reached (see advanceTimersLocked).
 func (m *memoryClient) Checkpoint(_ context.Context, in durable.CheckpointInput) (durable.CheckpointOutput, error) {
+	if err := validateCheckpoint(in); err != nil {
+		return durable.CheckpointOutput{}, err
+	}
+
+	m.mu.Lock()
+	// Apply each update.
+	// lastUpdate holds, per operation the request updates, the position
+	// of its last update in the request.
+	lastUpdate := make(map[string]int, len(in.Updates))
+	var updated []durable.Operation
+	var started []openInvoke
+	for i, u := range in.Updates {
+		op := m.applyUpdate(u)
+		updated = append(updated, op)
+		id := ptrStr(u.Id)
+		lastUpdate[id] = i
+		if u.Type == durable.OperationTypeChainedInvoke && u.Action == durable.OperationActionStart {
+			started = append(started, openInvoke{id: id, name: ptrStr(u.Name), target: m.invokeTargets[id]})
+		}
+	}
+	startInvokes := m.startInvokes
+	m.mu.Unlock()
+
+	// A registered target runs without the lock: a durable target is an
+	// execution of its own, and settling its invoke takes the lock.
+	if startInvokes != nil && len(started) > 0 {
+		startInvokes(started)
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Apply each update.
-	var updated []durable.Operation
-	for _, u := range in.Updates {
-		op := m.applyUpdate(u)
-		updated = append(updated, op)
+	// Virtual time passes only where the handler spent time: during a poll,
+	// which the SDK sends while a goroutine is blocked, or during the work
+	// a request reports finished. A request that only starts work, such as
+	// a STEP START, reports no time spent, so no timer fires on it. A timer
+	// the request itself starts did not run while the work ran, so only
+	// timers started by earlier requests are considered.
+	if len(in.Updates) == 0 || reportsFinishedWork(in.Updates) {
+		inRequest := make(map[string]bool, len(lastUpdate))
+		for id := range lastUpdate {
+			inRequest[id] = true
+		}
+		m.advanceTimersLocked(inRequest)
 	}
+	for _, id := range m.changed {
+		if _, inRequest := lastUpdate[id]; inRequest {
+			// The response already carries the record this request
+			// produced; replace it with the current one.
+			for i := range updated {
+				if ptrStr(updated[i].Id) == id {
+					updated[i] = deepCopyOperation(*m.operations[id])
+				}
+			}
+			continue
+		}
+		if op := m.operations[id]; op != nil {
+			updated = append(updated, deepCopyOperation(*op))
+		}
+	}
+	m.changed = nil
 
 	// Rotate token.
 	m.tokenSeq++
@@ -144,9 +287,118 @@ func (m *memoryClient) Checkpoint(_ context.Context, in durable.CheckpointInput)
 			// as usual; only the response withholds the token. The next
 			// invocation starts from the rotated token.
 			out.CheckpointToken = ""
+			m.tokenWithheld = true
 		}
 	}
 	return out, nil
+}
+
+// reportsFinishedWork reports whether updates record the end of work the
+// handler ran: a STEP attempt that succeeded, failed, or will be retried
+// (a step body or a condition check ran), or a CONTEXT that succeeded or
+// failed (a child function ran).
+func reportsFinishedWork(updates []durable.OperationUpdate) bool {
+	for _, u := range updates {
+		switch u.Type {
+		case durable.OperationTypeStep:
+			switch u.Action {
+			case durable.OperationActionSucceed, durable.OperationActionFail, durable.OperationActionRetry:
+				return true
+			}
+		case durable.OperationTypeContext:
+			switch u.Action {
+			case durable.OperationActionSucceed, durable.OperationActionFail:
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// advanceTimersLocked reports the timed operations the handler waits on
+// whose time has come while the handler ran other work. A timed operation
+// is a WAIT in STARTED, which ends at its scheduled end time, and a STEP in
+// PENDING, a retry or condition check whose next attempt is due at its next
+// attempt time. An operation in excluded is not considered: the current
+// request started or changed it, so it did not wait while the work ran.
+//
+// When at least one timed operation remains, the client moves its clock to
+// the earliest of their times. Every one whose time is at or before the
+// new clock then changes: a WAIT becomes SUCCEEDED and a STEP becomes
+// READY. The changed operations are added to m.changed, so the response
+// reports them.
+//
+// Caller must hold m.mu.
+func (m *memoryClient) advanceTimersLocked(excluded map[string]bool) {
+	var earliest time.Time
+	for _, id := range m.opOrder {
+		if excluded[id] {
+			continue
+		}
+		due, ok := timerDue(m.operations[id])
+		if ok && (earliest.IsZero() || due.Before(earliest)) {
+			earliest = due
+		}
+	}
+	if earliest.IsZero() {
+		return
+	}
+	m.advanceToLocked(earliest)
+	now := m.nowLocked()
+	for _, id := range m.opOrder {
+		if excluded[id] {
+			continue
+		}
+		op := m.operations[id]
+		due, ok := timerDue(op)
+		if !ok || due.After(now) {
+			continue
+		}
+		m.fireTimerLocked(id, op)
+	}
+}
+
+// timerDue returns the time at which a timed operation is due: the
+// scheduled end of a STARTED wait, or the next attempt time of a PENDING
+// step. ok is false for any other operation and for one that carries no
+// time.
+func timerDue(op *durable.Operation) (due time.Time, ok bool) {
+	if op == nil {
+		return time.Time{}, false
+	}
+	switch {
+	case op.Type == durable.OperationTypeWait && op.Status == durable.OperationStatusStarted &&
+		op.WaitDetails != nil && op.WaitDetails.ScheduledEndTimestamp != nil:
+		return *op.WaitDetails.ScheduledEndTimestamp, true
+	case op.Type == durable.OperationTypeStep && op.Status == durable.OperationStatusPending &&
+		op.StepDetails != nil && op.StepDetails.NextAttemptTimestamp != nil:
+		return *op.StepDetails.NextAttemptTimestamp, true
+	}
+	return time.Time{}, false
+}
+
+// fireTimerLocked completes the timed operation op stored under id: a WAIT
+// in STARTED becomes SUCCEEDED and a STEP in PENDING becomes READY. It
+// records the change in m.changed. Caller must hold m.mu.
+func (m *memoryClient) fireTimerLocked(id string, op *durable.Operation) bool {
+	switch {
+	case op.Type == durable.OperationTypeStep && op.Status == durable.OperationStatusPending:
+		// PENDING → READY: retry timer elapsed.
+		updated := *op
+		updated.Status = durable.OperationStatusReady
+		m.operations[id] = &updated
+	case op.Type == durable.OperationTypeWait && op.Status == durable.OperationStatusStarted:
+		// STARTED → SUCCEEDED: wait elapsed.
+		updated := *op
+		updated.Status = durable.OperationStatusSucceeded
+		now := m.stampTransition(&updated)
+		m.operations[id] = &updated
+		m.recordOperationEvent(&updated, types.EventTypeWaitSucceeded, nil, nil, now)
+	default:
+		return false
+	}
+	m.markChangedLocked(id)
+	return true
 }
 
 // omitTokenOnCheckpoint schedules the n-th Checkpoint call from now
@@ -232,14 +484,14 @@ func (m *memoryClient) applyUpdate(u durable.OperationUpdate) durable.Operation 
 		op.StartTimestamp = existing.StartTimestamp
 		op.EndTimestamp = existing.EndTimestamp
 	}
-	now := stampTransition(&op)
+	now := m.stampTransition(&op)
 
 	// Build type-specific details.
 	switch u.Type {
 	case durable.OperationTypeStep:
-		op.StepDetails = buildStepDetails(u, existing)
+		op.StepDetails = buildStepDetails(u, existing, now)
 	case durable.OperationTypeWait:
-		op.WaitDetails = buildWaitDetails(u)
+		op.WaitDetails = buildWaitDetails(u, existing, now)
 	case durable.OperationTypeCallback:
 		op.CallbackDetails = buildCallbackDetails(u, existing)
 	case durable.OperationTypeChainedInvoke:
@@ -269,14 +521,16 @@ func (m *memoryClient) applyUpdate(u durable.OperationUpdate) durable.Operation 
 	return op
 }
 
-// stampTransition records the wall-clock time of the status transition op
-// has just made and returns that time, so the matching history event can
-// carry the same timestamp. The first STARTED status sets StartTimestamp;
+// stampTransition records the time of the status transition op has just
+// made, read from the client's clock, and returns that time, so the
+// matching history event can carry the same timestamp. The first STARTED status sets StartTimestamp;
 // a later STARTED (a step re-entered after a retry) leaves it as it is. A
 // terminal status sets EndTimestamp. PENDING and READY are intermediate
 // and change neither.
-func stampTransition(op *durable.Operation) time.Time {
-	now := time.Now()
+//
+// Caller must hold m.mu.
+func (m *memoryClient) stampTransition(op *durable.Operation) time.Time {
+	now := m.nowLocked()
 	switch op.Status {
 	case durable.OperationStatusStarted:
 		if op.StartTimestamp == nil {
@@ -316,7 +570,10 @@ func deriveStatus(action durable.OperationAction) durable.OperationStatus {
 // the next attempt reads that state back from the operation log. Dropping
 // it would restart every attempt from the initial state, so the step would
 // never observe accumulated progress.
-func buildStepDetails(u durable.OperationUpdate, existing *durable.Operation) *durable.StepDetails {
+//
+// A RETRY records the next attempt time: now plus the update's
+// NextAttemptDelaySeconds.
+func buildStepDetails(u durable.OperationUpdate, existing *durable.Operation, now time.Time) *durable.StepDetails {
 	var attempt int32
 	if existing != nil && existing.StepDetails != nil {
 		attempt = existing.StepDetails.Attempt
@@ -343,17 +600,33 @@ func buildStepDetails(u durable.OperationUpdate, existing *durable.Operation) *d
 	if u.Error != nil {
 		sd.Error = u.Error
 	}
+	if u.Action == durable.OperationActionRetry {
+		var delay int32
+		if u.StepOptions != nil && u.StepOptions.NextAttemptDelaySeconds != nil {
+			delay = *u.StepOptions.NextAttemptDelaySeconds
+		}
+		next := now.Add(time.Duration(delay) * time.Second)
+		sd.NextAttemptTimestamp = &next
+	}
 	return sd
 }
 
-// buildWaitDetails constructs WaitDetails for a wait checkpoint update.
-// The local runner does not track wait durations; all pending waits complete
-// unconditionally when [LocalRunner.CompletePendingTimers] is called.
-func buildWaitDetails(u durable.OperationUpdate) *durable.WaitDetails {
+// buildWaitDetails constructs WaitDetails for a wait checkpoint update. A
+// START records the scheduled end time: now plus the update's WaitSeconds.
+// Any other action keeps the details of the stored record.
+func buildWaitDetails(u durable.OperationUpdate, existing *durable.Operation, now time.Time) *durable.WaitDetails {
 	if u.Action != durable.OperationActionStart {
+		if existing != nil {
+			return existing.WaitDetails
+		}
 		return nil
 	}
-	return &durable.WaitDetails{}
+	var secs int32
+	if u.WaitOptions != nil && u.WaitOptions.WaitSeconds != nil {
+		secs = *u.WaitOptions.WaitSeconds
+	}
+	end := now.Add(time.Duration(secs) * time.Second)
+	return &durable.WaitDetails{ScheduledEndTimestamp: &end}
 }
 
 // buildCallbackDetails constructs CallbackDetails, generating a callback ID
@@ -447,39 +720,77 @@ type OpenCallback struct {
 	Name string
 }
 
-// completePendingTimers transitions timer-blocked operations:
+// completePendingTimers transitions timer-blocked operations, whatever
+// their scheduled time:
 //   - STEP in PENDING → READY (retry timer elapsed)
 //   - WAIT in STARTED → SUCCEEDED (wait duration elapsed)
 //
-// Returns true if any operation was advanced.
+// The client's clock moves forward to the latest time among them, so the
+// recorded timestamps follow the scheduled times. Returns true if any
+// operation was advanced.
 func (m *memoryClient) completePendingTimers() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	var latest time.Time
+	for _, id := range m.opOrder {
+		if due, ok := timerDue(m.operations[id]); ok && due.After(latest) {
+			latest = due
+		}
+	}
+	if !latest.IsZero() {
+		m.advanceToLocked(latest)
+	}
 	advanced := false
 	for _, id := range m.opOrder {
 		op := m.operations[id]
 		if op == nil {
 			continue
 		}
-		if op.Type == durable.OperationTypeStep && op.Status == durable.OperationStatusPending {
-			// PENDING → READY: retry timer elapsed.
-			updated := *op
-			updated.Status = durable.OperationStatusReady
-			m.operations[id] = &updated
-			advanced = true
-		}
-		if op.Type == durable.OperationTypeWait && op.Status == durable.OperationStatusStarted {
-			// STARTED → SUCCEEDED: wait elapsed.
-			updated := *op
-			updated.Status = durable.OperationStatusSucceeded
-			now := stampTransition(&updated)
-			m.operations[id] = &updated
-			m.recordOperationEvent(&updated, types.EventTypeWaitSucceeded, nil, nil, now)
+		if m.fireTimerLocked(id, op) {
 			advanced = true
 		}
 	}
 	return advanced
+}
+
+// hasPendingOperation reports whether any stored operation is pending. A
+// pending operation is one whose status STARTED, PENDING, or READY can be
+// changed by something other than the handler: the service, a timer, or an
+// external actor. So the service has a reason to invoke the handler again.
+// These are a WAIT, CALLBACK, or CHAINED_INVOKE in STARTED status, and a
+// STEP in STARTED, PENDING, or READY status.
+//
+// A CONTEXT in STARTED status is not pending. Only the handler's own
+// checkpoints change a context, so a STARTED context gives the service no
+// reason to invoke the handler again. Race over no futures records exactly
+// such a context and responds PENDING, and the service rejects that
+// response. The execution operation is not pending either.
+func (m *memoryClient) hasPendingOperation() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, op := range m.operations {
+		switch op.Type {
+		case durable.OperationTypeWait, durable.OperationTypeCallback, durable.OperationTypeChainedInvoke:
+			if op.Status == durable.OperationStatusStarted {
+				return true
+			}
+		case durable.OperationTypeStep:
+			switch op.Status {
+			case durable.OperationStatusStarted, durable.OperationStatusPending, durable.OperationStatusReady:
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// withheldToken reports whether a checkpoint response withheld the token
+// during the current invocation.
+func (m *memoryClient) withheldToken() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.tokenWithheld
 }
 
 // completeCallback applies a result to a callback operation identified by
@@ -506,7 +817,7 @@ func (m *memoryClient) completeCallback(callbackID string, result operationResul
 		cd := *updated.CallbackDetails
 		cd.Result = strptr(result.result)
 		updated.CallbackDetails = &cd
-		now := stampTransition(&updated)
+		now := m.stampTransition(&updated)
 		m.recordOperationEvent(&updated, types.EventTypeCallbackSucceeded, cd.Result, nil, now)
 	case statusFailed:
 		updated.Status = durable.OperationStatusFailed
@@ -519,13 +830,14 @@ func (m *memoryClient) completeCallback(callbackID string, result operationResul
 			ErrorMessage: strptr(result.errMsg),
 		}
 		updated.CallbackDetails = &cd
-		now := stampTransition(&updated)
+		now := m.stampTransition(&updated)
 		m.recordOperationEvent(&updated, types.EventTypeCallbackFailed, nil, cd.Error, now)
 	default:
 		return fmt.Errorf("durabletest: unsupported callback result status %q", result.status)
 	}
 
 	m.operations[ptrStr(op.Id)] = &updated
+	m.markChangedLocked(ptrStr(op.Id))
 	return nil
 }
 
@@ -545,8 +857,9 @@ func (m *memoryClient) timeoutCallback(callbackID string) error {
 
 	updated := *op
 	updated.Status = durable.OperationStatusTimedOut
-	now := stampTransition(&updated)
+	now := m.stampTransition(&updated)
 	m.operations[ptrStr(op.Id)] = &updated
+	m.markChangedLocked(ptrStr(op.Id))
 	m.recordOperationEvent(&updated, types.EventTypeCallbackTimedOut, nil, &durable.ErrorObject{
 		ErrorType:    strptr(errTypeCallbackTimedOut),
 		ErrorMessage: strptr("callback timed out before it was resolved"),
@@ -641,7 +954,7 @@ func (m *memoryClient) settleInvoke(op *durable.Operation, result operationResul
 		updated.ChainedInvokeDetails = &durable.ChainedInvokeDetails{
 			Result: strptr(result.result),
 		}
-		now := stampTransition(&updated)
+		now := m.stampTransition(&updated)
 		m.recordOperationEvent(&updated, types.EventTypeChainedInvokeSucceeded, updated.ChainedInvokeDetails.Result, nil, now)
 	case statusFailed:
 		updated.Status = durable.OperationStatusFailed
@@ -656,7 +969,7 @@ func (m *memoryClient) settleInvoke(op *durable.Operation, result operationResul
 			errObj.StackTrace = append([]string(nil), result.stackTrace...)
 		}
 		updated.ChainedInvokeDetails = &durable.ChainedInvokeDetails{Error: errObj}
-		now := stampTransition(&updated)
+		now := m.stampTransition(&updated)
 		m.recordOperationEvent(&updated, types.EventTypeChainedInvokeFailed, nil, errObj, now)
 	case statusTimedOut:
 		updated.Status = durable.OperationStatusTimedOut
@@ -665,13 +978,14 @@ func (m *memoryClient) settleInvoke(op *durable.Operation, result operationResul
 			ErrorMessage: strptr(result.errMsg),
 		}
 		updated.ChainedInvokeDetails = &durable.ChainedInvokeDetails{Error: errObj}
-		now := stampTransition(&updated)
+		now := m.stampTransition(&updated)
 		m.recordOperationEvent(&updated, types.EventTypeChainedInvokeTimedOut, nil, errObj, now)
 	default:
 		return fmt.Errorf("durabletest: unsupported chained-invoke result status %q", result.status)
 	}
 
 	m.operations[ptrStr(op.Id)] = &updated
+	m.markChangedLocked(ptrStr(op.Id))
 	return nil
 }
 
