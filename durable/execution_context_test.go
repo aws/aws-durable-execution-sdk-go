@@ -73,19 +73,19 @@ func TestClaimOperationReplayTransition(t *testing.T) {
 		if !c.IsReplaying() {
 			t.Fatalf("IsReplaying() before claim %d = false, want true", want)
 		}
-		id, err := c.claimOperation()
+		id, err := c.claimOperation("")
 		if err != nil {
-			t.Fatalf("claimOperation() %d: %v", want, err)
+			t.Fatalf("claimOperation %d: %v", want, err)
 		}
 		if wantID := (&opIDs{counter: want - 1}).peek(); id != wantID {
-			t.Fatalf("claimOperation() %d = %q, want %q", want, id, wantID)
+			t.Fatalf("claimOperation %d = %q, want %q", want, id, wantID)
 		}
 	}
 
 	// Operation 3 has no checkpoint: mode must flip to live execution at
 	// claim time.
-	if _, err := c.claimOperation(); err != nil {
-		t.Fatalf("claimOperation() 3: %v", err)
+	if _, err := c.claimOperation(""); err != nil {
+		t.Fatalf("claimOperation 3: %v", err)
 	}
 	if c.IsReplaying() {
 		t.Error("IsReplaying() after claiming an uncheckpointed operation = true, want false")
@@ -100,8 +100,8 @@ func TestRefreshReplayModeVirtualContextProbe(t *testing.T) {
 		checkpointed("1-1", statusSucceeded),
 	})
 
-	if _, err := c.claimOperation(); err != nil {
-		t.Fatalf("claimOperation(): %v", err)
+	if _, err := c.claimOperation(""); err != nil {
+		t.Fatalf("claimOperation: %v", err)
 	}
 	if !c.IsReplaying() {
 		t.Error("IsReplaying() with checkpointed virtual-context child = false, want true")
@@ -113,7 +113,7 @@ func TestClaimOperationForeignGoroutine(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		_, err := c.claimOperation()
+		_, err := c.claimOperation("")
 		errCh <- err
 	}()
 	err := <-errCh
@@ -122,16 +122,16 @@ func TestClaimOperationForeignGoroutine(t *testing.T) {
 		t.Skip("goroutine ownership check compiled out by -tags=durablenocheck")
 	}
 	if !errors.Is(err, ErrWrongGoroutine) {
-		t.Errorf("claimOperation() from foreign goroutine = %v, want ErrWrongGoroutine", err)
+		t.Errorf("claimOperation from foreign goroutine = %v, want ErrWrongGoroutine", err)
 	}
 
 	// The failed claim must not have consumed an operation ID.
-	id, err := c.claimOperation()
+	id, err := c.claimOperation("")
 	if err != nil {
-		t.Fatalf("claimOperation() on owner: %v", err)
+		t.Fatalf("claimOperation on owner: %v", err)
 	}
 	if id != "1" {
-		t.Errorf("claimOperation() after rejected foreign claim = %q, want %q", id, "1")
+		t.Errorf("claimOperation after rejected foreign claim = %q, want %q", id, "1")
 	}
 }
 
@@ -142,18 +142,19 @@ func TestChildContextInheritsStateAndPrefix(t *testing.T) {
 		checkpointed("1-1", statusSucceeded),
 	})
 
-	entityID, err := c.claimOperation()
+	entityID, err := c.claimOperation("")
 	if err != nil {
-		t.Fatalf("claimOperation(): %v", err)
+		t.Fatalf("claimOperation: %v", err)
 	}
 	child := c.child(entityID, "", currentGoroutineOwner(), executionMode(c.mode.Load()))
+	defer child.enterBody()()
 
-	id, err := child.claimOperation()
+	id, err := child.claimOperation("")
 	if err != nil {
-		t.Fatalf("child claimOperation(): %v", err)
+		t.Fatalf("child claimOperation: %v", err)
 	}
 	if id != "1-1" {
-		t.Errorf("child claimOperation() = %q, want %q", id, "1-1")
+		t.Errorf("child claimOperation = %q, want %q", id, "1-1")
 	}
 	if !child.IsReplaying() {
 		t.Error("child IsReplaying() with checkpointed child op = false, want true")

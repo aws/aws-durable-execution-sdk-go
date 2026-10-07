@@ -215,7 +215,7 @@ func TestConfigureSerdesConcurrentWithForeignOperations(t *testing.T) {
 	if _, ok := d.callbackDeserializer.(upperDeserializer); !ok {
 		t.Errorf("callbackDeserializer = %T, want upperDeserializer kept from the earlier call", d.callbackDeserializer)
 	}
-	if id, err := ec.claimOperation(); err != nil || id != "1" {
+	if id, err := ec.claimOperation(""); err != nil || id != "1" {
 		t.Errorf("first claimed operation = %q, %v; want \"1\", nil", id, err)
 	}
 }

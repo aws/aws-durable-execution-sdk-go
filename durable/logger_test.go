@@ -216,7 +216,7 @@ func TestExecContextLoggerReadsOwnReplayState(t *testing.T) {
 	// Claim the replayed operation, then refresh for the next (absent)
 	// one: the context flips to live execution.
 	ec.owner = currentGoroutineOwner()
-	_, _ = ec.claimOperation()
+	_, _ = ec.claimOperation("")
 	ec.refreshReplayMode()
 	if ec.IsReplaying() {
 		t.Fatal("expected execution mode after flip")

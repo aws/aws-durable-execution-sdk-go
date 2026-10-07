@@ -73,7 +73,7 @@ func CreateCallback[O any](ctx Context, name string, opts ...CallbackOption) (*C
 		o.applyCallback(&options)
 	}
 
-	id, err := ec.claimOperation()
+	id, err := ec.claimOperation(name)
 	if err != nil {
 		return nil, err
 	}
@@ -230,7 +230,7 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 	// 3. Returns the callback result
 	//
 	// We use the RunInChildContext machinery but with our own subtype.
-	id, err := ec.claimOperation()
+	id, err := ec.claimOperation(name)
 	if err != nil {
 		return zero, err
 	}
@@ -302,7 +302,9 @@ func runClaimedWaitForCallback[O any](ec *execContext, id, name string, submitte
 	child := ec.child(id, name, ec.owner, mode)
 	opInfo := dispatchContextStart(ec, id, name, OperationSubTypeWaitForCallback, op)
 
+	restore := child.enterBody()
 	result, fnErr := runWaitForCallbackBody[O](child, name, submitter, options, serdes)
+	restore()
 
 	// From here to the checkpoint of the context's completion the
 	// operation is an executing span: its outcome belongs to this

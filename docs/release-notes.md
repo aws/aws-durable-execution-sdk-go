@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### Changed: an operation on an enclosing context is rejected
+
+A step body or a `RunInChildContext` body could call an operation on the
+enclosing context, for example the handler's `ctx` captured in a closure.
+The SDK recorded that operation beside the step or the child instead of
+under it. On replay the body did not run again, so the operation IDs no
+longer lined up. The execution then either kept a wrong history or failed
+with a `NonDeterministicReplayError`.
+
+Such a call now fails at the call with the new `durable.ErrWrongContext`
+when the body runs on the goroutine that owns the enclosing context. That
+covers a step body, a `WaitForCondition` check, a `WaitForCallback`
+submitter, and the body of a blocking `RunInChildContext`. An operation on
+a child context kept from a body that already returned, such as a
+sibling's context, fails the same way. A body that runs on its own
+goroutine, the body of `Go`, `RunInChildContextAsync`, a `Map` item, or a
+`Parallel` branch, already failed such a call with
+`durable.ErrWrongGoroutine`, and still does. In both cases the rejected
+operation claims no operation ID and records nothing. Match the error with
+`errors.Is`. An asynchronous operation reports it through its `Future`.
+Building with `-tags durablenocheck` removes the check.
+
 ### Changed: every log line is written exactly once, and `Result` takes a context
 
 A line that ran for the first time after an awaited operation was dropped

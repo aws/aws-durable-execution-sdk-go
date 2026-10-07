@@ -38,6 +38,80 @@ import (
 var ErrWrongGoroutine = errors.New(
 	"durable: operation called from a goroutine that does not own the context; use durable.Go for concurrent durable work")
 
+// ErrWrongContext is returned when a durable operation is called on a
+// Context that is not the innermost active context of the calling
+// goroutine. Inside a RunInChildContext, Go, Map, or Parallel body, only
+// the context that body received may claim an operation; an operation on
+// an enclosing context (the parent, or a sibling) returns this error. A
+// step body receives a StepContext, which exposes no durable operations,
+// so any operation claimed from a step body is on an enclosing context
+// and returns this error.
+//
+// The check runs before the operation claims its operation ID, so a
+// rejected call consumes no ID and records no checkpoint. An Async
+// operation reports the error through the returned Future. Match it with
+// errors.Is; the returned error wraps ErrWrongContext and names the
+// operation and the two contexts.
+//
+// The goroutine-ownership check runs first. A body that runs on its own
+// goroutine (StepAsync, RunInChildContextAsync, Go, a Map item, or a
+// Parallel branch) does not own an enclosing context, so an operation on
+// that context fails with [ErrWrongGoroutine] instead. ErrWrongContext is
+// returned when the call runs on the goroutine that owns the claimed
+// context: inside a Step body, a blocking RunInChildContext body, a
+// WaitForCondition check, a WaitForCallback submitter, or on a child
+// context kept from a body that already returned.
+//
+// The check is enabled in every default build. Building with
+// -tags durablenocheck compiles it out.
+var ErrWrongContext = errors.New(
+	"durable: operation called on a context that is not the innermost active context; inside a RunInChildContext, Go, Map, or Parallel body use the context that body received, and claim no operation on an enclosing context from inside a step body")
+
+// checkActive reports an [ErrWrongContext] error when c is not the
+// innermost active context of its goroutine. name is the operation being
+// claimed. The check is skipped when the goroutine identity is unavailable,
+// because then contexts of different goroutines cannot be told apart.
+func (c *execContext) checkActive(name string) error {
+	if c.active == nil || !c.owner.ok {
+		return nil
+	}
+	f := c.active.cur.Load()
+	if f == nil || (f.ctx == c && f.stepID == "") {
+		return nil
+	}
+	return fmt.Errorf("%w (operation %q on context %q, active context %q)", ErrWrongContext, name, c.contextID(), f.id())
+}
+
+// enterStepBody marks the step body or condition check of operation id,
+// claimed on c, as the innermost active body of c's goroutine. It returns
+// the function that restores the previous frame. A body that runs on a
+// goroutine other than c's owner marks nothing: the ownership check
+// already rejects a claim from that goroutine, and c's owner keeps running
+// its own code.
+func (c *execContext) enterStepBody(id string) func() {
+	return c.enterFrame(&activeFrame{ctx: c, stepID: id})
+}
+
+// enterBody marks c's own body as the innermost active body of c's
+// goroutine. It returns the function that restores the previous frame.
+// The SDK calls it around every child body that runs on the goroutine of
+// the context it was derived from, and around SDK code that claims
+// operations on c from that goroutine.
+func (c *execContext) enterBody() func() {
+	return c.enterFrame(&activeFrame{ctx: c})
+}
+
+// enterFrame installs f as the current frame of c's tracker when the
+// calling goroutine owns c, and returns the function that restores the
+// previous frame.
+func (c *execContext) enterFrame(f *activeFrame) func() {
+	if c.active == nil || !c.owner.ok || c.owner.check() != nil {
+		return func() {}
+	}
+	prev := c.active.cur.Swap(f)
+	return func() { c.active.cur.Store(prev) }
+}
+
 // goroutineOwner records the goroutine a context belongs to and detects
 // durable operations invoked from any other goroutine.
 //

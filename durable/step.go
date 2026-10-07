@@ -85,7 +85,7 @@ func Step[O any](ctx Context, name string, fn func(StepContext) (O, error), opts
 		o.applyStep(&options)
 	}
 
-	id, err := ec.claimOperation()
+	id, err := ec.claimOperation(name)
 	if err != nil {
 		return zero, err
 	}
@@ -114,7 +114,7 @@ func StepAsync[O any](ctx Context, name string, fn func(StepContext) (O, error),
 		o.applyStep(&options)
 	}
 
-	id, err := ec.claimOperation()
+	id, err := ec.claimOperation(name)
 	if err != nil {
 		return newFailedFuture[O](err)
 	}
@@ -552,6 +552,7 @@ func settleStepFailure[O any](ec *execContext, id, name string, options stepOpti
 // disabled.
 func runStepFunc[O any](ctx context.Context, ec *execContext, id, name string, fn func(StepContext) (O, error), attempt int) (O, []string, error) {
 	return runUserFunc(ec, fn, "durable: step panicked", func() (O, error) {
+		defer ec.enterStepBody(id)()
 		return fn(&stepContext{Context: ctx, logger: ec.operationLogger(id, name, attempt), attempt: attempt})
 	})
 }

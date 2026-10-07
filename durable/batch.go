@@ -94,7 +94,7 @@ func Map[I, O any](ctx Context, name string, items []I, fn func(ctx Context, ite
 		return BatchResult[O]{}, fmt.Errorf("durable: Map %q: %w", name, err)
 	}
 
-	id, err := ec.claimOperation()
+	id, err := ec.claimOperation(name)
 	if err != nil {
 		return BatchResult[O]{}, err
 	}
@@ -198,7 +198,7 @@ func Parallel[O any](ctx Context, name string, branches []Branch[O], opts ...Bat
 		return BatchResult[O]{}, fmt.Errorf("durable: Parallel %q: %w", name, err)
 	}
 
-	id, err := ec.claimOperation()
+	id, err := ec.claimOperation(name)
 	if err != nil {
 		return BatchResult[O]{}, err
 	}
@@ -1015,7 +1015,12 @@ type batchItemFunc[O any] func(childCtx Context, index int) (O, []string, error)
 // failure's trace names userFn. childCtx is the item's child context.
 func runBatchItemFunc[O any](childCtx Context, index int, userFn any, call func() (O, error)) (O, []string, error) {
 	ec, _ := childCtx.(*execContext)
-	return runUserFunc(ec, userFn, fmt.Sprintf("durable: batch item %d panicked", index), call)
+	return runUserFunc(ec, userFn, fmt.Sprintf("durable: batch item %d panicked", index), func() (O, error) {
+		if ec != nil {
+			defer ec.enterBody()()
+		}
+		return call()
+	})
 }
 
 // executeBatchItems runs the core batch loop: schedule items up to max
@@ -1125,7 +1130,7 @@ func executeBatchItems[I, O any](
 				childID = flatItemID(parentID, i)
 			} else {
 				var claimErr error
-				childID, claimErr = ec.claimOperation()
+				childID, claimErr = ec.claimOperation(itemName)
 				if claimErr != nil {
 					return BatchResult[O]{}, claimErr
 				}
@@ -1598,7 +1603,7 @@ func runNestedBatchItem[O any](
 	runItem batchItemFunc[O],
 ) (item BatchItem[O], retErr error) {
 	// Claim the child's operation ID from the parent.
-	childID, err := ec.claimOperation()
+	childID, err := ec.claimOperation(itemName)
 	if err != nil {
 		return BatchItem[O]{}, err
 	}
@@ -1792,11 +1797,13 @@ func replayTerminalBatch[I, O any](
 				}
 				if options.nesting == NestingFlat {
 					child := ec.child(id, name, ec.owner, mode)
+					defer child.enterBody()()
 					return replayFlatBatchChildrenFromRecord[I, O](child, id, record, items, fn, options)
 				}
 				return replayBatchChildrenFromRecord[I, O](ec, id, record, items, fn, options, childSubType)
 			}
 			child := ec.child(id, name, ec.owner, mode)
+			defer child.enterBody()()
 			return replayBatchChildren[I, O](child, id, name, items, fn, options, parentSubType, childSubType)
 		}
 		// If an operation-level serdes is configured, use it to
@@ -1818,6 +1825,7 @@ func replayTerminalBatch[I, O any](
 			// payload is not the batch summary (could be legacy).
 			mode := modeReplaySucceededContext
 			child := ec.child(id, name, ec.owner, mode)
+			defer child.enterBody()()
 			return replayBatchChildren[I, O](child, id, name, items, fn, options, parentSubType, childSubType)
 		}
 		res, err := toBatchResult[O](ec.Context, payload, options.itemSerdes, batchItemSerdesCtx(ec, options))

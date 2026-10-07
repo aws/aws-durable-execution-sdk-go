@@ -66,6 +66,13 @@ type execContext struct {
 	owner goroutineOwner
 	state *executionState
 
+	// active records the innermost active context of the goroutine that
+	// owns this context. Every context owned by that goroutine shares one
+	// tracker; see activeTracker. A claim on this context fails with
+	// [ErrWrongContext] unless the tracker names this context and no step
+	// body or condition check runs on it.
+	active *activeTracker
+
 	// checkpointParent is the operation ID that operations claimed on this
 	// context record as their ParentId. It equals ids.prefix for the root
 	// context (empty) and for a child context whose own operation is
@@ -190,6 +197,7 @@ func newExecContext(ctx context.Context, executionArn string, inv invocationInfo
 		state:        state,
 		suspend:      newSuspendSignal(),
 	}
+	ec.active = newActiveTracker(ec)
 	ec.setSerdesDefaults(serdesDefaults{serdes: JSONSerdes})
 	ec.setLogDefaults(logDefaults{handler: handler.WithAttrs(executionLogAttrs(executionArn, inv))})
 	ec.mode.Store(int32(mode))
@@ -429,8 +437,8 @@ func (c *execContext) parentOperationID() string {
 //
 // On error, no state is mutated: the operation ID is not consumed and the
 // mode is unchanged.
-func (c *execContext) claimOperation() (string, error) {
-	if err := c.claimable(); err != nil {
+func (c *execContext) claimOperation(name string) (string, error) {
+	if err := c.claimable(name); err != nil {
 		return "", err
 	}
 	c.refreshReplayMode()
@@ -444,17 +452,18 @@ func (c *execContext) claimOperation() (string, error) {
 // checkpoint log, so its absence says nothing about where replay ends; the
 // next checkpointed operation claimed on this context, or inside the
 // virtual child, settles that.
-func (c *execContext) claimUncheckpointedOperation() (string, error) {
-	if err := c.claimable(); err != nil {
+func (c *execContext) claimUncheckpointedOperation(name string) (string, error) {
+	if err := c.claimable(name); err != nil {
 		return "", err
 	}
 	return c.ids.next(), nil
 }
 
-// claimable reports whether this context may claim an operation: the
+// claimable reports whether this context may claim the operation name: the
 // invocation is not suspending, the context is not blocked or abandoned,
-// and the calling goroutine owns it.
-func (c *execContext) claimable() error {
+// the calling goroutine owns it, and it is the innermost active context of
+// that goroutine.
+func (c *execContext) claimable(name string) error {
 	if c.suspend.fired() {
 		return errSuspendExecution
 	}
@@ -464,7 +473,53 @@ func (c *execContext) claimable() error {
 	if c.abandon.abandoned() {
 		return errSuspendExecution
 	}
-	return c.owner.check()
+	if err := c.owner.check(); err != nil {
+		return err
+	}
+	return c.checkActive(name)
+}
+
+// activeTracker records, for one goroutine, the innermost body running on
+// it. The goroutine's own context code runs with the tracker naming that
+// context. Entering a child body, a step body, or a condition check on the
+// goroutine replaces the frame, and leaving it restores the previous one.
+// Only the owning goroutine changes the frame. The atomic pointer lets a
+// claim from another goroutine read it without a data race; that claim is
+// rejected by the ownership check first.
+type activeTracker struct {
+	cur atomic.Pointer[activeFrame]
+}
+
+// activeFrame is one entry of an activeTracker. ctx is the context whose
+// body runs. stepID is the operation ID of the step body or condition
+// check running on ctx, or empty while ctx's own body runs.
+type activeFrame struct {
+	ctx    *execContext
+	stepID string
+}
+
+// newActiveTracker returns a tracker whose active context is c.
+func newActiveTracker(c *execContext) *activeTracker {
+	t := &activeTracker{}
+	t.cur.Store(&activeFrame{ctx: c})
+	return t
+}
+
+// id returns the identity of the frame in an [ErrWrongContext] error.
+func (f *activeFrame) id() string {
+	if f.stepID != "" {
+		return f.stepID
+	}
+	return f.ctx.contextID()
+}
+
+// contextID returns the identity of c in an [ErrWrongContext] error: the
+// context's operation ID, or "root" for the root context.
+func (c *execContext) contextID() string {
+	if c.ids.prefix == "" {
+		return "root"
+	}
+	return c.ids.prefix
 }
 
 // refreshReplayMode switches from replay to live execution when the
@@ -727,6 +782,14 @@ func (c *execContext) childWith(entityID, name string, owner goroutineOwner, mod
 		branchTok:          c.branchTok,
 		combinatorObserve:  c.combinatorObserve,
 	}
+	// A child owned by c's goroutine shares c's tracker, because its body
+	// runs nested inside c's code on that goroutine. A child owned by
+	// another goroutine starts a tracker of its own.
+	if owner == c.owner && c.active != nil {
+		child.active = c.active
+	} else {
+		child.active = newActiveTracker(child)
+	}
 	child.setSerdesDefaults(d.serdes)
 	child.setLogDefaults(d.log)
 	child.mode.Store(int32(mode))
@@ -869,6 +932,7 @@ func (c *execContext) branchWith(owner goroutineOwner, d inheritedDefaults) *exe
 		branchTok:          c.branchTok,
 		combinatorObserve:  c.combinatorObserve,
 	}
+	b.active = newActiveTracker(b)
 	b.setSerdesDefaults(d.serdes)
 	b.setLogDefaults(d.log)
 	b.mode.Store(c.mode.Load())

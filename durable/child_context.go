@@ -341,7 +341,7 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 		return runVirtualChild(ec, name, subType, options, fn)
 	}
 
-	id, err := ec.claimOperation()
+	id, err := ec.claimOperation(name)
 	if err != nil {
 		return zero, err
 	}
@@ -379,7 +379,7 @@ func runClaimedChild[O any](ec *execContext, id, name, subType string, summary f
 			// so the caller sees one error type on every invocation.
 			if op.childCtx.replayChildren {
 				child := ec.child(id, name, ec.owner, modeReplaySucceededContext)
-				result, fnErr := fn(child)
+				result, fnErr := callChildBody(child, fn)
 				if fnErr != nil {
 					return zero, replayedChildFailure(name, options, fnErr, ec.returnedErrorTrace(fn, fnErr, 0))
 				}
@@ -438,7 +438,7 @@ func runClaimedChild[O any](ec *execContext, id, name, subType string, summary f
 		},
 		func(ctx context.Context) (any, error) {
 			child.Context = ctx
-			r, e := fn(child)
+			r, e := callChildBody(child, fn)
 			if e != nil {
 				fnTrace = ec.returnedErrorTrace(fn, e, 0)
 			}
@@ -556,7 +556,7 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 
 	// Claim the operation ID synchronously on the calling goroutine to
 	// preserve deterministic ID minting order across concurrent Go calls.
-	id, err := ec.claimOperation()
+	id, err := ec.claimOperation(name)
 	if err != nil {
 		return newFailedFuture[O](err)
 	}
@@ -615,7 +615,7 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 		// Recover panics in the child function so they settle the
 		// future as a failure rather than crashing the process.
 		result, fnTrace, fnErr := runUserFunc(child, fn, fmt.Sprintf("durable: child context %q panicked", name), func() (O, error) {
-			return fn(child)
+			return callChildBody(child, fn)
 		})
 
 		// From here to the checkpoint of the child's completion the
@@ -738,7 +738,7 @@ func claimVirtualChild(ec *execContext, name string) (string, error) {
 	if ec.virtual {
 		return "", fmt.Errorf("durable: child context %q: WithChildVirtual cannot be used inside a virtual child context; make one of the two a checkpointed child context", name)
 	}
-	id, err := ec.claimUncheckpointedOperation()
+	id, err := ec.claimUncheckpointedOperation(name)
 	if err != nil {
 		return "", err
 	}
@@ -787,7 +787,7 @@ func runVirtualChild[O any](ec *execContext, name, subType string, options child
 	var fnTrace []string
 	wrappedResult, wrappedErr := wrapVirtualChildBody(ec, opInfo, mode, func(ctx context.Context) (any, error) {
 		child.Context = ctx
-		r, e := fn(child)
+		r, e := callChildBody(child, fn)
 		if e != nil {
 			fnTrace = ec.returnedErrorTrace(fn, e, 0)
 		}
@@ -867,7 +867,7 @@ func runVirtualChildAsync[O any](ec *execContext, name, subType string, options 
 			var zero O
 			wrappedResult, wrappedErr := wrapVirtualChildBody(ec, opInfo, mode, func(ctx context.Context) (any, error) {
 				child.Context = ctx
-				return fn(child)
+				return callChildBody(child, fn)
 			})
 			if wrappedErr != nil {
 				return zero, wrappedErr
@@ -1038,7 +1038,7 @@ func replayChildAsync[O any](ec *execContext, id, name string, options childOpti
 		child.adoptBranchToken(tok)
 
 		result, fnTrace, fnErr := runUserFunc(child, fn, fmt.Sprintf("durable: child context %q panicked", name), func() (O, error) {
-			return fn(child)
+			return callChildBody(child, fn)
 		})
 		if fnErr != nil {
 			var zero O
@@ -1211,4 +1211,12 @@ func checkpointedEndTime(op *operation) time.Time {
 		return op.endTimestamp
 	}
 	return time.Now()
+}
+
+// callChildBody runs fn as the body of the child context child. While fn
+// runs on the parent's goroutine, the parent is not the innermost active
+// context, so a claim on the parent fails with [ErrWrongContext].
+func callChildBody[O any](child *execContext, fn func(Context) (O, error)) (O, error) {
+	defer child.enterBody()()
+	return fn(child)
 }

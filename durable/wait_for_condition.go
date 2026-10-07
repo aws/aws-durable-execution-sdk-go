@@ -53,7 +53,7 @@ func WaitForCondition[S any](ctx Context, name string, check func(StepContext, S
 		serdes = ec.serdesDefaults().serdes
 	}
 
-	id, err := ec.claimOperation()
+	id, err := ec.claimOperation(name)
 	if err != nil {
 		return zero, err
 	}
@@ -436,6 +436,7 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 // when capture is disabled.
 func runCheckFunc[S any](ctx context.Context, ec *execContext, id, name string, check func(StepContext, S) (S, error), state S, attempt int) (S, []string, error) {
 	return runUserFunc(ec, check, "durable: WaitForCondition check panicked", func() (S, error) {
+		defer ec.enterStepBody(id)()
 		return check(&stepContext{Context: ctx, logger: ec.operationLogger(id, name, attempt), attempt: attempt}, state)
 	})
 }

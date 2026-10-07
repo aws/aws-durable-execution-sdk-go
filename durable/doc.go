@@ -45,7 +45,12 @@
 // [Go] is the replay-safe way to run durable work concurrently. It claims
 // the child's operation ID on the calling goroutine, so the order is
 // deterministic, and then starts a goroutine that owns a fresh child
-// Context. Use the child Context inside the function, never the parent:
+// Context. Use the child Context inside the function, never the parent.
+// An operation on an enclosing Context from inside a child body or a step
+// body records nothing. It fails with [ErrWrongContext] when the body runs
+// on the goroutine that owns that Context, as a Step or blocking
+// RunInChildContext body does, and with [ErrWrongGoroutine] when the body
+// runs on its own goroutine, as a Go, Map, or Parallel body does:
 //
 //	fut := durable.Go(ctx, "work", func(child durable.Context) (T, error) {
 //		return durable.Step(child, "step", func(durable.StepContext) (T, error) {

@@ -220,6 +220,20 @@ operation on the calling goroutine, which keeps the order deterministic,
 and then starts a goroutine that owns a fresh child context. Use the child
 context inside the function, never the parent.
 
+The SDK enforces this. A body that runs on the calling goroutine, the body
+of a `Step` or of a blocking `RunInChildContext`, fails an operation on an
+enclosing context with `durable.ErrWrongContext`. A body that runs on its
+own goroutine, the body of `Go`, `RunInChildContextAsync`, a `Map` item, or
+a `Parallel` branch, fails the same call with `durable.ErrWrongGoroutine`,
+because that goroutine does not own the enclosing context. An operation on
+a child context kept from a body that already returned, such as a
+sibling's context, fails with `durable.ErrWrongContext` when it runs on
+that context's goroutine. A step body must not call an operation on a
+captured enclosing context either. Its own argument exposes no durable
+operations, so such a call fails with `durable.ErrWrongContext`. Either
+way the rejected operation claims no operation ID and records nothing.
+`-tags durablenocheck` removes both checks.
+
 ```go
 func handler(ctx durable.Context, _ any) (string, error) {
 	fut := durable.Go(ctx, "work", func(child durable.Context) (string, error) {
