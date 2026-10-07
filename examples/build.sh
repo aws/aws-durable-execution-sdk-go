@@ -43,6 +43,9 @@ EXAMPLES="
   invoke-tenant-id
   invoke-tenant-target
   chained-invoke
+  invoke-async
+  invoke-serdes
+  invoke-error-sentinels
   child-context-basic
   child-context-virtual
   child-context-serdes
