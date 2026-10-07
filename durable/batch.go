@@ -340,6 +340,17 @@ type BatchItem[O any] struct {
 	// Err is the item's error. It is nil unless Status is
 	// [BatchItemFailed].
 	Err error
+
+	// serialized is the output of the item serdes Marshal for Result, the
+	// bytes Result was decoded from. The batch aggregate stores these
+	// bytes, so the item serdes runs once per direction. It is cleared
+	// before the batch returns its result to the caller.
+	serialized []byte
+
+	// hasSerialized reports whether serialized holds the Marshal output.
+	// Marshal may return nil or an empty slice, so presence is tracked
+	// apart from the bytes.
+	hasSerialized bool
 }
 
 // BatchResult is the collected outcome of a [Map] or [Parallel] operation.
@@ -472,6 +483,10 @@ func (r BatchResult[O]) HasFailure() bool {
 // from the result's Items and Reason alone, so the first invocation and
 // every replay return the same error for the same checkpointed batch.
 func batchOutcome[O any](name string, result BatchResult[O]) (BatchResult[O], error) {
+	for i := range result.Items {
+		result.Items[i].serialized = nil
+		result.Items[i].hasSerialized = false
+	}
 	if result.Status() != BatchItemFailed {
 		return result, nil
 	}
@@ -1453,10 +1468,12 @@ func runPreClaimedBatchItem[O any](
 		return BatchItem[O]{}, decodeErr
 	}
 	return BatchItem[O]{
-		Index:  index,
-		Name:   itemName,
-		Status: BatchItemSucceeded,
-		Result: out,
+		Index:         index,
+		Name:          itemName,
+		Status:        BatchItemSucceeded,
+		Result:        out,
+		serialized:    serialized,
+		hasSerialized: true,
 	}, nil
 }
 
@@ -1585,10 +1602,12 @@ func runFlatBatchItem[O any](
 	}
 
 	return BatchItem[O]{
-		Index:  index,
-		Name:   itemName,
-		Status: BatchItemSucceeded,
-		Result: out,
+		Index:         index,
+		Name:          itemName,
+		Status:        BatchItemSucceeded,
+		Result:        out,
+		serialized:    serialized,
+		hasSerialized: true,
 	}, nil
 }
 
@@ -1687,10 +1706,12 @@ func runNestedBatchItem[O any](
 	}
 
 	return BatchItem[O]{
-		Index:  index,
-		Name:   itemName,
-		Status: BatchItemSucceeded,
-		Result: out,
+		Index:         index,
+		Name:          itemName,
+		Status:        BatchItemSucceeded,
+		Result:        out,
+		serialized:    serialized,
+		hasSerialized: true,
 	}, nil
 }
 
@@ -1721,11 +1742,17 @@ func replayTerminalChildItem[O any](
 				return BatchItem[O]{}, err
 			}
 			dispatchBatchItemReplayedEnd(ec, parentID, childID, itemName, childSubType, op, nil)
+			out, serialized, err := roundTripReplayedResult[O](ec, options.itemSerdes, childID, batchItemOpName(itemName, index), result)
+			if err != nil {
+				return BatchItem[O]{}, err
+			}
 			return BatchItem[O]{
-				Index:  index,
-				Name:   itemName,
-				Status: BatchItemSucceeded,
-				Result: result,
+				Index:         index,
+				Name:          itemName,
+				Status:        BatchItemSucceeded,
+				Result:        out,
+				serialized:    serialized,
+				hasSerialized: true,
 			}, nil
 		}
 		dispatchBatchItemReplayedEnd(ec, parentID, childID, itemName, childSubType, op, nil)
@@ -1734,10 +1761,12 @@ func replayTerminalChildItem[O any](
 			return BatchItem[O]{}, ec.serdesFailure(batchItemOpName(itemName, index), serdesDirectionUnmarshal, err)
 		}
 		return BatchItem[O]{
-			Index:  index,
-			Name:   itemName,
-			Status: BatchItemSucceeded,
-			Result: out,
+			Index:         index,
+			Name:          itemName,
+			Status:        BatchItemSucceeded,
+			Result:        out,
+			serialized:    []byte(op.childCtx.result),
+			hasSerialized: true,
 		}, nil
 
 	case statusFailed:
@@ -2036,13 +2065,16 @@ func toBatchResult[O any](ctx context.Context, payload batchCheckpointPayload, i
 		}
 		switch cp.Status {
 		case BatchItemSucceeded:
+			// The aggregate omits an empty result, and Marshal may return
+			// empty bytes. So every succeeded item is decoded, an empty
+			// result included, as the first run decoded it.
 			var out O
-			if cp.Result != "" {
-				if err := itemSerdes.Unmarshal(ctx, itemSctx(cp.Index), []byte(cp.Result), &out); err != nil {
-					return BatchResult[O]{}, newSerdesError(batchItemOpName(cp.Name, cp.Index), serdesDirectionUnmarshal, err)
-				}
+			if err := itemSerdes.Unmarshal(ctx, itemSctx(cp.Index), []byte(cp.Result), &out); err != nil {
+				return BatchResult[O]{}, newSerdesError(batchItemOpName(cp.Name, cp.Index), serdesDirectionUnmarshal, err)
 			}
 			items[i].Result = out
+			items[i].serialized = []byte(cp.Result)
+			items[i].hasSerialized = true
 		case BatchItemFailed:
 			cerr := batchItemError(cp.Name, cp.ErrType, cp.ErrMessage, cp.childErrorData, "")
 			cerr.StackTrace = cp.StackTrace
@@ -2349,9 +2381,16 @@ func fromBatchResult[O any](ctx context.Context, result BatchResult[O], itemSerd
 		}
 		switch item.Status {
 		case BatchItemSucceeded:
-			raw, err := itemSerdes.Marshal(ctx, itemSctx(item.Index), item.Result)
-			if err != nil {
-				return batchCheckpointPayload{}, newSerdesError(batchItemOpName(item.Name, item.Index), serdesDirectionMarshal, err)
+			// The item stored its marshaled bytes when it completed.
+			// Storing those bytes, rather than marshaling the decoded
+			// Result again, applies the item serdes once per direction.
+			raw := item.serialized
+			if !item.hasSerialized {
+				var err error
+				raw, err = itemSerdes.Marshal(ctx, itemSctx(item.Index), item.Result)
+				if err != nil {
+					return batchCheckpointPayload{}, newSerdesError(batchItemOpName(item.Name, item.Index), serdesDirectionMarshal, err)
+				}
 			}
 			cpItems[i].Result = string(raw)
 		case BatchItemFailed:

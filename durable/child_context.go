@@ -315,7 +315,11 @@ func (o *childOptions) failure(name string, rec errorRecord) error {
 // RunInChildContext runs fn in a child context with isolated operation
 // tracking. Use it to group durable operations into a named sub-workflow
 // whose overall result is checkpointed: on replay of a completed child
-// context, the stored result is returned without re-executing fn. If fn
+// context, the stored result is returned without re-executing fn. A
+// result whose serialized form exceeds 256 KiB is not stored. Replay
+// rebuilds it by running fn again, and it passes the new result through
+// the serdes, Marshal then Unmarshal, as the first run did. So replay
+// returns the same value as the first run for any [Serdes]. If fn
 // fails, RunInChildContext returns a [*ChildContextError], or the error
 // a [WithChildErrorMapper] mapper derives from it.
 func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, error), opts ...ChildOption) (O, error) {
@@ -383,7 +387,8 @@ func runClaimedChild[O any](ec *execContext, id, name, subType string, summary f
 				if fnErr != nil {
 					return zero, replayedChildFailure(name, options, fnErr, ec.returnedErrorTrace(fn, fnErr, 0))
 				}
-				return result, nil
+				out, _, err := roundTripReplayedResult[O](ec, options.serdes, id, name, result)
+				return out, err
 			}
 			var out O
 			if err := options.serdes.Unmarshal(ec.Context, ec.serdesCtx(id), []byte(op.childCtx.result), &out); err != nil {
@@ -1045,7 +1050,8 @@ func replayChildAsync[O any](ec *execContext, id, name string, options childOpti
 			fut.settle(zero, replayedChildFailure(name, options, fnErr, fnTrace))
 			return
 		}
-		fut.settle(result, nil)
+		out, _, err := roundTripReplayedResult[O](ec, options.serdes, id, name, result)
+		fut.settle(out, err)
 	}()
 	return fut
 }

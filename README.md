@@ -507,7 +507,10 @@ fails it with a `*durable.CallbackExternalError`.
 `RunInChildContext` runs a function with its own context. The operations
 inside it are recorded under the child, and the child's overall result is
 checkpointed. On replay of a completed child, the SDK returns the recorded
-result without running the function.
+result without running the function. A result whose serialized form exceeds
+256 KiB is not stored. Replay runs the function again and passes the new
+result through the serdes, as the first run did, so replay returns the
+same value as the first run.
 
 ```go
 func handler(ctx durable.Context, _ any) (string, error) {

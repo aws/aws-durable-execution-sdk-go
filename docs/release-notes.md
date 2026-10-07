@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### Fixed: replay returns the same child-context and batch-item result as the first run
+
+A child-context result whose serialized form exceeds 256 KiB is not
+stored. Replay rebuilds it by running the body again. Replay returned the
+new body value without passing it through the serdes, while the first run
+returned the value `Unmarshal` produced. A `Map` item or `Parallel` branch
+stored in the batch aggregate went through the item serdes twice in each
+direction. So a serdes whose round trip changes the value, such as one
+that compresses, encrypts, or normalizes, made replay return a different
+value than the first run.
+
+Every such path now applies the configured serdes exactly once per
+direction and returns the same value on the first run and on replay. That
+covers `RunInChildContext`, `RunInChildContextAsync`, and `Go` with a
+result over 256 KiB, the combinators `All`, `AllSettled`, `Any`, `Race`,
+`Join`, and `Select` over such a result, `Retry` whose attempt returns
+such a result, and every `Map` item and `Parallel` branch. A result rebuilt
+by running the body again is passed through `Marshal` and then
+`Unmarshal`, as on the first run.
+
 ### Changed: an operation on an enclosing context is rejected
 
 A step body or a `RunInChildContext` body could call an operation on the

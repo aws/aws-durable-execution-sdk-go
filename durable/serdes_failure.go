@@ -114,6 +114,25 @@ func decodeLiveResult[O any](ec *execContext, serdes Serdes, id, operation strin
 	return out, nil
 }
 
+// roundTripReplayedResult marshals result with serdes and returns the
+// value [decodeLiveResult] decodes from those bytes, together with the
+// bytes. Replay of a result too large to store runs the body again, so it
+// holds the raw body value. The first run returned the decoded value. So
+// this conversion applies the same round trip, and the value replay
+// returns equals the value the first run returned.
+func roundTripReplayedResult[O any](ec *execContext, serdes Serdes, id, operation string, result O) (O, []byte, error) {
+	serialized, err := serdes.Marshal(ec.Context, ec.serdesCtx(id), result)
+	if err != nil {
+		var zero O
+		return zero, nil, ec.serdesFailure(operation, serdesDirectionMarshal, err)
+	}
+	out, err := decodeLiveResult[O](ec, serdes, id, operation, serialized)
+	if err != nil {
+		return out, nil, err
+	}
+	return out, serialized, nil
+}
+
 // reportSerdesError passes err through [execContext.serdesFailure] when it
 // is a [*SerdesError] built by a conversion helper that has no execution
 // context, so a retryable serdes failure ends the invocation there too.
