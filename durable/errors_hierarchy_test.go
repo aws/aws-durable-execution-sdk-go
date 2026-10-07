@@ -72,7 +72,6 @@ func TestCallbackSubtypesMatchBaseTypes(t *testing.T) {
 		&CombinatorError{Name: "any"},
 		&BatchError{Name: "b", Reason: CompletionAllCompleted},
 		&NonDeterministicReplayError{Name: "n"},
-		&ResultTooLargeError{Name: "r"},
 	}
 	everything = append(everything, subtypes...)
 	for _, err := range everything {
@@ -290,25 +289,6 @@ func TestSettledRoundTripsErrorType(t *testing.T) {
 		}
 	})
 
-	t.Run("result too large error", func(t *testing.T) {
-		in := Settled[string]{Err: &ResultTooLargeError{Name: "r", SizeBytes: 900_000, LimitBytes: resultSizeLimitBytes}}
-		out := roundTrip(t, in)
-		var tooLarge *ResultTooLargeError
-		if !errors.As(out.Err, &tooLarge) {
-			t.Fatalf("deserialized error = %T, want *ResultTooLargeError", out.Err)
-		}
-		if tooLarge.Name != "r" {
-			t.Errorf("Name = %q, want r", tooLarge.Name)
-		}
-		if out.Err.Error() != in.Err.Error() {
-			t.Errorf("Error() = %q, want %q", out.Err.Error(), in.Err.Error())
-		}
-		var opErr *OperationError
-		if !errors.As(out.Err, &opErr) || opErr.Name != "r" {
-			t.Errorf("errors.As(*OperationError) after round trip failed: %v", out.Err)
-		}
-	})
-
 	t.Run("every SDK wire name rebuilds its type", func(t *testing.T) {
 		// Every error type that serializes under an SDK wire name and is
 		// matchable as *OperationError must deserialize as itself.
@@ -327,7 +307,6 @@ func TestSettledRoundTripsErrorType(t *testing.T) {
 			&BatchError{Name: "b", Reason: CompletionAllCompleted, Errors: []error{errors.New("m")}},
 			&OperationError{Name: "o", ErrorType: "E", Message: "m", Err: errors.New("m")},
 			&NonDeterministicReplayError{Name: "n"},
-			&ResultTooLargeError{Name: "r"},
 		} {
 			out := roundTrip(t, Settled[string]{Err: in})
 			if got, want := reflect.TypeOf(out.Err), reflect.TypeOf(in); got != want {

@@ -171,11 +171,6 @@ func runInvoke[O, I any](ec *execContext, id, name, functionID string, input I, 
 		return zero, ec.serdesFailure(name, serdesDirectionMarshal, err)
 	}
 
-	// Check the serialized input size before checkpointing START.
-	if sizeErr := checkResultSize(payload, name); sizeErr != nil {
-		return zero, sizeErr
-	}
-
 	update := OperationUpdate{
 		Id:      aws.String(hashID(id)),
 		Type:    OperationTypeChainedInvoke,

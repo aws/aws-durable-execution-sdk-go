@@ -62,17 +62,3 @@ func validateReplayConsistency(op *operation, expectedType, expectedSubType, exp
 	}
 	return nil
 }
-
-// checkResultSize validates that a serialized result fits within the
-// checkpoint batch payload limit. Returns *ResultTooLargeError if the
-// size exceeds [resultSizeLimitBytes].
-func checkResultSize(serialized []byte, name string) error {
-	if len(serialized) <= resultSizeLimitBytes {
-		return nil
-	}
-	return &ResultTooLargeError{
-		Name:       name,
-		SizeBytes:  len(serialized),
-		LimitBytes: resultSizeLimitBytes,
-	}
-}

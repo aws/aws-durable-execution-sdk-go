@@ -194,7 +194,6 @@ var wireErrorTypeCases = []struct {
 	{"OperationError", &OperationError{Name: "op", Err: fmt.Errorf("x")}, "OperationError"},
 	{"SerdesError", &SerdesError{Operation: "op", Direction: "marshal", Err: fmt.Errorf("x")}, "SerdesError"},
 	{"NonDeterministicReplayError", &NonDeterministicReplayError{Name: "n"}, "NonDeterministicReplayError"},
-	{"ResultTooLargeError", &ResultTooLargeError{Name: "r"}, "ResultTooLargeError"},
 	{"CheckpointError", &CheckpointError{Err: fmt.Errorf("x")}, "CheckpointError"},
 }
 

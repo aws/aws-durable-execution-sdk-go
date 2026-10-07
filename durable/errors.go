@@ -26,7 +26,6 @@ var (
 	_ error = (*BatchError)(nil)
 	_ error = (*OperationError)(nil)
 	_ error = (*NonDeterministicReplayError)(nil)
-	_ error = (*ResultTooLargeError)(nil)
 	_ error = (*SerdesError)(nil)
 )
 
@@ -116,8 +115,6 @@ func sdkWireErrorType(err error) (string, bool) {
 		return "SerdesError", true
 	case *NonDeterministicReplayError:
 		return "NonDeterministicReplayError", true
-	case *ResultTooLargeError:
-		return "ResultTooLargeError", true
 	case *CheckpointError:
 		return "CheckpointError", true
 	}
@@ -227,7 +224,7 @@ const (
 // Every typed operation error ([StepError], [InvokeError], [CallbackError]
 // and its subtypes, [ChildContextError], [WaitForConditionError],
 // [RetryError], [CombinatorError], [StepInterruptedError], [BatchError],
-// [NonDeterministicReplayError], [ResultTooLargeError]) is matchable this
+// [NonDeterministicReplayError]) is matchable this
 // way. The typed errors that wrap a recorded failure expose the same
 // fields directly.
 //
@@ -787,7 +784,7 @@ var sdkErrorsByWireType = func() map[string]struct{} {
 		&StepError{}, &StepInterruptedError{}, &InvokeError{},
 		&CallbackError{}, &CallbackExternalError{}, &CallbackTimeoutError{}, &CallbackSubmitterError{},
 		&ChildContextError{}, &WaitForConditionError{}, &RetryError{}, &CombinatorError{}, &SerdesError{},
-		&OperationError{}, &BatchError{}, &NonDeterministicReplayError{}, &ResultTooLargeError{},
+		&OperationError{}, &BatchError{}, &NonDeterministicReplayError{},
 	} {
 		name, _ := sdkWireErrorType(err)
 		m[name] = struct{}{}
@@ -812,7 +809,7 @@ var sdkErrorsByWireType = func() map[string]struct{} {
 // rebuilt inner type's own record names itself. sentinel, when non-nil, is
 // reachable through Err. Fields outside [OperationError] (Attempts,
 // FunctionID, CallbackID, Status, Direction, and the detail fields of
-// [NonDeterministicReplayError] and [ResultTooLargeError]) are zero, with
+// [NonDeterministicReplayError]) are zero, with
 // two exceptions: a callback timeout derives Heartbeat from the record and
 // unwraps to [ErrCallbackTimedOut], and a [BatchError] recovers
 // its Reason from the message. The types whose Error() text is composed
@@ -869,8 +866,6 @@ func reconstructSDKError(wireType string, op OperationError, sentinel error) err
 		return &SerdesError{Operation: op.Name, Err: leaf}
 	case "NonDeterministicReplayError":
 		return &NonDeterministicReplayError{Name: op.Name, recordedMessage: rec.message}
-	case "ResultTooLargeError":
-		return &ResultTooLargeError{Name: op.Name, recordedMessage: rec.message}
 	}
 	return leaf
 }
@@ -939,7 +934,7 @@ func completionReasonOf(message string) CompletionReason {
 //     [CallbackError] and its subtypes, [ChildContextError],
 //     [WaitForConditionError], [RetryError], [CombinatorError],
 //     [StepInterruptedError], [BatchError], [OperationError],
-//     [NonDeterministicReplayError], [ResultTooLargeError]) yields that
+//     [NonDeterministicReplayError]) yields that
 //     type. Its ErrorType, Message,
 //     ErrorData, and StackTrace fields hold the record's values. The
 //     operation's Name and the fields the record does not carry (such as
@@ -1376,57 +1371,5 @@ func (e *NonDeterministicReplayError) operationError() *OperationError {
 
 // As supports [errors.As] matching against [*OperationError].
 func (e *NonDeterministicReplayError) As(target any) bool {
-	return asOperationError(target, e.operationError())
-}
-
-// resultSizeLimitBytes is the checkpoint batch payload limit (750KB).
-// A single operation result exceeding this cannot fit in any checkpoint
-// batch and is rejected. This check applies only to
-// paths where the SDK serializes a user-produced value directly into a
-// checkpoint payload (Step results, WaitForCondition results). It does NOT
-// apply to child-context results (which use ReplayChildren offload) or
-// externally-produced values (callbacks, invokes).
-const resultSizeLimitBytes = 750 * 1024
-
-// ResultTooLargeError indicates that a single operation's serialized result
-// exceeds the checkpoint payload limit. The caller should restructure the
-// operation to return a reference (e.g., an S3 key) instead of the full
-// payload, or supply a custom [Serdes] that offloads to external storage.
-//
-// A value rebuilt from a checkpoint record (for example the Err of a
-// rejected [Settled]) carries Name and the recorded Error() text; SizeBytes
-// and LimitBytes are zero.
-type ResultTooLargeError struct {
-	// Name is the operation's name.
-	Name string
-
-	// SizeBytes is the serialized result's size.
-	SizeBytes int
-
-	// LimitBytes is the threshold that was exceeded.
-	LimitBytes int
-
-	// recordedMessage is the Error() text of a value rebuilt from a
-	// checkpoint record. It is empty for a value the size check produced.
-	recordedMessage string
-}
-
-func (e *ResultTooLargeError) Error() string {
-	if e.recordedMessage != "" {
-		return e.recordedMessage
-	}
-	return fmt.Sprintf(
-		"durable: operation %q result is %d bytes, exceeding the %d-byte checkpoint limit — "+
-			"return a reference instead of the full payload, or use a custom Serdes that offloads to external storage",
-		e.Name, e.SizeBytes, e.LimitBytes,
-	)
-}
-
-func (e *ResultTooLargeError) operationError() *OperationError {
-	return &OperationError{Name: e.Name, Message: e.Error()}
-}
-
-// As supports [errors.As] matching against [*OperationError].
-func (e *ResultTooLargeError) As(target any) bool {
 	return asOperationError(target, e.operationError())
 }

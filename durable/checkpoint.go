@@ -13,6 +13,13 @@ import (
 )
 
 const (
+	// checkpointBatchLimitBytes caps the byte size of one checkpoint call
+	// (750 KiB). The flusher stops adding requests to a batch before the
+	// batch would exceed it. It is not a payload limit: a single request
+	// larger than this is still sent on its own, and the service applies
+	// its own limit to each kind of payload.
+	checkpointBatchLimitBytes = 750 * 1024
+
 	// checkpointMaxBatchUpdates caps how many operation updates one
 	// checkpoint call carries, independent of their byte size.
 	checkpointMaxBatchUpdates = 250
@@ -20,7 +27,7 @@ const (
 	// checkpointBatchOverheadBytes approximates the request envelope
 	// (execution ARN, field names) that surrounds the updates. It is added
 	// to the token length when measuring a batch against
-	// [resultSizeLimitBytes].
+	// [checkpointBatchLimitBytes].
 	checkpointBatchOverheadBytes = 100
 )
 
@@ -61,7 +68,7 @@ type pendingCheckpoint struct {
 //
 // Requests are queued and sent by a single flusher goroutine. The flusher
 // takes as many queued requests as fit in one call (bounded by
-// [resultSizeLimitBytes] and [checkpointMaxBatchUpdates]) and sends them
+// [checkpointBatchLimitBytes] and [checkpointMaxBatchUpdates]) and sends them
 // together, so requests that arrive while a call is in flight are coalesced
 // into the next call. Because one flusher sends calls one at a time, the
 // token returned by call n is always the token sent with call n+1, and
@@ -408,7 +415,7 @@ func (cp *checkpointer) flush() {
 // skipped. Once the checkpointer is terminated, requests other than the
 // invocation's final write are settled with errCheckpointTerminated and
 // skipped. The batch grows while the next request fits under
-// [resultSizeLimitBytes] and [checkpointMaxBatchUpdates]. A request that
+// [checkpointBatchLimitBytes] and [checkpointMaxBatchUpdates]. A request that
 // would push the batch over either limit stays queued for the next call. A
 // batch always carries at least one request, so a single request larger
 // than the limit is still sent on its own.
@@ -436,7 +443,7 @@ func (cp *checkpointer) takeBatchLocked() ([]*pendingCheckpoint, string) {
 			continue
 		}
 		if len(batch) > 0 &&
-			(size+p.size > resultSizeLimitBytes || nUpdates+len(p.updates) > checkpointMaxBatchUpdates) {
+			(size+p.size > checkpointBatchLimitBytes || nUpdates+len(p.updates) > checkpointMaxBatchUpdates) {
 			break
 		}
 		batch = append(batch, p)

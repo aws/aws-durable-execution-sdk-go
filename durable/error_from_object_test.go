@@ -29,7 +29,6 @@ func publicErrorTypeSamples() []error {
 		&BatchError{Name: "b", Reason: CompletionFailureToleranceExceeded, Errors: []error{errors.New("a")}},
 		&OperationError{Name: "op", ErrorType: "Error", Message: "boom", Err: cause.standIn(nil)},
 		&NonDeterministicReplayError{Name: "n", StepID: "1", ExpectedType: "STEP", ActualType: "WAIT"},
-		&ResultTooLargeError{Name: "r", SizeBytes: 900, LimitBytes: 100},
 		newSerdesError("s", serdesDirectionMarshal, errors.New("bad json")),
 		&CheckpointError{Err: errors.New("throttled"), scope: ErrorScopeInvocation},
 	}
@@ -120,7 +119,6 @@ func TestErrorFromObjectKeepsRecordedMessageAsErrorText(t *testing.T) {
 		&CombinatorError{Name: "any", Errors: []error{errors.New("a"), errors.New("b")}},
 		&BatchError{Name: "b", Reason: CompletionMinSuccessfulReached, Errors: []error{errors.New("a"), errors.New("b")}},
 		&NonDeterministicReplayError{Name: "n", StepID: "1", ExpectedType: "STEP", ActualType: "WAIT"},
-		&ResultTooLargeError{Name: "r", SizeBytes: 900, LimitBytes: 100},
 	} {
 		rebuilt := ErrorFromObject(errorObject(orig))
 		if rebuilt.Error() != orig.Error() {

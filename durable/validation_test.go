@@ -147,86 +147,6 @@ func TestNonDeterministicReplayError_ErrorMessage(t *testing.T) {
 	}
 }
 
-// --- Item 2: Result size validation ---
-
-func TestCheckResultSize(t *testing.T) {
-	tests := []struct {
-		name    string
-		size    int
-		wantErr bool
-	}{
-		{
-			name:    "small payload",
-			size:    100,
-			wantErr: false,
-		},
-		{
-			name:    "at limit",
-			size:    resultSizeLimitBytes,
-			wantErr: false,
-		},
-		{
-			name:    "one byte over limit",
-			size:    resultSizeLimitBytes + 1,
-			wantErr: true,
-		},
-		{
-			name:    "double the limit",
-			size:    resultSizeLimitBytes * 2,
-			wantErr: true,
-		},
-		{
-			name:    "empty",
-			size:    0,
-			wantErr: false,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			data := make([]byte, tc.size)
-			err := checkResultSize(data, "test-op")
-			if tc.wantErr {
-				if err == nil {
-					t.Fatal("expected error, got nil")
-				}
-				var rtlErr *ResultTooLargeError
-				if !errors.As(err, &rtlErr) {
-					t.Fatalf("expected *ResultTooLargeError, got %T: %v", err, err)
-				}
-				if rtlErr.SizeBytes != tc.size {
-					t.Errorf("SizeBytes = %d, want %d", rtlErr.SizeBytes, tc.size)
-				}
-				if rtlErr.LimitBytes != resultSizeLimitBytes {
-					t.Errorf("LimitBytes = %d, want %d", rtlErr.LimitBytes, resultSizeLimitBytes)
-				}
-				if rtlErr.Name != "test-op" {
-					t.Errorf("Name = %q, want %q", rtlErr.Name, "test-op")
-				}
-			} else {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-			}
-		})
-	}
-}
-
-func TestResultTooLargeError_ErrorMessage(t *testing.T) {
-	err := &ResultTooLargeError{
-		Name:       "big-step",
-		SizeBytes:  1_000_000,
-		LimitBytes: resultSizeLimitBytes,
-	}
-	msg := err.Error()
-	if !strings.Contains(msg, "1000000") {
-		t.Errorf("error message should include actual size: %s", msg)
-	}
-	if !strings.Contains(msg, "reference") {
-		t.Errorf("error message should suggest returning a reference: %s", msg)
-	}
-}
-
 // --- Item 3: OperationError base matching ---
 
 func TestOperationErrorBase_AllTypedErrors(t *testing.T) {
@@ -270,10 +190,6 @@ func TestOperationErrorBase_AllTypedErrors(t *testing.T) {
 				ExpectedType: "STEP",
 				ActualType:   "WAIT",
 			},
-		},
-		{
-			name: "ResultTooLargeError",
-			err:  &ResultTooLargeError{Name: "big", SizeBytes: 1_000_000, LimitBytes: 750_000},
 		},
 	}
 
@@ -338,20 +254,5 @@ func TestNonDeterministicReplayError_MatchesOperationError(t *testing.T) {
 	}
 	if opErr.Name != "step-a" {
 		t.Errorf("OperationError.Name = %q, want %q", opErr.Name, "step-a")
-	}
-}
-
-func TestResultTooLargeError_MatchesOperationError(t *testing.T) {
-	err := &ResultTooLargeError{
-		Name:       "huge-step",
-		SizeBytes:  2_000_000,
-		LimitBytes: 750_000,
-	}
-	var opErr *OperationError
-	if !errors.As(err, &opErr) {
-		t.Fatal("ResultTooLargeError should match OperationError via As")
-	}
-	if opErr.Name != "huge-step" {
-		t.Errorf("OperationError.Name = %q, want %q", opErr.Name, "huge-step")
 	}
 }

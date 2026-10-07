@@ -436,20 +436,6 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 		return failStep[O](ec, id, name, failure, nil, attempt)
 	}
 
-	if sizeErr := checkResultSize(serialized, name); sizeErr != nil {
-		dispatchNotification(ec.operationHooks(), func(p *Plugin) {
-			if p.OnOperationAttemptEnd != nil {
-				p.OnOperationAttemptEnd(ec, AttemptEndHookInfo{
-					OperationHookInfo: attemptInfo.OperationHookInfo,
-					Attempt:           attempt,
-					Outcome:           PluginAttemptFailed,
-					Error:             sizeErr,
-				})
-			}
-		})
-		return settleStepFailure[O](ec, id, name, options, sizeErr, nil, attempt)
-	}
-
 	// Decode the value as replay will see it: from the serialized
 	// payload, so first execution and replay observe an identical result.
 	// The decode runs before the success is recorded, so a transient

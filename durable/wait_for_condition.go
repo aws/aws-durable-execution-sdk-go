@@ -38,10 +38,9 @@ func defaultConditionWaitStrategy[S any]() WaitStrategy[S] {
 // final state is checkpointed and returned.
 //
 // Every state that check returns is serialized and checkpointed, whether the
-// strategy continues or stops. So the result size limit applies to each
-// intermediate state as well as to the final result. When a serialized state
-// exceeds the limit, WaitForCondition returns a [*ResultTooLargeError]
-// without checkpointing that state.
+// strategy continues or stops. The SDK does not check the size of a state.
+// The service rejects a checkpoint whose state exceeds its payload limit, and
+// the rejection fails the execution with a [*CheckpointError].
 func WaitForCondition[S any](ctx Context, name string, check func(StepContext, S) (S, error), cfg ConditionConfig[S]) (S, error) {
 	var zero S
 	ec, ok := ctx.(*execContext)
@@ -399,9 +398,6 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 		}
 
 		// Condition met: checkpoint terminal SUCCEED with the final state.
-		if err := checkResultSize(serialized, name); err != nil {
-			return zero, "", err
-		}
 		update := waitForConditionUpdate(ec, id, name, OperationActionSucceed)
 		update.Payload = aws.String(string(serialized))
 		if cerr := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); cerr != nil {
@@ -411,12 +407,7 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 	}
 
 	// Condition not met: checkpoint RETRY with the intermediate state and
-	// the strategy's delay, then report the retry to the caller. The intermediate state is a
-	// checkpoint payload like the final result, so the same size limit
-	// applies to it.
-	if err := checkResultSize(serialized, name); err != nil {
-		return zero, "", err
-	}
+	// the strategy's delay, then report the retry to the caller.
 	delaySec, delayErr := durationToSeconds(decision.Delay)
 	if delayErr != nil {
 		return zero, "", fmt.Errorf("durable: WaitForCondition %q: retry delay: %w", name, delayErr)

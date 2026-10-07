@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Changed: payload sizes are left to the service, as in the JavaScript SDK
+
+The SDK no longer checks a step result, a `WaitForCondition` state, or an
+`Invoke` input against a size limit of its own, and `ResultTooLargeError`
+is removed. The check used 768000 bytes, which is the size limit of one
+checkpoint call, not a limit on one payload. The JavaScript SDK has no such
+check. The SDK now sends each payload as it is, and the service applies
+its own limit for that kind of payload. The service rejects a payload over
+its limit, and the rejection fails the execution with a `CheckpointError`,
+even when the handler catches the operation's error.
+
+Before, an `Invoke` input between 768000 and 1048576 bytes failed although
+the service accepts it. A step result over 768000 bytes went through the
+retry strategy, so the step function ran up to 6 times.
+
 ### Changed: a serdes failure is permanent and catchable, with a transient opt-in
 
 A serdes failure is now permanent by default, and no retry strategy
