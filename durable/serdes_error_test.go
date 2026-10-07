@@ -279,7 +279,7 @@ func TestBatchItemSerdesErrorReplayUnmarshal(t *testing.T) {
 	// be deserialized fails with a SerdesError naming the item.
 	cause := errors.New("unmarshal exploded")
 	fake := &fakeLambda{}
-	aggregate := `{"results":[{"index":0,"status":1,"result":"\"a\""}],"reason":1}`
+	aggregate := `{"all":[{"result":"a","index":0,"status":"SUCCEEDED"}],"completionReason":"ALL_COMPLETED"}`
 	payload := stepPayload(`""`, wireOperation{
 		Id:             hashID("1"),
 		Status:         "SUCCEEDED",
@@ -298,7 +298,7 @@ func TestBatchItemSerdesErrorReplayUnmarshal(t *testing.T) {
 		return "", nil
 	})
 
-	assertSerdesError(t, got, "item 0", "unmarshal", cause)
+	assertSerdesError(t, got, "map-item-0", "unmarshal", cause)
 }
 
 func TestChildContextSerdesErrorReplayUnmarshal(t *testing.T) {

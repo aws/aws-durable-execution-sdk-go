@@ -778,7 +778,7 @@ func TestStatusReflectsCompletionReason(t *testing.T) {
 // external construction produces. Item Err values do not survive
 // serialization, so the outcome is a *BatchError without item errors.
 func TestStatusDerivedAfterPublicJSONRoundTrip(t *testing.T) {
-	raw := `{"Items":[{"Index":0,"Status":1,"Result":"ok"},{"Index":1,"Name":"boom","Status":2}],"Reason":1}`
+	raw := `{"Items":[{"Index":0,"Status":"SUCCEEDED","Result":"ok"},{"Index":1,"Name":"boom","Status":"FAILED"}],"Reason":"ALL_COMPLETED"}`
 	var rt BatchResult[string]
 	if err := json.Unmarshal([]byte(raw), &rt); err != nil {
 		t.Fatalf("unmarshal: %v", err)
@@ -1556,7 +1556,7 @@ func TestBatchCheckpointPayloadRoundTrip(t *testing.T) {
 			if err := json.Unmarshal(raw, &decoded); err != nil {
 				t.Fatalf("unmarshal payload: %v", err)
 			}
-			got, err := toBatchResult[string](context.Background(), decoded, serdes, noItemSctx)
+			got, err := toBatchResult[string](context.Background(), decoded, namedItemOptions(serdes, tt.result), noItemSctx)
 			if err != nil {
 				t.Fatalf("toBatchResult: %v", err)
 			}
@@ -1653,7 +1653,7 @@ func TestBatchCheckpointPreservesInnerErrorType(t *testing.T) {
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		t.Fatalf("unmarshal payload: %v", err)
 	}
-	got, err := toBatchResult[string](context.Background(), decoded, serdes, noItemSctx)
+	got, err := toBatchResult[string](context.Background(), decoded, namedItemOptions(serdes, liveResult), noItemSctx)
 	if err != nil {
 		t.Fatalf("toBatchResult: %v", err)
 	}
@@ -1673,11 +1673,13 @@ func TestBatchCheckpointPreservesInnerErrorType(t *testing.T) {
 	if !errors.As(got.Items[1].Err, &replayedStep) {
 		t.Fatal("replayed error: errors.As(*StepError) failed — inner wrapper type lost across replay")
 	}
-	if replayedStep.Name != "fetch-data" {
-		t.Errorf("replayed StepError.Name = %q, want %q", replayedStep.Name, "fetch-data")
+	// The stored error object carries no step name or attempt count, so
+	// both are zero after replay.
+	if replayedStep.Name != "" {
+		t.Errorf("replayed StepError.Name = %q, want empty", replayedStep.Name)
 	}
-	if replayedStep.Attempts != 3 {
-		t.Errorf("replayed StepError.Attempts = %d, want %d", replayedStep.Attempts, 3)
+	if replayedStep.Attempts != 0 {
+		t.Errorf("replayed StepError.Attempts = %d, want 0", replayedStep.Attempts)
 	}
 
 	// The leaf error (user-defined) should be represented as a
@@ -1699,97 +1701,6 @@ func TestBatchCheckpointPreservesInnerErrorType(t *testing.T) {
 	}
 }
 
-// TestBatchCheckpointBackwardCompat verifies that a checkpoint payload
-// serialized WITHOUT the new inner wrapper fields (pre-fix format) still
-// deserializes correctly. The ErrType is preserved in replayedError since
-// there is no inner metadata to reconstruct from.
-func TestBatchCheckpointBackwardCompat(t *testing.T) {
-	// Simulate an old-format checkpoint without StepName/StepAttempts/InnerErr fields.
-	oldPayload := `{
-		"results": [
-			{"index": 0, "name": "item-0", "status": 1, "result": "\"ok\""},
-			{"index": 1, "name": "item-1", "status": 2, "errType": "CustomError", "errMessage": "something broke"}
-		],
-		"reason": 0
-	}`
-	var decoded batchCheckpointPayload
-	if err := json.Unmarshal([]byte(oldPayload), &decoded); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	got, err := toBatchResult[string](context.Background(), decoded, jsonSerdes{}, noItemSctx)
-	if err != nil {
-		t.Fatalf("toBatchResult: %v", err)
-	}
-	if len(got.Items) != 2 {
-		t.Fatalf("items = %d, want 2", len(got.Items))
-	}
-	// Failed item should have ChildContextError wrapping replayedError
-	// since "CustomError" is not a known SDK wrapper type.
-	var childErr *ChildContextError
-	if !errors.As(got.Items[1].Err, &childErr) {
-		t.Fatal("errors.As(*ChildContextError) failed")
-	}
-	re, ok := childErr.Err.(*replayedError)
-	if !ok {
-		t.Fatalf("inner error type = %T, want *replayedError", childErr.Err)
-	}
-	if re.errType != "CustomError" {
-		t.Errorf("replayedError.errType = %q, want %q", re.errType, "CustomError")
-	}
-	if re.message != "something broke" {
-		t.Errorf("replayedError.message = %q, want %q", re.message, "something broke")
-	}
-}
-
-// TestBatchCheckpointBackwardCompatStepError verifies that a legacy
-// checkpoint with ErrType="StepError" but NO inner metadata still
-// reconstructs a StepError (with zero-value fields) so errors.As succeeds.
-func TestBatchCheckpointBackwardCompatStepError(t *testing.T) {
-	oldPayload := `{
-		"results": [
-			{"index": 0, "name": "item-0", "status": 2, "errType": "StepError", "errMessage": "durable: step \"x\" failed after 2 attempts: timeout"}
-		],
-		"reason": 0
-	}`
-	var decoded batchCheckpointPayload
-	if err := json.Unmarshal([]byte(oldPayload), &decoded); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	got, err := toBatchResult[string](context.Background(), decoded, jsonSerdes{}, noItemSctx)
-	if err != nil {
-		t.Fatalf("toBatchResult: %v", err)
-	}
-
-	// errors.As for StepError must succeed even without inner metadata.
-	var stepErr *StepError
-	if !errors.As(got.Items[0].Err, &stepErr) {
-		t.Fatal("errors.As(*StepError) failed for legacy checkpoint")
-	}
-	// Without persisted metadata, Name and Attempts are zero-valued.
-	if stepErr.Name != "" {
-		t.Errorf("StepError.Name = %q, want empty (no metadata in legacy checkpoint)", stepErr.Name)
-	}
-	if stepErr.Attempts != 0 {
-		t.Errorf("StepError.Attempts = %d, want 0 (no metadata in legacy checkpoint)", stepErr.Attempts)
-	}
-	// The leaf error should carry the full message since no inner details
-	// are available.
-	if stepErr.Err == nil {
-		t.Fatal("StepError.Err is nil")
-	}
-	re, ok := stepErr.Err.(*replayedError)
-	if !ok {
-		t.Fatalf("StepError.Err type = %T, want *replayedError", stepErr.Err)
-	}
-	if re.errType != "Error" {
-		t.Errorf("leaf errType = %q, want %q", re.errType, "Error")
-	}
-}
-
-// TestRouteB_ErrorDataReconstructsRealValues verifies that the wire-only
-// replay path (Route B) produces real StepError.Name and StepError.Attempts
-// values when ErrorData carries the childErrorData JSON blob. This is the
-// common mid-batch cross-invocation resume case where only
 // op.childCtx.errType, errMessage, and errData are available.
 func TestRouteB_ErrorDataReconstructsRealValues(t *testing.T) {
 	// Simulate the ErrorData that encodeChildErrorData would write for a
@@ -1948,28 +1859,6 @@ func TestTruncateInnerErrMessage(t *testing.T) {
 		}
 		if !utf8.ValidString(d.InnerErrMessage) {
 			t.Error("ErrorData innerErrMessage is not valid UTF-8")
-		}
-	})
-
-	t.Run("long message truncated in aggregate payload", func(t *testing.T) {
-		leaf := fmt.Errorf("%s", long)
-		stepErr := &StepError{Name: "op", Attempts: 1, Err: leaf}
-		batchResult := BatchResult[string]{
-			Items: []BatchItem[string]{
-				{Index: 0, Name: "item", Status: BatchItemFailed, Err: &ChildContextError{Name: "item", Err: stepErr}},
-			},
-			Reason: CompletionAllCompleted,
-		}
-		payload, err := fromBatchResult(context.Background(), batchResult, jsonSerdes{}, noItemSctx)
-		if err != nil {
-			t.Fatalf("fromBatchResult: %v", err)
-		}
-		cp := payload.Results[0]
-		if len(cp.InnerErrMessage) > maxInnerErrMessageBytes {
-			t.Errorf("aggregate InnerErrMessage length = %d, want <= %d", len(cp.InnerErrMessage), maxInnerErrMessageBytes)
-		}
-		if !utf8.ValidString(cp.InnerErrMessage) {
-			t.Error("aggregate InnerErrMessage is not valid UTF-8")
 		}
 	})
 
@@ -2517,13 +2406,13 @@ func wfcMapHandler(ctx Context, _ any) (wfcVerdict, error) {
 }
 
 // wantWFCVerdict is the taxonomy both live and replay paths must report.
+// The stored item error object carries no inner operation name and no
+// attempt count, so both are zero on both paths.
 var wantWFCVerdict = wfcVerdict{
 	BatchStatus:  "FAILED",
 	ErrNonNil:    true,
 	AsChildCtx:   true,
 	AsWFC:        true,
-	WFCName:      "await-sensor",
-	WFCAttempts:  1,
 	LeafContains: true,
 }
 
@@ -2702,15 +2591,13 @@ func taxParallelHandler(ctx Context, _ any) (taxVerdict, error) {
 // SerdesError fields and the CallbackError timeout sentinel survive a
 // Parallel replay from the aggregate checkpoint payload.
 func TestParallelSerdesAndCallbackTaxonomyLiveToReplay(t *testing.T) {
+	// The stored item error object carries no inner operation name, serdes
+	// direction, or callback ID, so those are zero on both paths.
 	want := taxVerdict{
 		BatchStatus: "FAILED",
 		ErrAsSerdes: true,
 		SerdesAs:    true,
-		SerdesOp:    "decode-state",
-		SerdesDir:   "unmarshal",
 		CallbackAs:  true,
-		CbName:      "ext",
-		CbID:        "cb-123",
 		IsTimedOut:  true,
 	}
 
@@ -2866,4 +2753,14 @@ func TestBatchResultStartedAccessors(t *testing.T) {
 	if got := empty.StartedCount(); got != 0 {
 		t.Errorf("StartedCount() on an empty result = %d, want 0", got)
 	}
+}
+
+// namedItemOptions returns batch options whose item namer reproduces the
+// item names of result, as the batch's own options do on replay.
+func namedItemOptions(serdes Serdes, result BatchResult[string]) batchOptions {
+	names := map[int]string{}
+	for _, item := range result.Items {
+		names[item.Index] = item.Name
+	}
+	return batchOptions{itemSerdes: serdes, itemNamer: func(i int) string { return names[i] }}
 }

@@ -522,10 +522,9 @@ func TestMapItemFailureRecordsStackTrace(t *testing.T) {
 
 // TestFlatMapItemFailureKeepsStackTrace checks that a FLAT-nesting item
 // failure keeps the trace of the item function. FLAT mode records the item
-// function's own error as the item error, so the trace rides in a
-// transparent wrapper: the error's type and message are unchanged, and the
-// FAILED invocation response points at the item function, not at the
-// handler that returned the error.
+// function's own error type and message as the item error, and the trace
+// is kept with it: the FAILED invocation response points at the item
+// function, not at the handler that returned the error.
 func TestFlatMapItemFailureKeepsStackTrace(t *testing.T) {
 	fake := &fakeLambda{}
 	var itemErr error
@@ -541,9 +540,10 @@ func TestFlatMapItemFailureKeepsStackTrace(t *testing.T) {
 		return "", itemErr
 	})
 
-	// The wrapper is transparent for message and wire type.
-	if itemErr.Error() != "item failed" {
-		t.Errorf("item Err message = %q, want the raw error text", itemErr.Error())
+	// The item error is rebuilt from its stored error object: a stand-in
+	// that reports the recorded type and message.
+	if itemErr.Error() != "Error: item failed" {
+		t.Errorf("item Err message = %q, want %q", itemErr.Error(), "Error: item failed")
 	}
 	if wireErrorType(itemErr) != "Error" {
 		t.Errorf("wireErrorType = %q, want %q", wireErrorType(itemErr), "Error")
@@ -585,7 +585,7 @@ func TestFlatMapItemFailureKeepsStackTrace(t *testing.T) {
 	if parentOp.Id == "" {
 		t.Fatal("no Map SUCCEED update recorded")
 	}
-	if !strings.Contains(parentOp.ContextDetails.Result, "stackTrace") {
+	if !strings.Contains(parentOp.ContextDetails.Result, `"StackTrace"`) {
 		t.Errorf("aggregate payload carries no stackTrace: %s", parentOp.ContextDetails.Result)
 	}
 
@@ -598,11 +598,10 @@ func TestFlatMapItemFailureKeepsStackTrace(t *testing.T) {
 		replayErr = res.Items[0].Err
 		return "done", nil
 	})
-	var childErr *ChildContextError
-	if !errors.As(replayErr, &childErr) {
-		t.Fatalf("replayed item Err = %v, want *ChildContextError", replayErr)
+	if replayErr == nil || replayErr.Error() != itemErr.Error() {
+		t.Fatalf("replayed item Err = %v, want %v", replayErr, itemErr)
 	}
-	assertSameTrace(t, "replayed item StackTrace", childErr.StackTrace, trace)
+	assertSameTrace(t, "replayed item StackTrace", itemErrorTrace(replayErr), trace)
 }
 
 // tracedError is a user error that supplies its own stack trace through
@@ -653,10 +652,10 @@ func flatMapAggregateItems(t *testing.T, item func(Context, int, int) (string, e
 			if err := json.Unmarshal([]byte(aws.ToString(u.Payload)), &payload); err != nil {
 				t.Fatalf("aggregate payload: %v", err)
 			}
-			if len(payload.Results) != 1 {
-				t.Fatalf("aggregate payload items = %+v, want one", payload.Results)
+			if len(payload.All) != 1 {
+				t.Fatalf("aggregate payload items = %+v, want one", payload.All)
 			}
-			return payload.Results[0], itemErr
+			return payload.All[0], itemErr
 		}
 	}
 	t.Fatal("no Map SUCCEED update recorded")
@@ -670,19 +669,19 @@ func flatMapAggregateItems(t *testing.T, item func(Context, int, int) (string, e
 func TestFlatMapItemSuppliedTraceIsBounded(t *testing.T) {
 	cpItem, itemErr := flatMapAggregateItems(t, mapItemFailsWithOversizedTrace)
 
-	if got := len(cpItem.StackTrace); got != MaxStackTraceFrames {
+	if got := len(cpItem.Error.StackTrace); got != MaxStackTraceFrames {
 		t.Errorf("aggregate payload trace has %d frames, want exactly %d", got, MaxStackTraceFrames)
 	}
 	if got := len(itemErrorTrace(itemErr)); got != MaxStackTraceFrames {
 		t.Errorf("item error trace has %d frames, want exactly %d", got, MaxStackTraceFrames)
 	}
-	// The item function's own error is still the item error.
-	var traced *tracedError
-	if !errors.As(itemErr, &traced) {
-		t.Fatalf("item Err = %v, want *tracedError in the chain", itemErr)
+	// The item error is rebuilt from the stored error object, which names
+	// the item function's own error type.
+	if got := cpItem.Error.ErrorType; got != "tracedError" {
+		t.Errorf("stored ErrorType = %q, want %q", got, "tracedError")
 	}
-	if got := len(traced.trace); got != MaxStackTraceFrames*3 {
-		t.Errorf("user error trace mutated to %d frames, want the original %d", got, MaxStackTraceFrames*3)
+	if got := wireErrorType(itemErr); got != "tracedError" {
+		t.Errorf("item error type = %q, want %q", got, "tracedError")
 	}
 }
 
@@ -696,8 +695,8 @@ func TestFlatMapItemWithStackTracesFalseRecordsNone(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			cpItem, itemErr := flatMapAggregateItems(t, item, WithStackTraces(false))
-			if cpItem.StackTrace != nil {
-				t.Errorf("aggregate payload StackTrace = %v, want none", cpItem.StackTrace)
+			if cpItem.Error.StackTrace != nil {
+				t.Errorf("aggregate payload StackTrace = %v, want none", cpItem.Error.StackTrace)
 			}
 			if got := itemErrorTrace(itemErr); got != nil {
 				t.Errorf("item error trace = %v, want none", got)
@@ -765,7 +764,7 @@ func TestMapFailedItemReplayKeepsRecordedStackTrace(t *testing.T) {
 	assertReplayedItemTrace(t, routeB, liveTrace)
 
 	// Route A: replay from the parent's aggregate payload.
-	if !strings.Contains(parentPayload, "stackTrace") {
+	if !strings.Contains(parentPayload, `"StackTrace"`) {
 		t.Errorf("aggregate payload carries no stackTrace: %s", parentPayload)
 	}
 	routeA := []wireOperation{

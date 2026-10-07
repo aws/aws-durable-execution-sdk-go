@@ -3,6 +3,7 @@ package durable
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -228,16 +229,21 @@ func TestBatchErrorAlongsideResult(t *testing.T) {
 func TestBatchErrorUnwrapReachesItemErrors(t *testing.T) {
 	sentinel := errors.New("sentinel")
 
-	t.Run("flat items keep the item error", func(t *testing.T) {
+	t.Run("flat items keep the item error chain", func(t *testing.T) {
+		// A FLAT item reports its error rebuilt from the stored error
+		// object. The rebuilt chain keeps the wrapped SDK sentinel.
 		v := runVerdict(t, &fakeLambda{}, func(ctx Context, _ any) (batchVerdict, error) {
 			_, err := Map(ctx, "flat", []string{"a", "b"}, func(_ Context, item string, _ int) (string, error) {
 				if item == "b" {
-					return "", sentinel
+					return "", fmt.Errorf("item b: %w", ErrInvokeTimedOut)
 				}
 				return item, nil
 			}, WithMaxConcurrency(1), WithNesting(NestingFlat))
-			if !errors.Is(err, sentinel) {
-				return batchVerdict{}, errors.New("errors.Is(err, sentinel) = false")
+			if !errors.Is(err, ErrInvokeTimedOut) {
+				return batchVerdict{}, errors.New("errors.Is(err, ErrInvokeTimedOut) = false")
+			}
+			if !strings.Contains(err.Error(), "item b: "+ErrInvokeTimedOut.Error()) {
+				return batchVerdict{}, errors.New("unexpected batch error: " + err.Error())
 			}
 			return batchVerdict{Err: true}, nil
 		})

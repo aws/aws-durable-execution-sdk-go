@@ -406,7 +406,7 @@ func TestPluginChildOperationsDepthBatchReplayed(t *testing.T) {
 			}
 			return fmt.Sprint(br.StartedCount()), nil
 		}
-		record := `{"completionReason":2,"totalCount":3,"indexSet":"started","indexes":[1,2]}`
+		record := `{"type":"MapResult","totalCount":3,"successCount":1,"failureCount":0,"completionReason":"MIN_SUCCESSFUL_REACHED","status":"SUCCEEDED","itemStatuses":"S--"}`
 		ops := []wireOperation{
 			lifecycleExecOp(),
 			contextOp("1", "", OperationSubTypeMap, "batch", "SUCCEEDED", &wireContextDetails{Result: record, ReplayChildren: true}),

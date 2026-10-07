@@ -346,7 +346,7 @@ func TestOperationLifecycleBatchReplayed(t *testing.T) {
 func TestOperationLifecycleBatchReplayedTerminal(t *testing.T) {
 	rec := &opRecorder{}
 	handler := mapLifecycleHandler(rec, WithMaxConcurrency(1))
-	payload := `{"results":[{"index":0,"name":"item-0","status":1,"result":"2"},{"index":1,"name":"item-1","status":1,"result":"4"},{"index":2,"name":"item-2","status":1,"result":"6"}],"reason":1}`
+	payload := `{"all":[{"result":2,"index":0,"status":"SUCCEEDED"},{"result":4,"index":1,"status":"SUCCEEDED"},{"result":6,"index":2,"status":"SUCCEEDED"}],"completionReason":"ALL_COMPLETED"}`
 	ops := []wireOperation{
 		lifecycleExecOp(),
 		contextOp("1", "", OperationSubTypeMap, "batch", "SUCCEEDED", &wireContextDetails{Result: payload}),
@@ -383,7 +383,7 @@ func TestOperationLifecycleBatchReplayedAbandonedFromRecord(t *testing.T) {
 		return br.StartedCount(), nil
 	}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
 
-	record := `{"completionReason":2,"totalCount":3,"indexSet":"started","indexes":[1,2]}`
+	record := `{"type":"MapResult","totalCount":3,"successCount":1,"failureCount":0,"completionReason":"MIN_SUCCESSFUL_REACHED","status":"SUCCEEDED","itemStatuses":"S--"}`
 	ops := []wireOperation{
 		lifecycleExecOp(),
 		contextOp("1", "", OperationSubTypeMap, "batch", "SUCCEEDED", &wireContextDetails{Result: record, ReplayChildren: true}),

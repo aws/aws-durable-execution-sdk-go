@@ -410,7 +410,7 @@ func TestCustomCompletionFlatOversizedReplayUsesRecord(t *testing.T) {
 		t.Fatalf("live callback invocations = %d, want 3 (zero progress, then two terminal items)", got)
 	}
 
-	// The parent Map SUCCEED carries ReplayChildren and a decision record
+	// The parent Map SUCCEED carries ReplayChildren and a summary record
 	// with the recorded reason and the admitted prefix.
 	var sawParent bool
 	for _, u := range updateBatch(t, fake) {
@@ -421,12 +421,12 @@ func TestCustomCompletionFlatOversizedReplayUsesRecord(t *testing.T) {
 		if u.ContextOptions == nil || !aws.ToBool(u.ContextOptions.ReplayChildren) {
 			t.Fatal("Map SUCCEED did not set ReplayChildren; the aggregate did not exceed the size limit")
 		}
-		record, ok := parseBatchReplayRecord(aws.ToString(u.Payload))
+		record, ok := parseBatchSummaryRecord(aws.ToString(u.Payload))
 		if !ok {
-			t.Fatalf("Map SUCCEED payload %q is not a decision record", aws.ToString(u.Payload))
+			t.Fatalf("Map SUCCEED payload %q is not a summary record", aws.ToString(u.Payload))
 		}
-		if record.Reason != CompletionCustomFailed || record.StartedTotal != 2 || len(record.abandonedSet()) != 0 {
-			t.Fatalf("decision record = %+v, want CUSTOM_COMPLETION_FAILED over 2 terminal items", record)
+		if record.CompletionReason != CompletionCustomFailed || record.admitted() != 2 || strings.Contains(record.ItemStatuses, "-") {
+			t.Fatalf("summary record = %+v, want CUSTOM_COMPLETION_FAILED over 2 terminal items", record)
 		}
 	}
 	if !sawParent {

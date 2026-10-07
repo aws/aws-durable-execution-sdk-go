@@ -630,6 +630,15 @@ When every item ran, the reason is `ALL_COMPLETED`.
 `Failed()`, and `Started()`, the values through `Results()`, the per-item
 errors through `Errors()`, and why the batch ended through `Reason`.
 
+A batch records its result in the same format as the other durable
+execution SDKs. A failed item's error is recorded as its type, message,
+and the chain of errors it wraps. The SDK rebuilds each item error from
+that record, on the first run and on replay alike. An SDK error type in
+the chain, such as `*durable.StepError`, is rebuilt as that type, so
+`errors.As` finds it. Its detail fields that the record does not hold,
+such as `StepError.Attempts` and `CallbackError.CallbackID`, are zero.
+Match an error of your own type on the recorded `ErrorType`.
+
 Each item has a name. A `Map` item takes its name from `WithItemNamer`,
 and a `Parallel` branch from `Branch.Name`. A `Map` item with no name,
 or whose namer returns `""`, is named `map-item-<index>`, for example

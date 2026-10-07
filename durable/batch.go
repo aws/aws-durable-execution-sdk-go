@@ -1,7 +1,6 @@
 package durable
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -294,8 +293,10 @@ type Branch[O any] struct {
 // operation.
 type BatchItemStatus int
 
-// Batch item statuses. Values are persisted in checkpoints, so they are
-// pinned explicitly rather than derived from iota ordering.
+// Batch item statuses. A status is stored in checkpoints as its String()
+// form, such as "SUCCEEDED". The integer values stay fixed for in-memory
+// use, so they are pinned explicitly rather than derived from iota
+// ordering.
 const (
 	// BatchItemNotStarted is the zero value. It never appears in a
 	// [BatchResult]: items that never started are omitted from Items. It
@@ -355,7 +356,12 @@ type BatchItem[O any] struct {
 	Result O
 
 	// Err is the item's error. It is nil unless Status is
-	// [BatchItemFailed].
+	// [BatchItemFailed]. It is rebuilt from the error the batch records
+	// for the item, on the first run and on replay alike, so both report
+	// equal errors. An SDK error type in the chain is rebuilt as that
+	// type, with the detail fields the record does not hold, such as
+	// [StepError.Attempts], set to zero. Any other error in the chain is
+	// rebuilt as a value that reports its recorded type and message.
 	Err error
 
 	// serialized is the output of the item serdes Marshal for Result, the
@@ -588,8 +594,10 @@ func batchStatusFor[O any](items []BatchItem[O], reason CompletionReason) BatchI
 // CompletionReason records why a batch operation completed.
 type CompletionReason int
 
-// Batch completion reasons. Values are persisted in checkpoints, so they
-// are pinned explicitly rather than derived from iota ordering.
+// Batch completion reasons. A reason is stored in checkpoints as its
+// String() form, such as "ALL_COMPLETED". The integer values stay fixed
+// for in-memory use, so they are pinned explicitly rather than derived
+// from iota ordering.
 const (
 	// CompletionAllCompleted indicates every item ran to completion.
 	CompletionAllCompleted CompletionReason = 1
@@ -1865,29 +1873,41 @@ func replayTerminalBatch[I, O any](
 		if op.childCtx == nil {
 			return BatchResult[O]{}, fmt.Errorf("durable: batch %q: checkpointed SUCCEEDED with no context details", name)
 		}
-		// ReplayChildren mode: the full aggregate was too large to store,
-		// so reconstruct from the children. With a decision record, replay
-		// exactly the recorded admitted set so the result matches the live
-		// shape (including abandoned items) and reuses the recorded
-		// reason. Without a record (a checkpoint written before the record
-		// existed) fall back to sequential re-execution, which re-derives
-		// the reason.
+		// ReplayChildren mode: the full payload was too large to store,
+		// or held an item result that is not a JSON value, so the batch
+		// stored its summary record and each item is rebuilt from its own
+		// recorded operations. The record names the admitted items and
+		// which of them reached a terminal state, so replay rebuilds the
+		// live shape, abandoned items included, and reuses the recorded
+		// reason. A payload that is not a summary record falls back to
+		// re-running the items in order, which re-derives the reason.
 		if op.childCtx.replayChildren {
 			mode := modeReplaySucceededContext
-			if record, ok := parseBatchReplayRecord(op.childCtx.result); ok {
-				if record.StartedTotal > len(items) {
-					return BatchResult[O]{}, fmt.Errorf("durable: batch %q: replay record admits %d items but the batch has %d", name, record.StartedTotal, len(items))
+			if record, ok := parseBatchSummaryRecord(op.childCtx.result); ok {
+				if record.admitted() > len(items) {
+					return BatchResult[O]{}, fmt.Errorf("durable: batch %q: summary record admits %d items but the batch has %d", name, record.admitted(), len(items))
 				}
+				var res BatchResult[O]
+				var err error
 				if options.nesting == NestingFlat {
 					child := ec.child(id, name, ec.owner, mode)
 					defer child.enterBody()()
-					return replayFlatBatchChildrenFromRecord[I, O](child, id, record, items, fn, options)
+					res, err = replayFlatBatchChildrenFromRecord[I, O](child, id, record, items, fn, options)
+				} else {
+					res, err = replayBatchChildrenFromRecord[I, O](ec, id, record, items, fn, options, childSubType)
 				}
-				return replayBatchChildrenFromRecord[I, O](ec, id, record, items, fn, options, childSubType)
+				if err != nil {
+					return BatchResult[O]{}, err
+				}
+				return normalizeBatchItemErrors(res), nil
 			}
 			child := ec.child(id, name, ec.owner, mode)
 			defer child.enterBody()()
-			return replayBatchChildren[I, O](child, id, name, items, fn, options, parentSubType, childSubType)
+			res, err := replayBatchChildren[I, O](child, id, name, items, fn, options, parentSubType, childSubType)
+			if err != nil {
+				return BatchResult[O]{}, err
+			}
+			return normalizeBatchItemErrors(res), nil
 		}
 		// If an operation-level serdes is configured, use it to
 		// deserialize the whole batch result.
@@ -1898,20 +1918,21 @@ func replayTerminalBatch[I, O any](
 			}
 			return result, nil
 		}
-		// Normal replay: deserialize the stored aggregate result.
-		// The parent checkpoint stores a JSON-serialized batch summary
-		// using the batchCheckpointPayload envelope (lowercase "results"
-		// and "reason" JSON keys).
-		var payload batchCheckpointPayload
-		if err := json.Unmarshal([]byte(op.childCtx.result), &payload); err != nil {
-			// Fall back to re-executing children if the stored
-			// payload is not the batch summary (could be legacy).
+		// Normal replay: decode the stored full payload.
+		payload, ok := parseBatchCheckpointPayload(op.childCtx.result)
+		if !ok {
+			// The stored payload is not a full payload: rebuild the
+			// result by re-running the items in order.
 			mode := modeReplaySucceededContext
 			child := ec.child(id, name, ec.owner, mode)
 			defer child.enterBody()()
-			return replayBatchChildren[I, O](child, id, name, items, fn, options, parentSubType, childSubType)
+			res, err := replayBatchChildren[I, O](child, id, name, items, fn, options, parentSubType, childSubType)
+			if err != nil {
+				return BatchResult[O]{}, err
+			}
+			return normalizeBatchItemErrors(res), nil
 		}
-		res, err := toBatchResult[O](ec.Context, payload, options.itemSerdes, batchItemSerdesCtx(ec, options))
+		res, err := toBatchResult[O](ec.Context, payload, options, batchItemSerdesCtx(ec, options))
 		return res, ec.reportSerdesError(err)
 
 	case statusFailed:
@@ -2015,10 +2036,15 @@ func checkpointBatchSuccess[O any](
 	ec.suspend.enterExecuting()
 	defer ec.suspend.exitExecuting()
 
+	// Each failed item reports its error rebuilt from the stored form, so
+	// this run and every replay report equal item errors.
+	result = normalizeBatchItemErrors(result)
+
 	// Serialize the result. If an operation-level serdes is provided,
-	// use it; otherwise serialize a default JSON summary.
+	// use it; otherwise build the full payload.
 	var serialized []byte
 	var serErr error
+	fits := true
 
 	if options.resultSerdes != nil {
 		serialized, serErr = options.resultSerdes.Marshal(ec.Context, ec.serdesCtx(id), result)
@@ -2027,30 +2053,29 @@ func checkpointBatchSuccess[O any](
 		}
 	} else {
 		payload, payloadErr := fromBatchResult(ec.Context, result, options.itemSerdes, batchItemSerdesCtx(ec, options))
-		if payloadErr != nil {
+		switch {
+		case errors.Is(payloadErr, errBatchResultNotJSON):
+			fits = false
+		case payloadErr != nil:
 			return BatchResult[O]{}, ec.reportSerdesError(payloadErr)
+		default:
+			serialized, serErr = json.Marshal(payload)
 		}
-		serialized, serErr = json.Marshal(payload)
 	}
 	if serErr != nil {
 		return BatchResult[O]{}, fmt.Errorf("durable: batch %q: serialize result: %w", name, serErr)
 	}
 
 	update := batchParentUpdate(ec, id, name, subType, OperationActionSucceed)
-	if len(serialized) > checkpointSizeLimitBytes {
+	if !fits || len(serialized) > checkpointSizeLimitBytes {
+		// The full payload cannot be stored, so store the summary record
+		// and mark the checkpoint for child replay. The record holds the
+		// completion reason and which admitted items reached a terminal
+		// state, so replay rebuilds the live shape from each item's own
+		// recorded operations and reuses the recorded reason. A custom
+		// completion callback is therefore not called again on replay.
 		update.ContextOptions = &ContextOptions{ReplayChildren: aws.Bool(true)}
-		// The full aggregate is too large to store, so record a
-		// size-independent decision record alongside ReplayChildren. It
-		// carries the completion reason and which admitted items were
-		// abandoned (STARTED) versus terminal, so replay reconstructs the
-		// exact live shape instead of re-deriving it. The record is written
-		// for both nesting modes: a NORMAL item is rebuilt from its own
-		// checkpoint, a FLAT item from the operations recorded under the
-		// batch. Either way the recorded reason is reused, so a custom
-		// completion callback is not called again on replay. The
-		// caller's summary, if any, is stored in the record; see
-		// marshalBatchReplayRecord for how it is kept within the limit.
-		record := newBatchReplayRecord(result)
+		record := newBatchSummaryRecord(batchSummaryType(subType), result)
 		// The summary function's type was validated when the batch
 		// started, so only the nil check remains.
 		if summary, _ := batchSummaryFunc[O](options); summary != nil {
@@ -2060,9 +2085,9 @@ func checkpointBatchSuccess[O any](
 			}
 			record.Summary = s
 		}
-		recordBytes, recordErr := marshalBatchReplayRecord(record)
+		recordBytes, recordErr := marshalBatchSummaryRecord(record)
 		if recordErr != nil {
-			return BatchResult[O]{}, fmt.Errorf("durable: batch %q: serialize replay record: %w", name, recordErr)
+			return BatchResult[O]{}, fmt.Errorf("durable: batch %q: serialize summary record: %w", name, recordErr)
 		}
 		update.Payload = aws.String(string(recordBytes))
 	} else {
@@ -2074,73 +2099,6 @@ func checkpointBatchSuccess[O any](
 	dispatchContextEnd(ec, start, aws.ToString(update.Payload), nil)
 
 	return result, nil
-}
-
-// batchCheckpointPayload is the JSON structure stored as the parent batch
-// context's checkpoint payload. It uses checkpoint-safe item representations
-// that avoid interface fields (error) which cannot round-trip through JSON.
-type batchCheckpointPayload struct {
-	Results []batchCheckpointItem `json:"results"`
-	Reason  CompletionReason      `json:"reason"`
-}
-
-// batchCheckpointItem is the per-item representation in the checkpoint
-// payload. Unlike [BatchItem], it replaces the error interface with
-// serializable error type/message strings.
-//
-// The embedded childErrorData carries inner wrapper metadata, persisted
-// when ErrType is a known SDK wrapper (StepError, WaitForConditionError,
-// CallbackError, SerdesError) so replay can reconstruct the concrete type
-// with matching field values, causes, and sentinels. Its exported fields
-// flatten into this object's JSON, keeping the historical layout. The
-// item's own Name (JSON "name") shadows the wrapper name (JSON
-// "stepName"); access the latter as cp.childErrorData.Name.
-type batchCheckpointItem struct {
-	Index      int             `json:"index"`
-	Name       string          `json:"name,omitempty"`
-	Status     BatchItemStatus `json:"status"`
-	Result     string          `json:"result,omitempty"`
-	ErrType    string          `json:"errType,omitempty"`
-	ErrMessage string          `json:"errMessage,omitempty"`
-
-	// StackTrace holds the stack trace recorded for a failed item, one
-	// frame per string, innermost first. Persisting it in the aggregate
-	// payload keeps the item's user-code trace across replay.
-	StackTrace []string `json:"stackTrace,omitempty"`
-
-	childErrorData
-}
-
-// toBatchResult converts a deserialized checkpoint payload back into a
-// typed [BatchResult] using the provided item serdes for result values.
-// itemSctx returns the serdes context for the item at an input index.
-func toBatchResult[O any](ctx context.Context, payload batchCheckpointPayload, itemSerdes Serdes, itemSctx func(index int) SerdesContext) (BatchResult[O], error) {
-	items := make([]BatchItem[O], len(payload.Results))
-	for i, cp := range payload.Results {
-		items[i] = BatchItem[O]{
-			Index:  cp.Index,
-			Name:   cp.Name,
-			Status: cp.Status,
-		}
-		switch cp.Status {
-		case BatchItemSucceeded:
-			// The aggregate omits an empty result, and Marshal may return
-			// empty bytes. So every succeeded item is decoded, an empty
-			// result included, as the first run decoded it.
-			var out O
-			if err := itemSerdes.Unmarshal(ctx, itemSctx(cp.Index), []byte(cp.Result), &out); err != nil {
-				return BatchResult[O]{}, newSerdesError(batchItemOpName(cp.Name, cp.Index), serdesDirectionUnmarshal, err)
-			}
-			items[i].Result = out
-			items[i].serialized = []byte(cp.Result)
-			items[i].hasSerialized = true
-		case BatchItemFailed:
-			cerr := batchItemError(cp.Name, cp.ErrType, cp.ErrMessage, cp.childErrorData, "")
-			cerr.StackTrace = cp.StackTrace
-			items[i].Err = cerr
-		}
-	}
-	return BatchResult[O]{Items: items, Reason: payload.Reason}, nil
 }
 
 // maxInnerErrMessageBytes is the ceiling for the persisted inner error
@@ -2426,208 +2384,6 @@ func flatItemError(fnErr error, fnTrace []string) error {
 	return &flatItemTraceError{err: fnErr, trace: fnTrace}
 }
 
-// fromBatchResult converts a live [BatchResult] into the checkpoint payload
-// format for serialization. Item results are pre-serialized through the
-// provided item serdes; itemSctx returns the serdes context for the item at
-// an input index.
-func fromBatchResult[O any](ctx context.Context, result BatchResult[O], itemSerdes Serdes, itemSctx func(index int) SerdesContext) (batchCheckpointPayload, error) {
-	cpItems := make([]batchCheckpointItem, len(result.Items))
-	for i, item := range result.Items {
-		cpItems[i] = batchCheckpointItem{
-			Index:  item.Index,
-			Name:   item.Name,
-			Status: item.Status,
-		}
-		switch item.Status {
-		case BatchItemSucceeded:
-			// The item stored its marshaled bytes when it completed.
-			// Storing those bytes, rather than marshaling the decoded
-			// Result again, applies the item serdes once per direction.
-			raw := item.serialized
-			if !item.hasSerialized {
-				var err error
-				raw, err = itemSerdes.Marshal(ctx, itemSctx(item.Index), item.Result)
-				if err != nil {
-					return batchCheckpointPayload{}, newSerdesError(batchItemOpName(item.Name, item.Index), serdesDirectionMarshal, err)
-				}
-			}
-			cpItems[i].Result = string(raw)
-		case BatchItemFailed:
-			if item.Err != nil {
-				cpItems[i].StackTrace = itemErrorTrace(item.Err)
-				cpItems[i].ErrType = wireErrorType(item.Err)
-				cpItems[i].ErrMessage = item.Err.Error()
-				// Extract inner error details for child context errors.
-				var childErr *ChildContextError
-				if errors.As(item.Err, &childErr) && childErr.Err != nil {
-					cpItems[i].ErrType = childErr.ErrorType
-					cpItems[i].ErrMessage = childErr.Message
-					if cpItems[i].ErrType == "" {
-						cpItems[i].ErrType = wireErrorType(childErr.Err)
-						cpItems[i].ErrMessage = childErr.Err.Error()
-					}
-					// Persist inner wrapper metadata for known SDK types
-					// so replay reconstructs the concrete wrapper chain
-					// with matching fields, causes, and sentinels.
-					if meta, ok := wrapperErrorData(childErr.Err); ok {
-						cpItems[i].childErrorData = meta
-					}
-					if cpItems[i].ErrorData == "" {
-						cpItems[i].ErrorData = childErr.ErrorData
-					}
-				}
-			}
-		}
-	}
-	return batchCheckpointPayload{Results: cpItems, Reason: result.Reason}, nil
-}
-
-// Index-set discriminators for batchReplayRecord.
-const (
-	replayIndexSetStarted   = "started"
-	replayIndexSetCompleted = "completed"
-)
-
-// batchReplayRecord is the size-independent decision record stored on a
-// batch parent context whose full aggregate exceeded the checkpoint size
-// limit and was replaced by ReplayChildren. It captures the completion
-// reason and, in index order, which admitted branches were abandoned
-// (reported STARTED) versus reached a terminal status, so replay
-// reconstructs the exact live result shape rather than re-deriving it.
-//
-// The admitted branches are the prefix [0, StartedTotal). Indexes holds
-// whichever of the started (abandoned) or completed index sets is smaller,
-// selected by IndexSet, so the record stays bounded by branch count and
-// never by item payload size.
-//
-// Summary is the caller's [WithBatchSummary] output. It is advisory:
-// replay never reads it. It is absent when no summary function is set or
-// the summary is empty.
-type batchReplayRecord struct {
-	Reason       CompletionReason `json:"completionReason"`
-	StartedTotal int              `json:"totalCount"`
-	IndexSet     string           `json:"indexSet"`
-	Indexes      []int            `json:"indexes"`
-	Summary      string           `json:"summary,omitempty"`
-}
-
-// marshalBatchReplayRecord serializes record so that it fits the
-// checkpoint size limit. The record without its summary is bounded by
-// branch count and always fits. The summary is caller-supplied and may
-// not: it is shortened on a UTF-8 boundary, in proportion to the excess
-// of its JSON encoding over the space the rest of the record leaves,
-// until the encoding fits. A summary with no fitting prefix is omitted.
-func marshalBatchReplayRecord(record batchReplayRecord) ([]byte, error) {
-	summary := record.Summary
-	record.Summary = ""
-	base, err := json.Marshal(record)
-	if err != nil {
-		return nil, err
-	}
-	if summary == "" {
-		return base, nil
-	}
-	// The encoded summary is spliced in as `,"summary":<encoded>` before
-	// the closing brace, so this is the space it may occupy.
-	budget := checkpointSizeLimitBytes - len(base) - len(`,"summary":`)
-	for summary != "" {
-		encoded, err := json.Marshal(summary)
-		if err != nil {
-			return nil, err
-		}
-		if len(encoded) <= budget {
-			record.Summary = summary
-			return json.Marshal(record)
-		}
-		// Shrink in proportion to the overrun. Each pass strictly
-		// shortens the summary, so the loop ends; a prefix keeps
-		// roughly the same escaping ratio, so it ends in a few passes.
-		keep := len(summary) * budget / len(encoded)
-		if keep >= len(summary) {
-			keep = len(summary) - 1
-		}
-		summary = truncateUTF8(summary, max(keep, 0))
-	}
-	return base, nil
-}
-
-// newBatchReplayRecord builds the decision record from a live batch result.
-// Never-started branches are already excluded from result.Items, so the
-// item count is the started total.
-func newBatchReplayRecord[O any](result BatchResult[O]) batchReplayRecord {
-	var started, completed []int
-	for i := range result.Items {
-		if result.Items[i].Status == BatchItemStarted {
-			started = append(started, result.Items[i].Index)
-		} else {
-			completed = append(completed, result.Items[i].Index)
-		}
-	}
-	record := batchReplayRecord{
-		Reason:       result.Reason,
-		StartedTotal: len(result.Items),
-	}
-	if len(started) <= len(completed) {
-		record.IndexSet = replayIndexSetStarted
-		record.Indexes = started
-	} else {
-		record.IndexSet = replayIndexSetCompleted
-		record.Indexes = completed
-	}
-	if record.Indexes == nil {
-		record.Indexes = []int{}
-	}
-	return record
-}
-
-// parseBatchReplayRecord parses a decision record from a parent context's
-// stored payload. The second result is false for absent, malformed, or
-// out-of-range payloads (including checkpoints written before the record
-// existed), so the caller can fall back to sequential re-execution.
-func parseBatchReplayRecord(payload string) (batchReplayRecord, bool) {
-	if payload == "" {
-		return batchReplayRecord{}, false
-	}
-	var record batchReplayRecord
-	if err := json.Unmarshal([]byte(payload), &record); err != nil {
-		return batchReplayRecord{}, false
-	}
-	if record.StartedTotal < 0 {
-		return batchReplayRecord{}, false
-	}
-	if record.IndexSet != replayIndexSetStarted && record.IndexSet != replayIndexSetCompleted {
-		return batchReplayRecord{}, false
-	}
-	for _, idx := range record.Indexes {
-		if idx < 0 || idx >= record.StartedTotal {
-			return batchReplayRecord{}, false
-		}
-	}
-	return record, true
-}
-
-// abandonedSet returns the set of admitted branch indexes that were
-// reported STARTED (abandoned before reaching a terminal status).
-func (r batchReplayRecord) abandonedSet() map[int]bool {
-	set := make(map[int]bool, len(r.Indexes))
-	if r.IndexSet == replayIndexSetStarted {
-		for _, idx := range r.Indexes {
-			set[idx] = true
-		}
-		return set
-	}
-	completed := make(map[int]bool, len(r.Indexes))
-	for _, idx := range r.Indexes {
-		completed[idx] = true
-	}
-	for i := 0; i < r.StartedTotal; i++ {
-		if !completed[i] {
-			set[i] = true
-		}
-	}
-	return set
-}
-
 // replayRunItem returns the item function a replay path runs over a batch's
 // recorded operations. Map replays with the caller's items and fn. Parallel
 // replays with placeholder items and a fn that dispatches to the branch.
@@ -2659,20 +2415,19 @@ func replayRunItem[I, O any](items []I, fn func(Context, I, int) (O, error)) bat
 func replayBatchChildrenFromRecord[I, O any](
 	ec *execContext,
 	parentID string,
-	record batchReplayRecord,
+	record batchSummaryRecord,
 	items []I,
 	fn func(Context, I, int) (O, error),
 	options batchOptions,
 	childSubType string,
 ) (BatchResult[O], error) {
-	abandoned := record.abandonedSet()
 	sib := &opIDs{prefix: ec.ids.prefix, counter: ec.ids.counter}
 	runItem := replayRunItem(items, fn)
-	results := make([]BatchItem[O], 0, record.StartedTotal)
-	for i := 0; i < record.StartedTotal; i++ {
+	results := make([]BatchItem[O], 0, record.admitted())
+	for i := 0; i < record.admitted(); i++ {
 		childID := sib.next()
 		itemName := itemNameForIndex(options, i)
-		if abandoned[i] {
+		if record.abandoned(i) {
 			if op := ec.state.get(childID); op != nil {
 				dispatchBatchItemReplayedEnd(ec, parentID, childID, itemName, childSubType, op, nil)
 			}
@@ -2693,7 +2448,7 @@ func replayBatchChildrenFromRecord[I, O any](
 		}
 		results = append(results, item)
 	}
-	return BatchResult[O]{Items: results, Reason: record.Reason}, nil
+	return BatchResult[O]{Items: results, Reason: record.CompletionReason}, nil
 }
 
 // replayFlatBatchChildrenFromRecord reconstructs a FLAT batch result from
@@ -2708,17 +2463,16 @@ func replayBatchChildrenFromRecord[I, O any](
 func replayFlatBatchChildrenFromRecord[I, O any](
 	ec *execContext,
 	parentID string,
-	record batchReplayRecord,
+	record batchSummaryRecord,
 	items []I,
 	fn func(Context, I, int) (O, error),
 	options batchOptions,
 ) (BatchResult[O], error) {
-	abandoned := record.abandonedSet()
 	runItem := replayRunItem(items, fn)
-	results := make([]BatchItem[O], 0, record.StartedTotal)
-	for i := 0; i < record.StartedTotal; i++ {
+	results := make([]BatchItem[O], 0, record.admitted())
+	for i := 0; i < record.admitted(); i++ {
 		itemName := itemNameForIndex(options, i)
-		if abandoned[i] {
+		if record.abandoned(i) {
 			results = append(results, BatchItem[O]{
 				Index:  i,
 				Name:   itemName,
@@ -2733,7 +2487,7 @@ func replayFlatBatchChildrenFromRecord[I, O any](
 		}
 		results = append(results, item)
 	}
-	return BatchResult[O]{Items: results, Reason: record.Reason}, nil
+	return BatchResult[O]{Items: results, Reason: record.CompletionReason}, nil
 }
 
 // batchParentUpdate builds an operation update for the parent batch context.

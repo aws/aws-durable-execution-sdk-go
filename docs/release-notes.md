@@ -2,6 +2,57 @@
 
 ## Unreleased
 
+### Changed: the stored form of a `Map` or `Parallel` result
+
+A `Map` or `Parallel` batch stores its result on its own context operation
+when it succeeds. The stored form now matches the one the other Durable
+Execution SDKs store. Replay reads only the new form. A checkpoint in the
+old form is replayed by running the items again in order.
+
+The full payload is `{"all":[<item>,...],"completionReason":"<REASON>"}`.
+A succeeded item is `{"result":<value>,"index":<n>,"status":"SUCCEEDED"}`,
+where `<value>` is the bytes the item serdes produced, stored as a JSON
+value rather than as a JSON string. A failed item is
+`{"error":<error object>,"index":<n>,"status":"FAILED"}`. An item
+abandoned when the batch completed early is
+`{"index":<n>,"status":"STARTED"}`. Items carry no name. Replay names each
+item by its index, as the first run did. An item serdes whose output is
+not a JSON value cannot be held in this payload, so the batch stores the
+summary record below instead.
+
+`BatchItemStatus` and `CompletionReason` now encode to JSON as their
+`String()` values, such as `"SUCCEEDED"` and `"ALL_COMPLETED"`, and decode
+from them. An unrecognized string decodes to the zero value. The integer
+constants keep their values.
+
+A failed item's error is stored as a nested error object with the fields
+`ErrorType`, `ErrorMessage`, `ErrorData`, `StackTrace`, and `Cause`. The
+SDK builds `Cause` by walking the error's `Unwrap` chain. Each failed item
+in the returned `BatchResult` reports the error rebuilt from that object,
+on the first run and on replay alike, so both report equal errors. An SDK
+error type in the chain is rebuilt as that type, so `errors.As` finds it.
+The fields the object does not hold are zero: `StepError.Attempts`,
+`WaitForConditionError.Attempts`, `CallbackError.CallbackID`,
+`SerdesError.Direction`, and the names of operations inside the item. Any
+other error in the chain is rebuilt as a value that reports the recorded
+type and message, so `errors.As` against a caller's own error type no
+longer matches an item error, also in `NestingFlat` mode. Match on the
+recorded type with `wireErrorType`-style checks such as
+`ChildContextError.ErrorType`. The SDK sentinels `ErrCallbackTimedOut`,
+`ErrInvokeTimedOut`, `ErrExecutionStopped`, and `ErrExecutionCancelled`
+still match with `errors.Is`.
+
+When the full payload is larger than 262144 bytes, the batch stores a
+summary record and marks the checkpoint for child replay. A `Map` stores
+`{"type":"MapResult","totalCount":<n>,"successCount":<n>,"failureCount":<n>,"completionReason":"<REASON>","status":"<STATUS>","itemStatuses":"<markers>"}`.
+A `Parallel` stores `"type":"ParallelResult"` and adds
+`"startedCount":<n>` after `failureCount`. `itemStatuses` holds one
+character per admitted item in index order: `S` for succeeded, `F` for
+failed, and `-` for abandoned. A `WithBatchSummary` string is stored under
+an added `summary` key. Replay re-drives each `S` and `F` item from its own
+recorded operations, reports each `-` item as started, and uses the
+recorded completion reason without calling `ShouldComplete` again.
+
 ### Changed: `NonDeterministicReplayError` is now `NonDeterministicExecutionError`
 
 A replay that finds a checkpointed operation whose type, subtype, or name

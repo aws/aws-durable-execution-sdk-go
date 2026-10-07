@@ -296,8 +296,8 @@ func batchSummaryLiveThenReplay(t *testing.T, nesting NestingMode) {
 	if got := stored["summary"]; got != "3/3 done" {
 		t.Errorf(`record "summary" = %v, want "3/3 done"`, got)
 	}
-	if _, ok := parseBatchReplayRecord(aws.ToString(parent.Payload)); !ok {
-		t.Error("record with a summary no longer parses as a replay record")
+	if _, ok := parseBatchSummaryRecord(aws.ToString(parent.Payload)); !ok {
+		t.Error("record with a summary no longer parses as a summary record")
 	}
 
 	// Rebuild the checkpoint log from the live updates and replay.
@@ -543,12 +543,14 @@ func TestBatchSummaryPanicFailsOperation(t *testing.T) {
 	}
 }
 
-func TestMarshalBatchReplayRecordTruncatesSummaryToFit(t *testing.T) {
-	base := batchReplayRecord{
-		Reason:       CompletionAllCompleted,
-		StartedTotal: 3,
-		IndexSet:     replayIndexSetStarted,
-		Indexes:      []int{},
+func TestMarshalBatchSummaryRecordTruncatesSummaryToFit(t *testing.T) {
+	base := batchSummaryRecord{
+		Type:             batchSummaryTypeMap,
+		TotalCount:       3,
+		SuccessCount:     3,
+		CompletionReason: CompletionAllCompleted,
+		Status:           BatchItemSucceeded,
+		ItemStatuses:     "SSS",
 	}
 
 	// Three-byte runes with a limit that is not a multiple of three, so
@@ -575,16 +577,16 @@ func TestMarshalBatchReplayRecordTruncatesSummaryToFit(t *testing.T) {
 // marshalWithinLimit marshals record and asserts the result fits the
 // checkpoint limit, parses, and carries a valid UTF-8 prefix of the
 // original summary.
-func marshalWithinLimit(t *testing.T, record batchReplayRecord) []byte {
+func marshalWithinLimit(t *testing.T, record batchSummaryRecord) []byte {
 	t.Helper()
-	b, err := marshalBatchReplayRecord(record)
+	b, err := marshalBatchSummaryRecord(record)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(b) > checkpointSizeLimitBytes {
 		t.Fatalf("record is %d bytes, over the %d limit", len(b), checkpointSizeLimitBytes)
 	}
-	var parsed batchReplayRecord
+	var parsed batchSummaryRecord
 	if err := json.Unmarshal(b, &parsed); err != nil {
 		t.Fatalf("truncated record does not parse: %v", err)
 	}
@@ -594,15 +596,16 @@ func marshalWithinLimit(t *testing.T, record batchReplayRecord) []byte {
 	if !utf8.ValidString(parsed.Summary) || !strings.HasPrefix(record.Summary, parsed.Summary) {
 		t.Error("truncated summary is not a valid UTF-8 prefix of the original")
 	}
-	if _, ok := parseBatchReplayRecord(string(b)); !ok {
-		t.Error("truncated record is not accepted as a replay record")
+	if _, ok := parseBatchSummaryRecord(string(b)); !ok {
+		t.Error("truncated record is not accepted as a summary record")
 	}
 	return b
 }
 
-func TestMarshalBatchReplayRecordOmitsEmptySummary(t *testing.T) {
-	b, err := marshalBatchReplayRecord(batchReplayRecord{
-		Reason: CompletionAllCompleted, StartedTotal: 1, IndexSet: replayIndexSetStarted, Indexes: []int{},
+func TestMarshalBatchSummaryRecordOmitsEmptySummary(t *testing.T) {
+	b, err := marshalBatchSummaryRecord(batchSummaryRecord{
+		Type: batchSummaryTypeMap, TotalCount: 1, SuccessCount: 1,
+		CompletionReason: CompletionAllCompleted, Status: BatchItemSucceeded, ItemStatuses: "S",
 	})
 	if err != nil {
 		t.Fatal(err)

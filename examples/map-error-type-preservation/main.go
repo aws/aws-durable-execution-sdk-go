@@ -1,10 +1,13 @@
 // Command map-error-type-preservation demonstrates that a failed map
 // item's error preserves its concrete SDK wrapper types through the
 // checkpoint-and-replay cycle. After a Wait forces replay, errors.As
-// succeeds for both ChildContextError and StepError with field values
-// matching the live run. The leaf user-defined error type survives as a
-// type name string, which is the expected behavior for user types that
-// cannot be generically instantiated.
+// succeeds for both ChildContextError and StepError, and every field
+// matches the first run. The batch records each item error as a chain of
+// types and messages, so detail fields it does not record, such as the
+// step's name and attempt count, are empty on both runs. The leaf
+// user-defined error type survives as a type name string, which is the
+// expected behavior for user types that cannot be generically
+// instantiated.
 package main
 
 import (
