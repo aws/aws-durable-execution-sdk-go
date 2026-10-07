@@ -755,8 +755,9 @@ func handler(ctx durable.Context, _ any) (string, error) {
 
 ## Serialization
 
-The SDK stores operation results as JSON by default. `WithSerdes` sets a
-different `durable.Serdes` for the whole handler at construction time, and
+The SDK stores operation results as JSON by default. The stored JSON keeps
+`<`, `>` and `&` literal. `WithSerdes` sets a different `durable.Serdes`
+for the whole handler at construction time, and
 `ConfigureSerdes` changes it from inside the handler. Per-operation options
 such as `WithStepSerdes`, `WithChildSerdes`, and `WithBatchSerdes` override
 it for one operation. The `Serdes` interface is untyped. `Marshal` receives

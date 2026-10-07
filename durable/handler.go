@@ -647,7 +647,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 				}
 			})
 		}
-		serialized, serr := json.Marshal(wrapResult)
+		serialized, serr := marshalNoHTMLEscape(wrapResult)
 		if serr != nil {
 			// The result is deterministic, so a later invocation
 			// would fail to encode it the same way. Fail the

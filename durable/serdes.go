@@ -1,14 +1,17 @@
 package durable
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"reflect"
 )
 
-// JSONSerdes is the default [Serdes]. It encodes with [json.Marshal] and
-// decodes with [json.Unmarshal]. The SDK uses it for every operation result
+// JSONSerdes is the default [Serdes]. It encodes with [encoding/json] without
+// HTML escaping, so <, > and & stay literal in the stored JSON. Its output is
+// otherwise the output of [json.Marshal]: map keys are sorted and a nil value
+// encodes as null. It decodes with [json.Unmarshal]. The SDK uses it for every operation result
 // when no serializer option is supplied: no handler-wide [WithSerdes], no
 // per-operation option such as [WithStepSerdes], and no [ConfigureSerdes]
 // call in the handler.
@@ -54,7 +57,25 @@ type jsonSerdes struct{}
 var _ Serdes = jsonSerdes{}
 
 func (jsonSerdes) Marshal(_ context.Context, _ SerdesContext, v any) ([]byte, error) {
-	return json.Marshal(v)
+	return marshalNoHTMLEscape(v)
+}
+
+// marshalNoHTMLEscape marshals v to JSON with HTML escaping disabled, so
+// <, > and & stay literal. It matches json.Marshal in every other way:
+// map keys are sorted and a nil value encodes as null. json.Encoder.Encode
+// appends one trailing newline, which this function removes.
+func marshalNoHTMLEscape(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	b := buf.Bytes()
+	if n := len(b); n > 0 && b[n-1] == '\n' {
+		b = b[:n-1]
+	}
+	return b, nil
 }
 
 func (jsonSerdes) Unmarshal(_ context.Context, _ SerdesContext, data []byte, v any) error {

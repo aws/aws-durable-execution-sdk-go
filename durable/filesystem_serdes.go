@@ -159,10 +159,10 @@ type fsEnvelope struct {
 
 func (s *fileSystemSerdes) Marshal(_ context.Context, meta SerdesContext, v any) ([]byte, error) {
 	if v == nil {
-		return json.Marshal(nil)
+		return marshalNoHTMLEscape(nil)
 	}
 
-	valueJSON, err := json.Marshal(v)
+	valueJSON, err := marshalNoHTMLEscape(v)
 	if err != nil {
 		return nil, fmt.Errorf("durable: filesystem serdes: marshal value: %w", err)
 	}
@@ -172,7 +172,7 @@ func (s *fileSystemSerdes) Marshal(_ context.Context, meta SerdesContext, v any)
 		// Inline if small enough.
 		inline := string(valueJSON)
 		env := fsEnvelope{Data: &inline}
-		envelopeBytes, err := json.Marshal(env)
+		envelopeBytes, err := marshalNoHTMLEscape(env)
 		if err != nil {
 			return nil, fmt.Errorf("durable: filesystem serdes: marshal envelope: %w", err)
 		}
@@ -192,7 +192,7 @@ func (s *fileSystemSerdes) Marshal(_ context.Context, meta SerdesContext, v any)
 	if s.config.GeneratePreview != nil {
 		env.Preview = s.config.GeneratePreview(v)
 	}
-	return json.Marshal(env)
+	return marshalNoHTMLEscape(env)
 }
 
 func (s *fileSystemSerdes) Unmarshal(_ context.Context, _ SerdesContext, data []byte, v any) error {

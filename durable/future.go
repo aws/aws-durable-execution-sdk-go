@@ -390,7 +390,7 @@ func (s Settled[O]) MarshalJSON() ([]byte, error) {
 		var zero O
 		j.Value = zero
 	}
-	return json.Marshal(j)
+	return marshalNoHTMLEscape(j)
 }
 
 // UnmarshalJSON deserializes a Settled value. A rejected outcome that names

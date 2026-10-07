@@ -437,7 +437,7 @@ func newBatchSummaryRecord[O any](summaryType string, result BatchResult[O]) bat
 func marshalBatchSummaryRecord(record batchSummaryRecord) ([]byte, error) {
 	summary := record.Summary
 	record.Summary = ""
-	base, err := json.Marshal(record)
+	base, err := marshalNoHTMLEscape(record)
 	if err != nil {
 		return nil, err
 	}
@@ -448,13 +448,13 @@ func marshalBatchSummaryRecord(record batchSummaryRecord) ([]byte, error) {
 	// closing brace, so this is the space it may occupy.
 	budget := checkpointSizeLimitBytes - len(base) - len(`,"summary":`)
 	for summary != "" {
-		encoded, err := json.Marshal(summary)
+		encoded, err := marshalNoHTMLEscape(summary)
 		if err != nil {
 			return nil, err
 		}
 		if len(encoded) <= budget {
 			record.Summary = summary
-			return json.Marshal(record)
+			return marshalNoHTMLEscape(record)
 		}
 		// Shrink in proportion to the overrun. Each pass strictly
 		// shortens the summary, so the loop ends.

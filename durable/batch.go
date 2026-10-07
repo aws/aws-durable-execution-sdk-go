@@ -2059,7 +2059,7 @@ func checkpointBatchSuccess[O any](
 		case payloadErr != nil:
 			return BatchResult[O]{}, ec.reportSerdesError(payloadErr)
 		default:
-			serialized, serErr = json.Marshal(payload)
+			serialized, serErr = marshalNoHTMLEscape(payload)
 		}
 	}
 	if serErr != nil {
@@ -2233,7 +2233,7 @@ func encodeChildErrorData(err error) *string {
 	if !ok {
 		return nil
 	}
-	raw, marshalErr := json.Marshal(d)
+	raw, marshalErr := marshalNoHTMLEscape(d)
 	if marshalErr != nil {
 		return nil
 	}

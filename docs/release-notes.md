@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Changed: stored JSON keeps `<`, `>` and `&` literal
+
+The SDK no longer HTML-escapes `<`, `>` and `&` in the JSON it stores.
+Before, `JSONSerdes` and the other places that store JSON wrote them as
+`\u003c`, `\u003e` and `\u0026`. Stored checkpoints and the execution
+history now carry the characters literally. This covers every operation
+result stored through `JSONSerdes`, the handler result, the `Map` and
+`Parallel` records, the `AllSettled` outcomes, and the values and
+envelopes of `FileSystemSerdes`. The output matches the JavaScript SDK
+2.6.0 and the Python SDK, which both store the characters literally.
+Replay reads checkpoints in either form, because the two forms decode to
+the same value.
+
 ### Changed: the stored form of a `Map` or `Parallel` result
 
 A `Map` or `Parallel` batch stores its result on its own context operation
