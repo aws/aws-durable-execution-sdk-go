@@ -253,6 +253,7 @@ var expectations = map[string]expectation{
 
 	"error-determinism":       {result: `{"isDeterministic":true,"errorPropsBeforeReplay":{"isStepError":true,"causeName":"Error"},"errorPropsAfterReplay":{"isStepError":true,"causeName":"Error"}}`},
 	"error-handling-taxonomy": {result: `{"stepErrorInfo":{"matched":true,"typeName":"StepError","operationName":"failing-step","attempts":1,"isOpError":true,"opErrorName":"failing-step","errorType":"Error"},"invokeErrorInfo":{"matched":true,"typeName":"InvokeError","operationName":"failing-invoke","isOpError":true,"opErrorName":"failing-invoke","errorType":"Error"},"callbackErrorInfo":{"matched":true,"typeName":"CallbackExternalError","operationName":"failing-callback","isOpError":true,"opErrorName":"failing-callback","errorType":"CallbackError"}}`},
+	"error-stack-traces":      {result: `{"message":"charge 4111-xxxx: card declined","stackFrames":0}`},
 
 	"force-checkpoint-callback":   {result: `"{\"Items\":[{\"Index\":0,\"Name\":\"long-running\",\"Status\":1,\"Result\":\"long-complete\",\"Err\":null},{\"Index\":1,\"Name\":\"callbacks\",\"Status\":1,\"Result\":\"callbacks-complete\",\"Err\":null}],\"Reason\":1}"`},
 	"force-checkpoint-invoke":     {result: `"{\"Items\":[{\"Index\":0,\"Name\":\"long-running\",\"Status\":1,\"Result\":\"long-complete\",\"Err\":null},{\"Index\":1,\"Name\":\"invokes\",\"Status\":1,\"Result\":\"invokes-complete\",\"Err\":null}],\"Reason\":1}"`},
@@ -296,6 +297,7 @@ var expectations = map[string]expectation{
 	"logger-after-callback": {result: `{"message":"done","callbackId":"self-resolved","result":"callback-resolved"}`},
 	"logger-after-wait":     {result: `"done"`},
 	"logger-log-levels":     {result: `"done"`},
+	"logger-replay-mode":    {result: `"done"`},
 	"logger-slog-handler":   {result: `"done"`},
 
 	"map-basic": {result: `[2,4,6,8,10]`},

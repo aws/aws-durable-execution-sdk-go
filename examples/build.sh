@@ -133,6 +133,8 @@ EXAMPLES="
   logger-after-callback
   logger-log-levels
   logger-slog-handler
+  logger-replay-mode
+  error-stack-traces
   plugin-lifecycle
   insight-plugin
   serde-basic

@@ -1,0 +1,8 @@
+[
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "charge-card",
+    "status": "FAILED"
+  }
+]

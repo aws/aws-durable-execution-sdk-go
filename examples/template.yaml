@@ -2005,6 +2005,40 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 120
 
+  LoggerReplayModeFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-logger-replay-mode
+      CodeUri: .aws-sam/build-artifacts/logger-replay-mode/
+      Handler: bootstrap
+      Description: WithReplayLogMode and ConfigureLogging select whether replayed log records are emitted
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  ErrorStackTracesFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-error-stack-traces
+      CodeUri: .aws-sam/build-artifacts/error-stack-traces/
+      Handler: bootstrap
+      Description: WithStackTraces(false) records step failures without stack traces
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
   PluginLifecycleFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -2831,6 +2865,12 @@ Outputs:
   LoggerSlogHandlerFunction:
     Description: Logger Slog Handler Function ARN
     Value: !GetAtt LoggerSlogHandlerFunction.Arn
+  LoggerReplayModeFunction:
+    Description: Logger Replay Mode Function ARN
+    Value: !GetAtt LoggerReplayModeFunction.Arn
+  ErrorStackTracesFunction:
+    Description: Error Stack Traces Function ARN
+    Value: !GetAtt ErrorStackTracesFunction.Arn
   PluginLifecycleFunction:
     Description: Plugin Lifecycle Function ARN
     Value: !GetAtt PluginLifecycleFunction.Arn

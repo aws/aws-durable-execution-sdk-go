@@ -175,6 +175,8 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [logger-after-callback](logger-after-callback/main.go) | WaitForCallback, Context.Logger | SUCCEEDED |
 | [logger-log-levels](logger-log-levels/main.go) | Context.Logger, all log levels | SUCCEEDED |
 | [logger-slog-handler](logger-slog-handler/main.go) | WithLogHandler, application slog.Handler | SUCCEEDED |
+| [logger-replay-mode](logger-replay-mode/main.go) | WithReplayLogMode, ConfigureLogging, ReplayLogModeEmit / ReplayLogModeSuppress | SUCCEEDED |
+| [error-stack-traces](error-stack-traces/main.go) | Step, WithStackTraces(false), StepError.StackTrace, MaxStackTraceFrames | SUCCEEDED |
 | [plugin-lifecycle](plugin-lifecycle/main.go) | WithPlugins, hook lifecycle ordering | SUCCEEDED |
 | [insight-plugin](insight-plugin/main.go) | WithPlugins, insight.New (Workflow Insight plugin) | SUCCEEDED |
 
