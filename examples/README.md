@@ -71,7 +71,7 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [wait-callback-timeout](wait-callback-timeout/main.go) | WaitForCallback, timeout | SUCCEEDED |
 | [wait-callback-heartbeat](wait-callback-heartbeat/main.go) | WaitForCallback, heartbeat | SUCCEEDED |
 | [wait-callback-failures](wait-callback-failures/main.go) | WaitForCallback, submitter failure handling | SUCCEEDED |
-| [wait-callback-serdes](wait-callback-serdes/main.go) | WaitForCallback, WithCallbackSerdes | SUCCEEDED |
+| [wait-callback-serdes](wait-callback-serdes/main.go) | WaitForCallback, WithCallbackSerdes, SerdesOf | SUCCEEDED |
 | [wait-callback-mixed-ops](wait-callback-mixed-ops/main.go) | WaitForCallback, Step, Wait | SUCCEEDED |
 | [wait-callback-nested](wait-callback-nested/main.go) | WaitForCallback (nested) | SUCCEEDED |
 | [wait-callback-child-context](wait-callback-child-context/main.go) | WaitForCallback, RunInChildContext | SUCCEEDED |
@@ -87,7 +87,7 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [create-callback-heartbeat](create-callback-heartbeat/main.go) | CreateCallback, heartbeat | SUCCEEDED |
 | [create-callback-concurrent](create-callback-concurrent/main.go) | CreateCallback (multiple concurrent) | SUCCEEDED |
 | [create-callback-failures](create-callback-failures/main.go) | CreateCallback, failure handling | SUCCEEDED |
-| [create-callback-serdes](create-callback-serdes/main.go) | CreateCallback, WithCallbackSerdes | SUCCEEDED |
+| [create-callback-serdes](create-callback-serdes/main.go) | CreateCallback, WithCallbackSerdes, SerdesOf | SUCCEEDED |
 | [create-callback-mixed-ops](create-callback-mixed-ops/main.go) | CreateCallback, Step, Wait | SUCCEEDED |
 | [create-callback-error-instance](create-callback-error-instance/main.go) | CreateCallback, CallbackError | SUCCEEDED |
 | [callback-sender](callback-sender/main.go) | (companion submitter function) | — |
@@ -181,9 +181,11 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 A serdes written for one result type can use `durable.SerdesOf`, which
 adapts typed marshal and unmarshal functions to the untyped `Serdes`
 interface and rejects any other type with a descriptive error.
-`serde-basic` shows the pattern with `WithStepSerdes`. A `SerdesOf` serdes
-also works handler-wide with `WithSerdes`, but then every operation result
-in the handler must be that one type.
+`serde-basic` shows the pattern with `WithStepSerdes`, and
+`create-callback-serdes` and `wait-callback-serdes` show it with
+`WithCallbackSerdes`, decoding with `JSONSerdes` and then rewriting a
+field. A `SerdesOf` serdes also works handler-wide with `WithSerdes`, but
+then every operation result in the handler must be that one type.
 
 A filesystem serdes stores only a file reference in the checkpoint. In
 the default `FileSystemSerdesModeAlways` every value is written to a file;
