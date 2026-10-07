@@ -1,0 +1,14 @@
+[
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "reserve",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "charge",
+    "status": "SUCCEEDED"
+  }
+]

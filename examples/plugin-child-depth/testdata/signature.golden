@@ -1,0 +1,32 @@
+[
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "load-order",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "RunInChildContext",
+    "name": "fulfil",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "reserve-stock",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "charge-card",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "notify",
+    "status": "SUCCEEDED"
+  }
+]

@@ -16,6 +16,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // expectation declares how the smoke test verifies one example once its
@@ -251,8 +252,26 @@ var expectations = map[string]expectation{
 	"create-callback-simple":         {result: `{"value":"hello from external"}`},
 	"create-callback-timeout":        {result: `{"timedOut":true,"error":"durable: callback \"timeout-callback\" failed: Callback.Timeout: Callback timed out"}`},
 
+	"custom-entry-point": {result: `{"message":"confirmed order ORD-12345"}`},
+
 	"error-determinism":       {result: `{"isDeterministic":true,"errorPropsBeforeReplay":{"isStepError":true,"causeName":"Error"},"errorPropsAfterReplay":{"isStepError":true,"causeName":"Error"}}`},
 	"error-handling-taxonomy": {result: `{"stepErrorInfo":{"matched":true,"typeName":"StepError","operationName":"failing-step","attempts":1,"isOpError":true,"opErrorName":"failing-step","errorType":"Error"},"invokeErrorInfo":{"matched":true,"typeName":"InvokeError","operationName":"failing-invoke","isOpError":true,"opErrorName":"failing-invoke","errorType":"Error"},"callbackErrorInfo":{"matched":true,"typeName":"CallbackExternalError","operationName":"failing-callback","isOpError":true,"opErrorName":"failing-callback","errorType":"CallbackError"}}`},
+
+	"execution-start-time": {
+		nondeterministic: "startedAt is the execution's start time and deadline is 24 hours later, so both depend on when the execution ran",
+		check: func(t testing.TB, result string) {
+			obj := resultObject(t, result)
+			assertFields(t, obj, map[string]any{"matchesFirstInvocation": true})
+			startedAt, err := time.Parse(time.RFC3339Nano, fmt.Sprint(obj["startedAt"]))
+			if err != nil || startedAt.IsZero() {
+				t.Fatalf("expected a start time, got %v (%v)", obj["startedAt"], err)
+			}
+			deadline, err := time.Parse(time.RFC3339Nano, fmt.Sprint(obj["deadline"]))
+			if err != nil || deadline.Sub(startedAt) != 24*time.Hour {
+				t.Fatalf("expected the deadline 24 hours after %s, got %v (%v)", startedAt, obj["deadline"], err)
+			}
+		},
+	},
 
 	"force-checkpoint-callback":   {result: `"{\"Items\":[{\"Index\":0,\"Name\":\"long-running\",\"Status\":1,\"Result\":\"long-complete\",\"Err\":null},{\"Index\":1,\"Name\":\"callbacks\",\"Status\":1,\"Result\":\"callbacks-complete\",\"Err\":null}],\"Reason\":1}"`},
 	"force-checkpoint-invoke":     {result: `"{\"Items\":[{\"Index\":0,\"Name\":\"long-running\",\"Status\":1,\"Result\":\"long-complete\",\"Err\":null},{\"Index\":1,\"Name\":\"invokes\",\"Status\":1,\"Result\":\"invokes-complete\",\"Err\":null}],\"Reason\":1}"`},
@@ -372,6 +391,7 @@ var expectations = map[string]expectation{
 	"parallel-tolerated-failure-percentage": {result: `{"successCount":2,"failureCount":2,"totalCount":4,"completionReason":"FAILURE_TOLERANCE_EXCEEDED","hasFailure":true,"successResults":["result-1","result-3"]}`},
 	"parallel-virtual-context":              {result: `{"results":["fetched","processed","validated"],"totalCount":3,"successCount":3}`},
 	"parallel-wait":                         {result: `"Completed waits"`},
+	"plugin-child-depth":                    {result: `{"reported":[{"name":"load-order","childrenOmitted":true},{"name":"fulfil","childrenOmitted":true},{"name":"notify","childrenOmitted":true}]}`},
 	"plugin-lifecycle":                      {result: `{"message":"plugin lifecycle complete","hooks":[{"hook":"OnInvocationStart"},{"hook":"OnOperationStart","operationName":"compute"},{"hook":"OnOperationAttemptStart","operationName":"compute","attempt":1},{"hook":"OnOperationAttemptEnd","operationName":"compute","attempt":1},{"hook":"OnOperationEnd","operationName":"compute"}]}`},
 
 	"retry-callback":   {failed: true, errorType: "CallbackTimeoutError"},
@@ -387,6 +407,7 @@ var expectations = map[string]expectation{
 	"serde-filesystem-overflow":     {result: `{"smallOrderId":"ORD-42","largeLength":307200}`},
 	"serde-preview-field-selection": {result: `{"id":"cust-9","email":"decoy@example.com","customerEmail":"person@example.com","auditLength":2000}`},
 	"serde-preview-truncation":      {result: `{"id":"acct-123","tier":"gold","notesLength":500}`},
+	"serde-retryable-error":         {result: `{"orderId":"ORD-12345","status":"charged after reserved ORD-12345"}`},
 	"serde-struct-with-times":       {result: `{"defaultSerdes":{"title":"Durable Functions 101","createdAt":"2020-01-01T00:00:00Z","publishedAt":"2020-01-02T00:00:00Z","isPublished":true,"ageHours":48,"archivedAtIsNil":true,"equalsOriginal":true},"epochSerdes":{"title":"Durable Functions 101","createdAt":"2020-01-01T00:00:00Z","publishedAt":"2020-01-02T00:00:00Z","isPublished":true,"ageHours":48,"archivedAtIsNil":true,"equalsOriginal":true}}`},
 
 	"simple-execution": {

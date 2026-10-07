@@ -28,7 +28,8 @@ import (
 //     matrix asserts, and each holds only operation signatures, so a
 //     run-specific value cannot be recorded by mistake.
 //
-// An example is durable when its main.go starts a durable handler; a
+// An example is durable when its main.go starts a durable handler, with
+// durable.Start or through its own entry point around durable.Wrap; a
 // plain Lambda has no operation log and is not checked.
 func TestEveryExampleAssertsSignature(t *testing.T) {
 	root := filepath.Join("..", "..")
@@ -48,7 +49,7 @@ func TestEveryExampleAssertsSignature(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !bytes.Contains(src, []byte("durable.Start(")) {
+		if !bytes.Contains(src, []byte("durable.Start(")) && !bytes.Contains(src, []byte("durable.Wrap(")) {
 			continue
 		}
 		checked = append(checked, name)
@@ -56,7 +57,7 @@ func TestEveryExampleAssertsSignature(t *testing.T) {
 	}
 	sort.Strings(checked)
 	if len(checked) < 50 {
-		t.Fatalf("only %d durable examples found; the glob or the durable.Start marker is wrong", len(checked))
+		t.Fatalf("only %d durable examples found; the glob or the durable.Start and durable.Wrap markers are wrong", len(checked))
 	}
 }
 

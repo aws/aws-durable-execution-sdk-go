@@ -177,6 +177,10 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [logger-slog-handler](logger-slog-handler/main.go) | WithLogHandler, application slog.Handler | SUCCEEDED |
 | [plugin-lifecycle](plugin-lifecycle/main.go) | WithPlugins, hook lifecycle ordering | SUCCEEDED |
 | [insight-plugin](insight-plugin/main.go) | WithPlugins, insight.New (Workflow Insight plugin) | SUCCEEDED |
+| [plugin-child-depth](plugin-child-depth/main.go) | WithPlugins, WithPluginChildOperationsDepth (ChildrenOmitted) | SUCCEEDED |
+| [custom-entry-point](custom-entry-point/main.go) | Wrap, lambda.Handler entry point with middleware | SUCCEEDED |
+| [execution-start-time](execution-start-time/main.go) | ExecutionStartTime, Step, Wait | SUCCEEDED |
+| [serde-retryable-error](serde-retryable-error/main.go) | WithStepSerdes, SerdesOf, RetryableSerdesError, ErrRetryableSerdes | SUCCEEDED |
 
 A serdes written for one result type can use `durable.SerdesOf`, which
 adapts typed marshal and unmarshal functions to the untyped `Serdes`

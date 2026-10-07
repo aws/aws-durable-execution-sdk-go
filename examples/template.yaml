@@ -2039,6 +2039,74 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 60
 
+  PluginChildDepthFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-plugin-child-depth
+      CodeUri: .aws-sam/build-artifacts/plugin-child-depth/
+      Handler: bootstrap
+      Description: Plugin notifications bounded by WithPluginChildOperationsDepth
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  CustomEntryPointFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-custom-entry-point
+      CodeUri: .aws-sam/build-artifacts/custom-entry-point/
+      Handler: bootstrap
+      Description: Own Lambda entry point around durable.Wrap
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  ExecutionStartTimeFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-execution-start-time
+      CodeUri: .aws-sam/build-artifacts/execution-start-time/
+      Handler: bootstrap
+      Description: Deadline derived from ExecutionStartTime across invocations
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  SerdeRetryableErrorFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-serde-retryable-error
+      CodeUri: .aws-sam/build-artifacts/serde-retryable-error/
+      Handler: bootstrap
+      Description: Custom serdes returning RetryableSerdesError for a transient failure
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
   SerdeBasicFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -2837,6 +2905,18 @@ Outputs:
   InsightPluginFunction:
     Description: Insight Plugin Function ARN
     Value: !GetAtt InsightPluginFunction.Arn
+  PluginChildDepthFunction:
+    Description: Plugin Child Depth Function ARN
+    Value: !GetAtt PluginChildDepthFunction.Arn
+  CustomEntryPointFunction:
+    Description: Custom Entry Point Function ARN
+    Value: !GetAtt CustomEntryPointFunction.Arn
+  ExecutionStartTimeFunction:
+    Description: Execution Start Time Function ARN
+    Value: !GetAtt ExecutionStartTimeFunction.Arn
+  SerdeRetryableErrorFunction:
+    Description: Serde Retryable Error Function ARN
+    Value: !GetAtt SerdeRetryableErrorFunction.Arn
   SerdeBasicFunction:
     Description: Serde Basic Function ARN
     Value: !GetAtt SerdeBasicFunction.Arn

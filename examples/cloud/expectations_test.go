@@ -165,6 +165,7 @@ func TestExpectationAssert(t *testing.T) {
 func TestExpectationChecksAcceptObservedResults(t *testing.T) {
 	samples := map[string]string{
 		"concurrent-callback-wait":            `{"elapsedMs":1263}`,
+		"execution-start-time":                `{"startedAt":"2026-10-07T06:40:12.345Z","deadline":"2026-10-08T06:40:12.345Z","matchesFirstInvocation":true}`,
 		"future-any":                          `{"status":"succeeded","value":"first success"}`,
 		"future-race-wait":                    `{"elapsedMs":1182}`,
 		"map-completion-config-issue":         `{"totalItems":4,"successfulCount":2,"failedCount":0,"startedCount":2,"hasFailures":false,"batchStatus":"SUCCEEDED","completionReason":"MIN_SUCCESSFUL_REACHED","successfulItems":[{"index":0,"itemId":1},{"index":2,"itemId":3}],"failedItems":null}`,
