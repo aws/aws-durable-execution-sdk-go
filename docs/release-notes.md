@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+### Changed: `NonDeterministicReplayError` is now `NonDeterministicExecutionError`
+
+A replay that finds a checkpointed operation whose type, subtype, or name
+differs from the operation the handler now runs failed with a
+`*durable.NonDeterministicReplayError`, recorded with the `ErrorType`
+`NonDeterministicReplayError`. The other Durable Execution SDKs name this
+failure `NonDeterministicExecutionError`. The Go type is now
+`*durable.NonDeterministicExecutionError`, and its recorded `ErrorType` is
+`NonDeterministicExecutionError`. `NonDeterministicReplayError` no longer
+exists.
+
+The detail fields now state the source of each value. `ActualType`,
+`ActualSubType`, and `ActualName` are now `RecordedType`,
+`RecordedSubType`, and `RecordedName`: the operation the checkpoint
+recorded. `ExpectedType`, `ExpectedSubType`, and `ExpectedName` are now
+`CurrentType`, `CurrentSubType`, and `CurrentName`: the operation the
+handler now runs.
+
+The mismatch message named only the operation the handler now runs, so a
+name-only mismatch did not show the checkpointed name. It now states both
+operations as a type, subtype, and name triple:
+
+```
+durable: non-deterministic replay at step "c4ca4238a0b92382": the checkpoint recorded operation (type STEP, subtype "Step", name "a"), but the handler now runs (type STEP, subtype "Step", name "b"). The handler code changed between deployments.
+```
+
+### Added: `BatchCompletionError` for a custom-failed batch with no failed item
+
+A `ShouldComplete` decision that failed a `Map` or `Parallel` batch with
+no failed item returned a `*durable.BatchError` recorded as `BatchError`.
+It now returns the new `*durable.BatchCompletionError`, recorded with the
+`ErrorType` `BatchCompletionError`. Its `Reason` is
+`CompletionCustomFailed`. A batch with at least one failed item still
+returns a `*durable.BatchError` recorded as `BatchError`. `errors.As`
+against `*durable.OperationError` matches both, and `ErrorFromObject`
+rebuilds both.
+
 ### Changed: `Map` and `Parallel` return an error only when the batch fails
 
 `Map` and `Parallel` returned a `*BatchError` whenever an item failed,

@@ -574,7 +574,7 @@ func TestDefaultHandlerErrorTypeForEverySDKError(t *testing.T) {
 		{"CombinatorError", &CombinatorError{Name: "any", Errors: []error{cause}}, "PromiseCombinatorError", false},
 		{"BatchError", &BatchError{Name: "b", Errors: []error{cause}}, "BatchError", false},
 		{"SerdesError", &SerdesError{Operation: "marshal", Err: cause}, "SerdesError", false},
-		{"NonDeterministicReplayError", &NonDeterministicReplayError{Name: "s", StepID: "1", ExpectedType: "Step"}, "NonDeterministicReplayError", false},
+		{"NonDeterministicExecutionError", &NonDeterministicExecutionError{Name: "s", StepID: "1", CurrentType: "Step"}, "NonDeterministicExecutionError", false},
 		{"CheckpointError", &CheckpointError{Err: cause}, "CheckpointError", false},
 		{"replayed failure", &replayedError{errType: "Recorded", message: "m"}, "Recorded", false},
 		{"WithErrorData wrapper is transparent", WithErrorData(&StepError{Name: "s", ErrorType: "Custom", Message: "m", StackTrace: frames}, "d"), "Custom", true},

@@ -116,10 +116,11 @@ func TestBreachVariantsReturnBatchError(t *testing.T) {
 	}
 }
 
-// TestCustomFailedReturnsBatchError asserts that a batch completed by a
-// CompleteBatch(CompletionOutcomeFailed) decision returns a *BatchError
-// whose Reason is CUSTOM_COMPLETION_FAILED, even with no failed item.
-func TestCustomFailedReturnsBatchError(t *testing.T) {
+// TestCustomFailedReturnsBatchCompletionError asserts that a batch
+// completed by a CompleteBatch(CompletionOutcomeFailed) decision with no
+// failed item returns a *BatchCompletionError whose Reason is
+// CUSTOM_COMPLETION_FAILED.
+func TestCustomFailedReturnsBatchCompletionError(t *testing.T) {
 	var gotErr error
 	var total int
 	h := func(ctx durable.Context, _ any) (int, error) {
@@ -138,12 +139,12 @@ func TestCustomFailedReturnsBatchError(t *testing.T) {
 		return 0, nil
 	}
 	runToCompletion(t, h)
-	var be *durable.BatchError
+	var be *durable.BatchCompletionError
 	if !errors.As(gotErr, &be) {
-		t.Fatalf("Map returned err = %v, want *BatchError", gotErr)
+		t.Fatalf("Map returned err = %v, want *BatchCompletionError", gotErr)
 	}
 	if be.Reason != durable.CompletionCustomFailed {
-		t.Errorf("BatchError.Reason = %s, want CUSTOM_COMPLETION_FAILED", be.Reason)
+		t.Errorf("BatchCompletionError.Reason = %s, want CUSTOM_COMPLETION_FAILED", be.Reason)
 	}
 	if total != 1 {
 		t.Errorf("result.TotalCount() = %d, want 1", total)
@@ -267,7 +268,7 @@ func TestShouldCompleteConsultedAtZeroProgress(t *testing.T) {
 
 // TestShouldCompleteZeroProgressFailed asserts that a zero-progress
 // CompleteBatch(CompletionOutcomeFailed) runs no item and returns a
-// *BatchError with CUSTOM_COMPLETION_FAILED and an empty result.
+// *BatchCompletionError with CUSTOM_COMPLETION_FAILED and an empty result.
 func TestShouldCompleteZeroProgressFailed(t *testing.T) {
 	var gotErr error
 	var total int
@@ -285,12 +286,12 @@ func TestShouldCompleteZeroProgressFailed(t *testing.T) {
 		return 0, nil
 	}
 	runToCompletion(t, h)
-	var be *durable.BatchError
+	var be *durable.BatchCompletionError
 	if !errors.As(gotErr, &be) {
-		t.Fatalf("Parallel returned err = %v, want *BatchError", gotErr)
+		t.Fatalf("Parallel returned err = %v, want *BatchCompletionError", gotErr)
 	}
 	if be.Reason != durable.CompletionCustomFailed {
-		t.Errorf("BatchError.Reason = %s, want CUSTOM_COMPLETION_FAILED", be.Reason)
+		t.Errorf("BatchCompletionError.Reason = %s, want CUSTOM_COMPLETION_FAILED", be.Reason)
 	}
 	if total != 0 {
 		t.Errorf("result.TotalCount() = %d, want 0", total)

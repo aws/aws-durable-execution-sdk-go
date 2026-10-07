@@ -115,7 +115,7 @@ func WithChildSummary[O any](fn func(result O) string) ChildOption {
 // The subtype is part of the operation's identity on replay. Every
 // invocation of the execution must supply the same subtype for the same
 // operation; an invocation that finds a different subtype in the
-// checkpoint returns a [*NonDeterministicReplayError]. A subtype must
+// checkpoint returns a [*NonDeterministicExecutionError]. A subtype must
 // therefore not depend on the input, on time, or on any other value that
 // can differ between invocations, and changing it in a deployment breaks
 // the executions that are in flight.
@@ -748,13 +748,13 @@ func claimVirtualChild(ec *execContext, name string) (string, error) {
 		return "", err
 	}
 	if op := ec.state.get(id); op != nil {
-		e := &NonDeterministicReplayError{
-			Name:          name,
-			StepID:        op.id,
-			ExpectedName:  name,
-			ActualType:    op.opType,
-			ActualSubType: op.subType,
-			ActualName:    op.name,
+		e := &NonDeterministicExecutionError{
+			Name:            name,
+			StepID:          op.id,
+			CurrentName:     name,
+			RecordedType:    op.opType,
+			RecordedSubType: op.subType,
+			RecordedName:    op.name,
 		}
 		e.detail = fmt.Sprintf(
 			"durable: non-deterministic replay at step %q (name %q): "+

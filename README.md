@@ -612,10 +612,14 @@ item finishes. A `ShouldComplete` that completes the batch at that first
 call runs no item and returns an empty result. Items still running when
 the batch completes early are reported with the status `BatchItemStarted`.
 
-`Map` and `Parallel` return a `*durable.BatchError` only when the batch
-fails as a unit. That is a breached tolerance, with the reason
+`Map` and `Parallel` return an error only when the batch fails as a
+unit. That is a breached tolerance, with the reason
 `FAILURE_TOLERANCE_EXCEEDED`, or a `ShouldComplete` that completes the
-batch as failed, with the reason `CUSTOM_COMPLETION_FAILED`. A failure
+batch as failed, with the reason `CUSTOM_COMPLETION_FAILED`. The error is
+a `*durable.BatchError` carrying the per-item errors when an item failed.
+A `ShouldComplete` that fails the batch with no failed item returns a
+`*durable.BatchCompletionError` instead, recorded with the `ErrorType`
+`BatchCompletionError`. A failure
 within a tolerance returns the populated result and a nil error, so
 `if err != nil { return err }` keeps the tolerance. Read the failed items
 from `Failed()` and `Errors()`. `MIN_SUCCESSFUL_REACHED` means the

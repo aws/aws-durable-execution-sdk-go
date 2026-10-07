@@ -225,7 +225,7 @@ func TestParentContextErrorIs(t *testing.T) {
 // operation ID. The handler ignores the rejection, so the next operation on
 // the active context takes the ID the rejected one would have taken. The
 // execution suspends on a wait and replays, which fails with a
-// NonDeterministicReplayError if the IDs do not line up.
+// NonDeterministicExecutionError if the IDs do not line up.
 func TestParentContextClaimsNoID(t *testing.T) {
 	cases := []struct {
 		name    string

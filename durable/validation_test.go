@@ -105,15 +105,15 @@ func TestValidateReplayConsistency(t *testing.T) {
 				if err == nil {
 					t.Fatal("expected error, got nil")
 				}
-				var ndErr *NonDeterministicReplayError
+				var ndErr *NonDeterministicExecutionError
 				if !errors.As(err, &ndErr) {
-					t.Fatalf("expected *NonDeterministicReplayError, got %T: %v", err, err)
+					t.Fatalf("expected *NonDeterministicExecutionError, got %T: %v", err, err)
 				}
-				if ndErr.ActualType != tc.wantErrType {
-					t.Errorf("ActualType = %q, want %q", ndErr.ActualType, tc.wantErrType)
+				if ndErr.RecordedType != tc.wantErrType {
+					t.Errorf("RecordedType = %q, want %q", ndErr.RecordedType, tc.wantErrType)
 				}
-				if ndErr.ExpectedType != tc.expectedType {
-					t.Errorf("ExpectedType = %q, want %q", ndErr.ExpectedType, tc.expectedType)
+				if ndErr.CurrentType != tc.expectedType {
+					t.Errorf("CurrentType = %q, want %q", ndErr.CurrentType, tc.expectedType)
 				}
 			} else {
 				if err != nil {
@@ -124,26 +124,26 @@ func TestValidateReplayConsistency(t *testing.T) {
 	}
 }
 
-func TestNonDeterministicReplayError_ErrorMessage(t *testing.T) {
-	err := &NonDeterministicReplayError{
+func TestNonDeterministicExecutionError_ErrorMessage(t *testing.T) {
+	err := &NonDeterministicExecutionError{
 		Name:            "my-wait",
 		StepID:          "1",
-		ExpectedType:    "WAIT",
-		ExpectedSubType: "Wait",
-		ExpectedName:    "my-wait",
-		ActualType:      "STEP",
-		ActualSubType:   "Step",
-		ActualName:      "my-wait",
+		CurrentType:     "WAIT",
+		CurrentSubType:  "Wait",
+		CurrentName:     "my-wait",
+		RecordedType:    "STEP",
+		RecordedSubType: "Step",
+		RecordedName:    "my-wait",
 	}
-	msg := err.Error()
-	if !strings.Contains(msg, "non-deterministic") {
-		t.Errorf("error message should mention non-deterministic: %s", msg)
+	want := `durable: non-deterministic replay at step "1": ` +
+		`the checkpoint recorded operation (type STEP, subtype "Step", name "my-wait"), ` +
+		`but the handler now runs (type WAIT, subtype "Wait", name "my-wait"). ` +
+		`The handler code changed between deployments.`
+	if got := err.Error(); got != want {
+		t.Errorf("Error() =\n%s\nwant\n%s", got, want)
 	}
-	if !strings.Contains(msg, "WAIT/Wait") {
-		t.Errorf("error message should mention expected type: %s", msg)
-	}
-	if !strings.Contains(msg, "STEP/Step") {
-		t.Errorf("error message should mention actual type: %s", msg)
+	if strings.Contains(err.Error(), "\u2014") {
+		t.Errorf("Error() contains an em dash: %s", err.Error())
 	}
 }
 
@@ -183,12 +183,12 @@ func TestOperationErrorBase_AllTypedErrors(t *testing.T) {
 			err:  &CombinatorError{Name: "all", Errors: []error{errors.New("a"), errors.New("b")}},
 		},
 		{
-			name: "NonDeterministicReplayError",
-			err: &NonDeterministicReplayError{
+			name: "NonDeterministicExecutionError",
+			err: &NonDeterministicExecutionError{
 				Name:         "nd",
 				StepID:       "1",
-				ExpectedType: "STEP",
-				ActualType:   "WAIT",
+				CurrentType:  "STEP",
+				RecordedType: "WAIT",
 			},
 		},
 	}
@@ -240,17 +240,17 @@ func TestOperationError_DoesNotMatchNonOperationError(t *testing.T) {
 	}
 }
 
-func TestNonDeterministicReplayError_MatchesOperationError(t *testing.T) {
-	err := &NonDeterministicReplayError{
+func TestNonDeterministicExecutionError_MatchesOperationError(t *testing.T) {
+	err := &NonDeterministicExecutionError{
 		Name:         "step-a",
 		StepID:       "1",
-		ExpectedType: "STEP",
-		ActualType:   "WAIT",
+		CurrentType:  "STEP",
+		RecordedType: "WAIT",
 	}
 	// Should match via As.
 	var opErr *OperationError
 	if !errors.As(err, &opErr) {
-		t.Fatal("NonDeterministicReplayError should match OperationError via As")
+		t.Fatal("NonDeterministicExecutionError should match OperationError via As")
 	}
 	if opErr.Name != "step-a" {
 		t.Errorf("OperationError.Name = %q, want %q", opErr.Name, "step-a")

@@ -56,7 +56,9 @@ import (
 //
 // Map returns a [BatchError] as err only when the batch failed as a unit:
 // its completion reason is [CompletionFailureToleranceExceeded] or
-// [CompletionCustomFailed]. It still returns the populated [BatchResult],
+// [CompletionCustomFailed]. A custom completion decision that fails the
+// batch with no failed item returns a [BatchCompletionError] instead. Map
+// still returns the populated [BatchResult],
 // so the partial results remain available for compensation. The error's
 // Reason is the batch's completion reason and its Errors are the per-item
 // errors in input order. A failure within a configured tolerance does not
@@ -179,8 +181,9 @@ func runClaimedMap[I, O any](ec *execContext, id, name string, items []I, fn fun
 // [CompletionReason] each produces, and Parallel returns a [BatchError] as
 // err together with the populated [BatchResult] only when the batch failed
 // as a unit ([CompletionFailureToleranceExceeded] or
-// [CompletionCustomFailed]). A failure within a configured tolerance
-// returns the result and a nil err. The batch's checkpoint records the operation as SUCCEEDED
+// [CompletionCustomFailed]), or a [BatchCompletionError] when a custom
+// completion decision failed the batch with no failed item. A failure
+// within a configured tolerance returns the result and a nil err. The batch's checkpoint records the operation as SUCCEEDED
 // regardless, and replay returns the same error.
 func Parallel[O any](ctx Context, name string, branches []Branch[O], opts ...BatchOption) (BatchResult[O], error) {
 	ec, ok := ctx.(*execContext)
@@ -493,9 +496,11 @@ func (r BatchResult[O]) HasFailure() bool {
 
 // batchOutcome is the return value of [Map] and [Parallel] for a
 // completed batch: the populated result and, when the batch failed as a
-// unit, a [BatchError] describing the failure. A batch fails as a unit
-// when its Reason is [CompletionFailureToleranceExceeded] or
-// [CompletionCustomFailed]. A failed item within a tolerance does not fail
+// unit, an error describing the failure. A batch fails as a unit when its
+// Reason is [CompletionFailureToleranceExceeded] or
+// [CompletionCustomFailed]. The error is a [BatchCompletionError] when the
+// reason is [CompletionCustomFailed] and no item failed, and a
+// [BatchError] otherwise. A failed item within a tolerance does not fail
 // the batch, so it returns a nil error and the caller reads the failure
 // from the result. The outcome is derived from the result's Items and
 // Reason alone, so the first invocation and every replay return the same
@@ -510,7 +515,11 @@ func batchOutcome[O any](name string, result BatchResult[O]) (BatchResult[O], er
 	default:
 		return result, nil
 	}
-	return result, &BatchError{Name: name, Reason: result.Reason, Errors: result.Errors()}
+	errs := result.Errors()
+	if result.Reason == CompletionCustomFailed && len(errs) == 0 {
+		return result, &BatchCompletionError{Name: name, Reason: result.Reason}
+	}
+	return result, &BatchError{Name: name, Reason: result.Reason, Errors: errs}
 }
 
 // SuccessCount returns the number of items that succeeded.
@@ -926,7 +935,7 @@ const (
 	// CompletionOutcomeFailed completes the batch as failed, with
 	// [CompletionCustomFailed], even if no item failed. Map and Parallel
 	// then return a [BatchError] whose Errors holds the failed items'
-	// errors, which may be empty.
+	// errors, or a [BatchCompletionError] when no item failed.
 	CompletionOutcomeFailed CompletionOutcome = 2
 )
 

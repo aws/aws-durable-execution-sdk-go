@@ -24,8 +24,9 @@ var (
 	_ error = (*RetryError)(nil)
 	_ error = (*CombinatorError)(nil)
 	_ error = (*BatchError)(nil)
+	_ error = (*BatchCompletionError)(nil)
 	_ error = (*OperationError)(nil)
-	_ error = (*NonDeterministicReplayError)(nil)
+	_ error = (*NonDeterministicExecutionError)(nil)
 	_ error = (*SerdesError)(nil)
 )
 
@@ -109,12 +110,14 @@ func sdkWireErrorType(err error) (string, bool) {
 		return "PromiseCombinatorError", true
 	case *BatchError:
 		return "BatchError", true
+	case *BatchCompletionError:
+		return "BatchCompletionError", true
 	case *OperationError:
 		return "OperationError", true
 	case *SerdesError:
 		return "SerdesError", true
-	case *NonDeterministicReplayError:
-		return "NonDeterministicReplayError", true
+	case *NonDeterministicExecutionError:
+		return "NonDeterministicExecutionError", true
 	case *CheckpointError:
 		return "CheckpointError", true
 	}
@@ -224,7 +227,7 @@ const (
 // Every typed operation error ([StepError], [InvokeError], [CallbackError]
 // and its subtypes, [ChildContextError], [WaitForConditionError],
 // [RetryError], [CombinatorError], [StepInterruptedError], [BatchError],
-// [NonDeterministicReplayError]) is matchable this
+// [BatchCompletionError], [NonDeterministicExecutionError]) is matchable this
 // way. The typed errors that wrap a recorded failure expose the same
 // fields directly.
 //
@@ -784,7 +787,7 @@ var sdkErrorsByWireType = func() map[string]struct{} {
 		&StepError{}, &StepInterruptedError{}, &InvokeError{},
 		&CallbackError{}, &CallbackExternalError{}, &CallbackTimeoutError{}, &CallbackSubmitterError{},
 		&ChildContextError{}, &WaitForConditionError{}, &RetryError{}, &CombinatorError{}, &SerdesError{},
-		&OperationError{}, &BatchError{}, &NonDeterministicReplayError{},
+		&OperationError{}, &BatchError{}, &BatchCompletionError{}, &NonDeterministicExecutionError{},
 	} {
 		name, _ := sdkWireErrorType(err)
 		m[name] = struct{}{}
@@ -809,7 +812,7 @@ var sdkErrorsByWireType = func() map[string]struct{} {
 // rebuilt inner type's own record names itself. sentinel, when non-nil, is
 // reachable through Err. Fields outside [OperationError] (Attempts,
 // FunctionID, CallbackID, Status, Direction, and the detail fields of
-// [NonDeterministicReplayError]) are zero, with
+// [NonDeterministicExecutionError]) are zero, with
 // two exceptions: a callback timeout derives Heartbeat from the record and
 // unwraps to [ErrCallbackTimedOut], and a [BatchError] recovers
 // its Reason from the message. The types whose Error() text is composed
@@ -862,10 +865,12 @@ func reconstructSDKError(wireType string, op OperationError, sentinel error) err
 		return &CombinatorError{Name: op.Name, Errors: []error{inner}, recordedMessage: rec.message}
 	case "BatchError":
 		return &BatchError{Name: op.Name, Reason: completionReasonOf(rec.message), Errors: []error{inner}, recordedMessage: rec.message}
+	case "BatchCompletionError":
+		return &BatchCompletionError{Name: op.Name, Reason: CompletionCustomFailed, recordedMessage: rec.message}
 	case "SerdesError":
 		return &SerdesError{Operation: op.Name, Err: leaf}
-	case "NonDeterministicReplayError":
-		return &NonDeterministicReplayError{Name: op.Name, recordedMessage: rec.message}
+	case "NonDeterministicExecutionError":
+		return &NonDeterministicExecutionError{Name: op.Name, recordedMessage: rec.message}
 	}
 	return leaf
 }
@@ -933,8 +938,8 @@ func completionReasonOf(message string) CompletionReason {
 //   - The wire name of a typed operation error ([StepError], [InvokeError],
 //     [CallbackError] and its subtypes, [ChildContextError],
 //     [WaitForConditionError], [RetryError], [CombinatorError],
-//     [StepInterruptedError], [BatchError], [OperationError],
-//     [NonDeterministicReplayError]) yields that
+//     [StepInterruptedError], [BatchError], [BatchCompletionError],
+//     [OperationError], [NonDeterministicExecutionError]) yields that
 //     type. Its ErrorType, Message,
 //     ErrorData, and StackTrace fields hold the record's values. The
 //     operation's Name and the fields the record does not carry (such as
@@ -1186,7 +1191,9 @@ func (e *CombinatorError) As(target any) bool {
 // [CompletionFailureToleranceExceeded] means the completion policy stopped
 // the batch: the fail-fast default, or an exceeded tolerance.
 // [CompletionCustomFailed] means a custom completion decision failed the
-// batch, possibly with no failed item. The batch result is returned
+// batch while at least one item failed. A custom completion decision that
+// fails a batch with no failed item returns a [*BatchCompletionError], not
+// a *BatchError. The batch result is returned
 // alongside it, populated, so the caller can inspect and compensate the
 // partial outcome.
 //
@@ -1248,6 +1255,42 @@ func (e *BatchError) As(target any) bool {
 	return asOperationError(target, e.operationError())
 }
 
+// BatchCompletionError is returned by [Map] and [Parallel] when a custom
+// completion decision failed the batch and no item failed, for example a
+// required quorum that can no longer be met. A batch where an item failed
+// returns a [*BatchError] instead. Match on the type or on Reason.
+//
+// Its recorded ErrorType is "BatchCompletionError". The batch result is
+// returned alongside it, populated. A value rebuilt from a checkpoint record
+// keeps the recorded text as its Error() text.
+type BatchCompletionError struct {
+	// Name is the batch operation's name.
+	Name string
+
+	// Reason is the completion reason, always CompletionCustomFailed.
+	Reason CompletionReason
+
+	// recordedMessage is the Error() text of a value rebuilt from a
+	// checkpoint record. It is empty for a value the batch produced.
+	recordedMessage string
+}
+
+func (e *BatchCompletionError) Error() string {
+	if e.recordedMessage != "" {
+		return e.recordedMessage
+	}
+	return fmt.Sprintf("%s%q failed: %s: a custom completion decision failed the batch with no failed item", batchErrorPrefix, e.Name, e.Reason)
+}
+
+func (e *BatchCompletionError) operationError() *OperationError {
+	return &OperationError{Name: e.Name, Message: e.Error()}
+}
+
+// As supports [errors.As] matching against [*OperationError].
+func (e *BatchCompletionError) As(target any) bool {
+	return asOperationError(target, e.operationError())
+}
+
 // SerdesError indicates that a serialization or deserialization operation
 // failed. It wraps the underlying serdes failure with context about which
 // operation and direction (marshal/unmarshal) triggered it.
@@ -1290,12 +1333,15 @@ func newSerdesError(operation, direction string, cause error) *SerdesError {
 	return &SerdesError{Operation: operation, Direction: direction, Err: cause}
 }
 
-// NonDeterministicReplayError indicates that replay diverged from the
-// recorded execution. Two cases produce it:
+// NonDeterministicExecutionError indicates that replay diverged from the
+// recorded execution. Its recorded ErrorType is
+// "NonDeterministicExecutionError". Two cases produce it:
 //
 //   - A checkpointed operation's type, sub-type, or name does not match
-//     what the current code expects at the same position. The handler code
-//     changed between deployments in a way that breaks replay determinism.
+//     the operation the handler now runs at the same position. The handler
+//     code changed between deployments in a way that breaks replay
+//     determinism. The Recorded fields hold the checkpointed operation and
+//     the Current fields hold the operation the handler now runs.
 //   - The current code awaits an operation inside a child context whose
 //     result is already recorded, but the operation had not completed when
 //     that result was recorded. Such an operation never runs again during
@@ -1305,32 +1351,37 @@ func newSerdesError(operation, direction string, cause error) *SerdesError {
 // A value rebuilt from a checkpoint record (for example the Err of a
 // rejected [Settled]) carries Name and the recorded Error() text; the
 // detail fields are zero.
-type NonDeterministicReplayError struct {
+type NonDeterministicExecutionError struct {
 	// Name is the operation name the current code passed.
 	Name string
 
 	// StepID is the positional ID where the mismatch was detected.
 	StepID string
 
-	// ExpectedType is the operation type the current code expects.
-	ExpectedType string
+	// CurrentType is the operation type the handler now runs at this
+	// position.
+	CurrentType string
 
-	// ExpectedSubType is the sub-type the current code expects (may be
-	// empty for operations that don't distinguish by sub-type).
-	ExpectedSubType string
+	// CurrentSubType is the operation sub-type the handler now runs at this
+	// position (may be empty for operations that don't distinguish by
+	// sub-type).
+	CurrentSubType string
 
-	// ExpectedName is the operation name the current code expects (may be
-	// empty for unnamed operations).
-	ExpectedName string
+	// CurrentName is the operation name the handler now runs at this
+	// position (may be empty for unnamed operations).
+	CurrentName string
 
-	// ActualType is the checkpointed operation's type.
-	ActualType string
+	// RecordedType is the operation type the checkpoint recorded at this
+	// position.
+	RecordedType string
 
-	// ActualSubType is the checkpointed operation's sub-type.
-	ActualSubType string
+	// RecordedSubType is the operation sub-type the checkpoint recorded at
+	// this position.
+	RecordedSubType string
 
-	// ActualName is the checkpointed operation's name.
-	ActualName string
+	// RecordedName is the operation name the checkpoint recorded at this
+	// position.
+	RecordedName string
 
 	// recordedMessage is the Error() text of a value rebuilt from a
 	// checkpoint record. It is empty for a value replay produced.
@@ -1344,33 +1395,29 @@ type NonDeterministicReplayError struct {
 	detail string
 }
 
-func (e *NonDeterministicReplayError) Error() string {
+func (e *NonDeterministicExecutionError) Error() string {
 	if e.recordedMessage != "" {
 		return e.recordedMessage
 	}
 	if e.detail != "" {
 		return e.detail
 	}
-	expected := e.ExpectedType
-	if e.ExpectedSubType != "" {
-		expected += "/" + e.ExpectedSubType
-	}
-	actual := e.ActualType
-	if e.ActualSubType != "" {
-		actual += "/" + e.ActualSubType
-	}
 	return fmt.Sprintf(
-		"durable: non-deterministic replay at step %q (name %q): "+
-			"expected %s but found %s — the handler code changed between deployments",
-		e.StepID, e.Name, expected, actual,
+		"durable: non-deterministic replay at step %q: "+
+			"the checkpoint recorded operation (type %s, subtype %q, name %q), "+
+			"but the handler now runs (type %s, subtype %q, name %q). "+
+			"The handler code changed between deployments.",
+		e.StepID,
+		e.RecordedType, e.RecordedSubType, e.RecordedName,
+		e.CurrentType, e.CurrentSubType, e.CurrentName,
 	)
 }
 
-func (e *NonDeterministicReplayError) operationError() *OperationError {
+func (e *NonDeterministicExecutionError) operationError() *OperationError {
 	return &OperationError{Name: e.Name, Message: e.Error()}
 }
 
 // As supports [errors.As] matching against [*OperationError].
-func (e *NonDeterministicReplayError) As(target any) bool {
+func (e *NonDeterministicExecutionError) As(target any) bool {
 	return asOperationError(target, e.operationError())
 }

@@ -13,7 +13,7 @@ package durable
 //   - op is nil (first execution, no checkpoint to validate)
 //   - All present fields match
 //
-// Returns *NonDeterministicReplayError on mismatch.
+// Returns *NonDeterministicExecutionError on mismatch.
 func validateReplayConsistency(op *operation, expectedType, expectedSubType, expectedName string) error {
 	if op == nil {
 		return nil
@@ -25,39 +25,39 @@ func validateReplayConsistency(op *operation, expectedType, expectedSubType, exp
 	}
 
 	if op.opType != expectedType {
-		return &NonDeterministicReplayError{
+		return &NonDeterministicExecutionError{
 			Name:            expectedName,
 			StepID:          op.id,
-			ExpectedType:    expectedType,
-			ExpectedSubType: expectedSubType,
-			ExpectedName:    expectedName,
-			ActualType:      op.opType,
-			ActualSubType:   op.subType,
-			ActualName:      op.name,
+			CurrentType:     expectedType,
+			CurrentSubType:  expectedSubType,
+			CurrentName:     expectedName,
+			RecordedType:    op.opType,
+			RecordedSubType: op.subType,
+			RecordedName:    op.name,
 		}
 	}
 	if expectedSubType != "" && op.subType != expectedSubType {
-		return &NonDeterministicReplayError{
+		return &NonDeterministicExecutionError{
 			Name:            expectedName,
 			StepID:          op.id,
-			ExpectedType:    expectedType,
-			ExpectedSubType: expectedSubType,
-			ExpectedName:    expectedName,
-			ActualType:      op.opType,
-			ActualSubType:   op.subType,
-			ActualName:      op.name,
+			CurrentType:     expectedType,
+			CurrentSubType:  expectedSubType,
+			CurrentName:     expectedName,
+			RecordedType:    op.opType,
+			RecordedSubType: op.subType,
+			RecordedName:    op.name,
 		}
 	}
 	if op.name != expectedName {
-		return &NonDeterministicReplayError{
+		return &NonDeterministicExecutionError{
 			Name:            expectedName,
 			StepID:          op.id,
-			ExpectedType:    expectedType,
-			ExpectedSubType: expectedSubType,
-			ExpectedName:    expectedName,
-			ActualType:      op.opType,
-			ActualSubType:   op.subType,
-			ActualName:      op.name,
+			CurrentType:     expectedType,
+			CurrentSubType:  expectedSubType,
+			CurrentName:     expectedName,
+			RecordedType:    op.opType,
+			RecordedSubType: op.subType,
+			RecordedName:    op.name,
 		}
 	}
 	return nil

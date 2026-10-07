@@ -27,8 +27,9 @@ func publicErrorTypeSamples() []error {
 		newRetryError("r", 3, newChildContextError("r-attempt-3", cause), true),
 		&CombinatorError{Name: "any", Errors: []error{errors.New("a"), errors.New("b")}},
 		&BatchError{Name: "b", Reason: CompletionFailureToleranceExceeded, Errors: []error{errors.New("a")}},
+		&BatchCompletionError{Name: "b", Reason: CompletionCustomFailed},
 		&OperationError{Name: "op", ErrorType: "Error", Message: "boom", Err: cause.standIn(nil)},
-		&NonDeterministicReplayError{Name: "n", StepID: "1", ExpectedType: "STEP", ActualType: "WAIT"},
+		&NonDeterministicExecutionError{Name: "n", StepID: "1", CurrentType: "STEP", RecordedType: "WAIT"},
 		newSerdesError("s", serdesDirectionMarshal, errors.New("bad json")),
 		&CheckpointError{Err: errors.New("throttled"), scope: ErrorScopeInvocation},
 	}
@@ -118,7 +119,8 @@ func TestErrorFromObjectKeepsRecordedMessageAsErrorText(t *testing.T) {
 		&StepInterruptedError{Name: "s"},
 		&CombinatorError{Name: "any", Errors: []error{errors.New("a"), errors.New("b")}},
 		&BatchError{Name: "b", Reason: CompletionMinSuccessfulReached, Errors: []error{errors.New("a"), errors.New("b")}},
-		&NonDeterministicReplayError{Name: "n", StepID: "1", ExpectedType: "STEP", ActualType: "WAIT"},
+		&BatchCompletionError{Name: "b", Reason: CompletionCustomFailed},
+		&NonDeterministicExecutionError{Name: "n", StepID: "1", CurrentType: "STEP", RecordedType: "WAIT"},
 	} {
 		rebuilt := ErrorFromObject(errorObject(orig))
 		if rebuilt.Error() != orig.Error() {

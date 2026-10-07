@@ -73,6 +73,10 @@ func batchOnly(err error) error {
 	if errors.As(err, &berr) {
 		return nil
 	}
+	var cerr *BatchCompletionError
+	if errors.As(err, &cerr) {
+		return nil
+	}
 	return err
 }
 
@@ -703,12 +707,16 @@ func TestBatchOutcome(t *testing.T) {
 			Reason: CompletionCustomFailed,
 		}
 		_, err := batchOutcome("b", result)
-		var berr *BatchError
-		if !errors.As(err, &berr) {
-			t.Fatalf("err = %v (%T), want *BatchError", err, err)
+		var cerr *BatchCompletionError
+		if !errors.As(err, &cerr) {
+			t.Fatalf("err = %v (%T), want *BatchCompletionError", err, err)
 		}
-		if berr.Reason != CompletionCustomFailed || len(berr.Errors) != 0 {
-			t.Errorf("BatchError = %+v, want CUSTOM_COMPLETION_FAILED with no item errors", berr)
+		if cerr.Reason != CompletionCustomFailed || cerr.Name != "b" {
+			t.Errorf("BatchCompletionError = %+v, want name b and CUSTOM_COMPLETION_FAILED", cerr)
+		}
+		var berr *BatchError
+		if errors.As(err, &berr) {
+			t.Errorf("err matches *BatchError, want only *BatchCompletionError")
 		}
 		if !strings.Contains(err.Error(), "CUSTOM_COMPLETION_FAILED") {
 			t.Errorf("Error() = %q, want reason in message", err.Error())

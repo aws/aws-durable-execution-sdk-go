@@ -122,7 +122,7 @@ func TestCustomCompletionSucceedsEarly(t *testing.T) {
 
 // TestCustomCompletionFailsEarly: the callback completes the batch as
 // failed although no item failed. The batch's Status is FAILED and Map
-// returns a BatchError with no item errors.
+// returns a BatchCompletionError.
 func TestCustomCompletionFailsEarly(t *testing.T) {
 	resp := invokeBatch(t, &fakeLambda{}, batchPayload(`null`), func(ctx Context, _ any) (customResult, error) {
 		items := []int{1, 2, 3}
@@ -136,12 +136,12 @@ func TestCustomCompletionFailsEarly(t *testing.T) {
 				}
 				return ContinueBatch()
 			}}))
-		var berr *BatchError
-		if !errors.As(err, &berr) {
+		var cerr *BatchCompletionError
+		if !errors.As(err, &cerr) {
 			return customResult{}, err
 		}
-		if berr.Reason != CompletionCustomFailed || len(berr.Errors) != 0 {
-			return customResult{}, errors.New("BatchError should carry CompletionCustomFailed and no item errors")
+		if cerr.Reason != CompletionCustomFailed {
+			return customResult{}, errors.New("BatchCompletionError should carry CompletionCustomFailed")
 		}
 		return customResultOf(br, err, nil), nil
 	})

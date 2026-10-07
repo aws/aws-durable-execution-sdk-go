@@ -647,7 +647,7 @@ const unfinishedReplayParkTimeout = time.Second
 // is, the invocation responds PENDING
 // whatever the handler returns, so the context is marked blocked and the
 // caller unwinds with errSuspendExecution. If none does, the caller unwinds
-// with a *NonDeterministicReplayError that names the unfinished operation.
+// with a *NonDeterministicExecutionError that names the unfinished operation.
 //
 // Event 2 is what bounds the wait. A parking branch that is the last active
 // branch awaits nothing that is watched, so nothing can fire the signal;
@@ -701,19 +701,19 @@ func (c *execContext) parkUnfinishedReplay(op *operation, id, opType, subType, n
 // commitment. The message states which operation was awaited
 // and why it can never settle, so a determinism violation is diagnosable
 // from the execution's failure record.
-func newUnfinishedReplayError(op *operation, id, opType, subType, name string) *NonDeterministicReplayError {
-	e := &NonDeterministicReplayError{
-		Name:            name,
-		StepID:          id,
-		ExpectedType:    opType,
-		ExpectedSubType: subType,
-		ExpectedName:    name,
+func newUnfinishedReplayError(op *operation, id, opType, subType, name string) *NonDeterministicExecutionError {
+	e := &NonDeterministicExecutionError{
+		Name:           name,
+		StepID:         id,
+		CurrentType:    opType,
+		CurrentSubType: subType,
+		CurrentName:    name,
 	}
 	checkpoint := "has no checkpoint"
 	if op != nil {
-		e.ActualType = op.opType
-		e.ActualSubType = op.subType
-		e.ActualName = op.name
+		e.RecordedType = op.opType
+		e.RecordedSubType = op.subType
+		e.RecordedName = op.name
 		checkpoint = fmt.Sprintf("is checkpointed as %s", op.status)
 	}
 	e.detail = fmt.Sprintf(

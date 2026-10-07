@@ -191,9 +191,10 @@ var wireErrorTypeCases = []struct {
 	{"RetryError", &RetryError{Name: "r", Attempts: 3, Err: fmt.Errorf("x")}, "RetryError"},
 	{"CombinatorError", &CombinatorError{Name: "any", Errors: []error{fmt.Errorf("x")}}, "PromiseCombinatorError"},
 	{"BatchError", &BatchError{Name: "b", Reason: CompletionFailureToleranceExceeded, Errors: []error{fmt.Errorf("x")}}, "BatchError"},
+	{"BatchCompletionError", &BatchCompletionError{Name: "b", Reason: CompletionCustomFailed}, "BatchCompletionError"},
 	{"OperationError", &OperationError{Name: "op", Err: fmt.Errorf("x")}, "OperationError"},
 	{"SerdesError", &SerdesError{Operation: "op", Direction: "marshal", Err: fmt.Errorf("x")}, "SerdesError"},
-	{"NonDeterministicReplayError", &NonDeterministicReplayError{Name: "n"}, "NonDeterministicReplayError"},
+	{"NonDeterministicExecutionError", &NonDeterministicExecutionError{Name: "n"}, "NonDeterministicExecutionError"},
 	{"CheckpointError", &CheckpointError{Err: fmt.Errorf("x")}, "CheckpointError"},
 }
 

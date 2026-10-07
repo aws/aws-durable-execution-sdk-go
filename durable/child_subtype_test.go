@@ -231,7 +231,7 @@ func TestChildSubTypeValidation(t *testing.T) {
 }
 
 // TestChildSubTypeMismatchOnReplay asserts that a child context whose
-// checkpoint records one subtype fails with a NonDeterministicReplayError
+// checkpoint records one subtype fails with a NonDeterministicExecutionError
 // when the code supplies another, in either direction between the default
 // and a caller's value, for RunInChildContext and Go.
 func TestChildSubTypeMismatchOnReplay(t *testing.T) {
@@ -253,13 +253,13 @@ func TestChildSubTypeMismatchOnReplay(t *testing.T) {
 					contextOp("1", "", tc.checkpointed, "child", "SUCCEEDED", &wireContextDetails{Result: `"v"`}))
 				resp := invokeStep(t, fake, payload, func(ctx Context, event string) (string, error) {
 					_, err := handler(ctx, event)
-					var ndErr *NonDeterministicReplayError
+					var ndErr *NonDeterministicExecutionError
 					if !errors.As(err, &ndErr) {
-						return "", fmt.Errorf("err = %v, want a NonDeterministicReplayError", err)
+						return "", fmt.Errorf("err = %v, want a NonDeterministicExecutionError", err)
 					}
-					if ndErr.ExpectedSubType != tc.expected || ndErr.ActualSubType != tc.checkpointed {
+					if ndErr.CurrentSubType != tc.expected || ndErr.RecordedSubType != tc.checkpointed {
 						return "", fmt.Errorf("subtypes = (expected %q, actual %q), want (%q, %q)",
-							ndErr.ExpectedSubType, ndErr.ActualSubType, tc.expected, tc.checkpointed)
+							ndErr.CurrentSubType, ndErr.RecordedSubType, tc.expected, tc.checkpointed)
 					}
 					return "detected", nil
 				})

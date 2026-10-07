@@ -45,9 +45,9 @@ func TestParkUnfinishedReplayLastBranchReturnsWithinBound(t *testing.T) {
 	done := parkOnChild(root, nil)
 	select {
 	case err := <-done:
-		var nd *NonDeterministicReplayError
+		var nd *NonDeterministicExecutionError
 		if !errors.As(err, &nd) {
-			t.Fatalf("park returned %v (%T), want *NonDeterministicReplayError", err, err)
+			t.Fatalf("park returned %v (%T), want *NonDeterministicExecutionError", err, err)
 		}
 		if nd.StepID != "1-1" || nd.Name != "extra" {
 			t.Errorf("error names step %q / %q, want 1-1 / extra", nd.StepID, nd.Name)
@@ -169,9 +169,9 @@ func TestParkUnfinishedReplayErrorDescribesOperation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			select {
 			case err := <-parkOnChild(root, tc.op):
-				var nd *NonDeterministicReplayError
+				var nd *NonDeterministicExecutionError
 				if !errors.As(err, &nd) {
-					t.Fatalf("park returned %T, want *NonDeterministicReplayError", err)
+					t.Fatalf("park returned %T, want *NonDeterministicExecutionError", err)
 				}
 				msg := err.Error()
 				for _, want := range []string{`step "1-1"`, `name "extra"`, "STEP/Step", tc.want, "already recorded"} {
@@ -179,8 +179,8 @@ func TestParkUnfinishedReplayErrorDescribesOperation(t *testing.T) {
 						t.Errorf("error %q does not mention %q", msg, want)
 					}
 				}
-				if tc.op != nil && nd.ActualType != string(OperationTypeStep) {
-					t.Errorf("ActualType = %q, want STEP", nd.ActualType)
+				if tc.op != nil && nd.RecordedType != string(OperationTypeStep) {
+					t.Errorf("RecordedType = %q, want STEP", nd.RecordedType)
 				}
 				if root.suspend.fired() {
 					t.Error("suspend signal fired: the park error must not suspend the invocation")
@@ -270,9 +270,9 @@ func TestParkUnfinishedReplayContextDoneWithoutCommitmentFails(t *testing.T) {
 	cancel()
 	select {
 	case err := <-done:
-		var nd *NonDeterministicReplayError
+		var nd *NonDeterministicExecutionError
 		if !errors.As(err, &nd) {
-			t.Fatalf("park returned %v (%T), want *NonDeterministicReplayError", err, err)
+			t.Fatalf("park returned %v (%T), want *NonDeterministicExecutionError", err, err)
 		}
 		if nd.StepID != "1-1" || nd.Name != "extra" {
 			t.Errorf("error names step %q / %q, want 1-1 / extra", nd.StepID, nd.Name)

@@ -297,7 +297,7 @@ func TestVirtualChildInsideFlatBatchItem(t *testing.T) {
 
 // TestVirtualChildAtCheckpointedPosition asserts that replaying code that
 // declares a virtual child where the checkpoint records an operation is a
-// NonDeterministicReplayError, not a silent re-execution.
+// NonDeterministicExecutionError, not a silent re-execution.
 func TestVirtualChildAtCheckpointedPosition(t *testing.T) {
 	for variant, handler := range virtualChildHandlers() {
 		t.Run(variant, func(t *testing.T) {
@@ -313,9 +313,9 @@ func TestVirtualChildAtCheckpointedPosition(t *testing.T) {
 			if _, err := h(context.Background(), payload); err != nil {
 				t.Fatal(err)
 			}
-			var nde *NonDeterministicReplayError
+			var nde *NonDeterministicExecutionError
 			if !errors.As(got, &nde) {
-				t.Fatalf("error = %T %v, want a NonDeterministicReplayError", got, got)
+				t.Fatalf("error = %T %v, want a NonDeterministicExecutionError", got, got)
 			}
 			if !strings.Contains(nde.Error(), "declares a virtual child context") {
 				t.Errorf("error = %q, want it to name the virtual child context", nde.Error())

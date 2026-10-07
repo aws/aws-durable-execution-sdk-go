@@ -264,7 +264,7 @@ Events 2 and 3 share one outcome, decided by whether a pending commitment
 exists at that moment. If one does, the invocation responds `PENDING`
 whatever the handler returns, so the caller unwinds with
 `errSuspendExecution`. If none does, the caller unwinds with a
-`*NonDeterministicReplayError` that names the operation and its checkpoint
+`*NonDeterministicExecutionError` that names the operation and its checkpoint
 status.
 
 Event 2 is the termination guarantee. When the parking goroutine is the

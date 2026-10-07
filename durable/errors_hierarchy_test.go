@@ -71,7 +71,7 @@ func TestCallbackSubtypesMatchBaseTypes(t *testing.T) {
 		newRetryError("r", 2, newChildContextError("r-attempt-2", rec), true),
 		&CombinatorError{Name: "any"},
 		&BatchError{Name: "b", Reason: CompletionAllCompleted},
-		&NonDeterministicReplayError{Name: "n"},
+		&NonDeterministicExecutionError{Name: "n"},
 	}
 	everything = append(everything, subtypes...)
 	for _, err := range everything {
@@ -273,13 +273,13 @@ func TestSettledRoundTripsErrorType(t *testing.T) {
 	})
 
 	t.Run("non-deterministic replay error", func(t *testing.T) {
-		in := Settled[string]{Err: &NonDeterministicReplayError{
-			Name: "n", StepID: "1.2", ExpectedType: "STEP", ActualType: "WAIT",
+		in := Settled[string]{Err: &NonDeterministicExecutionError{
+			Name: "n", StepID: "1.2", CurrentType: "STEP", RecordedType: "WAIT",
 		}}
 		out := roundTrip(t, in)
-		var ndErr *NonDeterministicReplayError
+		var ndErr *NonDeterministicExecutionError
 		if !errors.As(out.Err, &ndErr) {
-			t.Fatalf("deserialized error = %T, want *NonDeterministicReplayError", out.Err)
+			t.Fatalf("deserialized error = %T, want *NonDeterministicExecutionError", out.Err)
 		}
 		if ndErr.Name != "n" {
 			t.Errorf("Name = %q, want n", ndErr.Name)
@@ -306,7 +306,7 @@ func TestSettledRoundTripsErrorType(t *testing.T) {
 			&CombinatorError{Name: "any", Errors: []error{errors.New("m")}},
 			&BatchError{Name: "b", Reason: CompletionAllCompleted, Errors: []error{errors.New("m")}},
 			&OperationError{Name: "o", ErrorType: "E", Message: "m", Err: errors.New("m")},
-			&NonDeterministicReplayError{Name: "n"},
+			&NonDeterministicExecutionError{Name: "n"},
 		} {
 			out := roundTrip(t, Settled[string]{Err: in})
 			if got, want := reflect.TypeOf(out.Err), reflect.TypeOf(in); got != want {
