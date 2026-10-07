@@ -254,6 +254,8 @@ var expectations = map[string]expectation{
 	"error-determinism":       {result: `{"isDeterministic":true,"errorPropsBeforeReplay":{"isStepError":true,"causeName":"Error"},"errorPropsAfterReplay":{"isStepError":true,"causeName":"Error"}}`},
 	"error-handling-taxonomy": {result: `{"stepErrorInfo":{"matched":true,"typeName":"StepError","operationName":"failing-step","attempts":1,"isOpError":true,"opErrorName":"failing-step","errorType":"Error"},"invokeErrorInfo":{"matched":true,"typeName":"InvokeError","operationName":"failing-invoke","isOpError":true,"opErrorName":"failing-invoke","errorType":"Error"},"callbackErrorInfo":{"matched":true,"typeName":"CallbackExternalError","operationName":"failing-callback","isOpError":true,"opErrorName":"failing-callback","errorType":"CallbackError"}}`},
 
+	"execution-client-custom": {result: `{"orderId":"ORD-12345","paidBy":"invoice"}`},
+
 	"force-checkpoint-callback":   {result: `"{\"Items\":[{\"Index\":0,\"Name\":\"long-running\",\"Status\":1,\"Result\":\"long-complete\",\"Err\":null},{\"Index\":1,\"Name\":\"callbacks\",\"Status\":1,\"Result\":\"callbacks-complete\",\"Err\":null}],\"Reason\":1}"`},
 	"force-checkpoint-invoke":     {result: `"{\"Items\":[{\"Index\":0,\"Name\":\"long-running\",\"Status\":1,\"Result\":\"long-complete\",\"Err\":null},{\"Index\":1,\"Name\":\"invokes\",\"Status\":1,\"Result\":\"invokes-complete\",\"Err\":null}],\"Reason\":1}"`},
 	"force-checkpoint-step-retry": {result: `"{\"Items\":[{\"Index\":0,\"Name\":\"long-running\",\"Status\":1,\"Result\":\"long-complete\",\"Err\":null},{\"Index\":1,\"Name\":\"retrying\",\"Status\":1,\"Result\":\"retry-complete\",\"Err\":null}],\"Reason\":1}"`},

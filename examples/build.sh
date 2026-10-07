@@ -153,6 +153,7 @@ EXAMPLES="
   force-checkpoint-step-retry
   error-determinism
   error-handling-taxonomy
+  execution-client-custom
   handler-error
   hello-world
   simple-execution

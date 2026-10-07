@@ -2352,6 +2352,23 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 120
 
+  ExecutionClientCustomFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-execution-client-custom
+      CodeUri: .aws-sam/build-artifacts/execution-client-custom/
+      Handler: bootstrap
+      Description: Custom ExecutionClient on the Lambda service
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
   HandlerErrorFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -2891,6 +2908,9 @@ Outputs:
   ErrorHandlingTaxonomyFunction:
     Description: Error Handling Taxonomy Function ARN
     Value: !GetAtt ErrorHandlingTaxonomyFunction.Arn
+  ExecutionClientCustomFunction:
+    Description: Execution Client Custom Function ARN
+    Value: !GetAtt ExecutionClientCustomFunction.Arn
   HandlerErrorFunction:
     Description: Handler Error Function ARN
     Value: !GetAtt HandlerErrorFunction.Arn
