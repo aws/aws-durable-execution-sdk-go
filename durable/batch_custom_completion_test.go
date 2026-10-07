@@ -87,12 +87,21 @@ func TestCustomCompletionSucceedsEarly(t *testing.T) {
 		t.Errorf("results = %v, want %v", r.Results, want)
 	}
 
-	// The callback ran once per terminal item and stopped being called
-	// once it completed the batch.
-	if len(snapshots) != 2 {
-		t.Fatalf("callback invocations = %d, want 2", len(snapshots))
+	// The callback ran once at zero progress, then once per terminal item,
+	// and stopped being called once it completed the batch.
+	if len(snapshots) != 3 {
+		t.Fatalf("callback invocations = %d, want 3", len(snapshots))
 	}
-	first := snapshots[0]
+	zero := snapshots[0]
+	if zero.TotalCount != 4 || zero.CompletedCount != 0 || zero.SuccessCount != 0 || zero.FailureCount != 0 {
+		t.Errorf("zero-progress snapshot counts = %+v", zero)
+	}
+	for _, it := range zero.Items {
+		if it.Status != BatchItemNotStarted {
+			t.Errorf("zero-progress item %d status = %s, want NOT_STARTED", it.Index, it.Status)
+		}
+	}
+	first := snapshots[1]
 	if first.TotalCount != 4 || first.CompletedCount != 1 || first.SuccessCount != 1 || first.FailureCount != 0 {
 		t.Errorf("first snapshot counts = %+v", first)
 	}
@@ -105,7 +114,7 @@ func TestCustomCompletionSucceedsEarly(t *testing.T) {
 	if !reflect.DeepEqual(first.Items, wantItems) {
 		t.Errorf("first snapshot items = %+v, want %+v", first.Items, wantItems)
 	}
-	second := snapshots[1]
+	second := snapshots[2]
 	if second.CompletedCount != 2 || second.Items[1].Status != BatchItemSucceeded {
 		t.Errorf("second snapshot = %+v", second)
 	}
@@ -180,8 +189,8 @@ func TestCustomCompletionContinuesToEnd(t *testing.T) {
 	if r.Success != 2 || r.Failure != 2 || r.Total != 4 {
 		t.Errorf("success/failure/total = %d/%d/%d, want 2/2/4", r.Success, r.Failure, r.Total)
 	}
-	if got := atomic.LoadInt32(&calls); got != 4 {
-		t.Errorf("callback invocations = %d, want 4 (once per terminal item)", got)
+	if got := atomic.LoadInt32(&calls); got != 5 {
+		t.Errorf("callback invocations = %d, want 5 (once at zero progress, then once per terminal item)", got)
 	}
 }
 
@@ -321,8 +330,8 @@ func TestCustomCompletionReplayDoesNotReinvokeCallback(t *testing.T) {
 	if live.Reason != "CUSTOM_COMPLETION_FAILED" || live.Total != 2 || live.Failure != 1 {
 		t.Fatalf("live result = %+v", live)
 	}
-	if got := atomic.LoadInt32(&calls); got != 2 {
-		t.Fatalf("live callback invocations = %d, want 2", got)
+	if got := atomic.LoadInt32(&calls); got != 3 {
+		t.Fatalf("live callback invocations = %d, want 3 (zero progress, then two terminal items)", got)
 	}
 
 	var mapPayload string
@@ -397,8 +406,8 @@ func TestCustomCompletionFlatOversizedReplayUsesRecord(t *testing.T) {
 	if live.Reason != "CUSTOM_COMPLETION_FAILED" || live.Status != "FAILED" || live.Total != 2 || live.Success != 2 {
 		t.Fatalf("live result = %+v", live)
 	}
-	if got := atomic.LoadInt32(&calls); got != 2 {
-		t.Fatalf("live callback invocations = %d, want 2", got)
+	if got := atomic.LoadInt32(&calls); got != 3 {
+		t.Fatalf("live callback invocations = %d, want 3 (zero progress, then two terminal items)", got)
 	}
 
 	// The parent Map SUCCEED carries ReplayChildren and a decision record

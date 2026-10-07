@@ -148,8 +148,8 @@ func TestBatchToleratedFailurePercentageExact(t *testing.T) {
 		return verdictOf(Map(ctx, "pct25", []string{"fail", "ok", "ok2", "ok3"}, failOn("fail"),
 			WithMaxConcurrency(1), WithCompletion(CompletionConfig{ToleratedFailurePercentage: aws.Int(25)})))
 	})
-	if v.Reason != "ALL_COMPLETED" || v.Total != 4 {
-		t.Fatalf("verdict = %+v, want ALL_COMPLETED over 4 items: 1 of 4 (25%%) does not exceed 25", v)
+	if v.Err || v.Total != 4 || v.Failed != 1 {
+		t.Fatalf("verdict = %+v, want err == nil over 4 items: 1 of 4 (25%%) does not exceed 25", v)
 	}
 }
 
@@ -235,7 +235,7 @@ func TestBatchErrorUnwrapReachesItemErrors(t *testing.T) {
 					return "", sentinel
 				}
 				return item, nil
-			}, WithMaxConcurrency(1), WithNesting(NestingFlat), WithCompletion(CompletionConfig{ToleratedFailureCount: aws.Int(1)}))
+			}, WithMaxConcurrency(1), WithNesting(NestingFlat))
 			if !errors.Is(err, sentinel) {
 				return batchVerdict{}, errors.New("errors.Is(err, sentinel) = false")
 			}
@@ -378,29 +378,31 @@ func TestBatchMinSuccessfulReachedIsNotAnError(t *testing.T) {
 	}
 }
 
-// TestBatchMinSuccessfulNotReachedIsBatchError asserts that a batch whose
-// MinSuccessful threshold is never met returns *BatchError once every item
-// has run.
-func TestBatchMinSuccessfulNotReachedIsBatchError(t *testing.T) {
+// TestBatchMinSuccessfulNotReachedIsNotAnError asserts that a batch whose
+// MinSuccessful threshold is never met runs every item and returns
+// err == nil. MinSuccessful sets no failure tolerance, so the failure does
+// not fail the batch; the caller reads it from the result.
+func TestBatchMinSuccessfulNotReachedIsNotAnError(t *testing.T) {
 	v := runVerdict(t, &fakeLambda{}, func(ctx Context, _ any) (batchVerdict, error) {
 		return verdictOf(Map(ctx, "min-not-reached", []string{"ok0", "fail", "ok2"}, failOn("fail"),
 			WithMaxConcurrency(1), WithCompletion(CompletionConfig{MinSuccessful: 3})))
 	})
-	if !v.IsBatchError || v.Reason != "ALL_COMPLETED" || v.Total != 3 || v.Success != 2 || v.Failure != 1 {
-		t.Fatalf("verdict = %+v, want *BatchError with ALL_COMPLETED over all 3 items", v)
+	if v.Err || v.Status != "FAILED" || v.Total != 3 || v.Success != 2 || v.Failure != 1 {
+		t.Fatalf("verdict = %+v, want err == nil with Status FAILED over all 3 items", v)
 	}
 }
 
-// TestBatchToleratedFailureStillReturnsBatchError asserts that a failure
-// within a configured tolerance runs the batch to completion and still
-// returns *BatchError, whose Reason distinguishes it from a breach.
-func TestBatchToleratedFailureStillReturnsBatchError(t *testing.T) {
+// TestBatchToleratedFailureIsNotAnError asserts that a failure within a
+// configured tolerance runs the batch to completion and returns
+// err == nil. The result still reports the failure: Status is FAILED and
+// Failed holds the item.
+func TestBatchToleratedFailureIsNotAnError(t *testing.T) {
 	v := runVerdict(t, &fakeLambda{}, func(ctx Context, _ any) (batchVerdict, error) {
 		return verdictOf(Map(ctx, "tolerated", []string{"ok", "fail", "ok2"}, failOn("fail"),
 			WithMaxConcurrency(1), WithCompletion(CompletionConfig{ToleratedFailureCount: aws.Int(1)})))
 	})
-	if !v.IsBatchError || v.Reason != "ALL_COMPLETED" || v.Total != 3 || v.Status != "FAILED" {
-		t.Fatalf("verdict = %+v, want *BatchError with ALL_COMPLETED over all 3 items", v)
+	if v.Err || v.Total != 3 || v.Status != "FAILED" || v.Failed != 1 {
+		t.Fatalf("verdict = %+v, want err == nil with Status FAILED over all 3 items", v)
 	}
 }
 

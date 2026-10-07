@@ -606,8 +606,21 @@ completes the batch, and `Map` or `Parallel` returns a
 changes that. `MinSuccessful` completes the batch once that many items
 succeed. `ToleratedFailureCount` and `ToleratedFailurePercentage` let the
 batch continue past failures up to a limit. `ShouldComplete` decides
-programmatically from a `BatchProgress` snapshot. Items still running when
+programmatically from a `BatchProgress` snapshot. The SDK calls it once
+before the first item starts, with every count at 0, and again after each
+item finishes. A `ShouldComplete` that completes the batch at that first
+call runs no item and returns an empty result. Items still running when
 the batch completes early are reported with the status `BatchItemStarted`.
+
+`Map` and `Parallel` return a `*durable.BatchError` only when the batch
+fails as a unit. That is a breached tolerance, with the reason
+`FAILURE_TOLERANCE_EXCEEDED`, or a `ShouldComplete` that completes the
+batch as failed, with the reason `CUSTOM_COMPLETION_FAILED`. A failure
+within a tolerance returns the populated result and a nil error, so
+`if err != nil { return err }` keeps the tolerance. Read the failed items
+from `Failed()` and `Errors()`. `MIN_SUCCESSFUL_REACHED` means the
+threshold completed the batch with items still unstarted or in flight.
+When every item ran, the reason is `ALL_COMPLETED`.
 
 `BatchResult` reports each item's status through `Items`, `Succeeded()`,
 `Failed()`, and `Started()`, the values through `Results()`, the per-item

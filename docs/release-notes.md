@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### Changed: `Map` and `Parallel` return an error only when the batch fails
+
+`Map` and `Parallel` returned a `*BatchError` whenever an item failed,
+even a failure within `ToleratedFailureCount` or
+`ToleratedFailurePercentage`. So `if err != nil { return err }` turned a
+tolerated failure into a handler failure.
+
+They now return a `*BatchError` only when the reason is
+`CompletionFailureToleranceExceeded` or `CompletionCustomFailed`. A
+tolerated failure returns the populated result and a nil error.
+`BatchResult.Status()` still reports `BatchItemFailed`, and `Failed()` and
+`Errors()` list the failures.
+
+### Fixed: a batch where every item ran reports `ALL_COMPLETED`
+
+When the last item met `MinSuccessful`, the reason was
+`CompletionMinSuccessfulReached`. It is now `CompletionAllCompleted`.
+`CompletionMinSuccessfulReached` means the threshold completed the batch
+before every item finished.
+
+### Changed: `ShouldComplete` is called once before the first item
+
+`CompletionConfig.ShouldComplete` was first called after the first item
+finished, so at least one item always ran. It is now also called once
+before any item starts, with a `BatchProgress` whose counts are 0 and whose
+items are all `BatchItemNotStarted`. A `CompleteBatch` decision at that
+call runs no item and returns an empty result with the reason
+`CompletionCustomSucceeded` or `CompletionCustomFailed`. A callback that
+completes on a count threshold returns `ContinueBatch` at that call, so it
+runs as before, with one more call.
+
 ### Changed: unnamed `Map` items and `Parallel` branches get default names
 
 A `Map` item with no `WithItemNamer`, and a `Parallel` branch with an

@@ -54,13 +54,15 @@ import (
 // that tolerate failures or complete the batch early, and the
 // [CompletionReason] each one produces.
 //
-// When at least one item failed, Map returns a [BatchError] as err and
-// still returns the populated [BatchResult], so the partial results remain
-// available for compensation. The error's Reason is the batch's completion
-// reason and its Errors are the per-item errors in input order. This holds
-// whether or not the failures were within a configured tolerance; check
-// [BatchError.Reason] to distinguish an exceeded tolerance from tolerated
-// failures. Every other non-nil err (invalid options, suspension, replay
+// Map returns a [BatchError] as err only when the batch failed as a unit:
+// its completion reason is [CompletionFailureToleranceExceeded] or
+// [CompletionCustomFailed]. It still returns the populated [BatchResult],
+// so the partial results remain available for compensation. The error's
+// Reason is the batch's completion reason and its Errors are the per-item
+// errors in input order. A failure within a configured tolerance does not
+// fail the batch: Map returns the result and a nil err, and the caller
+// reads the failures from [BatchResult.Failed] and [BatchResult.Errors].
+// Every other non-nil err (invalid options, suspension, replay
 // divergence, a checkpoint failure) is returned with a zero result and
 // must be propagated unchanged:
 //
@@ -70,7 +72,7 @@ import (
 //	case err == nil:
 //		// use result
 //	case errors.As(err, &berr):
-//		// items failed; result is populated for compensation
+//		// the batch failed; result is populated for compensation
 //	default:
 //		return err // suspension or SDK failure: propagate unchanged
 //	}
@@ -174,9 +176,11 @@ func runClaimedMap[I, O any](ec *execContext, id, name string, items []I, fn fun
 //
 // Completion and failure follow the same rules as [Map]: the default policy
 // is fail-fast, [CompletionConfig] documents the thresholds and the
-// [CompletionReason] each produces, and when at least one branch failed
-// Parallel returns a [BatchError] as err together with the populated
-// [BatchResult]. The batch's checkpoint records the operation as SUCCEEDED
+// [CompletionReason] each produces, and Parallel returns a [BatchError] as
+// err together with the populated [BatchResult] only when the batch failed
+// as a unit ([CompletionFailureToleranceExceeded] or
+// [CompletionCustomFailed]). A failure within a configured tolerance
+// returns the result and a nil err. The batch's checkpoint records the operation as SUCCEEDED
 // regardless, and replay returns the same error.
 func Parallel[O any](ctx Context, name string, branches []Branch[O], opts ...BatchOption) (BatchResult[O], error) {
 	ec, ok := ctx.(*execContext)
@@ -488,16 +492,22 @@ func (r BatchResult[O]) HasFailure() bool {
 }
 
 // batchOutcome is the return value of [Map] and [Parallel] for a
-// completed batch: the populated result and, when [BatchResult.Status] is
-// [BatchItemFailed], a [BatchError] describing the failure. It is derived
-// from the result's Items and Reason alone, so the first invocation and
-// every replay return the same error for the same checkpointed batch.
+// completed batch: the populated result and, when the batch failed as a
+// unit, a [BatchError] describing the failure. A batch fails as a unit
+// when its Reason is [CompletionFailureToleranceExceeded] or
+// [CompletionCustomFailed]. A failed item within a tolerance does not fail
+// the batch, so it returns a nil error and the caller reads the failure
+// from the result. The outcome is derived from the result's Items and
+// Reason alone, so the first invocation and every replay return the same
+// error for the same checkpointed batch.
 func batchOutcome[O any](name string, result BatchResult[O]) (BatchResult[O], error) {
 	for i := range result.Items {
 		result.Items[i].serialized = nil
 		result.Items[i].hasSerialized = false
 	}
-	if result.Status() != BatchItemFailed {
+	switch result.Reason {
+	case CompletionFailureToleranceExceeded, CompletionCustomFailed:
+	default:
 		return result, nil
 	}
 	return result, &BatchError{Name: name, Reason: result.Reason, Errors: result.Errors()}
@@ -768,16 +778,20 @@ func WithBatchSummary[O any](fn func(result BatchResult[O]) string) BatchOption 
 // [CompletionReason]:
 //
 //   - No threshold fires: [CompletionAllCompleted].
-//   - MinSuccessful items have succeeded: [CompletionMinSuccessfulReached].
-//     Items not yet started are omitted.
+//   - MinSuccessful items have succeeded before every item finished:
+//     [CompletionMinSuccessfulReached]. Items not yet started are omitted.
+//     When the last item meets MinSuccessful, every item ran, and the
+//     reason is [CompletionAllCompleted].
 //   - More items failed than the tolerance allows (or, with no tolerance
 //     set, one item failed): [CompletionFailureToleranceExceeded]. Items
 //     not yet started are omitted.
 //
-// The completion reason describes why scheduling stopped. Whether the
-// batch is returned as an error is decided separately: Map and Parallel
-// return a [BatchError] whenever at least one item failed, whatever the
-// reason. See [Map].
+// The completion reason describes why scheduling stopped, and it decides
+// whether the batch is returned as an error: Map and Parallel return a
+// [BatchError] only for [CompletionFailureToleranceExceeded] and
+// [CompletionCustomFailed]. A failed item under [CompletionAllCompleted]
+// or [CompletionMinSuccessfulReached] is within the policy, so err is nil
+// and [BatchResult.Status] still reports [BatchItemFailed]. See [Map].
 //
 // # Custom completion
 //
@@ -811,9 +825,13 @@ type CompletionConfig struct {
 	ToleratedFailurePercentage *int
 
 	// ShouldComplete decides completion programmatically. It is called
-	// after each item reaches a terminal state, with a [BatchProgress]
-	// snapshot taken at that moment, and returns [ContinueBatch] to keep
-	// going or [CompleteBatch] to complete the batch now. Completing early
+	// once before the first item is admitted, with a zero-progress
+	// [BatchProgress] snapshot: every count is 0 and every item is
+	// [BatchItemNotStarted]. It is then called after each item reaches a
+	// terminal state, with a snapshot taken at that moment. It returns
+	// [ContinueBatch] to keep going or [CompleteBatch] to complete the
+	// batch now. Completing at the zero-progress call runs no item and
+	// returns an empty result. Completing early
 	// leaves the items still in flight with status [BatchItemStarted] and
 	// omits the items that never started, exactly as a threshold does.
 	// The batch's [CompletionReason] is then [CompletionCustomSucceeded]
@@ -850,8 +868,10 @@ func (c CompletionConfig) validate() error {
 }
 
 // BatchProgress is the snapshot of a batch's progress passed to
-// [CompletionConfig].ShouldComplete. It is taken directly after one item
-// reached a terminal state, before any further item is admitted.
+// [CompletionConfig].ShouldComplete. The first snapshot is taken before
+// any item is admitted and reports zero progress. Each later snapshot is
+// taken directly after one item reached a terminal state, before any
+// further item is admitted.
 type BatchProgress struct {
 	_ [0]func() // blocks unkeyed literals; keeps fields addable
 
@@ -1079,6 +1099,14 @@ func executeBatchItems[I, O any](
 		reasonLocked bool // set at the moment the completion decision is made
 	)
 	decider := newBatchDecider(parentName, options, totalItems)
+
+	// A custom policy may complete the batch before any item runs. The
+	// batch then admits no item and records an empty result.
+	if decided, stop, derr := decider.initial(); derr != nil {
+		return BatchResult[O]{}, derr
+	} else if stop {
+		return checkpointBatchSuccess(ec, start, BatchResult[O]{Items: results, Reason: decided}, options)
+	}
 
 	// Sequential execution path (max-concurrency = 1 or all items sequential).
 	// Also used when max-concurrency >= totalItems (effectively unlimited).
@@ -1566,9 +1594,10 @@ func flatItemContext(ec *execContext, parentID string, index int, itemName strin
 // FLAT items are numbered under the batch (see flatItemID), so a FLAT batch
 // consumes none. NORMAL items are claimed from the enclosing context: the
 // sequential path claims one per started item, and the concurrent path
-// claims one per item up front.
+// claims one per item up front. A batch that a custom policy completed
+// before admitting any item claims none on either path.
 func batchReplayAdvance(options batchOptions, totalItems, startedItems int) int {
-	if options.nesting == NestingFlat {
+	if options.nesting == NestingFlat || startedItems == 0 {
 		return 0
 	}
 	concurrency := options.maxConcurrency
@@ -1919,6 +1948,11 @@ func replayBatchChildren[I, O any](
 	// re-derived from the replayed outcomes. For a custom policy that
 	// calls ShouldComplete again.
 	decider := newBatchDecider(parentName, options, totalItems)
+	if decided, stop, derr := decider.initial(); derr != nil {
+		return BatchResult[O]{}, derr
+	} else if stop {
+		return BatchResult[O]{Items: results, Reason: decided}, nil
+	}
 
 	runItem := replayRunItem(items, fn)
 
@@ -2933,7 +2967,10 @@ func (d *batchDecider) terminal(index int, status BatchItemStatus) (reason Compl
 	}
 
 	if d.cfg.ShouldComplete == nil {
-		if shouldStopMin(d.cfg, d.successCount) {
+		// MinSuccessful is an early-completion reason. When the item just
+		// recorded was the last one, every item ran, so the batch completes
+		// with CompletionAllCompleted when the loop ends.
+		if d.successCount+d.failureCount < len(d.status) && shouldStopMin(d.cfg, d.successCount) {
 			return CompletionMinSuccessfulReached, true, nil
 		}
 		if shouldStopFailure(d.cfg, d.failureCount, len(d.status)) {
@@ -2942,6 +2979,25 @@ func (d *batchDecider) terminal(index int, status BatchItemStatus) (reason Compl
 		return CompletionAllCompleted, false, nil
 	}
 
+	return d.consult()
+}
+
+// initial evaluates a custom policy once before the first item is
+// admitted. The ShouldComplete callback sees a zero-progress snapshot:
+// every count is 0 and every item is [BatchItemNotStarted]. stop is true
+// when the callback completes the batch at once; the batch then admits no
+// item. A threshold policy and an empty batch are not consulted, because
+// no count threshold can be met before an item runs.
+func (d *batchDecider) initial() (reason CompletionReason, stop bool, err error) {
+	if d.cfg.ShouldComplete == nil || len(d.status) == 0 {
+		return CompletionAllCompleted, false, nil
+	}
+	return d.consult()
+}
+
+// consult calls ShouldComplete on the current progress and maps its
+// decision to a completion reason.
+func (d *batchDecider) consult() (reason CompletionReason, stop bool, err error) {
 	decision, err := d.callShouldComplete()
 	if err != nil {
 		return 0, false, err

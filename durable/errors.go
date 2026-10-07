@@ -1181,19 +1181,20 @@ func (e *CombinatorError) As(target any) bool {
 	return asOperationError(target, e.operationError())
 }
 
-// BatchError is returned as err by [Map] and [Parallel] when the batch's
-// [BatchResult.Status] is [BatchItemFailed]: at least one item failed, or
-// the batch-level completion indicates failure. The batch result is
-// returned alongside it, populated, so the caller can inspect and
-// compensate the partial outcome.
+// BatchError is returned as err by [Map] and [Parallel] when the batch
+// fails as a unit. That happens for two completion reasons only.
+// [CompletionFailureToleranceExceeded] means the completion policy stopped
+// the batch: the fail-fast default, or an exceeded tolerance.
+// [CompletionCustomFailed] means a custom completion decision failed the
+// batch, possibly with no failed item. The batch result is returned
+// alongside it, populated, so the caller can inspect and compensate the
+// partial outcome.
 //
-// Reason is the batch's [CompletionReason]. It is
-// [CompletionFailureToleranceExceeded] when the completion policy stopped
-// the batch (the fail-fast default, or an exceeded tolerance);
-// [CompletionCustomFailed] when a custom completion decision failed the
-// batch, possibly with no failed item; [CompletionAllCompleted] or
-// [CompletionMinSuccessfulReached] when the failures were within a
-// configured tolerance and the batch ran on.
+// A failure within a configured tolerance does not produce a BatchError.
+// The batch then ends with [CompletionAllCompleted] or
+// [CompletionMinSuccessfulReached], and Map or Parallel returns the
+// populated result with a nil error. Read the failed items from
+// [BatchResult.Failed] and their errors from [BatchResult.Errors].
 //
 // Errors holds the per-item errors in input order. [errors.Is] and
 // [errors.As] reach them through Unwrap, so a caller can match an item's

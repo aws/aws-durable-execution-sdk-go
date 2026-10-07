@@ -779,9 +779,14 @@ func TestStatusDerivedAfterPublicJSONRoundTrip(t *testing.T) {
 	if rt.Status() != BatchItemFailed {
 		t.Errorf("Status() = %v, want BatchItemFailed (derived from Items)", rt.Status())
 	}
+	// A failed item within a tolerance does not fail the batch as a unit.
+	if _, err := batchOutcome("b", rt); err != nil {
+		t.Errorf("outcome = %v, want nil for a tolerated failure", err)
+	}
+	rt.Reason = CompletionFailureToleranceExceeded
 	_, got := batchOutcome("b", rt)
 	if got == nil {
-		t.Fatal("outcome = nil, want non-nil for public state that indicates failure")
+		t.Fatal("outcome = nil, want non-nil for a breached tolerance")
 	}
 	if !strings.Contains(got.Error(), `batch "b" failed`) {
 		t.Errorf("outcome = %q, want batch-level error message", got.Error())
@@ -2657,7 +2662,7 @@ func taxParallelHandler(ctx Context, _ any) (taxVerdict, error) {
 		{Name: "await", Func: func(_ Context) (string, error) {
 			return "", &CallbackError{Name: "ext", CallbackID: "cb-123", Err: ErrCallbackTimedOut}
 		}},
-	}, WithMaxConcurrency(1), WithCompletion(CompletionConfig{ToleratedFailureCount: aws.Int(2)}))
+	}, WithMaxConcurrency(1), WithCompletion(CompletionConfig{ToleratedFailureCount: aws.Int(1)}))
 	var berr *BatchError
 	if err != nil && !errors.As(err, &berr) {
 		return taxVerdict{}, err

@@ -72,11 +72,9 @@ func handler(ctx durable.Context, _ any) (Output, error) {
 		// completion policy would stop the batch at the first failure.
 		durable.WithCompletion(durable.CompletionConfig{ToleratedFailureCount: aws.Int(1)}),
 	)
-	// Failed items are reported as a *durable.BatchError alongside the
-	// populated result; this handler reports the result. Any other error is
-	// an SDK failure and propagates.
-	var berr *durable.BatchError
-	if err != nil && !errors.As(err, &berr) {
+	// Failures within the tolerance do not fail the batch: err is nil and
+	// the result reports the failed items. Any non-nil err propagates.
+	if err != nil {
 		return Output{}, err
 	}
 
