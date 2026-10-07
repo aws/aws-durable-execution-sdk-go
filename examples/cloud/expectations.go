@@ -253,6 +253,7 @@ var expectations = map[string]expectation{
 	"child-context-error-data-propagation": {
 		result: `{"found":true,"errorData":"{\"reason\":\"operator-cancelled\"}","errorType":"ChildContextError"}`,
 	},
+	"child-context-error-mapper": {result: `{"status":"declined","declineCode":"insufficient_funds"}`},
 	"child-context-error-propagation": {
 		result: `{"found":true,"errMsg":"durable: child context \"outer-child\" failed: ChildContextError: durable: child context \"inner-child\" failed: StepError: durable: step \"throw-error\" failed after 1 attempts: Error: intentional nested failure","depth":2,"isOpErr":true,"isChild":true}`,
 	},
@@ -262,6 +263,8 @@ var expectations = map[string]expectation{
 	"child-context-serdes":               {result: `"HELLO"`},
 	"child-context-serdes-large-payload": {result: `{"payloadLength":307200,"payloadHash":"c10a028e3fa345bba74b4603acfef02aacd68568aa8396fa95287df1a27c5bdc"}`},
 	"child-context-serdes-virtual":       {result: `"HELLO FROM VIRTUAL"`},
+	"child-context-subtype":              {result: `{"order":"order confirmed","audit":"audit recorded"}`},
+	"child-context-summary":              {result: `{"rowCount":4000,"firstId":0,"lastId":3999}`},
 	"child-context-virtual":              {result: `"virtual child step completed"`},
 	"child-ops-invalid-depth":            {failed: true, errorType: "ChildContextError"},
 	"child-ops-preservation":             {result: `{"branchFailed":true}`},
