@@ -51,19 +51,46 @@ type Context interface {
 	// installed with [WithLogHandler] or [ConfigureLogging]. Inside a child
 	// context (from [RunInChildContext], [Go], [Map], [Parallel], or
 	// [WaitForCallback]) the records also carry the child operation's ID
-	// as operationId and its name as operationName. While this context is
-	// replaying, log output is suppressed so that replayed code does not
-	// duplicate log lines, unless [ReplayLogModeEmit] is in effect, in
-	// which case replayed records are emitted with the attribute
-	// replay=true. Suppression is decided per branch: each context (root,
-	// child context, and each concurrent branch from [Go], [Map], or
-	// [Parallel]) consults its own replay state, so a branch that is still
-	// replaying stays suppressed even after a sibling branch has reached
-	// live execution.
+	// as operationId and its name as operationName.
+	//
+	// Every line is logged exactly once, in the invocation that first runs
+	// it. Code that replays ran in an earlier invocation, so its records
+	// are dropped, or emitted with the attribute replay=true under
+	// [ReplayLogModeEmit]. Code that runs for the first time is live, and
+	// its records carry no replay attribute. [Context.IsReplaying] reports
+	// which of the two this context is in.
+	//
+	// The one exception follows an invocation that fails, for example by
+	// crashing or timing out. The SDK cannot know which lines a failed
+	// invocation wrote, so the next invocation logs again the lines the
+	// failed invocation ran after it received an outcome. A step body can
+	// also run more than once under [AtLeastOncePerRetry], and the lines
+	// of its [StepContext.Logger] repeat with the body.
+	//
+	// Replay is decided per context: the root, each child context, and
+	// each concurrent branch from [Go], [Map], or [Parallel] has its own
+	// replay state, so a branch that is still replaying stays suppressed
+	// even after a sibling branch has reached live execution.
 	Logger() *slog.Logger
 
-	// IsReplaying reports whether the execution is currently replaying
-	// previously checkpointed operations.
+	// IsReplaying reports whether the code running on this context ran in
+	// an earlier invocation.
+	//
+	// A context starts an invocation replaying when the checkpoint log
+	// holds operations for it. It stops replaying, and never resumes, at
+	// the first of these points:
+	//
+	//  1. It starts an operation that has no checkpoint.
+	//  2. Its code receives the outcome of an operation that the previous
+	//     invocation did not have: the operation changed while the
+	//     execution was suspended, or it completed during this invocation.
+	//     The code receives an outcome when a blocking operation returns,
+	//     when [Future.Result] or [Callback.Result] returns, or when a
+	//     combinator, [Map], [Parallel], or [WaitForCallback] returns.
+	//
+	// Starting an asynchronous operation, such as [CreateCallback], [Go],
+	// or [StepAsync], does not end replay, and neither does receiving the
+	// suspension signal.
 	IsReplaying() bool
 
 	// sealed prevents external implementations of Context. Only the SDK

@@ -141,7 +141,7 @@ func handler(ctx durable.Context, _ any) (Output, error) {
 	}, durable.WithRetry(durable.NoRetry()))
 	_ = err // Step failure is expected locally; cloud succeeds and resolves the callback.
 
-	_, err = cb.Result()
+	_, err = cb.Result(ctx)
 	var cbErr *durable.CallbackError
 	switch {
 	case err == nil:

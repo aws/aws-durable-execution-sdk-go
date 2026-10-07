@@ -195,7 +195,7 @@ func TestChildSummaryAsyncStoredForOversizedResult(t *testing.T) {
 		fut := Go(ctx, "big", func(Context) (string, error) {
 			return large, nil
 		}, WithChildSummary(func(result string) string { return fmt.Sprintf("%d bytes", len(result)) }))
-		out, err := fut.Result()
+		out, err := fut.Result(ctx)
 		if err != nil {
 			return "", err
 		}
@@ -215,7 +215,7 @@ func TestChildSummaryAsyncTypeMismatchFailsFuture(t *testing.T) {
 	resp := invokeStep(t, fake, childPayload(`"x"`), func(ctx Context, _ string) (string, error) {
 		fut := Go(ctx, "typed", func(Context) (int, error) { return 1, nil },
 			WithChildSummary(func(string) string { return "" }))
-		_, err := fut.Result()
+		_, err := fut.Result(ctx)
 		if err == nil || !strings.Contains(err.Error(), "WithChildSummary") {
 			return "", fmt.Errorf("expected a configuration error, got %v", err)
 		}
@@ -461,7 +461,7 @@ var summaryPanicChildTests = []struct {
 	{"Go", func(ctx Context, large string) error {
 		fut := Go(ctx, "big", func(Context) (string, error) { return large, nil },
 			WithChildSummary(func(string) string { panic("summary boom") }))
-		_, err := fut.Result()
+		_, err := fut.Result(ctx)
 		return err
 	}},
 }

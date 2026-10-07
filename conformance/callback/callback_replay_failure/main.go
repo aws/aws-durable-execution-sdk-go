@@ -14,7 +14,7 @@ func handler(ctx durable.Context, name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	result, cbErr := cb.Result()
+	result, cbErr := cb.Result(ctx)
 	var outcome string
 	if cbErr != nil {
 		outcome = fmt.Sprintf("caught_failure:%v", cbErr)

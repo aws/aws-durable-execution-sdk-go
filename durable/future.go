@@ -45,6 +45,14 @@ type Future[O any] struct {
 	// run first. preResult must not block.
 	preResultOnce sync.Once
 	preResult     func()
+
+	// newOutcome, when set, reports whether the future's outcome is one
+	// the previous invocation did not have. Result applies it to the
+	// context passed in; see execContext.receiveOutcome. It is set before
+	// the future can settle, and read only after it settled. It is nil
+	// for a future that is not bound to an operation, which never
+	// switches a context to live.
+	newOutcome func() bool
 }
 
 // Result blocks until the operation settles, then returns its outcome.
@@ -55,10 +63,42 @@ type Future[O any] struct {
 // other work runs settles the future then. The invocation suspends only
 // when no goroutine running handler code can make progress; Result then
 // returns the suspension signal, which must be returned unchanged.
-func (f *Future[O]) Result() (O, error) {
+//
+// ctx is the context of the code that reads the outcome: the context the
+// calling goroutine runs on, which can differ from the context that
+// started the operation, for example inside a [Go] branch. When the
+// previous invocation did not have the outcome, the code after Result
+// runs for the first time, so ctx stops replaying: its log records are
+// written and [Context.IsReplaying] reports false. See [Context.Logger].
+func (f *Future[O]) Result(ctx Context) (O, error) {
+	value, err := f.result()
+	if err != nil && errors.Is(err, errSuspendExecution) {
+		// The suspension signal is not an outcome. It can settle the
+		// future before the operation has bound newOutcome, so the
+		// field is not read.
+		return value, err
+	}
+	if ec, ok := ctx.(*execContext); ok && f.newOutcome != nil {
+		ec.receiveOutcome(err, f.newOutcome)
+	}
+	return value, err
+}
+
+// result is [Future.Result] without a receiving context. The SDK reads
+// futures with it where the outcome reaches user code through an
+// operation of its own, such as a combinator.
+func (f *Future[O]) result() (O, error) {
 	f.activate()
 	f.park()
 	return f.value, f.err
+}
+
+// bind binds the future to the operation with the positional ID id, so
+// that [Future.Result] reports a new outcome when state reports one for
+// the operation. It must be called before the future can settle.
+func (f *Future[O]) bind(state *executionState, id string) *Future[O] {
+	f.newOutcome = func() bool { return state.newOutcome(id) }
+	return f
 }
 
 // activate runs the pre-result hook exactly once.

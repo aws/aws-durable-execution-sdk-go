@@ -197,7 +197,7 @@ func TestCallbackSerdesErrorReplayUnmarshal(t *testing.T) {
 		if err != nil {
 			return "", err
 		}
-		_, err = cb.Result()
+		_, err = cb.Result(ctx)
 		got = err
 		return "", nil
 	})

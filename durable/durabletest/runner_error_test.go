@@ -118,7 +118,7 @@ func TestLocalRunnerErrorContract(t *testing.T) {
 			if err != nil {
 				return "", err
 			}
-			return cb.Result()
+			return cb.Result(ctx)
 		}
 		result, err := durabletest.NewLocalRunner(handler).RunUntilComplete("x")
 		if err != nil {

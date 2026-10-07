@@ -92,7 +92,7 @@ func TestDurabletestCompletesWaitDuringInvocation(t *testing.T) {
 		}); err != nil {
 			return "", err
 		}
-		if _, err := pause.Result(); err != nil {
+		if _, err := pause.Result(ctx); err != nil {
 			return "", err
 		}
 		return "done", nil

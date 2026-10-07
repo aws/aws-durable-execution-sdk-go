@@ -4,9 +4,8 @@
 // (triggered by the callback response), replayed operations suppress log
 // output so "before-callback" does NOT appear again.
 //
-// The replay→live transition happens when the next durable operation is
-// claimed and has no checkpoint. A step after the callback demonstrates that
-// live-mode logging resumes correctly after replay.
+// The callback's outcome is new to the resume invocation, so the code after
+// WaitForCallback is live there and its lines are written.
 package main
 
 import (
@@ -42,8 +41,7 @@ func handler(ctx durable.Context, _ any) (result, error) {
 		return result{}, err
 	}
 
-	// This step triggers the replay→live transition on the resume
-	// invocation.
+	// The step runs live on the resume invocation.
 	_, err = durable.Step(ctx, "post-callback-step", func(sc durable.StepContext) (string, error) {
 		sc.Logger().Info("inside-post-callback-step", "phase", "live")
 		return "ok", nil

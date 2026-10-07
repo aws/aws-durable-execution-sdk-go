@@ -227,7 +227,7 @@ func handler(ctx durable.Context, _ any) (string, error) {
 			return "done", nil
 		})
 	})
-	return fut.Result()
+	return fut.Result(ctx)
 }
 ```
 
@@ -440,7 +440,7 @@ so set `WaitStrategy`.
 
 `CreateCallback` creates a callback and returns it at once. The callback
 exposes `ID()`, the identifier to hand to an external system, and
-`Result()`, which blocks until that system completes it. The external
+`Result(ctx)`, which blocks until that system completes it. The external
 system completes a callback with the `SendDurableExecutionCallbackSuccess`
 or `SendDurableExecutionCallbackFailure` API. The result is a JSON
 document. From the CLI, the command below completes the callback with the
@@ -461,7 +461,7 @@ func handler(ctx durable.Context, _ any) (string, error) {
 		return "", err
 	}
 	ctx.Logger().Info("awaiting approval", "callbackId", cb.ID())
-	return cb.Result()
+	return cb.Result(ctx)
 }
 ```
 
@@ -669,8 +669,8 @@ func handler(ctx durable.Context, _ any) (string, error) {
 	if err := durable.Join(ctx, "settle", []durable.Awaitable{charge, reserve}); err != nil {
 		return "", err
 	}
-	receipt, _ := charge.Result()
-	reserved, _ := reserve.Result()
+	receipt, _ := charge.Result(ctx)
+	reserved, _ := reserve.Result(ctx)
 	return fmt.Sprintf("%s reserved %d items", receipt, reserved), nil
 }
 ```
@@ -901,19 +901,52 @@ func handler(ctx durable.Context, event Event) (string, error) {
 
 ### Replayed log records
 
-While a context replays checkpointed operations, its log records are
-dropped, so replayed code does not duplicate the lines it wrote when it
-first ran. Suppression is decided per branch. A `Go` branch that is still
-replaying stays quiet while a sibling that has reached live execution logs
-normally.
+Every line is logged exactly once, in the invocation that first runs it.
+Code that ran in an earlier invocation is replaying, and its log records
+are dropped. Code that runs for the first time is live, and its records
+are written. `Context.IsReplaying` reports which of the two the code is
+in.
+
+A context starts an invocation replaying when the checkpoint log holds
+operations for it. It becomes live, and stays live, at the first of these
+points.
+
+1. It starts an operation that has no checkpoint.
+2. Its code receives the outcome of an operation that the previous
+   invocation did not have. That is an operation that changed while the
+   execution was suspended, or one that completed during this invocation.
+   The code receives an outcome when a blocking operation returns, when
+   `Future.Result` or `Callback.Result` returns, or when a combinator,
+   `Map`, `Parallel`, or `WaitForCallback` returns.
+
+An invocation suspends only while an operation the code awaits is still
+pending. That operation completes while the execution is suspended. So in
+the next invocation, the code before the await replays, and the code after
+it is live. Starting an asynchronous operation such as `CreateCallback` or
+`Go` does not make a context live, and neither does the suspension
+signal.
+
+`Result` takes the context of the code that reads the outcome. Inside a
+`Go` branch, pass the branch's context, even for a future the parent
+created, so that the branch's own lines are logged.
+
+One case logs a line twice. When an invocation fails, for example by
+crashing or timing out, the SDK cannot know which lines it wrote. The next
+invocation logs again the lines the failed invocation ran after it
+received an outcome. A step body can also run more than once under
+`AtLeastOncePerRetry`, and the lines of its `StepContext.Logger` repeat
+with the body.
+
+Replay is decided per context. A `Go` branch that is still replaying stays
+quiet while a sibling that has reached live execution logs normally.
 
 To see the records of the replayed portion when diagnosing a replay
 problem, select `ReplayLogModeEmit` with `WithReplayLogMode` at
 construction or with `ConfigureLogging` inside the handler. Replayed
 records are then emitted with the field `replay` set to `true`. Live
 records carry no `replay` field. Expect duplicate lines. Every line written
-before a suspension appears again on each later invocation that replays
-it. `ReplayLogModeSuppress` is the default. The top-level `replay` key
+before a suspension appears again, with `replay` set to `true`, on each
+later invocation that replays it. `ReplayLogModeSuppress` is the default. The top-level `replay` key
 belongs to the SDK in every mode. A value you attach under that name with
 `Logger.With` or pass with a record is dropped, while the same name inside a
 group opened with `WithGroup` is kept. At construction the option is

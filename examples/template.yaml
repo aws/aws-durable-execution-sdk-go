@@ -1971,6 +1971,23 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 120
 
+  LoggerExactlyOnceFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-logger-exactly-once
+      CodeUri: .aws-sam/build-artifacts/logger-exactly-once/
+      Handler: bootstrap
+      Description: Every log line written exactly once across replays and a crashed invocation
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
   LoggerLogLevelsFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -2825,6 +2842,9 @@ Outputs:
   LoggerAfterCallbackFunction:
     Description: Logger After Callback Function ARN
     Value: !GetAtt LoggerAfterCallbackFunction.Arn
+  LoggerExactlyOnceFunction:
+    Description: Logger Exactly Once Function ARN
+    Value: !GetAtt LoggerExactlyOnceFunction.Arn
   LoggerLogLevelsFunction:
     Description: Logger Log Levels Function ARN
     Value: !GetAtt LoggerLogLevelsFunction.Arn

@@ -25,7 +25,7 @@ func virtualChildHandlers(opts ...ChildOption) map[string]Handler[string, string
 			return RunInChildContext(ctx, "virtual", body, opts...)
 		},
 		"Go": func(ctx Context, _ string) (string, error) {
-			return Go(ctx, "virtual", body, opts...).Result()
+			return Go(ctx, "virtual", body, opts...).Result(ctx)
 		},
 	}
 }
@@ -163,7 +163,7 @@ func TestVirtualChildFailure(t *testing.T) {
 				return err
 			},
 			"Go": func(ctx Context, opts ...ChildOption) error {
-				_, err := Go(ctx, "virtual", func(Context) (string, error) { return "", boom }, opts...).Result()
+				_, err := Go(ctx, "virtual", func(Context) (string, error) { return "", boom }, opts...).Result(ctx)
 				return err
 			},
 		} {
@@ -219,7 +219,7 @@ func TestVirtualChildNestedInVirtualChildRejected(t *testing.T) {
 			return RunInChildContext(ctx, "inner", func(Context) (string, error) { return "ran", nil }, WithChildVirtual())
 		},
 		"Go": func(ctx Context) (string, error) {
-			return Go(ctx, "inner", func(Context) (string, error) { return "ran", nil }, WithChildVirtual()).Result()
+			return Go(ctx, "inner", func(Context) (string, error) { return "ran", nil }, WithChildVirtual()).Result(ctx)
 		},
 	} {
 		t.Run(variant, func(t *testing.T) {
@@ -417,7 +417,7 @@ func virtualLifecycleRuns(extra ...ChildOption) map[string]func(c Context, fn fu
 			return RunInChildContext(c, "virtual", fn, opts...)
 		},
 		"Go": func(c Context, fn func(Context) (string, error)) (string, error) {
-			return Go(c, "virtual", fn, opts...).Result()
+			return Go(c, "virtual", fn, opts...).Result(c)
 		},
 	}
 }

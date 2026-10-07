@@ -1,14 +1,9 @@
 // Command logger-after-wait demonstrates replay-aware logging across a
-// suspend/resume boundary. Log lines emitted before the wait appear once
-// (during the first invocation). On replay (after the wait completes), the
-// replayed code path is suppressed — only log lines emitted during live
-// execution (after the replay→live transition) appear in the second
-// invocation.
-//
-// The replay→live transition happens when the next durable operation is
-// claimed and no checkpoint exists for it. So a log call between the wait
-// and the next operation is still suppressed. The log after a live step
-// demonstrates the transition clearly.
+// suspend/resume boundary. The line before the wait is written once,
+// during the first invocation. The second invocation replays the code
+// before the wait and drops its records. The wait's outcome is new to the
+// second invocation, so the code after the wait is live there and its
+// lines are written.
 package main
 
 import (
@@ -24,9 +19,7 @@ func handler(ctx durable.Context, _ any) (string, error) {
 		return "", err
 	}
 
-	// This step triggers the replay→live transition on the second
-	// invocation. The step itself is live (not checkpointed), so the
-	// logger switches from replay to live mode when claiming it.
+	// The step runs live on the second invocation, after the wait.
 	_, err := durable.Step(ctx, "post-wait-step", func(sc durable.StepContext) (string, error) {
 		sc.Logger().Info("inside-post-wait-step", "phase", "live")
 		return "ok", nil

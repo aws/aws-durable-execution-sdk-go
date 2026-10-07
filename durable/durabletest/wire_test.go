@@ -31,7 +31,7 @@ func TestWirePayloadReadByDurable(t *testing.T) {
 		if err != nil {
 			return "", err
 		}
-		cbResult, err := cb.Result()
+		cbResult, err := cb.Result(ctx)
 		if err != nil {
 			return "", err
 		}
@@ -253,7 +253,7 @@ func TestBuildPayloadDecodesAsWireInput(t *testing.T) {
 	}
 
 	snapshot, token := runner.client.beginInvocation()
-	payload, err := runner.exec.buildPayload([]byte("21"), snapshot, token)
+	payload, err := runner.exec.buildPayload([]byte("21"), snapshot, token, nil)
 	if err != nil {
 		t.Fatalf("buildPayload: %v", err)
 	}

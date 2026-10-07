@@ -49,7 +49,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 		return Result{}, fmt.Errorf("send callback: %w", err)
 	}
 
-	value, err := cb.Result()
+	value, err := cb.Result(ctx)
 	if err != nil {
 		return Result{}, err
 	}

@@ -35,7 +35,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	_, err1 := cb1.Result()
+	_, err1 := cb1.Result(ctx)
 
 	// Test 2: Callback failure.
 	cb2, err := durable.CreateCallback[string](ctx, "failure-test",
@@ -68,7 +68,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	_, err2 := cb2.Result()
+	_, err2 := cb2.Result(ctx)
 
 	// Wait to force replay.
 	if err := durable.Wait(ctx, "post-errors-wait", 1*time.Second); err != nil {

@@ -266,7 +266,7 @@ func TestWaitReportedDuringInvocation(t *testing.T) {
 		}); err != nil {
 			return "", err
 		}
-		if _, err := pause.Result(); err != nil {
+		if _, err := pause.Result(ctx); err != nil {
 			return "", err
 		}
 		return "done", nil
@@ -311,7 +311,7 @@ func TestStepRetryReportedReadyDuringInvocation(t *testing.T) {
 		}); err != nil {
 			return "", err
 		}
-		return flaky.Result()
+		return flaky.Result(ctx)
 	}
 	result, err := durabletest.NewLocalRunner(h).Run(struct{}{})
 	if err != nil {
@@ -409,7 +409,7 @@ func awaitedFinishedCases() []awaitedFinishedCase {
 				if err := longStep(ctx); err != nil {
 					return "", err
 				}
-				_, err := pause.Result()
+				_, err := pause.Result(ctx)
 				return "done", err
 			})},
 		{name: "02 WaitForCallback whose submitter completes the callback", want: durabletest.Succeeded,
@@ -427,7 +427,7 @@ func awaitedFinishedCases() []awaitedFinishedCase {
 				if err := longStep(ctx); err != nil {
 					return "", err
 				}
-				return inv.Result()
+				return inv.Result(ctx)
 			})},
 		{name: "04 Invoke whose START response already reports it failed", want: durabletest.Failed, setup: registerTargets,
 			handler: noRunner(func(ctx durable.Context, _ struct{}) (string, error) {
@@ -463,7 +463,7 @@ func awaitedFinishedCases() []awaitedFinishedCase {
 				if err := longStep(ctx); err != nil {
 					return "", err
 				}
-				return bg.Result()
+				return bg.Result(ctx)
 			})},
 		{name: "08 Join over a WaitAsync and a StepAsync", want: durabletest.Succeeded,
 			handler: noRunner(func(ctx durable.Context, _ struct{}) (string, error) {
@@ -475,7 +475,7 @@ func awaitedFinishedCases() []awaitedFinishedCase {
 				if err := durable.Join(ctx, "both", []durable.Awaitable{pause, work}); err != nil {
 					return "", err
 				}
-				return work.Result()
+				return work.Result(ctx)
 			})},
 		{name: "09 StepAsync retry whose next attempt becomes due while another step runs", want: durabletest.Succeeded,
 			handler: noRunner(func(ctx durable.Context, _ struct{}) (string, error) {
@@ -493,7 +493,7 @@ func awaitedFinishedCases() []awaitedFinishedCase {
 				if err := longStep(ctx); err != nil {
 					return "", err
 				}
-				return flaky.Result()
+				return flaky.Result(ctx)
 			})},
 		{name: "10 WaitForCondition whose next check becomes due while a step runs", want: durabletest.Succeeded,
 			handler: noRunner(func(ctx durable.Context, _ struct{}) (string, error) {
@@ -508,7 +508,7 @@ func awaitedFinishedCases() []awaitedFinishedCase {
 				if err := longStep(ctx); err != nil {
 					return "", err
 				}
-				n, err := poll.Result()
+				n, err := poll.Result(ctx)
 				if err != nil {
 					return "", err
 				}

@@ -193,15 +193,26 @@ type executionState struct {
 	// that observes its terminal checkpoint reports the end as live, not
 	// replayed.
 	updated map[string]struct{}
+
+	// settledAtStart holds the wire IDs of the operations that were
+	// already terminal in the state the invocation started from. It is
+	// written once, by newExecutionState, and only read afterwards, so it
+	// needs no lock. An operation that is absent from it settled during
+	// this invocation, or has not settled.
+	settledAtStart map[string]struct{}
 }
 
 func newExecutionState(ops []*operation) *executionState {
 	s := &executionState{
-		operations: make(map[string]*operation, len(ops)),
-		childCount: make(map[string]int),
+		operations:     make(map[string]*operation, len(ops)),
+		childCount:     make(map[string]int),
+		settledAtStart: make(map[string]struct{}),
 	}
 	for _, op := range ops {
 		s.insert(op)
+		if op.status.terminal() {
+			s.settledAtStart[op.id] = struct{}{}
+		}
 	}
 	return s
 }
@@ -234,6 +245,26 @@ func (s *executionState) setUpdatedOperationIDs(wireIDs []string) {
 func (s *executionState) updatedSinceLastInvocation(positionalID string) bool {
 	_, ok := s.updated[hashID(positionalID)]
 	return ok
+}
+
+// newOutcome reports whether the outcome of the operation with the
+// positional ID is one the previous invocation did not have. That holds
+// in two cases:
+//
+//  1. The invocation payload lists the operation as updated since the
+//     previous invocation.
+//  2. The operation was not terminal when this invocation started, so its
+//     outcome was produced during this invocation.
+//
+// Code that receives a new outcome runs for the first time; see
+// execContext.observeOutcome.
+func (s *executionState) newOutcome(positionalID string) bool {
+	wireID := hashID(positionalID)
+	if _, ok := s.updated[wireID]; ok {
+		return true
+	}
+	_, settled := s.settledAtStart[wireID]
+	return !settled
 }
 
 // get returns the checkpointed operation for the positional ID, or nil if

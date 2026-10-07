@@ -211,7 +211,7 @@ func TestChildErrorMapperAsyncLiveAndReplay(t *testing.T) {
 		fut := Go(ctx, "pay", func(Context) (string, error) {
 			return "", errors.New("declined")
 		}, WithChildErrorMapper(paymentMapper))
-		_, err := fut.Result()
+		_, err := fut.Result(ctx)
 		var pe *paymentError
 		if !errors.As(err, &pe) {
 			t.Fatalf("live err = %T (%v), want *paymentError", err, err)
@@ -232,7 +232,7 @@ func TestChildErrorMapperAsyncLiveAndReplay(t *testing.T) {
 			t.Fatal("fn should not execute on replay")
 			return "", nil
 		}, WithChildErrorMapper(paymentMapper))
-		_, err := fut.Result()
+		_, err := fut.Result(ctx)
 		var pe *paymentError
 		if !errors.As(err, &pe) {
 			t.Fatalf("replay err = %T (%v), want *paymentError", err, err)

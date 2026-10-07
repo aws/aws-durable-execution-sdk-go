@@ -52,7 +52,7 @@
 //			return doWork()
 //		})
 //	})
-//	result, err := fut.Result()
+//	result, err := fut.Result(ctx)
 //
 // # Awaiting Several Futures
 //
@@ -67,16 +67,16 @@
 //	if err := durable.Join(ctx, "settle", []durable.Awaitable{fa, fb}); err != nil {
 //		return err
 //	}
-//	receipt, _ := fa.Result()
-//	ok, _ := fb.Result()
+//	receipt, _ := fa.Result(ctx)
+//	ok, _ := fb.Result(ctx)
 //
 // The hand-written form below looks equivalent but is not:
 //
-//	a, err := fa.Result()
+//	a, err := fa.Result(ctx)
 //	if err != nil {
 //		return err
 //	}
-//	b, err := fb.Result()
+//	b, err := fb.Result(ctx)
 //
 // When fa's branch suspends, fa.Result returns the suspension signal and
 // the handler returns before awaiting fb. fb's branch therefore never

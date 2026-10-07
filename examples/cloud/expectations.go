@@ -43,6 +43,12 @@ type expectation struct {
 	// no reason is rejected by validate.
 	check            func(t testing.TB, result string)
 	nondeterministic string
+
+	// logLines, when set, is how many records the deployed function
+	// writes with each message over the whole execution, counting only
+	// records without the replay attribute. The cloud test reads the
+	// execution's records from the function's log group.
+	logLines map[string]int
 }
 
 // outcome is what the smoke test observed for one example.
@@ -295,8 +301,19 @@ var expectations = map[string]expectation{
 
 	"logger-after-callback": {result: `{"message":"done","callbackId":"self-resolved","result":"callback-resolved"}`},
 	"logger-after-wait":     {result: `"done"`},
-	"logger-log-levels":     {result: `"done"`},
-	"logger-slog-handler":   {result: `"done"`},
+	"logger-exactly-once": {
+		result: `"done"`,
+		// The invocation that writes "crash-line" exits the process, and
+		// the retried invocation writes the line again.
+		logLines: map[string]int{
+			"start": 1, "after-wait": 1, "between-callback": 1, "between-wait-async": 1,
+			"after-wait-async": 1, "after-callback": 1, "after-wait-for-cb": 1, "after-all": 1,
+			"branch-after-parent": 1, "branch-after-own": 1, "after-branch": 1, "after-map": 1,
+			"after-parallel": 1, "crash-line": 2, "after-crash": 1,
+		},
+	},
+	"logger-log-levels":   {result: `"done"`},
+	"logger-slog-handler": {result: `"done"`},
 
 	"map-basic": {result: `[2,4,6,8,10]`},
 	"map-completion-config-issue": {

@@ -117,7 +117,7 @@ func TestGoParentContextFromChildGoroutineFails(t *testing.T) {
 			}
 			return "", err
 		})
-		_, err := fut.Result()
+		_, err := fut.Result(ctx)
 		var childErr *ChildContextError
 		if !errors.As(err, &childErr) {
 			return "", fmt.Errorf("expected ChildContextError, got: %v", err)
@@ -227,15 +227,15 @@ func foreignOperations(ec *execContext) []error {
 	var errs []error
 	_, err := Step(ec, "step", func(StepContext) (string, error) { return "", nil })
 	errs = append(errs, err)
-	_, err = StepAsync(ec, "step-async", func(StepContext) (string, error) { return "", nil }).Result()
+	_, err = StepAsync(ec, "step-async", func(StepContext) (string, error) { return "", nil }).Result(ec)
 	errs = append(errs, err)
 	_, err = Invoke[string](ec, "invoke", "fn", "in")
 	errs = append(errs, err)
-	_, err = InvokeAsync[string](ec, "invoke-async", "fn", "in").Result()
+	_, err = InvokeAsync[string](ec, "invoke-async", "fn", "in").Result(ec)
 	errs = append(errs, err)
 	_, err = RunInChildContext(ec, "child", func(Context) (string, error) { return "", nil })
 	errs = append(errs, err)
-	_, err = RunInChildContextAsync(ec, "child-async", func(Context) (string, error) { return "", nil }).Result()
+	_, err = RunInChildContextAsync(ec, "child-async", func(Context) (string, error) { return "", nil }).Result(ec)
 	errs = append(errs, err)
 	_, err = WaitForCondition(ec, "condition",
 		func(StepContext, string) (string, error) { return "", nil },

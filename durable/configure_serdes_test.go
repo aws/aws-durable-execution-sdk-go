@@ -191,7 +191,7 @@ func TestConfigureSerdesCallbackDeserializer(t *testing.T) {
 			if err != nil {
 				return "", err
 			}
-			got, err = cb.Result()
+			got, err = cb.Result(ctx)
 			return got, err
 		}
 		if _, err := Wrap(handler, withLambdaAPI(fake))(context.Background(), in); err != nil {
@@ -306,7 +306,7 @@ func TestConfigureSerdesAfterRunInChildContextAsync(t *testing.T) {
 			if err := ConfigureSerdes(ctx, SerdesConfig{Serdes: maskedReceiptSerdes("RCPT:")}); err != nil {
 				return "", err
 			}
-			if _, err := fut.Result(); err != nil {
+			if _, err := fut.Result(ctx); err != nil {
 				return "", err
 			}
 			_, err := Step(ctx, "after", func(StepContext) (receipt, error) {
@@ -339,7 +339,7 @@ func TestConfigureSerdesAfterStepAsync(t *testing.T) {
 			if err := ConfigureSerdes(ctx, SerdesConfig{Serdes: maskedReceiptSerdes("RCPT:"), CallbackDeserializer: upperDeserializer{}}); err != nil {
 				return "", err
 			}
-			_, err := fut.Result()
+			_, err := fut.Result(ctx)
 			return "", err
 		})
 

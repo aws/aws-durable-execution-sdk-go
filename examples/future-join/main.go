@@ -63,9 +63,9 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 
 	// Every future has settled successfully, so each Result returns
 	// immediately.
-	receipt, _ := charge.Result()
-	reserved, _ := reserve.Result()
-	notified, _ := notify.Result()
+	receipt, _ := charge.Result(ctx)
+	reserved, _ := reserve.Result(ctx)
+	notified, _ := notify.Result(ctx)
 
 	return Result{Receipt: receipt, Reserved: reserved, Notified: notified, Completed: true}, nil
 }

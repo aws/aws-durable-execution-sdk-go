@@ -14,11 +14,11 @@ func handler(ctx durable.Context, names []string) (map[string]string, error) {
 		return nil, err
 	}
 
-	resultA, err := cbA.Result()
+	resultA, err := cbA.Result(ctx)
 	if err != nil {
 		return nil, err
 	}
-	resultB, err := cbB.Result()
+	resultB, err := cbB.Result(ctx)
 	if err != nil {
 		return nil, err
 	}

@@ -53,7 +53,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 		return Result{}, err
 	}
 
-	_, err = cb.Result()
+	_, err = cb.Result(ctx)
 	if err != nil {
 		var cbErr *durable.CallbackError
 		if errors.As(err, &cbErr) {

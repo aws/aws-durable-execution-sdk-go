@@ -474,7 +474,7 @@ func TestRunUntilCompleteBlocksOnCallback(t *testing.T) {
 		if err != nil {
 			return "", err
 		}
-		result, err := cb.Result()
+		result, err := cb.Result(ctx)
 		if err != nil {
 			return "", err
 		}
@@ -499,7 +499,7 @@ func TestCallbackSuccessFlow(t *testing.T) {
 		if err != nil {
 			return "", err
 		}
-		result, err := cb.Result()
+		result, err := cb.Result(ctx)
 		if err != nil {
 			return "", err
 		}
@@ -558,7 +558,7 @@ func TestCallbackFailureSurfacesCallbackError(t *testing.T) {
 		if err != nil {
 			return "", err
 		}
-		_, err = cb.Result()
+		_, err = cb.Result(ctx)
 		if err != nil {
 			return "", err
 		}
@@ -611,7 +611,7 @@ func TestCallbackHeartbeat(t *testing.T) {
 		if err != nil {
 			return "", err
 		}
-		result, err := cb.Result()
+		result, err := cb.Result(ctx)
 		if err != nil {
 			return "", err
 		}

@@ -45,7 +45,7 @@ func verificationHandler(ctx durable.Context, _ any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return cb.Result()
+	return cb.Result(ctx)
 }
 
 func TestDeserializerTransformation(t *testing.T) {

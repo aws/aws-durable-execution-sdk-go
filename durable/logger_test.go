@@ -330,10 +330,10 @@ func TestGoBranchReplaySuppressionIsPerBranch(t *testing.T) {
 			c.Logger().Info("b-live")
 			return "b", nil
 		})
-		if _, err := a.Result(); err != nil {
+		if _, err := a.Result(ctx); err != nil {
 			return "", err
 		}
-		if _, err := b.Result(); err != nil {
+		if _, err := b.Result(ctx); err != nil {
 			return "", err
 		}
 		return "ok", nil
@@ -788,7 +788,7 @@ func TestChildContextLoggerCarriesChildOperationScope(t *testing.T) {
 			c.Logger().Info("go")
 			return "b", nil
 		})
-		return fut.Result()
+		return fut.Result(ctx)
 	}, withLambdaAPI(fake), WithLogHandler(rec))
 	if _, err := h(lambdaCtx(t, "req-3", ""), childPayload(`"x"`)); err != nil {
 		t.Fatalf("Invoke() error: %v", err)

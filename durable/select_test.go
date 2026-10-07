@@ -319,7 +319,7 @@ func TestSelectSuspendThenTerminalPropagatesSuspension(t *testing.T) {
 				if err != nil {
 					return "", err
 				}
-				return cb.Result()
+				return cb.Result(childCtx)
 			}},
 			{Name: "terminal", Func: func(childCtx Context) (string, error) {
 				if _, err := Step(childCtx, "t-step", func(StepContext) (string, error) {
@@ -331,7 +331,7 @@ func TestSelectSuspendThenTerminalPropagatesSuspension(t *testing.T) {
 				if err != nil {
 					return "", err
 				}
-				return cb.Result()
+				return cb.Result(childCtx)
 			}},
 			{Name: "failing", Func: func(childCtx Context) (string, error) {
 				return "", Wait(childCtx, "w", time.Minute)

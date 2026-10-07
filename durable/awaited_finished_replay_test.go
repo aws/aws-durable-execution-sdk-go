@@ -238,7 +238,7 @@ func TestAwaitedOperationNotTerminalInInitialState(t *testing.T) {
 				if err := longStep(ctx); err != nil {
 					return "", err
 				}
-				return inv.Result()
+				return inv.Result(ctx)
 			},
 		},
 	}

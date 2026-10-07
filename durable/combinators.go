@@ -22,15 +22,15 @@ import (
 //
 // Empty input returns an empty slice immediately (matching Promise.all([])).
 func All[O any](ctx Context, name string, fs []*Future[O], opts ...ChildOption) ([]O, error) {
-	return RunInChildContext(ctx, name, func(_ Context) ([]O, error) {
-		if err := awaitBarrier(asAwaitables(fs), true); err != nil {
+	return RunInChildContext(ctx, name, func(childCtx Context) ([]O, error) {
+		if err := awaitBarrier(childCtx, asAwaitables(fs), true); err != nil {
 			return nil, err
 		}
 		// Every future settled successfully, so each Result call below
 		// returns immediately.
 		results := make([]O, len(fs))
 		for i, f := range fs {
-			results[i], _ = f.Result()
+			results[i], _ = f.result()
 		}
 		return results, nil
 	}, opts...)
@@ -41,14 +41,15 @@ func All[O any](ctx Context, name string, fs []*Future[O], opts ...ChildOption) 
 // types can be passed to [Join] together.
 type Awaitable interface {
 	// await blocks until the future settles and returns its error, or nil
-	// on success. The method is unexported so only SDK futures implement
-	// the interface.
-	await() error
+	// on success, as [Future.Result] does with ctx as the receiving
+	// context. The method is unexported so only SDK futures implement the
+	// interface.
+	await(ctx Context) error
 }
 
 // await implements [Awaitable].
-func (f *Future[O]) await() error {
-	_, err := f.Result()
+func (f *Future[O]) await(ctx Context) error {
+	_, err := f.Result(ctx)
 	return err
 }
 
@@ -83,11 +84,11 @@ func (f *Future[O]) await() error {
 //	if err := durable.Join(ctx, "settle", []durable.Awaitable{fa, fb}); err != nil {
 //		return err
 //	}
-//	receipt, _ := fa.Result()
-//	ok, _ := fb.Result()
+//	receipt, _ := fa.Result(ctx)
+//	ok, _ := fb.Result(ctx)
 func Join(ctx Context, name string, fs []Awaitable, opts ...ChildOption) error {
-	_, err := RunInChildContext(ctx, name, func(_ Context) (Void, error) {
-		return Void{}, awaitBarrier(fs, false)
+	_, err := RunInChildContext(ctx, name, func(childCtx Context) (Void, error) {
+		return Void{}, awaitBarrier(childCtx, fs, false)
 	}, opts...)
 	return err
 }
@@ -111,11 +112,11 @@ func Join(ctx Context, name string, fs []Awaitable, opts ...ChildOption) error {
 // A future whose operation finishes in this invocation settles with its
 // outcome; the suspension sentinel arrives only when the invocation
 // suspends.
-func awaitBarrier(fs []Awaitable, failFast bool) error {
+func awaitBarrier(ctx Context, fs []Awaitable, failFast bool) error {
 	var firstErr error
 	var sawSuspend bool
 	for _, f := range fs {
-		err := f.await()
+		err := f.await(ctx)
 		switch {
 		case err == nil:
 		case errors.Is(err, errSuspendExecution):
@@ -159,7 +160,7 @@ func AllSettled[O any](ctx Context, name string, fs []*Future[O], opts ...ChildO
 		results := make([]Settled[O], len(fs))
 		var sawSuspend bool
 		for i, f := range fs {
-			val, err := f.Result()
+			val, err := f.result()
 			switch {
 			case err == nil:
 				results[i] = Settled[O]{Value: val}

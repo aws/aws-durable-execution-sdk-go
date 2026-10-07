@@ -123,9 +123,9 @@ func nestedChildHandlers(rec *opRecorder) map[string]func(context.Context, []byt
 		"RunInChildContextAsync": Wrap(func(ctx Context, _ string) (string, error) {
 			return RunInChildContextAsync(ctx, "outer", func(c Context) (string, error) {
 				return RunInChildContextAsync(c, "mid", func(c Context) (string, error) {
-					return RunInChildContextAsync(c, "inner", leaf).Result()
-				}).Result()
-			}).Result()
+					return RunInChildContextAsync(c, "inner", leaf).Result(c)
+				}).Result(c)
+			}).Result(ctx)
 		}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
 	}
 }
@@ -267,7 +267,7 @@ func failingChildHandlers(rec *opRecorder, got *errBox) map[string]func(context.
 			return "", err
 		}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
 		"RunInChildContextAsync": Wrap(func(ctx Context, _ string) (string, error) {
-			_, err := RunInChildContextAsync(ctx, "child", body).Result()
+			_, err := RunInChildContextAsync(ctx, "child", body).Result(ctx)
 			got.set(err)
 			return "", err
 		}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
@@ -393,7 +393,7 @@ func callbackLifecycleHandler(rec *opRecorder, got *errBox) func(context.Context
 		if err != nil {
 			return "", err
 		}
-		out, err := cb.Result()
+		out, err := cb.Result(ctx)
 		got.set(err)
 		return out, err
 	}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
@@ -798,7 +798,7 @@ func TestOperationLifecycleContextAtMostOnePerInvocation(t *testing.T) {
 		child := RunInChildContextAsync(ctx, "child", func(c Context) (string, error) {
 			return Step(c, "s", func(StepContext) (string, error) { return "v", nil })
 		})
-		if _, err := child.Result(); err != nil {
+		if _, err := child.Result(ctx); err != nil {
 			return "", err
 		}
 		return WaitForCallback[string](ctx, "wfcb", func(StepContext, string) error { return nil })
@@ -847,7 +847,7 @@ func TestOperationLifecycleChildContextReplayedSucceededSerdesFailure(t *testing
 				return "", nil
 			}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
 			"RunInChildContextAsync": Wrap(func(ctx Context, _ string) (string, error) {
-				_, err := RunInChildContextAsync(ctx, "child", body, serdes).Result()
+				_, err := RunInChildContextAsync(ctx, "child", body, serdes).Result(ctx)
 				got.set(err)
 				return "", nil
 			}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),

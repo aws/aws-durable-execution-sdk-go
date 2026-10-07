@@ -345,7 +345,15 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 	if err != nil {
 		return zero, err
 	}
+	out, err := runClaimedChild(ec, id, name, subType, summary, options, fn)
+	ec.observeOutcome(id, err)
+	return out, err
+}
 
+// runClaimedChild is [RunInChildContext] for a checkpointed child context
+// whose operation ID id is already claimed on ec.
+func runClaimedChild[O any](ec *execContext, id, name, subType string, summary func(O) string, options childOptions, fn func(Context) (O, error)) (O, error) {
+	var zero O
 	op := ec.state.get(id)
 	if err := validateReplayConsistency(op, string(OperationTypeContext), subType, name); err != nil {
 		return zero, err
@@ -562,7 +570,7 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 		return newUnfinishedReplayFuture[O](ec.suspend)
 	}
 	if op != nil && op.status.terminal() {
-		return resolveTerminalChild[O](ec, op, id, name, subType, options, fn)
+		return resolveTerminalChild[O](ec, op, id, name, subType, options, fn).bind(ec.state, id)
 	}
 
 	// Checkpoint START if this is the first invocation of this child.
@@ -579,7 +587,7 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 	// Create the future and register it for suspension settlement before
 	// launching the goroutine. This ordering guarantees that a suspension
 	// fired between here and the goroutine start settles the future.
-	fut := newFuture[O]()
+	fut := newFuture[O]().bind(ec.state, id)
 	registerFuture(ec.suspend, fut)
 
 	// Determine child replay mode before launching the goroutine. This
@@ -785,6 +793,7 @@ func runVirtualChild[O any](ec *execContext, name, subType string, options child
 		}
 		return r, e
 	})
+	ec.observeChildLive(child, wrappedErr)
 	if wrappedErr != nil {
 		return zero, virtualChildFailure(ec, opInfo, name, options, wrappedErr, fnTrace)
 	}
@@ -869,6 +878,9 @@ func runVirtualChildAsync[O any](ec *execContext, name, subType string, options 
 			r, _ := wrappedResult.(O)
 			return r, nil
 		})
+		// The future is read only after it settles, so the child's mode
+		// is final when the reader asks for it.
+		fut.newOutcome = child.isLive
 		if fnErr != nil {
 			var zero O
 			fut.settle(zero, virtualChildFailure(ec, opInfo, name, options, fnErr, fnTrace))

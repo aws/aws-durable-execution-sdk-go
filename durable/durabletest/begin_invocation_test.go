@@ -94,11 +94,11 @@ func TestCallbackResolvedAfterPayloadBuiltResumesSameInvocation(t *testing.T) {
 			time.Sleep(300 * time.Millisecond)
 			return 1, nil
 		})
-		v, err := cb.Result()
+		v, err := cb.Result(ctx)
 		if err != nil {
 			return "", err
 		}
-		if _, err := long.Result(); err != nil {
+		if _, err := long.Result(ctx); err != nil {
 			return "", err
 		}
 		return v, nil
@@ -163,5 +163,71 @@ func TestStartedContextIsNotPending(t *testing.T) {
 	send(t, m, waitStart("w", 5))
 	if !m.hasPendingOperation() {
 		t.Fatal("a STARTED wait does not count as pending")
+	}
+}
+
+// TestUpdatedOperationIdsSinceLastSuccessfulInvocation checks the updated
+// list the client computes for each invocation payload. An operation is
+// listed when its record changed since the last successful invocation
+// ended. A failed invocation does not move that base, so the next payload
+// lists again what the failed invocation received.
+func TestUpdatedOperationIdsSinceLastSuccessfulInvocation(t *testing.T) {
+	m := newMemoryClient()
+	start := func(id string) {
+		send(t, m, durable.OperationUpdate{
+			Id: aws.String(id), Name: aws.String(id),
+			Type: durable.OperationTypeCallback, Action: durable.OperationActionStart,
+		})
+	}
+	resolve := func(id string) {
+		t.Helper()
+		m.mu.Lock()
+		cbID := *m.operations[id].CallbackDetails.CallbackId
+		m.mu.Unlock()
+		if err := m.completeCallback(cbID, operationResult{status: statusSucceeded, result: `"x"`}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	updated := func() []string {
+		_, _, ids := m.beginInvocationWithUpdates()
+		return ids
+	}
+	equal := func(a, b []string) bool {
+		if len(a) != len(b) {
+			return false
+		}
+		for i := range a {
+			if a[i] != b[i] {
+				return false
+			}
+		}
+		return true
+	}
+
+	// Invocation 1 starts both callbacks and succeeds.
+	if got := updated(); len(got) != 0 {
+		t.Fatalf("invocation 1 updated = %v, want none", got)
+	}
+	start("a")
+	start("b")
+	m.endInvocation(true)
+
+	// a resolves while suspended. Invocation 2 lists it, then fails.
+	resolve("a")
+	if got := updated(); !equal(got, []string{"a"}) {
+		t.Fatalf("invocation 2 updated = %v, want [a]", got)
+	}
+	m.endInvocation(false)
+
+	// b resolves. Invocation 3 lists a again and b, and succeeds.
+	resolve("b")
+	if got := updated(); !equal(got, []string{"a", "b"}) {
+		t.Fatalf("invocation 3 updated = %v, want [a b]", got)
+	}
+	m.endInvocation(true)
+
+	// Nothing changed since invocation 3.
+	if got := updated(); len(got) != 0 {
+		t.Fatalf("invocation 4 updated = %v, want none", got)
 	}
 }

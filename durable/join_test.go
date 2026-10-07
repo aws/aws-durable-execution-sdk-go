@@ -38,15 +38,15 @@ func TestJoinHeterogeneousSuccess(t *testing.T) {
 		if err := Join(ctx, "settle", []Awaitable{fa, fb, fc}); err != nil {
 			return "", err
 		}
-		n, err := fa.Result()
+		n, err := fa.Result(ctx)
 		if err != nil {
 			return "", err
 		}
-		s, err := fb.Result()
+		s, err := fb.Result(ctx)
 		if err != nil {
 			return "", err
 		}
-		flag, err := fc.Result()
+		flag, err := fc.Result(ctx)
 		if err != nil {
 			return "", err
 		}
@@ -134,7 +134,7 @@ func TestJoinDrainsSuspendedThenFailing(t *testing.T) {
 			if err != nil {
 				return "", err
 			}
-			return cb.Result()
+			return cb.Result(childCtx)
 		})
 		f2 := Go(ctx, "failer", func(childCtx Context) (int, error) {
 			if _, err := Step(childCtx, "trailing-step", func(StepContext) (int, error) {
@@ -173,7 +173,7 @@ func TestJoinFailingThenSuspendedPropagatesSuspension(t *testing.T) {
 			if err != nil {
 				return "", err
 			}
-			return cb.Result()
+			return cb.Result(childCtx)
 		})
 
 		err := Join(ctx, "settle", []Awaitable{f1, f2})
@@ -252,8 +252,8 @@ func TestJoinReplaySuccess(t *testing.T) {
 		if err := Join(ctx, "settle", []Awaitable{fa, fb}); err != nil {
 			return "", err
 		}
-		n, _ := fa.Result()
-		s, _ := fb.Result()
+		n, _ := fa.Result(ctx)
+		s, _ := fb.Result(ctx)
 		return s + "=" + strconv.Itoa(n), nil
 	})
 
@@ -350,7 +350,7 @@ func TestAwaitBarrierOrdering(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := awaitBarrier(tc.fs, tc.failFast)
+			err := awaitBarrier(nil, tc.fs, tc.failFast)
 			switch tc.want {
 			case "":
 				if err != nil {
@@ -381,7 +381,7 @@ func TestAwaitBarrierFailFastStopsAwaiting(t *testing.T) {
 			laterAwaited.Store(true)
 			later.settle(0, nil)
 		}
-		err := awaitBarrier([]Awaitable{newFailedFuture[int](errors.New("first")), later}, failFast)
+		err := awaitBarrier(nil, []Awaitable{newFailedFuture[int](errors.New("first")), later}, failFast)
 		if err == nil || err.Error() != "first" {
 			t.Fatalf("failFast=%v: awaitBarrier = %v, want first", failFast, err)
 		}

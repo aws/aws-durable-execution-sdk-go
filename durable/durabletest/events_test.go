@@ -223,7 +223,7 @@ func TestCallbackAndInvokeEvents(t *testing.T) {
 		if err != nil {
 			return "", err
 		}
-		approved, err := cb.Result()
+		approved, err := cb.Result(ctx)
 		if err != nil {
 			return "", err
 		}

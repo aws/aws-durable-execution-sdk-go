@@ -156,7 +156,7 @@ func findUpdate(batches [][]OperationUpdate, name string, action OperationAction
 func TestSuspendWaitsForRunningAsyncStep(t *testing.T) {
 	out := runSuspendWithRunningBranch(t, func(ctx Context, body func() (string, error)) func() (string, error) {
 		fut := StepAsync(ctx, "slow-step", func(_ StepContext) (string, error) { return body() })
-		return fut.Result
+		return func() (string, error) { return fut.Result(ctx) }
 	})
 	if out.status != invocationPending {
 		t.Fatalf("status = %q, want %q", out.status, invocationPending)
@@ -179,7 +179,7 @@ func TestSuspendWaitsForRunningGoBranch(t *testing.T) {
 		fut := Go(ctx, "slow-branch", func(c Context) (string, error) {
 			return Step(c, "inner-step", func(_ StepContext) (string, error) { return body() })
 		})
-		return fut.Result
+		return func() (string, error) { return fut.Result(ctx) }
 	})
 	if out.status != invocationPending {
 		t.Fatalf("status = %q, want %q", out.status, invocationPending)
@@ -206,7 +206,7 @@ func TestSuspendWaitsForRunningConditionCheck(t *testing.T) {
 					},
 				})
 		})
-		return fut.Result
+		return func() (string, error) { return fut.Result(ctx) }
 	})
 	if out.status != invocationPending {
 		t.Fatalf("status = %q, want %q", out.status, invocationPending)
@@ -268,7 +268,7 @@ func TestSuspendDrainEndsWhenContextEnds(t *testing.T) {
 			return "late", nil
 		})
 		go func() {
-			_, err := fut.Result()
+			_, err := fut.Result(ctx)
 			stepErr <- err
 		}()
 		<-bodyStarted
@@ -373,7 +373,7 @@ func TestSuspendDrainWaitsForStepStartedDuringSettle(t *testing.T) {
 		if err := Wait(ctx, "short-wait", time.Second); err != nil {
 			return "", err
 		}
-		return fut.Result()
+		return fut.Result(ctx)
 	}, withLambdaAPI(fake), withSuspendSettle(settle))
 
 	type response struct {

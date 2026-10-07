@@ -37,8 +37,12 @@ func (c *Callback[O]) ID() string {
 // invocation. The first poll is sent one second after Result blocks. When
 // nothing else can make progress, the invocation ends, and Result returns
 // the suspension signal, which must be returned unchanged.
-func (c *Callback[O]) Result() (O, error) {
-	return c.future.Result()
+//
+// ctx is the context of the code that reads the outcome, as for
+// [Future.Result]: when the previous invocation did not have the outcome,
+// ctx stops replaying.
+func (c *Callback[O]) Result(ctx Context) (O, error) {
+	return c.future.Result(ctx)
 }
 
 // CreateCallback creates a callback that an external system completes with
@@ -73,7 +77,16 @@ func CreateCallback[O any](ctx Context, name string, opts ...CallbackOption) (*C
 	if err != nil {
 		return nil, err
 	}
+	cb, err := createClaimedCallback[O](ec, id, name, options)
+	if cb != nil {
+		cb.future.bind(ec.state, id)
+	}
+	return cb, err
+}
 
+// createClaimedCallback is [CreateCallback] for a callback whose operation
+// ID id is already claimed on ec.
+func createClaimedCallback[O any](ec *execContext, id, name string, options callbackOptions) (*Callback[O], error) {
 	op := ec.state.get(id)
 	if err := validateReplayConsistency(op, string(OperationTypeCallback), OperationSubTypeCallback, name); err != nil {
 		return nil, err
@@ -176,7 +189,7 @@ func CreateCallback[O any](ctx Context, name string, opts ...CallbackOption) (*C
 
 	// Return a callback whose future starts watching it at the first
 	// Result call. This lets WaitForCallback run the submitter step
-	// between CreateCallback and cb.Result() in the same invocation.
+	// between CreateCallback and cb.Result(ctx) in the same invocation.
 	serdes := callbackDeserializerForOptions(ec, options)
 	fut := newPendingCallbackFuture(ec, id, func(settled *operation) (O, error) {
 		return observeCallbackOutcome[O](ec, settled, id, name, serdes, info)
@@ -221,6 +234,15 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 	if err != nil {
 		return zero, err
 	}
+	out, err := runClaimedWaitForCallback[O](ec, id, name, submitter, options)
+	ec.observeOutcome(id, err)
+	return out, err
+}
+
+// runClaimedWaitForCallback is [WaitForCallback] for an operation whose ID
+// id is already claimed on ec.
+func runClaimedWaitForCallback[O any](ec *execContext, id, name string, submitter func(ctx StepContext, callbackID string) error, options callbackOptions) (O, error) {
+	var zero O
 	// One snapshot serves the whole operation, so the result is written
 	// and read back with the same serdes.
 	serdes := ec.serdesDefaults().serdes
@@ -375,7 +397,7 @@ func runWaitForCallbackBody[O any](child *execContext, name string, submitter fu
 	}
 
 	// Step 3: await the callback result.
-	result, cbErr := cb.Result()
+	result, cbErr := cb.Result(child)
 	if cbErr != nil {
 		return zero, cbErr
 	}

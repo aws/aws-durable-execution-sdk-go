@@ -89,7 +89,9 @@ func Step[O any](ctx Context, name string, fn func(StepContext) (O, error), opts
 	if err != nil {
 		return zero, err
 	}
-	return runStep(ec, id, name, fn, options)
+	out, err := runStep(ec, id, name, fn, options)
+	ec.observeOutcome(id, err)
+	return out, err
 }
 
 // StepAsync is [Step], except that fn runs concurrently and the result is
@@ -120,7 +122,7 @@ func StepAsync[O any](ctx Context, name string, fn func(StepContext) (O, error),
 		return newUnfinishedReplayFuture[O](ec.suspend)
 	}
 
-	fut := newFuture[O]()
+	fut := newFuture[O]().bind(ec.state, id)
 	registerFuture(ec.suspend, fut)
 
 	// Snapshot the serializer and logging defaults on the owning goroutine:

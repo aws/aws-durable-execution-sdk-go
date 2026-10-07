@@ -169,7 +169,7 @@ func TestCreateCallbackDefaultDeserialization(t *testing.T) {
 			if err != nil {
 				return "", err
 			}
-			return cb.Result()
+			return cb.Result(ctx)
 		})
 		if resp.Status != invocationSucceeded {
 			t.Fatalf("status = %q, want SUCCEEDED", resp.Status)
@@ -186,7 +186,7 @@ func TestCreateCallbackDefaultDeserialization(t *testing.T) {
 			if err != nil {
 				return "", err
 			}
-			n, err := cb.Result()
+			n, err := cb.Result(ctx)
 			if err != nil {
 				return "", err
 			}
@@ -208,7 +208,7 @@ func TestCreateCallbackDefaultDeserialization(t *testing.T) {
 			if err != nil {
 				return "", err
 			}
-			_, resultErr = cb.Result()
+			_, resultErr = cb.Result(ctx)
 			return "", resultErr
 		})
 		if resp.Status != invocationFailed {

@@ -335,7 +335,7 @@ func TestChildContextAsyncFailureRecordsStackTrace(t *testing.T) {
 	fake := &fakeLambda{}
 	var childErr *ChildContextError
 	resp := invokeStep(t, fake, stepPayload(`""`), func(ctx Context, _ string) (string, error) {
-		_, err := Go(ctx, "child", childBodyFails).Result()
+		_, err := Go(ctx, "child", childBodyFails).Result(ctx)
 		if !errors.As(err, &childErr) {
 			t.Errorf("Go().Result() error = %v, want *ChildContextError", err)
 		}

@@ -100,7 +100,7 @@ func TestResetClearsOpenCallbacksAndPreservesConfig(t *testing.T) {
 		if err != nil {
 			return "", err
 		}
-		v, err := cb.Result()
+		v, err := cb.Result(ctx)
 		return prefix + v, err
 	}
 
@@ -486,7 +486,7 @@ func TestFormatTreeLocalRunTimings(t *testing.T) {
 			if err != nil {
 				return "", err
 			}
-			v, err := cb.Result()
+			v, err := cb.Result(c)
 			return s + v, err
 		})
 	}
@@ -589,7 +589,7 @@ func TestFormatTreeLocalRunUnsettledOperationHasNoEnd(t *testing.T) {
 		if err != nil {
 			return "", err
 		}
-		return cb.Result()
+		return cb.Result(ctx)
 	}
 	runner := durabletest.NewLocalRunner(handler)
 	result, err := runner.RunUntilComplete("go")

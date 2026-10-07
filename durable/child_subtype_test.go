@@ -22,7 +22,7 @@ func childSubTypeHandlers(opts ...ChildOption) map[string]Handler[string, string
 			return RunInChildContext(ctx, "child", body, opts...)
 		},
 		"Go": func(ctx Context, _ string) (string, error) {
-			return Go(ctx, "child", body, opts...).Result()
+			return Go(ctx, "child", body, opts...).Result(ctx)
 		},
 	}
 }

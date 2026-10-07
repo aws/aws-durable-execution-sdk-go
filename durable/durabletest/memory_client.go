@@ -5,6 +5,7 @@ package durabletest
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"sync"
@@ -83,6 +84,18 @@ type memoryClient struct {
 	// its response every invoke the targets settled.
 	startInvokes func([]openInvoke)
 
+	// delivered holds, per operation ID, the record of the operation as the
+	// current invocation last received it: in its payload or in a
+	// checkpoint response. settled holds the same map as it stood when
+	// the last successful invocation ended. The next invocation payload
+	// lists, as updated, every operation whose record differs from
+	// settled, as the service does: an operation whose state changed
+	// since the last successful invocation. A failed invocation leaves
+	// settled unchanged, so the next payload lists again what the failed
+	// invocation received.
+	delivered map[string]string
+	settled   map[string]string
+
 	// checkpointedEnd holds the outcome the handler checkpointed on the
 	// execution operation, which it does when a result is too large to
 	// return inline. The terminal event is not recorded at checkpoint
@@ -143,6 +156,8 @@ func (m *memoryClient) resetLocked() {
 	m.clock = time.Now().UTC()
 	m.changed = nil
 	m.tokenWithheld = false
+	m.delivered = make(map[string]string)
+	m.settled = make(map[string]string)
 }
 
 // nowLocked returns the client's virtual clock. Caller must hold m.mu.
@@ -189,12 +204,55 @@ func (m *memoryClient) markChangedLocked(id string) {
 // is either in the snapshot or in the change list the next checkpoint
 // response reports. It is never lost between the two.
 func (m *memoryClient) beginInvocation() ([]operationSnapshot, string) {
+	ops, token, _ := m.beginInvocationWithUpdates()
+	return ops, token
+}
+
+// beginInvocationWithUpdates is beginInvocation that also returns the IDs
+// of the operations the payload lists as updated: those whose record
+// changed since the last successful invocation ended, in insertion order.
+func (m *memoryClient) beginInvocationWithUpdates() ([]operationSnapshot, string, []string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	ops := m.snapshotLocked()
 	m.changed = nil
 	m.tokenWithheld = false
-	return ops, m.token
+	var updated []string
+	m.delivered = make(map[string]string, len(ops))
+	for _, op := range ops {
+		record := snapshotRecord(op)
+		if m.settled[op.ID] != record {
+			updated = append(updated, op.ID)
+		}
+		m.delivered[op.ID] = record
+	}
+	return ops, m.token, updated
+}
+
+// endInvocation records how the current invocation ended. A successful
+// invocation makes the records it received the base the next payload's
+// updated operations are computed from.
+func (m *memoryClient) endInvocation(successful bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !successful {
+		return
+	}
+	m.settled = make(map[string]string, len(m.delivered))
+	for id, record := range m.delivered {
+		m.settled[id] = record
+	}
+}
+
+// snapshotRecord returns the record of an operation as an invocation
+// receives it, in a form two records compare by.
+func snapshotRecord(op operationSnapshot) string {
+	b, err := json.Marshal(apiOperationToWire(op))
+	if err != nil {
+		// The wire shape holds only strings, numbers, and booleans.
+		panic(fmt.Sprintf("durabletest: encode operation record: %v", err))
+	}
+	return string(b)
 }
 
 // Checkpoint validates the operation updates against the service's limits,
@@ -271,6 +329,12 @@ func (m *memoryClient) Checkpoint(_ context.Context, in durable.CheckpointInput)
 		}
 	}
 	m.changed = nil
+	for _, op := range updated {
+		if op.Type == durable.OperationTypeExecution {
+			continue
+		}
+		m.delivered[ptrStr(op.Id)] = snapshotRecord(operationToSnapshot(op))
+	}
 
 	// Rotate token.
 	m.tokenSeq++

@@ -41,7 +41,7 @@ func handler(ctx durable.Context, _ any) (string, error) {
 		durable.WithChildVirtual(),
 		durable.WithChildSerdes(uppercaseSerdes{}))
 
-	return f.Result()
+	return f.Result(ctx)
 }
 
 func main() { durable.Start(handler) }

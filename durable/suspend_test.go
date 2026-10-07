@@ -27,8 +27,8 @@ func TestActiveBranchAccountingSiblingContinues(t *testing.T) {
 			})
 		})
 		// Wait for both.
-		_, _ = futA.Result()
-		_, _ = futB.Result()
+		_, _ = futA.Result(ctx)
+		_, _ = futB.Result(ctx)
 		return "", nil
 	})
 
@@ -72,7 +72,7 @@ func TestPendingCallbackInGoChildSuspendsWithSiblingProgress(t *testing.T) {
 			if err != nil {
 				return "", err
 			}
-			return cb.Result()
+			return cb.Result(childCtx)
 		})
 		fastBranch := Go(ctx, "fast-branch", func(childCtx Context) (string, error) {
 			return Step(childCtx, "fast-step", func(_ StepContext) (string, error) {
@@ -81,8 +81,8 @@ func TestPendingCallbackInGoChildSuspendsWithSiblingProgress(t *testing.T) {
 		})
 		// Await the fast branch first so its checkpoints are recorded
 		// deterministically before the callback branch suspends.
-		_, _ = fastBranch.Result()
-		_, _ = cbBranch.Result()
+		_, _ = fastBranch.Result(ctx)
+		_, _ = cbBranch.Result(ctx)
 		return "", nil
 	})
 
@@ -134,7 +134,7 @@ func TestActiveBranchAccountingNoHang(t *testing.T) {
 			name: "wait-async-blocking",
 			handler: func(ctx Context, _ string) (string, error) {
 				fut := WaitAsync(ctx, "wa", time.Second)
-				_, err := fut.Result()
+				_, err := fut.Result(ctx)
 				return "", err
 			},
 		},
@@ -142,7 +142,7 @@ func TestActiveBranchAccountingNoHang(t *testing.T) {
 			name: "invoke-async-blocking",
 			handler: func(ctx Context, _ string) (string, error) {
 				fut := InvokeAsync[string](ctx, "ia", "arn:target", "x")
-				_, err := fut.Result()
+				_, err := fut.Result(ctx)
 				return "", err
 			},
 		},
@@ -153,7 +153,7 @@ func TestActiveBranchAccountingNoHang(t *testing.T) {
 				if err != nil {
 					return "", err
 				}
-				_, err = cb.Result()
+				_, err = cb.Result(ctx)
 				return "", err
 			},
 		},
@@ -163,7 +163,7 @@ func TestActiveBranchAccountingNoHang(t *testing.T) {
 				fut := Go(ctx, "child", func(childCtx Context) (string, error) {
 					return "", Wait(childCtx, "inner-wait", time.Second)
 				})
-				_, err := fut.Result()
+				_, err := fut.Result(ctx)
 				return "", err
 			},
 		},
@@ -175,9 +175,9 @@ func TestActiveBranchAccountingNoHang(t *testing.T) {
 					if err != nil {
 						return "", err
 					}
-					return cb.Result()
+					return cb.Result(childCtx)
 				})
-				_, err := fut.Result()
+				_, err := fut.Result(ctx)
 				return "", err
 			},
 		},
@@ -227,7 +227,7 @@ func TestActiveBranchAccountingHandlerSuccessNotBlocked(t *testing.T) {
 			// WaitAsync with a pre-completed wait (SUCCEEDED on replay).
 			// The async goroutine completes immediately.
 			fut := WaitAsync(ctx, "w", time.Second)
-			_, _ = fut.Result()
+			_, _ = fut.Result(ctx)
 			return "done", nil
 		})
 
@@ -251,7 +251,7 @@ func TestActiveBranchAccountingConcurrentDeregister(t *testing.T) {
 			})
 		}
 		// All branches block; wait for one to unwind.
-		_, err := futures[0].Result()
+		_, err := futures[0].Result(ctx)
 		return "", err
 	})
 
@@ -273,7 +273,7 @@ func TestActiveBranchDoubleDeregisterSafe(t *testing.T) {
 		if err != nil {
 			return "", err
 		}
-		_, err = cb.Result()
+		_, err = cb.Result(ctx)
 		return "", err
 	})
 
@@ -331,7 +331,7 @@ func TestAsyncOperationDoesNotBlockCaller(t *testing.T) {
 				if err := runAfterStep(ctx); err != nil {
 					return "", err
 				}
-				if _, err := fut.Result(); !errors.Is(err, errSuspendExecution) {
+				if _, err := fut.Result(ctx); !errors.Is(err, errSuspendExecution) {
 					return "", errors.New("async wait did not become pending")
 				}
 				return "", errSuspendExecution
@@ -355,7 +355,7 @@ func TestAsyncOperationDoesNotBlockCaller(t *testing.T) {
 				if err := runAfterStep(ctx); err != nil {
 					return "", err
 				}
-				if _, err := fut.Result(); !errors.Is(err, errSuspendExecution) {
+				if _, err := fut.Result(ctx); !errors.Is(err, errSuspendExecution) {
 					return "", errors.New("async step did not become pending")
 				}
 				return "", errSuspendExecution
@@ -377,7 +377,7 @@ func TestAsyncOperationDoesNotBlockCaller(t *testing.T) {
 				if err := runAfterStep(ctx); err != nil {
 					return "", err
 				}
-				if _, err := fut.Result(); !errors.Is(err, errSuspendExecution) {
+				if _, err := fut.Result(ctx); !errors.Is(err, errSuspendExecution) {
 					return "", errors.New("async invoke did not become pending")
 				}
 				return "", errSuspendExecution
@@ -425,7 +425,7 @@ func TestAbandonedGoChildCheckpointRefused(t *testing.T) {
 			if err != nil {
 				return "", err
 			}
-			return cb.Result()
+			return cb.Result(childCtx)
 		})
 
 		// childB: blocked in non-durable work; will attempt a step
@@ -545,7 +545,7 @@ func TestSuspendSignalLateFutureSettlesWithSuspendError(t *testing.T) {
 	if !late.settled() {
 		t.Fatal("future registered after fire() was not settled")
 	}
-	_, err := late.Result()
+	_, err := late.Result(nil)
 	if !errors.Is(err, errSuspendExecution) {
 		t.Fatalf("late future error = %v, want errSuspendExecution", err)
 	}

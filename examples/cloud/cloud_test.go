@@ -12,6 +12,9 @@
 // example declares in expectations.go. The example list is parsed from
 // build.sh so there is a single source of truth.
 //
+// An example that declares logLines also has its log records read from
+// the function's log group and counted per message.
+//
 // The execution's operation signature is then compared with the golden
 // file the example's local handler test asserts, using the comparison
 // mode that test declares (see extest.ParseHandlerTest). An example whose
@@ -44,6 +47,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 
@@ -73,6 +77,7 @@ func TestExamples(t *testing.T) {
 		t.Fatalf("load AWS config: %v", err)
 	}
 	client := lambda.NewFromConfig(cfg)
+	logs := cloudwatchlogs.NewFromConfig(cfg)
 	prefix := os.Getenv("FUNCTION_NAME_PREFIX")
 
 	payload, err := os.ReadFile("../event.json")
@@ -134,6 +139,9 @@ func TestExamples(t *testing.T) {
 				got.errorType = aws.ToString(final.Error.ErrorType)
 			}
 			exp.assert(t, got)
+			if exp.logLines != nil {
+				assertLogLines(ctx, t, logs, functionName, arn, exp.logLines)
+			}
 
 			assertSignature(t, client, name, arn)
 		})

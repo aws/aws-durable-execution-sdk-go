@@ -46,7 +46,9 @@ func Wait(ctx Context, name string, d time.Duration, opts ...WaitOption) error {
 		return err
 	}
 
-	return runWait(ec, id, name, d)
+	err = runWait(ec, id, name, d)
+	ec.observeOutcome(id, err)
+	return err
 }
 
 // WaitAsync is [Wait], except that the wait completes through the returned
@@ -74,7 +76,7 @@ func WaitAsync(ctx Context, name string, d time.Duration, opts ...WaitOption) *F
 		return newUnfinishedReplayFuture[Void](ec.suspend)
 	}
 
-	fut := newFuture[Void]()
+	fut := newFuture[Void]().bind(ec.state, id)
 	registerFuture(ec.suspend, fut)
 
 	// Snapshot the serializer and logging defaults on the owning goroutine:

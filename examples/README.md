@@ -173,6 +173,7 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [serde-preview-field-selection](serde-preview-field-selection/main.go) | NewFileSystemSerdes, GeneratePreview, BuildPreview (exclude-all, path matching, masking) | SUCCEEDED |
 | [logger-after-wait](logger-after-wait/main.go) | Wait, Context.Logger, replay suppression | SUCCEEDED |
 | [logger-after-callback](logger-after-callback/main.go) | WaitForCallback, Context.Logger | SUCCEEDED |
+| [logger-exactly-once](logger-exactly-once/main.go) | Context.Logger after every kind of awaited outcome, Result(ctx) in a Go branch, a crashed invocation | SUCCEEDED |
 | [logger-log-levels](logger-log-levels/main.go) | Context.Logger, all log levels | SUCCEEDED |
 | [logger-slog-handler](logger-slog-handler/main.go) | WithLogHandler, application slog.Handler | SUCCEEDED |
 | [plugin-lifecycle](plugin-lifecycle/main.go) | WithPlugins, hook lifecycle ordering | SUCCEEDED |

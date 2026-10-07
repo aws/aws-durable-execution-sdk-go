@@ -17,7 +17,7 @@ func parentInChild(ctx durable.Context) {
 	fut := durable.Go(ctx, "go", func(child durable.Context) (string, error) {
 		return durable.Step(ctx, "s", work) // want `durable.Step uses ctx from an enclosing scope inside a function that receives its own Context; use child`
 	})
-	_, _ = fut.Result()
+	_, _ = fut.Result(ctx)
 
 	_, _ = durable.Map(ctx, "map", []int{1, 2}, func(c durable.Context, item int, index int) (string, error) {
 		return durable.Step(ctx, "s", work) // want `durable.Step uses ctx from an enclosing scope inside a function that receives its own Context; use c`
@@ -104,7 +104,7 @@ func okCases(ctx durable.Context) {
 	fut := durable.Go(ctx, "go", func(child durable.Context) (string, error) {
 		return durable.Step(child, "s", work)
 	})
-	_, _ = fut.Result()
+	_, _ = fut.Result(ctx)
 
 	// Operations on the handler's own Context.
 	_, _ = durable.Step(ctx, "top", work)

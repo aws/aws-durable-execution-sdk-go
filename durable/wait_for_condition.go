@@ -58,7 +58,9 @@ func WaitForCondition[S any](ctx Context, name string, check func(StepContext, S
 		return zero, err
 	}
 
-	return runWaitForCondition(ec, id, name, check, cfg, serdes)
+	state, err := runWaitForCondition(ec, id, name, check, cfg, serdes)
+	ec.observeOutcome(id, err)
+	return state, err
 }
 
 // runWaitForCondition drives one wait-for-condition operation from its

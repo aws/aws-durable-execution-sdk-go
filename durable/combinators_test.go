@@ -775,7 +775,7 @@ func TestAllDrainsSuspendedSiblings(t *testing.T) {
 			if err != nil {
 				return "", err
 			}
-			return cb.Result()
+			return cb.Result(childCtx)
 		})
 
 		// Child 2: run a submitter step, then create a callback and
@@ -791,7 +791,7 @@ func TestAllDrainsSuspendedSiblings(t *testing.T) {
 			if err != nil {
 				return "", err
 			}
-			return cb.Result()
+			return cb.Result(childCtx)
 		})
 
 		_, err := All(ctx, "all-drain", []*Future[string]{f1, f2})
@@ -823,7 +823,7 @@ func TestAllSuspendThenTerminalPropagatesSuspension(t *testing.T) {
 			if err != nil {
 				return "", err
 			}
-			return cb.Result()
+			return cb.Result(childCtx)
 		})
 		f2 := newSettledFuture("ok", nil)
 		f3 := newFailedFuture[string](errors.New("real-failure"))
@@ -856,7 +856,7 @@ func TestAllDrainsAfterRealError(t *testing.T) {
 			if err != nil {
 				return "", err
 			}
-			return cb.Result()
+			return cb.Result(childCtx)
 		})
 
 		// f2: pre-settled with a real error.
@@ -874,7 +874,7 @@ func TestAllDrainsAfterRealError(t *testing.T) {
 			if err != nil {
 				return "", err
 			}
-			return cb.Result()
+			return cb.Result(childCtx)
 		})
 		_, err := All(ctx, "all-err-drain", []*Future[string]{f1, f2, f3})
 		errCh <- err
@@ -945,7 +945,7 @@ func TestAllSettledSuspendThenTerminalPropagatesSuspension(t *testing.T) {
 			if err != nil {
 				return "", err
 			}
-			return cb.Result()
+			return cb.Result(childCtx)
 		})
 		f2 := Go(ctx, "settler", func(childCtx Context) (string, error) {
 			return Step(childCtx, "settle-step", func(_ StepContext) (string, error) {
@@ -1145,7 +1145,7 @@ func TestAnySuspendThenWinnerPropagatesSuspension(t *testing.T) {
 			if err != nil {
 				return "", err
 			}
-			return cb.Result()
+			return cb.Result(childCtx)
 		})
 
 		// f2: succeeds only after the suspension is observed.
@@ -1191,7 +1191,7 @@ func TestAnyThreeFutureSuspendThenFail(t *testing.T) {
 			if err != nil {
 				return "", err
 			}
-			return cb.Result()
+			return cb.Result(childCtx)
 		})
 		f2 := newFailedFuture[string](errors.New("fail-1"))
 		f3 := newFailedFuture[string](errors.New("fail-2"))
@@ -1232,7 +1232,7 @@ func TestRaceSuspendThenTerminalPropagatesSuspension(t *testing.T) {
 			if err != nil {
 				return "", err
 			}
-			return cb.Result()
+			return cb.Result(childCtx)
 		})
 
 		// f2: succeeds only after the suspension is observed.

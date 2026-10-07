@@ -9,7 +9,7 @@ func handler(ctx durable.Context, name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return cb.Result()
+	return cb.Result(ctx)
 }
 
 func main() { durable.Start(handler) }

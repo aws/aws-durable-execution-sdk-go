@@ -46,7 +46,7 @@ func operationSubTypeCases() []subTypeCase {
 			if err != nil {
 				return "", err
 			}
-			return cb.Result()
+			return cb.Result(ctx)
 		}},
 		{OperationSubTypeChainedInvoke, OperationTypeChainedInvoke, func(ctx Context, event string) (string, error) {
 			return Invoke[string](ctx, "op", "target-function", event)

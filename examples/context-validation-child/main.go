@@ -24,7 +24,7 @@ func handler(ctx durable.Context, _ any) (string, error) {
 	f1 := durable.StepAsync(ctx, "correct-step", func(_ durable.StepContext) (string, error) {
 		return "this works", nil
 	})
-	_, err := f1.Result()
+	_, err := f1.Result(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -40,7 +40,7 @@ func handler(ctx durable.Context, _ any) (string, error) {
 		})
 	})
 
-	result, err := f2.Result()
+	result, err := f2.Result(ctx)
 	if err != nil {
 		return "", err
 	}

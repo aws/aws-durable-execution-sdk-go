@@ -175,7 +175,7 @@ func TestSuspendWaitsForConcurrentMapItemCompletion(t *testing.T) {
 				}
 				return res.Results()[0], nil
 			})
-			return fut.Result
+			return func() (string, error) { return fut.Result(ctx) }
 		})
 	requireBranchCompletionRecorded(t, out, "inner-step", "item-0", "items", "mapper")
 }
@@ -194,7 +194,7 @@ func TestSuspendWaitsForSequentialMapItemCompletion(t *testing.T) {
 				}
 				return res.Results()[0], nil
 			})
-			return fut.Result
+			return func() (string, error) { return fut.Result(ctx) }
 		})
 	requireBranchCompletionRecorded(t, out, "inner-step", "item-0", "items", "mapper")
 }
@@ -216,7 +216,7 @@ func TestSuspendWaitsForParallelParentCompletion(t *testing.T) {
 				}
 				return res.Results()[0], nil
 			})
-			return fut.Result
+			return func() (string, error) { return fut.Result(ctx) }
 		})
 	requireBranchCompletionRecorded(t, out, "inner-step", "slow", "fan-out", "runner")
 }
@@ -244,7 +244,7 @@ func TestSuspendWaitsForCallbackContextCompletion(t *testing.T) {
 					return err
 				})
 			})
-			return fut.Result
+			return func() (string, error) { return fut.Result(ctx) }
 		})
 	requireBranchCompletionRecorded(t, out, "cb", "cb-branch")
 	succeed := findUpdate(out.batches, "cb", OperationActionSucceed)

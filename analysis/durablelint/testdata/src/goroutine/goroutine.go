@@ -38,7 +38,7 @@ func goStatement(ctx durable.Context) {
 		fut := durable.Go(ctx, "f", func(child durable.Context) (string, error) { // want `durable.Go runs on a goroutine started by the go statement`
 			return durable.Step(child, "g", work)
 		})
-		_, _ = fut.Result()
+		_, _ = fut.Result(ctx)
 	}()
 }
 
@@ -75,11 +75,11 @@ func okCases(ctx durable.Context) error {
 	fut := durable.Go(ctx, "go", func(child durable.Context) (string, error) {
 		return durable.Step(child, "s", work)
 	})
-	_, _ = fut.Result()
+	_, _ = fut.Result(ctx)
 
 	// Async variants run their body on an SDK goroutine.
 	f2 := durable.StepAsync(ctx, "async", work)
-	_, _ = f2.Result()
+	_, _ = f2.Result(ctx)
 
 	// A goroutine that does no durable work is fine.
 	var g errgroup.Group

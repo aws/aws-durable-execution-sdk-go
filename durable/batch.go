@@ -99,7 +99,14 @@ func Map[I, O any](ctx Context, name string, items []I, fn func(ctx Context, ite
 		return BatchResult[O]{}, err
 	}
 	options.itemID = batchItemIDs(ec, id, options.nesting)
+	result, err := runClaimedMap(ec, id, name, items, fn, options)
+	ec.observeOutcome(id, err)
+	return result, err
+}
 
+// runClaimedMap is [Map] for a batch whose operation ID id is already
+// claimed on ec.
+func runClaimedMap[I, O any](ec *execContext, id, name string, items []I, fn func(ctx Context, item I, index int) (O, error), options batchOptions) (BatchResult[O], error) {
 	// Check if the batch is already checkpointed as a terminal operation.
 	op := ec.state.get(id)
 	if err := validateReplayConsistency(op, string(OperationTypeContext), OperationSubTypeMap, name); err != nil {
@@ -196,7 +203,14 @@ func Parallel[O any](ctx Context, name string, branches []Branch[O], opts ...Bat
 		return BatchResult[O]{}, err
 	}
 	options.itemID = batchItemIDs(ec, id, options.nesting)
+	result, err := runClaimedParallel(ec, id, name, branches, options)
+	ec.observeOutcome(id, err)
+	return result, err
+}
 
+// runClaimedParallel is [Parallel] for a batch whose operation ID id is
+// already claimed on ec.
+func runClaimedParallel[O any](ec *execContext, id, name string, branches []Branch[O], options batchOptions) (BatchResult[O], error) {
 	// Check if the batch is already checkpointed as a terminal operation.
 	op := ec.state.get(id)
 	if err := validateReplayConsistency(op, string(OperationTypeContext), OperationSubTypeParallel, name); err != nil {

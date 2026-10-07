@@ -143,7 +143,7 @@ func TestCallbackTimedOutSentinelOnLiveAndReplay(t *testing.T) {
 		if err != nil {
 			return "", err
 		}
-		_, err = cb.Result()
+		_, err = cb.Result(ctx)
 		if err == nil {
 			return "", errors.New("callback succeeded, want timeout")
 		}

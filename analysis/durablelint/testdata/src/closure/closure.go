@@ -95,7 +95,7 @@ func writesInChild(ctx durable.Context) {
 		result = "x" // want `result is declared outside this child context function`
 		return result, nil
 	})
-	_, _ = fut.Result()
+	_, _ = fut.Result(ctx)
 
 	_, _ = durable.Map(ctx, "map", []int{1, 2}, func(c durable.Context, item int, index int) (string, error) {
 		counter += item // want `counter is declared outside this child context function`

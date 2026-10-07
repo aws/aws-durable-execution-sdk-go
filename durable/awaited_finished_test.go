@@ -200,7 +200,7 @@ func awaitedFinishedCases() []awaitedFinishedCase {
 				if err := longStep(ctx); err != nil {
 					return "", err
 				}
-				_, err := pause.Result()
+				_, err := pause.Result(ctx)
 				return "done", err
 			}},
 		{"02 WaitForCallback whose submitter completes the callback",
@@ -217,7 +217,7 @@ func awaitedFinishedCases() []awaitedFinishedCase {
 				if err := longStep(ctx); err != nil {
 					return "", err
 				}
-				return inv.Result()
+				return inv.Result(ctx)
 			}},
 		{"04 Invoke whose START response already reports it failed",
 			[]*reportRule{{onType: durable.OperationTypeChainedInvoke, onAction: durable.OperationActionStart,
@@ -255,7 +255,7 @@ func awaitedFinishedCases() []awaitedFinishedCase {
 				if err := longStep(ctx); err != nil {
 					return "", err
 				}
-				return bg.Result()
+				return bg.Result(ctx)
 			}},
 		{"08 Join over a WaitAsync and a StepAsync", waitDone, "SUCCEEDED",
 			func(ctx durable.Context, _ struct{}) (string, error) {
@@ -267,7 +267,7 @@ func awaitedFinishedCases() []awaitedFinishedCase {
 				if err := durable.Join(ctx, "both", []durable.Awaitable{pause, work}); err != nil {
 					return "", err
 				}
-				return work.Result()
+				return work.Result(ctx)
 			}},
 		{"09 StepAsync retry whose next attempt becomes due while another step runs",
 			onWorkDone("", "flaky", durable.OperationStatusReady), "SUCCEEDED",
@@ -286,7 +286,7 @@ func awaitedFinishedCases() []awaitedFinishedCase {
 				if err := longStep(ctx); err != nil {
 					return "", err
 				}
-				return flaky.Result()
+				return flaky.Result(ctx)
 			}},
 		{"10 WaitForCondition whose next check becomes due while a step runs",
 			onWorkDone("", "until-ready", durable.OperationStatusReady), "SUCCEEDED",
@@ -302,7 +302,7 @@ func awaitedFinishedCases() []awaitedFinishedCase {
 				if err := longStep(ctx); err != nil {
 					return "", err
 				}
-				n, err := poll.Result()
+				n, err := poll.Result(ctx)
 				return fmt.Sprint(n), err
 			}},
 	}

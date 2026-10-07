@@ -286,7 +286,7 @@ func TestRegisteredDurableTargetBlockedOnCallbackStaysOpen(t *testing.T) {
 		if err != nil {
 			return priceQuote{}, err
 		}
-		if _, err := cb.Result(); err != nil {
+		if _, err := cb.Result(ctx); err != nil {
 			return priceQuote{}, err
 		}
 		return priceQuote{SKU: req.SKU}, nil

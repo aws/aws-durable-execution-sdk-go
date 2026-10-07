@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### Changed: every log line is written exactly once, and `Result` takes a context
+
+A line that ran for the first time after an awaited operation was dropped
+as replayed. For example, a line after the last `Wait` of a handler was
+written in no invocation, and `IsReplaying` returned true on it. The SDK
+decided that code was live only when the code started an operation with
+no checkpoint.
+
+A context now also becomes live when its code receives the outcome of an
+operation that the previous invocation did not have. That is an operation
+the invocation payload lists in `UpdatedOperationIds`, or one that
+completed during the current invocation. So every line is written exactly
+once, in the invocation that first runs it, and `IsReplaying` reports
+false there. A line is written twice only after a failed invocation: the
+next invocation writes again the lines the failed one ran after it
+received an outcome.
+
+`Future.Result`, `Callback.Result`, and the `Awaitable` interface now take
+the `durable.Context` of the code that reads the outcome. Write
+`fut.Result(ctx)` instead of `fut.Result()`. Inside a `Go` branch, pass
+the branch's context, also for a future the parent created.
+
+The `durabletest` local runner now sets `UpdatedOperationIds` on each
+invocation as the service does: the operations whose state changed since
+the last successful invocation.
+
 ### Changed: the local test runner validates checkpoints and reports completions as the service does
 
 The `durabletest` local runner now rejects every checkpoint update the

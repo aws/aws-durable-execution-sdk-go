@@ -92,10 +92,31 @@ The state always contains at least one operation (the root `EXECUTION`
 record). If additional operations exist, prior work has been checkpointed
 and the context enters replay.
 
-Before each operation, `refreshReplayMode` checks whether the next
-positional ID has a checkpoint entry. If it does, the operation returns the
-stored result. If not, the context transitions to live execution mode for
-that operation and all subsequent ones.
+A context switches from replay to live execution, and never back, at the
+first of two points:
+
+1. **Claim.** Before each operation, `refreshReplayMode` checks whether the
+   next positional ID has a checkpoint entry. If it does, the operation
+   returns the stored result. If not, the context transitions to live
+   execution mode for that operation and all subsequent ones.
+2. **New outcome.** When an operation's outcome returns to user code,
+   `observeOutcome` checks whether the previous invocation had that
+   outcome. It did not when the invocation payload lists the operation in
+   `UpdatedOperationIds`, or when the operation was not terminal in the
+   state the invocation started from. Code that receives such an outcome
+   runs for the first time, so the context switches to live. The hook runs
+   when a blocking operation returns, in `Future.Result` and
+   `Callback.Result` on the context passed in, and when a combinator,
+   `Map`, `Parallel`, or `WaitForCallback` returns.
+
+An invocation suspends only while an operation the code awaits is pending.
+That operation completes while the execution is suspended, so the next
+invocation lists it as updated. Every outcome the code received before
+that await was already available, so the code up to the await replays and
+the code after it is live. Each line therefore runs live in exactly one
+invocation. The exception is a failed invocation: the next invocation's
+`UpdatedOperationIds` also lists the outcomes the failed invocation
+received, so the code that ran after them is live again.
 
 ## Suspension
 
@@ -159,7 +180,7 @@ commitment stands. Firing does two things:
 
 1. Closes an internal channel so the handler's select notices immediately.
 2. Settles all registered in-flight futures with `errSuspendExecution` so
-   goroutines blocked on `Future.Result()` unwind without hanging.
+   goroutines blocked on `Future.Result` unwind without hanging.
 
 So the commitment and the firing are separate events, and `committed()` can
 be true well before `fired()` is. Code that needs to know the invocation
@@ -498,11 +519,11 @@ has three key properties:
    settlement is safe by construction.
 
 2. **Re-readable.** The done channel is closed on settlement. Any number of
-   goroutines can call `Result()` after settlement and receive the same
+   goroutines can call `Result` after settlement and receive the same
    value without blocking.
 
 3. **Deferred suspension.** Callback futures attach a `preResult` hook. The
-   suspend signal fires only when `Result()` is actually called, allowing
+   suspend signal fires only when `Result` is actually called, allowing
    intervening operations (like a submitter step) to execute in the same
    invocation before the function suspends.
 
@@ -517,7 +538,7 @@ fut := durable.Go(ctx, "work", func(child durable.Context) (T, error) {
     // This runs on a new goroutine with its own Context.
     return doWork(child)
 })
-result, err := fut.Result()
+result, err := fut.Result(ctx)
 ```
 
 The sequence is:

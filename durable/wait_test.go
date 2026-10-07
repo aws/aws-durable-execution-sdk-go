@@ -243,7 +243,7 @@ func TestWaitAppliesOptions(t *testing.T) {
 		if err := Wait(ctx, "sync", time.Second, countingWaitOption{&syncApplied}); err != nil {
 			return "", err
 		}
-		_, err := fut.Result()
+		_, err := fut.Result(ctx)
 		return "", err
 	})
 

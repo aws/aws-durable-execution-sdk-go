@@ -66,15 +66,15 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 	}
 
 	// Collect results.
-	r1, err := cb1.Result()
+	r1, err := cb1.Result(ctx)
 	if err != nil {
 		return Result{}, err
 	}
-	r2, err := cb2.Result()
+	r2, err := cb2.Result(ctx)
 	if err != nil {
 		return Result{}, err
 	}
-	r3, err := cb3.Result()
+	r3, err := cb3.Result(ctx)
 	if err != nil {
 		return Result{}, err
 	}

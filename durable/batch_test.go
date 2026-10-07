@@ -2188,7 +2188,7 @@ func TestGoInsideItemCommitsAfterRetirement(t *testing.T) {
 						close(created)
 						<-release
 						// The first Result call records the commitment.
-						return cb.Result()
+						return cb.Result(gc)
 					})
 				}
 				<-created
@@ -2420,7 +2420,7 @@ func TestSuspendedBranchHoldsConcurrencySlot(t *testing.T) {
 					if cerr != nil {
 						return "", cerr
 					}
-					return cb.Result()
+					return cb.Result(c)
 				}
 				// Item 2 must NOT be reached.
 				return "item-2-ran", nil

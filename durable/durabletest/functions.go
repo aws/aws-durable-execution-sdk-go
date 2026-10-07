@@ -232,8 +232,8 @@ type invokeOutcome struct {
 func (e *localExecution) invoke(eventJSON []byte, maxInvocations int) (invokeOutcome, error) {
 	e.client.recordExecutionStarted(string(eventJSON))
 
-	ops, token := e.client.beginInvocation()
-	payload, err := e.buildPayload(eventJSON, ops, token)
+	ops, token, updated := e.client.beginInvocationWithUpdates()
+	payload, err := e.buildPayload(eventJSON, ops, token, updated)
 	if err != nil {
 		return invokeOutcome{}, fmt.Errorf("build invocation payload: %w", err)
 	}
@@ -294,6 +294,9 @@ func (e *localExecution) invoke(eventJSON []byte, maxInvocations int) (invokeOut
 		empty = false
 		e.emptyPending = 0
 	}
+	// The service treats a PENDING response with nothing pending as a
+	// failed invocation.
+	e.client.endInvocation(!empty)
 	respErr := responseError(resp)
 	e.client.recordInvocationCompleted(requestID, start, end, respErr)
 	e.client.recordExecutionEnded(resp.Status, resp.Result, respErr)
@@ -580,7 +583,11 @@ func (e *localExecution) completeChainedInvoke(name string, result operationResu
 // the checkpoint log and the checkpoint token taken with it. The payload
 // shape matches what the Lambda durable execution service delivers to a
 // handler.
-func (e *localExecution) buildPayload(eventJSON []byte, allOps []operationSnapshot, token string) ([]byte, error) {
+//
+// updated lists the IDs of the operations whose state changed since the
+// last successful invocation; the payload carries them as
+// UpdatedOperationIds, as the service does.
+func (e *localExecution) buildPayload(eventJSON []byte, allOps []operationSnapshot, token string, updated []string) ([]byte, error) {
 	// Build the operations list for the initial state: starts with the
 	// execution operation carrying the customer input, followed by all
 	// checkpointed operations.
@@ -607,6 +614,7 @@ func (e *localExecution) buildPayload(eventJSON []byte, allOps []operationSnapsh
 		InitialExecutionState: wire.InitialExecutionState{
 			Operations: wireOps,
 		},
+		UpdatedOperationIds: updated,
 	}
 
 	return json.Marshal(input)

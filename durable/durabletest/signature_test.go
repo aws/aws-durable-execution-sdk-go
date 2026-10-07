@@ -96,7 +96,7 @@ func TestSignatureCallback(t *testing.T) {
 		if err != nil {
 			return "", err
 		}
-		result, err := cb.Result()
+		result, err := cb.Result(ctx)
 		if err != nil {
 			return "", err
 		}

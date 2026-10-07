@@ -14,7 +14,7 @@ func handler(ctx durable.Context, name string) (numericResult, error) {
 	if err != nil {
 		return numericResult{}, err
 	}
-	value, err := cb.Result()
+	value, err := cb.Result(ctx)
 	if err != nil {
 		return numericResult{}, err
 	}

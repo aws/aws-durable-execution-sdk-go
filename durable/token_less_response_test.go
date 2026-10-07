@@ -117,11 +117,11 @@ func TestTokenlessPollResponsePends(t *testing.T) {
 			time.Sleep(1500 * time.Millisecond)
 			return "worked", nil
 		})
-		v, err := cb.Result()
+		v, err := cb.Result(ctx)
 		if err != nil {
 			return "", err
 		}
-		if _, err := long.Result(); err != nil {
+		if _, err := long.Result(ctx); err != nil {
 			return "", err
 		}
 		return v, nil

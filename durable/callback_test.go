@@ -46,7 +46,7 @@ func TestCreateCallbackFirstInvocation(t *testing.T) {
 		}
 		// Block on Result() — this fires the suspend signal, causing
 		// the invocation to end PENDING.
-		result, err := cb.Result()
+		result, err := cb.Result(ctx)
 		if err != nil {
 			return "", err
 		}
@@ -140,7 +140,7 @@ func TestCreateCallbackReplaySuccess(t *testing.T) {
 		if cb.ID() != "cb-123" {
 			return "", errors.New("unexpected callback ID")
 		}
-		result, err := cb.Result()
+		result, err := cb.Result(ctx)
 		if err != nil {
 			return "", err
 		}
@@ -182,7 +182,7 @@ func TestCreateCallbackReplayFailed(t *testing.T) {
 		if err != nil {
 			return "", err
 		}
-		_, err = cb.Result()
+		_, err = cb.Result(ctx)
 		if err == nil {
 			return "", errors.New("expected error from callback")
 		}
@@ -224,7 +224,7 @@ func TestCreateCallbackReplayTimedOut(t *testing.T) {
 		if err != nil {
 			return "", err
 		}
-		_, err = cb.Result()
+		_, err = cb.Result(ctx)
 		if err == nil {
 			return "", errors.New("expected error from callback")
 		}
@@ -263,7 +263,7 @@ func TestCreateCallbackReplayStarted(t *testing.T) {
 			return "", err
 		}
 		// Should suspend — Result will get errSuspendExecution.
-		_, err = cb.Result()
+		_, err = cb.Result(ctx)
 		if err == nil {
 			return "", errors.New("expected suspension error")
 		}
@@ -790,7 +790,7 @@ func TestUnresolvedCallbackInBatchDoesNotForcePending(t *testing.T) {
 						return "", cerr
 					}
 					close(callbackPending)
-					v, rerr := cb.Result()
+					v, rerr := cb.Result(c)
 					if rerr != nil {
 						return "", rerr
 					}
@@ -835,7 +835,7 @@ func TestAllBranchesPendingCallbackSuspends(t *testing.T) {
 				if cerr != nil {
 					return "", cerr
 				}
-				return cb.Result()
+				return cb.Result(c)
 			}, WithCompletion(CompletionConfig{MinSuccessful: 1}))
 		if err != nil {
 			return "", err

@@ -24,9 +24,9 @@ type Void struct{}
 
 type Future[O any] struct{ _ O }
 
-func (f *Future[O]) Result() (O, error) { var z O; return z, nil }
+func (f *Future[O]) Result(ctx Context) (O, error) { var z O; return z, nil }
 
-type Awaitable interface{ await() error }
+type Awaitable interface{ await(ctx Context) error }
 
 type Settled[O any] struct {
 	Value O
@@ -46,7 +46,7 @@ type Callback[O any] struct{ _ O }
 
 func (c *Callback[O]) ID() string { return "" }
 
-func (c *Callback[O]) Result() (O, error) { var z O; return z, nil }
+func (c *Callback[O]) Result(ctx Context) (O, error) { var z O; return z, nil }
 
 type ConditionConfig[S any] struct {
 	InitialState S

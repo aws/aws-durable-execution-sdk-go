@@ -50,7 +50,7 @@ func handler(ctx durable.Context, _ any) (string, error) {
 		)
 	})
 
-	result, err := f.Result()
+	result, err := f.Result(ctx)
 	if err != nil {
 		return "", err
 	}

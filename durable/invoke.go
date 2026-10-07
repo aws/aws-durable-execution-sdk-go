@@ -72,7 +72,9 @@ func Invoke[O, I any](ctx Context, name, functionID string, input I, opts ...Inv
 		return zero, err
 	}
 
-	return runInvoke[O, I](ec, id, name, functionID, input, options)
+	out, err := runInvoke[O, I](ec, id, name, functionID, input, options)
+	ec.observeOutcome(id, err)
+	return out, err
 }
 
 // InvokeAsync is [Invoke], except that the result is delivered through the
@@ -104,7 +106,7 @@ func InvokeAsync[O, I any](ctx Context, name, functionID string, input I, opts .
 		return newUnfinishedReplayFuture[O](ec.suspend)
 	}
 
-	fut := newFuture[O]()
+	fut := newFuture[O]().bind(ec.state, id)
 	registerFuture(ec.suspend, fut)
 
 	// Snapshot the serializer and logging defaults on the owning goroutine:

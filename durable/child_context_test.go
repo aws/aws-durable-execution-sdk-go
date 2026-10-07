@@ -44,7 +44,7 @@ func TestFutureSettleOnce(t *testing.T) {
 			tc.first(f)
 			tc.second(f)
 
-			v, err := f.Result()
+			v, err := f.Result(nil)
 			if v != tc.wantValue {
 				t.Errorf("Result() value = %q, want %q", v, tc.wantValue)
 			}
@@ -68,7 +68,7 @@ func TestFutureConcurrentSettle(t *testing.T) {
 	}
 	wg.Wait()
 
-	v, err := f.Result()
+	v, err := f.Result(nil)
 	if err != nil {
 		t.Fatalf("Result() error = %v", err)
 	}
@@ -77,7 +77,7 @@ func TestFutureConcurrentSettle(t *testing.T) {
 	}
 
 	// Re-read: same value.
-	v2, err2 := f.Result()
+	v2, err2 := f.Result(nil)
 	if v2 != v || err2 != err {
 		t.Errorf("second Result() = (%d,%v), want (%d,%v)", v2, err2, v, err)
 	}
@@ -87,7 +87,7 @@ func TestFutureResultBlocks(t *testing.T) {
 	f := newFuture[string]()
 	done := make(chan struct{})
 	go func() {
-		_, _ = f.Result()
+		_, _ = f.Result(nil)
 		close(done)
 	}()
 
@@ -160,7 +160,7 @@ func TestFutureAndCallbackExposeNoChannel(t *testing.T) {
 
 func TestNewFailedFuture(t *testing.T) {
 	f := newFailedFuture[string](errors.New("boom"))
-	v, err := f.Result()
+	v, err := f.Result(nil)
 	if v != "" {
 		t.Errorf("value = %q, want empty", v)
 	}
@@ -171,7 +171,7 @@ func TestNewFailedFuture(t *testing.T) {
 
 func TestNewSettledFuture(t *testing.T) {
 	f := newSettledFuture("hello", nil)
-	v, err := f.Result()
+	v, err := f.Result(nil)
 	if v != "hello" || err != nil {
 		t.Errorf("Result() = (%q, %v), want (hello, nil)", v, err)
 	}
@@ -188,11 +188,11 @@ func TestSuspendSignalSettlesRegisteredFutures(t *testing.T) {
 
 	sig.fire()
 
-	_, err1 := f1.Result()
+	_, err1 := f1.Result(nil)
 	if !errors.Is(err1, errSuspendExecution) {
 		t.Errorf("f1 err = %v, want errSuspendExecution", err1)
 	}
-	_, err2 := f2.Result()
+	_, err2 := f2.Result(nil)
 	if !errors.Is(err2, errSuspendExecution) {
 		t.Errorf("f2 err = %v, want errSuspendExecution", err2)
 	}
@@ -205,7 +205,7 @@ func TestSuspendSignalAlreadyFiredSettlesLateRegistration(t *testing.T) {
 	f := newFuture[string]()
 	registerFuture(sig, f)
 
-	_, err := f.Result()
+	_, err := f.Result(nil)
 	if !errors.Is(err, errSuspendExecution) {
 		t.Errorf("err = %v, want errSuspendExecution", err)
 	}
@@ -220,7 +220,7 @@ func TestSuspendSignalDoesNotSettleAlreadySettledFuture(t *testing.T) {
 	f.settle("normal", nil)
 	sig.fire()
 
-	v, err := f.Result()
+	v, err := f.Result(nil)
 	if v != "normal" || err != nil {
 		t.Errorf("Result() = (%q, %v), want (normal, nil)", v, err)
 	}
@@ -491,7 +491,7 @@ func TestRunInChildContextAsyncSuccess(t *testing.T) {
 				return event + "-done", nil
 			})
 		})
-		result, err := fut.Result()
+		result, err := fut.Result(ctx)
 		if err != nil {
 			return "", err
 		}
@@ -513,7 +513,7 @@ func TestRunInChildContextAsyncReplaySucceeded(t *testing.T) {
 			t.Fatal("fn should not execute on replay")
 			return "", nil
 		})
-		return fut.Result()
+		return fut.Result(ctx)
 	})
 
 	if want := `{"Status":"SUCCEEDED","Result":"\"replayed\""}`; resp != want {
@@ -536,7 +536,7 @@ func TestRunInChildContextAsyncReplayFailed(t *testing.T) {
 			t.Fatal("fn should not execute on replay")
 			return "", nil
 		})
-		_, err := fut.Result()
+		_, err := fut.Result(ctx)
 		if err == nil {
 			t.Fatal("expected error from failed child")
 		}
@@ -561,7 +561,7 @@ func TestRunInChildContextAsyncFnError(t *testing.T) {
 		fut := RunInChildContextAsync(ctx, "failing", func(childCtx Context) (string, error) {
 			return "", errors.New("child failed")
 		})
-		_, err := fut.Result()
+		_, err := fut.Result(ctx)
 		if err == nil {
 			return "unexpected", nil
 		}
@@ -596,7 +596,7 @@ func TestRunInChildContextAsyncPanic(t *testing.T) {
 		fut := RunInChildContextAsync(ctx, "panicker", func(childCtx Context) (string, error) {
 			panic("kaboom")
 		})
-		_, err := fut.Result()
+		_, err := fut.Result(ctx)
 		if err == nil {
 			return "unexpected", nil
 		}
@@ -623,7 +623,7 @@ func TestRunInChildContextAsyncSuspension(t *testing.T) {
 			}
 			return "done", nil
 		})
-		_, err := fut.Result()
+		_, err := fut.Result(ctx)
 		return "", err
 	})
 
@@ -641,7 +641,7 @@ func TestGoIsRunInChildContextAsync(t *testing.T) {
 				return event + "-via-go", nil
 			})
 		})
-		return fut.Result()
+		return fut.Result(ctx)
 	})
 
 	if want := `{"Status":"SUCCEEDED","Result":"\"input-via-go\""}`; resp != want {
@@ -665,11 +665,11 @@ func TestMultipleGoFanOut(t *testing.T) {
 				return "B", nil
 			})
 		})
-		a, err := f1.Result()
+		a, err := f1.Result(ctx)
 		if err != nil {
 			return "", err
 		}
-		b, err := f2.Result()
+		b, err := f2.Result(ctx)
 		if err != nil {
 			return "", err
 		}
@@ -699,8 +699,8 @@ func TestMultipleGoOneSuspends(t *testing.T) {
 		})
 
 		// Collect results. One of them will be errSuspendExecution.
-		_, err1 := f1.Result()
-		_, err2 := f2.Result()
+		_, err1 := f1.Result(ctx)
+		_, err2 := f2.Result(ctx)
 
 		// At least one must be suspension.
 		if !errors.Is(err1, errSuspendExecution) && !errors.Is(err2, errSuspendExecution) {
@@ -729,7 +729,7 @@ func TestGoGoroutineOwnership(t *testing.T) {
 				return "ok", nil
 			})
 		})
-		return fut.Result()
+		return fut.Result(ctx)
 	})
 
 	if want := `{"Status":"SUCCEEDED","Result":"\"ok\""}`; resp != want {
@@ -745,7 +745,7 @@ func TestStepAsyncSuccess(t *testing.T) {
 		fut := StepAsync(ctx, "async-step", func(StepContext) (string, error) {
 			return "async-" + event, nil
 		})
-		return fut.Result()
+		return fut.Result(ctx)
 	})
 
 	if want := `{"Status":"SUCCEEDED","Result":"\"async-data\""}`; resp != want {
@@ -763,7 +763,7 @@ func TestStepAsyncReplaySucceeded(t *testing.T) {
 			t.Fatal("should not execute on replay")
 			return "", nil
 		})
-		return fut.Result()
+		return fut.Result(ctx)
 	})
 
 	if want := `{"Status":"SUCCEEDED","Result":"\"replayed\""}`; resp != want {
@@ -779,7 +779,7 @@ func TestStepAsyncSuspension(t *testing.T) {
 		fut := StepAsync(ctx, "retry-step", func(StepContext) (string, error) {
 			return "", errors.New("transient")
 		})
-		_, err := fut.Result()
+		_, err := fut.Result(ctx)
 		return "", err
 	})
 
@@ -794,7 +794,7 @@ func TestWaitAsyncSuspends(t *testing.T) {
 	fake := &fakeLambda{}
 	resp := invokeStep(t, fake, stepPayload(`"x"`), func(ctx Context, _ string) (string, error) {
 		fut := WaitAsync(ctx, "w", 10*time.Second)
-		_, err := fut.Result()
+		_, err := fut.Result(ctx)
 		return "", err
 	})
 
@@ -812,7 +812,7 @@ func TestWaitAsyncReplaySucceeded(t *testing.T) {
 	})
 	resp := invokeStep(t, fake, payload, func(ctx Context, _ string) (string, error) {
 		fut := WaitAsync(ctx, "w", 10*time.Second)
-		_, err := fut.Result()
+		_, err := fut.Result(ctx)
 		if err != nil {
 			return "", err
 		}
@@ -830,7 +830,7 @@ func TestInvokeAsyncStartsAndSuspends(t *testing.T) {
 	fake := &fakeLambda{}
 	resp := invokeStep(t, fake, stepPayload(`"order"`), func(ctx Context, event string) (string, error) {
 		fut := InvokeAsync[string](ctx, "charge", "arn:target:1", event)
-		_, err := fut.Result()
+		_, err := fut.Result(ctx)
 		return "", err
 	})
 
@@ -856,7 +856,7 @@ func TestInvokeAsyncReplaySucceeded(t *testing.T) {
 	})
 	resp := invokeStep(t, fake, payload, func(ctx Context, _ string) (string, error) {
 		fut := InvokeAsync[string](ctx, "i", "target", "in")
-		return fut.Result()
+		return fut.Result(ctx)
 	})
 
 	if want := `{"Status":"SUCCEEDED","Result":"\"result-from-invoke\""}`; resp != want {
@@ -879,11 +879,11 @@ func TestStepAsyncAndGoInterleaved(t *testing.T) {
 			})
 		})
 
-		s, err := stepFut.Result()
+		s, err := stepFut.Result(ctx)
 		if err != nil {
 			return "", err
 		}
-		g, err := goFut.Result()
+		g, err := goFut.Result(ctx)
 		if err != nil {
 			return "", err
 		}
@@ -1111,7 +1111,7 @@ func TestRunInChildContextAsyncReplayChildrenReExecution(t *testing.T) {
 				return "", nil
 			})
 		})
-		return fut.Result()
+		return fut.Result(ctx)
 	})
 
 	if !fnCalled {
@@ -1194,7 +1194,7 @@ func TestGoReplayChildrenFailureIsChildContextError(t *testing.T) {
 		fut := Go(ctx, "big", func(Context) (string, error) {
 			return "", replayChildrenFailure{}
 		})
-		_, err := fut.Result()
+		_, err := fut.Result(ctx)
 		report(err)
 		return "handled", nil
 	})
@@ -1223,7 +1223,7 @@ func TestGoReplayChildrenRunsOnOwnGoroutine(t *testing.T) {
 			t.Error("future settled before Go returned: child body ran synchronously")
 		}
 		close(release)
-		return fut.Result()
+		return fut.Result(ctx)
 	})
 
 	if want := `{"Status":"SUCCEEDED","Result":"\"reconstructed\""}`; resp != want {
@@ -1250,7 +1250,7 @@ func TestRunInChildContextAsyncReplayChildrenLargePayload(t *testing.T) {
 				return largeResult, nil
 			})
 		})
-		return fut.Result()
+		return fut.Result(ctx)
 	})
 
 	updates := updateBatch(t, fake)
@@ -1323,7 +1323,7 @@ func TestGoForwardsChildSerdes(t *testing.T) {
 		fut := Go(ctx, "child", func(Context) (string, error) {
 			return "hello", nil
 		}, WithChildSerdes(upperSerdes{}))
-		return fut.Result()
+		return fut.Result(ctx)
 	})
 
 	if want := `{"Status":"SUCCEEDED","Result":"\"HELLO\""}`; resp != want {
@@ -1349,7 +1349,7 @@ func TestGoChildSerdesReplay(t *testing.T) {
 			t.Error("child body must not re-execute on replay")
 			return "", nil
 		}, WithChildSerdes(failingSerdes{failUnmarshal: true, cause: cause}))
-		_, got = fut.Result()
+		_, got = fut.Result(ctx)
 		return "", nil
 	})
 	assertSerdesError(t, got, "child", "unmarshal", cause)

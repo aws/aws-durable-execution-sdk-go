@@ -18,24 +18,25 @@ func replayedStepPayload() []byte {
 }
 
 // replayScenarioPayload is the checkpoint log runReplayThenLive replays: a
-// STARTED child context with one SUCCEEDED step inside it, and a STARTED
-// step at the root. A STARTED child re-enters its body in replay mode
-// until it claims an operation with no checkpoint; a STARTED step with no
-// outcome re-executes its body while the root is still replaying.
+// STARTED step at the root, then a STARTED child context with one
+// SUCCEEDED step inside it. A STARTED step with no outcome re-executes its
+// body while the root is still replaying, and its outcome is new, so the
+// root is live after it. A STARTED child re-enters its body in replay mode
+// until it claims an operation with no checkpoint.
 func replayScenarioPayload() []byte {
 	return childPayload(`"x"`,
-		checkpointedChild("1", "STARTED", nil),
-		checkpointedStep("1-1", "SUCCEEDED", &wireStepDetails{Attempt: 1, Result: `"done"`}),
-		checkpointedStep("2", "STARTED", nil),
+		checkpointedStep("1", "STARTED", nil),
+		checkpointedChild("2", "STARTED", nil),
+		checkpointedStep("2-1", "SUCCEEDED", &wireStepDetails{Attempt: 1, Result: `"done"`}),
 	)
 }
 
 // runReplayThenLive runs a handler over replayScenarioPayload that logs
 // from every scope both while replaying and live, in this order:
-// "root-replaying" from the handler body, "child-replaying" from the
-// re-entered child context, "child-live" after the child's first live
-// step, "step-replaying" from the re-executed STARTED step body, and
-// "root-live" after the root's first live step. configure, when non-nil,
+// "root-replaying" from the handler body, "step-replaying" from the
+// re-executed STARTED step body, "child-replaying" from the re-entered
+// child context, "child-live" after the child's first live step, and
+// "root-live" after the child returns its new outcome. configure, when non-nil,
 // runs first with the root context. The handler is built with opts plus
 // the fake Lambda API and a recording handler, which is returned.
 func runReplayThenLive(t *testing.T, configure func(ctx Context) error, opts ...HandlerOption) *recordingHandler {
@@ -50,6 +51,12 @@ func runReplayThenLive(t *testing.T, configure func(ctx Context) error, opts ...
 			}
 		}
 		ctx.Logger().Info("root-replaying")
+		if _, err := Step(ctx, "u", func(sc StepContext) (string, error) {
+			sc.Logger().Info("step-replaying")
+			return "u", nil
+		}); err != nil {
+			return "", err
+		}
 		if _, err := RunInChildContext(ctx, "outer", func(c Context) (string, error) {
 			c.Logger().Info("child-replaying")
 			if _, err := Step(c, "s", func(StepContext) (string, error) { return "done", nil }); err != nil {
@@ -60,12 +67,6 @@ func runReplayThenLive(t *testing.T, configure func(ctx Context) error, opts ...
 			}
 			c.Logger().Info("child-live")
 			return "c", nil
-		}); err != nil {
-			return "", err
-		}
-		if _, err := Step(ctx, "u", func(sc StepContext) (string, error) {
-			sc.Logger().Info("step-replaying")
-			return "u", nil
 		}); err != nil {
 			return "", err
 		}
@@ -124,7 +125,7 @@ func TestConfigureLoggingReplayLogModeEmitEmitsReplayedRecords(t *testing.T) {
 // scope's own operation attributes.
 func assertReplayThenLiveEmitted(t *testing.T, rec *recordingHandler) {
 	t.Helper()
-	want := []string{"root-replaying", "child-replaying", "child-live", "step-replaying", "root-live"}
+	want := []string{"root-replaying", "step-replaying", "child-replaying", "child-live", "root-live"}
 	replayed := map[string]bool{"root-replaying": true, "child-replaying": true, "step-replaying": true}
 	if got := rec.messages(); strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Fatalf("messages = %v, want %v", got, want)
@@ -142,11 +143,11 @@ func assertReplayThenLiveEmitted(t *testing.T, rec *recordingHandler) {
 		}
 		switch r.message {
 		case "child-replaying", "child-live":
-			if r.attrs[logKeyOperationID] != hashID("1") || r.attrs[logKeyOperationName] != "outer" {
+			if r.attrs[logKeyOperationID] != hashID("2") || r.attrs[logKeyOperationName] != "outer" {
 				t.Errorf("child record %q attrs = %v, want the child's own scope", r.message, r.attrs)
 			}
 		case "step-replaying":
-			if r.attrs[logKeyOperationID] != hashID("2") || r.attrs[logKeyOperationName] != "u" {
+			if r.attrs[logKeyOperationID] != hashID("1") || r.attrs[logKeyOperationName] != "u" {
 				t.Errorf("step record attrs = %v, want the step's own scope", r.attrs)
 			}
 		default:
@@ -593,7 +594,7 @@ func TestConfigureLoggingAfterGoKeepsBranchSettings(t *testing.T) {
 		}
 		close(release)
 		ctx.Logger().Info("root")
-		return fut.Result()
+		return fut.Result(ctx)
 	}, withLambdaAPI(fake), WithLogHandler(original))
 	if _, err := h(t.Context(), childPayload(`"x"`)); err != nil {
 		t.Fatalf("Invoke() error: %v", err)

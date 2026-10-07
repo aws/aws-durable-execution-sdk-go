@@ -19,7 +19,7 @@ func inStep(ctx durable.Context) {
 	f := durable.StepAsync(ctx, "async", func(sc durable.StepContext) (string, error) {
 		return durable.Invoke[string](ctx, "inv", "fn", 1) // want `durable.Invoke is called inside a step body`
 	})
-	_, _ = f.Result()
+	_, _ = f.Result(ctx)
 
 	_, _ = durable.WaitForCondition(ctx, "cond", func(sc durable.StepContext, s int) (int, error) {
 		_, _ = durable.RunInChildContext(ctx, "child", func(c durable.Context) (int, error) { // want `durable.RunInChildContext is called inside a step body`

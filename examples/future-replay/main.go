@@ -25,7 +25,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 	// await guarantees the failed step is recorded before the settle
 	// context, keeping the operation log order deterministic. The outcome
 	// is discarded here: AllSettled below absorbs the failure.
-	_, _ = failFuture.Result()
+	_, _ = failFuture.Result(ctx)
 
 	// AllSettled absorbs the failure — no unhandled error propagation.
 	_, err := durable.AllSettled(ctx, "settle", []*durable.Future[string]{failFuture})

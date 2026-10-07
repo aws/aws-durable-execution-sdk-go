@@ -2,6 +2,7 @@ package durable
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync/atomic"
@@ -485,6 +486,70 @@ func (c *execContext) refreshReplayMode() {
 		return
 	}
 	c.mode.Store(int32(modeExecution))
+}
+
+// observeOutcome switches this context from replay to live execution when
+// its code receives the outcome of the operation id, err being the error
+// that outcome carries, and the previous invocation did not have that
+// outcome. Every point where an operation's outcome returns to user code
+// calls it on the context of the code that receives the outcome.
+//
+// The rule rests on these facts:
+//
+//  1. An invocation suspends only while an operation its code awaits is
+//     still pending.
+//  2. That operation settles while the execution is suspended, so the
+//     next invocation lists it as updated.
+//  3. Every outcome the code received before that await was already
+//     available to the previous invocation, so it is not new, and the code
+//     up to the await stays replaying.
+//  4. The code after the await receives a new outcome. The previous
+//     invocation never ran it.
+//
+// So switching at the first new outcome makes every line of code live in
+// exactly the invocation that first runs it. A failed invocation is the
+// exception: the next invocation lists the outcomes the failed one already
+// received, so the code that ran after them is live again.
+//
+// The suspension signal is not an outcome, and neither is a context
+// switching to live: the mode only moves from replay to live, never back.
+// A context replaying inside a child context whose result is already
+// recorded keeps that mode, because its unfinished operations must park
+// instead of running.
+func (c *execContext) observeOutcome(id string, err error) {
+	c.receiveOutcome(err, func() bool { return c.state.newOutcome(id) })
+}
+
+// receiveOutcome is observeOutcome for an outcome whose novelty isNew
+// reports. isNew is called only when the context is replaying and err is
+// not the suspension signal.
+func (c *execContext) receiveOutcome(err error, isNew func() bool) {
+	if executionMode(c.mode.Load()) != modeReplay {
+		return
+	}
+	if err != nil && errors.Is(err, errSuspendExecution) {
+		return
+	}
+	if !isNew() {
+		return
+	}
+	c.mode.CompareAndSwap(int32(modeReplay), int32(modeExecution))
+}
+
+// observeChildLive switches this context from replay to live execution
+// when a virtual child context run on it, child, ended live and err, its
+// outcome, is not the suspension signal. A virtual child records no
+// operation of its own, so its outcome has no record to look up. Its
+// operations are recorded in this context's sequence, so a child that
+// reached live code proves that the code after it never ran either.
+func (c *execContext) observeChildLive(child *execContext, err error) {
+	c.receiveOutcome(err, child.isLive)
+}
+
+// isLive reports whether this context runs live, neither replaying nor
+// replaying inside a child context whose result is already recorded.
+func (c *execContext) isLive() bool {
+	return executionMode(c.mode.Load()) == modeExecution
 }
 
 // unfinishedInSucceededContext reports whether the checkpointed operation

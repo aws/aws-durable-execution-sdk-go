@@ -61,7 +61,7 @@ func virtualWaitHandlers(bodyRuns, stepRuns *atomic.Int32) map[string]durable.Ha
 			return finish(durable.RunInChildContext(ctx, "virtual", body, durable.WithChildVirtual()))
 		},
 		"Go": func(ctx durable.Context, _ any) (virtualWaitRun, error) {
-			return finish(durable.Go(ctx, "virtual", body, durable.WithChildVirtual()).Result())
+			return finish(durable.Go(ctx, "virtual", body, durable.WithChildVirtual()).Result(ctx))
 		},
 	}
 }
@@ -213,7 +213,7 @@ func emptyVirtualBody(variant string, bodyRuns, stepRuns *atomic.Int32) func(c d
 		}
 		var err error
 		if variant == "Go" {
-			_, err = durable.Go(c, "empty", empty, durable.WithChildVirtual()).Result()
+			_, err = durable.Go(c, "empty", empty, durable.WithChildVirtual()).Result(c)
 		} else {
 			_, err = durable.RunInChildContext(c, "empty", empty, durable.WithChildVirtual())
 		}

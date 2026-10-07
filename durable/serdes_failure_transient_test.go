@@ -97,7 +97,7 @@ func TestRetryableSerdesErrorOnLiveUnmarshalRecordsNothing(t *testing.T) {
 				return durable.RunInChildContextAsync(ctx, "child", func(_ durable.Context) (string, error) {
 					atomic.AddInt64(body, 1)
 					return "value", nil
-				}, durable.WithChildSerdes(s)).Result()
+				}, durable.WithChildSerdes(s)).Result(ctx)
 			},
 		},
 		{

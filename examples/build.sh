@@ -131,6 +131,7 @@ EXAMPLES="
   concurrent-callback-wait
   logger-after-wait
   logger-after-callback
+  logger-exactly-once
   logger-log-levels
   logger-slog-handler
   plugin-lifecycle

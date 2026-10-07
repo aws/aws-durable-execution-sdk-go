@@ -160,7 +160,7 @@ func waitLifecycleHandlers(rec *opRecorder) map[string]func(context.Context, []b
 		}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
 		"WaitAsync": Wrap(func(ctx Context, _ string) (string, error) {
 			fut := WaitAsync(ctx, "pause", 5*time.Second)
-			if _, err := fut.Result(); err != nil {
+			if _, err := fut.Result(ctx); err != nil {
 				return "", err
 			}
 			return after(ctx)
@@ -248,7 +248,7 @@ func invokeLifecycleHandlers(rec *opRecorder) map[string]func(context.Context, [
 			return Invoke[string](ctx, "call", "target-fn", "in")
 		}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
 		"InvokeAsync": Wrap(func(ctx Context, _ string) (string, error) {
-			return InvokeAsync[string](ctx, "call", "target-fn", "in").Result()
+			return InvokeAsync[string](ctx, "call", "target-fn", "in").Result(ctx)
 		}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
 	}
 }
@@ -367,7 +367,7 @@ func TestOperationLifecycleInvokeReplayedSucceededSerdesFailure(t *testing.T) {
 				return "", nil
 			}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
 			"InvokeAsync": Wrap(func(ctx Context, _ string) (string, error) {
-				_, err := InvokeAsync[string](ctx, "call", "target-fn", "in", serdes).Result()
+				_, err := InvokeAsync[string](ctx, "call", "target-fn", "in", serdes).Result(ctx)
 				*got = err
 				return "", nil
 			}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
@@ -591,13 +591,13 @@ func TestOperationLifecycleAtMostOnePerInvocation(t *testing.T) {
 		w := WaitAsync(ctx, "w", 5*time.Second)
 		i := InvokeAsync[string](ctx, "i", "target-fn", "in")
 		s := StepAsync(ctx, "s", func(StepContext) (string, error) { return "v", nil })
-		if _, err := s.Result(); err != nil {
+		if _, err := s.Result(ctx); err != nil {
 			return "", err
 		}
-		if _, err := w.Result(); err != nil {
+		if _, err := w.Result(ctx); err != nil {
 			return "", err
 		}
-		return i.Result()
+		return i.Result(ctx)
 	}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
 
 	count := func(evs []opEvent) map[string]int {
