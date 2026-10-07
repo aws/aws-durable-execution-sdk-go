@@ -613,6 +613,15 @@ the batch completes early are reported with the status `BatchItemStarted`.
 `Failed()`, and `Started()`, the values through `Results()`, the per-item
 errors through `Errors()`, and why the batch ended through `Reason`.
 
+Each item has a name. A `Map` item takes its name from `WithItemNamer`,
+and a `Parallel` branch from `Branch.Name`. A `Map` item with no name,
+or whose namer returns `""`, is named `map-item-<index>`, for example
+`map-item-0`. A `Parallel` branch with an empty `Name` is named
+`parallel-branch-<index>`. The name is the name of the item's recorded
+child context and of the `operationName` log field inside it. It is also
+the key that `BatchResult.Item` and `BatchResult.Result` look up, so
+`results.Result("map-item-1")` returns the value of the second item.
+
 ### Combinators
 
 `StepAsync`, `WaitAsync`, `InvokeAsync`, `RunInChildContextAsync`, and `Go`

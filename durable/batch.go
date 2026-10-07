@@ -19,7 +19,11 @@ import (
 //
 // Each item runs in a MapIteration child context. Items are identified by
 // their zero-based index; use [WithItemNamer] to assign display names from
-// item values. MaxConcurrency bounds in-flight items.
+// item values. An item with no [WithItemNamer], or whose namer returns "",
+// is named "map-item-<index>", for example "map-item-0". The name is the
+// recorded name of the item's child context and the key that
+// [BatchResult.Item] and [BatchResult.Result] match on. MaxConcurrency
+// bounds in-flight items.
 //
 // # The source collection
 //
@@ -83,6 +87,7 @@ func Map[I, O any](ctx Context, name string, items []I, fn func(ctx Context, ite
 	}
 
 	options := resolveBatchOptions(ec, opts)
+	options.defaultNamePrefix = defaultMapItemNamePrefix
 
 	if options.maxConcurrencySet && options.maxConcurrency <= 0 {
 		return BatchResult[O]{}, fmt.Errorf("durable: Map %q: max concurrency must be positive, got %d", name, options.maxConcurrency)
@@ -162,7 +167,10 @@ func runClaimedMap[I, O any](ec *execContext, id, name string, items []I, fn fun
 // types.
 //
 // Each branch runs in a ParallelBranch child context named by [Branch].Name.
-// MaxConcurrency bounds in-flight branches.
+// A branch with an empty Name is named "parallel-branch-<index>", for
+// example "parallel-branch-0". The name is the key that [BatchResult.Item]
+// and [BatchResult.Result] match on. MaxConcurrency bounds in-flight
+// branches.
 //
 // Completion and failure follow the same rules as [Map]: the default policy
 // is fail-fast, [CompletionConfig] documents the thresholds and the
@@ -177,6 +185,7 @@ func Parallel[O any](ctx Context, name string, branches []Branch[O], opts ...Bat
 	}
 
 	options := resolveBatchOptions(ec, opts)
+	options.defaultNamePrefix = defaultParallelBranchNamePrefix
 
 	// Default branch naming from Branch.Name when no explicit itemNamer.
 	if options.itemNamer == nil {
@@ -265,8 +274,9 @@ func runClaimedParallel[O any](ec *execContext, id, name string, branches []Bran
 type Branch[O any] struct {
 	_ [0]func() // blocks unkeyed literals; keeps fields addable
 
-	// Name identifies the branch. It may be empty in [Parallel]. [Select]
-	// returns it as the winner and rejects duplicate names.
+	// Name identifies the branch. It may be empty in [Parallel], which then
+	// names the branch "parallel-branch-<index>". [Select] returns it as
+	// the winner and rejects duplicate names.
 	Name string
 
 	// Func is the branch body.
@@ -680,7 +690,8 @@ func WithCompletion(c CompletionConfig) BatchOption {
 //	durable.Map(ctx, "process", orders, processOrder,
 //	    durable.WithItemNamer(func(i int) string { return orders[i].ID }))
 //
-// namer must be a deterministic function of its argument.
+// namer must be a deterministic function of its argument. An index for
+// which namer returns "" is named "map-item-<index>".
 //
 // For [Parallel] branches, set [Branch].Name directly instead.
 func WithItemNamer(namer func(index int) string) BatchOption {
@@ -871,8 +882,9 @@ type BatchItemProgress struct {
 	// Index is the zero-based position of the item in the input slice.
 	Index int
 
-	// Name identifies the item or branch. It is empty when the item has
-	// no name.
+	// Name identifies the item or branch. An item with no configured name
+	// is named "map-item-<index>" in [Map] and "parallel-branch-<index>"
+	// in [Parallel].
 	Name string
 
 	// Status is [BatchItemNotStarted] for an item the batch has not yet
@@ -961,6 +973,10 @@ type batchOptions struct {
 	maxConcurrencySet bool // true when user explicitly set via WithMaxConcurrency
 	completion        CompletionConfig
 	itemNamer         func(index int) string
+	// defaultNamePrefix names an item that has no configured name: the
+	// item at index i is named defaultNamePrefix followed by i in decimal.
+	// Map and Parallel set it after resolving the options.
+	defaultNamePrefix string
 	itemSerdes        Serdes
 	resultSerdes      Serdes
 	nesting           NestingMode
@@ -2840,12 +2856,25 @@ func replayedBatchFailure(op *operation, err error) error {
 	return nil
 }
 
+// Default name prefixes for batch items that have no configured name.
+const (
+	defaultMapItemNamePrefix        = "map-item-"
+	defaultParallelBranchNamePrefix = "parallel-branch-"
+)
+
 // itemNameForIndex returns the name for a batch item at the given index.
+// The configured namer's name is used when it is not empty. Otherwise the
+// item is named from its index alone, so every invocation produces the
+// same name for the same item.
 func itemNameForIndex(options batchOptions, index int) string {
+	var name string
 	if options.itemNamer != nil {
-		return options.itemNamer(index)
+		name = options.itemNamer(index)
 	}
-	return ""
+	if name == "" && options.defaultNamePrefix != "" {
+		name = fmt.Sprintf("%s%d", options.defaultNamePrefix, index)
+	}
+	return name
 }
 
 // batchItemOpName returns the operation name recorded for a batch item's

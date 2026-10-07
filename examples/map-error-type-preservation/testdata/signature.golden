@@ -8,22 +8,19 @@
   {
     "type": "CONTEXT",
     "subType": "MapIteration",
+    "name": "map-item-0",
     "status": "SUCCEEDED"
   },
   {
     "type": "CONTEXT",
     "subType": "MapIteration",
+    "name": "map-item-1",
     "status": "FAILED"
   },
   {
     "type": "CONTEXT",
     "subType": "MapIteration",
-    "status": "SUCCEEDED"
-  },
-  {
-    "type": "STEP",
-    "subType": "Step",
-    "name": "charge",
+    "name": "map-item-2",
     "status": "SUCCEEDED"
   },
   {
@@ -37,6 +34,12 @@
     "subType": "Step",
     "name": "charge",
     "status": "FAILED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "charge",
+    "status": "SUCCEEDED"
   },
   {
     "type": "STEP",

@@ -8,26 +8,31 @@
   {
     "type": "CONTEXT",
     "subType": "MapIteration",
+    "name": "map-item-0",
     "status": "SUCCEEDED"
   },
   {
     "type": "CONTEXT",
     "subType": "MapIteration",
+    "name": "map-item-1",
     "status": "SUCCEEDED"
   },
   {
     "type": "CONTEXT",
     "subType": "MapIteration",
+    "name": "map-item-2",
     "status": "SUCCEEDED"
   },
   {
     "type": "CONTEXT",
     "subType": "MapIteration",
+    "name": "map-item-3",
     "status": "SUCCEEDED"
   },
   {
     "type": "CONTEXT",
     "subType": "MapIteration",
+    "name": "map-item-4",
     "status": "SUCCEEDED"
   },
   {
@@ -39,13 +44,7 @@
   {
     "type": "CHAINED_INVOKE",
     "subType": "ChainedInvoke",
-    "name": "invoke-item-0",
-    "status": "SUCCEEDED"
-  },
-  {
-    "type": "CHAINED_INVOKE",
-    "subType": "ChainedInvoke",
-    "name": "invoke-item-2",
+    "name": "invoke-item-3",
     "status": "SUCCEEDED"
   },
   {
@@ -57,27 +56,31 @@
   {
     "type": "CHAINED_INVOKE",
     "subType": "ChainedInvoke",
-    "name": "invoke-item-3",
+    "name": "invoke-item-2",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CHAINED_INVOKE",
+    "subType": "ChainedInvoke",
+    "name": "invoke-item-0",
     "status": "SUCCEEDED"
   },
   {
     "type": "CONTEXT",
     "subType": "MapIteration",
+    "name": "map-item-5",
     "status": "SUCCEEDED"
   },
   {
     "type": "CONTEXT",
     "subType": "MapIteration",
+    "name": "map-item-6",
     "status": "SUCCEEDED"
   },
   {
     "type": "CONTEXT",
     "subType": "MapIteration",
-    "status": "SUCCEEDED"
-  },
-  {
-    "type": "CONTEXT",
-    "subType": "MapIteration",
+    "name": "map-item-7",
     "status": "SUCCEEDED"
   },
   {
@@ -87,8 +90,15 @@
     "status": "SUCCEEDED"
   },
   {
+    "type": "CHAINED_INVOKE",
+    "subType": "ChainedInvoke",
+    "name": "invoke-item-7",
+    "status": "SUCCEEDED"
+  },
+  {
     "type": "CONTEXT",
     "subType": "MapIteration",
+    "name": "map-item-8",
     "status": "SUCCEEDED"
   },
   {
@@ -98,15 +108,9 @@
     "status": "SUCCEEDED"
   },
   {
-    "type": "CHAINED_INVOKE",
-    "subType": "ChainedInvoke",
-    "name": "invoke-item-8",
-    "status": "SUCCEEDED"
-  },
-  {
-    "type": "CHAINED_INVOKE",
-    "subType": "ChainedInvoke",
-    "name": "invoke-item-7",
+    "type": "CONTEXT",
+    "subType": "MapIteration",
+    "name": "map-item-9",
     "status": "SUCCEEDED"
   },
   {
@@ -116,35 +120,21 @@
     "status": "SUCCEEDED"
   },
   {
-    "type": "CONTEXT",
-    "subType": "MapIteration",
-    "status": "SUCCEEDED"
-  },
-  {
-    "type": "CONTEXT",
-    "subType": "MapIteration",
-    "status": "SUCCEEDED"
-  },
-  {
-    "type": "CONTEXT",
-    "subType": "MapIteration",
-    "status": "SUCCEEDED"
-  },
-  {
-    "type": "CONTEXT",
-    "subType": "MapIteration",
-    "status": "SUCCEEDED"
-  },
-  {
     "type": "CHAINED_INVOKE",
     "subType": "ChainedInvoke",
-    "name": "invoke-item-13",
+    "name": "invoke-item-8",
     "status": "SUCCEEDED"
   },
   {
-    "type": "CHAINED_INVOKE",
-    "subType": "ChainedInvoke",
-    "name": "invoke-item-11",
+    "type": "CONTEXT",
+    "subType": "MapIteration",
+    "name": "map-item-10",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "MapIteration",
+    "name": "map-item-11",
     "status": "SUCCEEDED"
   },
   {
@@ -156,12 +146,37 @@
   {
     "type": "CONTEXT",
     "subType": "MapIteration",
+    "name": "map-item-12",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "MapIteration",
+    "name": "map-item-13",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "MapIteration",
+    "name": "map-item-14",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CHAINED_INVOKE",
+    "subType": "ChainedInvoke",
+    "name": "invoke-item-11",
     "status": "SUCCEEDED"
   },
   {
     "type": "CHAINED_INVOKE",
     "subType": "ChainedInvoke",
     "name": "invoke-item-12",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CHAINED_INVOKE",
+    "subType": "ChainedInvoke",
+    "name": "invoke-item-13",
     "status": "SUCCEEDED"
   },
   {

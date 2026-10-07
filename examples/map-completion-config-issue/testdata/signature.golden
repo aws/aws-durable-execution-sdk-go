@@ -6,16 +6,6 @@
     "status": "SUCCEEDED"
   },
   {
-    "type": "CONTEXT",
-    "subType": "MapIteration",
-    "status": "SUCCEEDED"
-  },
-  {
-    "type": "CONTEXT",
-    "subType": "MapIteration",
-    "status": "SUCCEEDED"
-  },
-  {
     "type": "STEP",
     "subType": "Step",
     "name": "process-item-0",

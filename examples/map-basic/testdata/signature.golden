@@ -8,11 +8,13 @@
   {
     "type": "CONTEXT",
     "subType": "MapIteration",
+    "name": "map-item-0",
     "status": "SUCCEEDED"
   },
   {
     "type": "CONTEXT",
     "subType": "MapIteration",
+    "name": "map-item-1",
     "status": "SUCCEEDED"
   },
   {
@@ -23,6 +25,7 @@
   {
     "type": "CONTEXT",
     "subType": "MapIteration",
+    "name": "map-item-2",
     "status": "SUCCEEDED"
   },
   {
@@ -33,6 +36,12 @@
   {
     "type": "CONTEXT",
     "subType": "MapIteration",
+    "name": "map-item-3",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
     "status": "SUCCEEDED"
   },
   {
@@ -43,11 +52,7 @@
   {
     "type": "CONTEXT",
     "subType": "MapIteration",
-    "status": "SUCCEEDED"
-  },
-  {
-    "type": "STEP",
-    "subType": "Step",
+    "name": "map-item-4",
     "status": "SUCCEEDED"
   },
   {

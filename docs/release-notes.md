@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Changed: unnamed `Map` items and `Parallel` branches get default names
+
+A `Map` item with no `WithItemNamer`, and a `Parallel` branch with an
+empty `Name`, were recorded with an empty name. So the history and the
+`operationName` log field did not identify the item, and
+`BatchResult.Item` and `BatchResult.Result` could not find it by name.
+
+Such an item is now named from its zero-based index, as in the other
+Durable Execution SDKs. A `Map` item is named `map-item-<index>`, and a
+`Parallel` branch `parallel-branch-<index>`. A `WithItemNamer` that
+returns `""` for an index falls back to `map-item-<index>`. A non-empty
+configured name is used unchanged. The recorded names of unnamed items
+change accordingly.
+
 ### Fixed: replay returns the same child-context and batch-item result as the first run
 
 A child-context result whose serialized form exceeds 256 KiB is not

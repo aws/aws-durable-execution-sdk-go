@@ -256,7 +256,7 @@ func TestWaitForConditionSerdesErrorTerminalUnmarshal(t *testing.T) {
 
 func TestBatchItemSerdesErrorLiveMarshal(t *testing.T) {
 	// A batch item result that cannot be serialized fails the batch with
-	// a SerdesError naming the item.
+	// a SerdesError naming the item by its default name.
 	cause := errors.New("marshal exploded")
 	fake := &fakeLambda{}
 	var got error
@@ -271,7 +271,7 @@ func TestBatchItemSerdesErrorLiveMarshal(t *testing.T) {
 		return "", nil
 	})
 
-	assertSerdesError(t, got, "item 0", "marshal", cause)
+	assertSerdesError(t, got, "map-item-0", "marshal", cause)
 }
 
 func TestBatchItemSerdesErrorReplayUnmarshal(t *testing.T) {

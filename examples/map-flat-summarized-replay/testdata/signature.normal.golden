@@ -8,65 +8,49 @@
   {
     "type": "CONTEXT",
     "subType": "MapIteration",
+    "name": "map-item-0",
     "status": "SUCCEEDED"
   },
   {
     "type": "CONTEXT",
     "subType": "MapIteration",
+    "name": "map-item-1",
     "status": "SUCCEEDED"
   },
   {
     "type": "CONTEXT",
     "subType": "MapIteration",
+    "name": "map-item-2",
     "status": "SUCCEEDED"
   },
   {
     "type": "CONTEXT",
     "subType": "MapIteration",
+    "name": "map-item-3",
     "status": "SUCCEEDED"
   },
   {
     "type": "CONTEXT",
     "subType": "MapIteration",
+    "name": "map-item-4",
     "status": "SUCCEEDED"
   },
   {
     "type": "CONTEXT",
     "subType": "MapIteration",
-    "status": "SUCCEEDED"
-  },
-  {
-    "type": "CONTEXT",
-    "subType": "MapIteration",
-    "status": "SUCCEEDED"
-  },
-  {
-    "type": "CONTEXT",
-    "subType": "MapIteration",
+    "name": "map-item-5",
     "status": "SUCCEEDED"
   },
   {
     "type": "STEP",
     "subType": "Step",
-    "name": "resolve-7",
+    "name": "resolve-2",
     "status": "SUCCEEDED"
   },
   {
-    "type": "STEP",
-    "subType": "Step",
-    "name": "resolve-3",
-    "status": "SUCCEEDED"
-  },
-  {
-    "type": "STEP",
-    "subType": "Step",
-    "name": "resolve-1",
-    "status": "SUCCEEDED"
-  },
-  {
-    "type": "STEP",
-    "subType": "Step",
-    "name": "resolve-4",
+    "type": "CONTEXT",
+    "subType": "MapIteration",
+    "name": "map-item-6",
     "status": "SUCCEEDED"
   },
   {
@@ -78,7 +62,25 @@
   {
     "type": "STEP",
     "subType": "Step",
-    "name": "resolve-6",
+    "name": "resolve-3",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "resolve-4",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "MapIteration",
+    "name": "map-item-7",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "resolve-1",
     "status": "SUCCEEDED"
   },
   {
@@ -90,7 +92,13 @@
   {
     "type": "STEP",
     "subType": "Step",
-    "name": "resolve-2",
+    "name": "resolve-6",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "resolve-7",
     "status": "SUCCEEDED"
   },
   {

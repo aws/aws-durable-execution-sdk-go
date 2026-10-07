@@ -444,11 +444,21 @@ func TestOperationLifecycleBatchConcurrentDispatchRace(t *testing.T) {
 	if want := 2 + items*2 + items*steps*2; len(evs) != want {
 		t.Fatalf("len(events) = %d, want %d", len(evs), want)
 	}
-	// The items are unnamed, so their events form one group: one STARTED
-	// start and one SUCCEEDED end per item, each item ID once per hook.
+	// Each item has one STARTED start and one SUCCEEDED end, each item ID
+	// once per hook, under its default name.
 	counts := map[string]int{}
-	for _, ev := range batchItemEvents(evs, "1")[""] {
-		counts[ev.hook+":"+ev.info.ID+":"+string(ev.info.Status)]++
+	for name, group := range batchItemEvents(evs, "1") {
+		for _, ev := range group {
+			// Item i has ID i+2: the batch is operation 1.
+			var id int
+			if _, err := fmt.Sscan(ev.info.ID, &id); err != nil {
+				t.Fatalf("item ID %q: %v", ev.info.ID, err)
+			}
+			if want := fmt.Sprintf("map-item-%d", id-2); name != want {
+				t.Errorf("item %s event name = %q, want %q", ev.info.ID, name, want)
+			}
+			counts[ev.hook+":"+ev.info.ID+":"+string(ev.info.Status)]++
+		}
 	}
 	for i := range items {
 		id := fmt.Sprint(i + 2)

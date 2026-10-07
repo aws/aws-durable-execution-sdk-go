@@ -335,9 +335,9 @@ var expectations = map[string]expectation{
 		},
 	},
 	"map-empty":              {result: `{"results":[],"errors":[],"successCount":0,"failureCount":0,"totalCount":0,"status":"SUCCEEDED","completionReason":"ALL_COMPLETED"}`},
-	"map-error-preservation": {result: `{"success":["Processed item 1","Processed item 3"],"errors":[{"message":"durable: child context \"\" failed: StepError: durable: step \"process-item-1\" failed after 1 attempts: Error: custom error for item 2","isStepError":true}],"totalErrors":1,"totalSuccess":2}`},
+	"map-error-preservation": {result: `{"success":["Processed item 1","Processed item 3"],"errors":[{"message":"durable: child context \"map-item-1\" failed: StepError: durable: step \"process-item-1\" failed after 1 attempts: Error: custom error for item 2","isStepError":true}],"totalErrors":1,"totalSuccess":2}`},
 	"map-error-type-preservation": {
-		result: `{"preserved":true,"beforeReplay":{"isChildCtxErr":true,"childCtxName":"","isStepErr":true,"stepName":"charge","stepAttempts":1,"leafTypeName":"PaymentError","leafMessage":"payment declined: INSUFFICIENT_FUNDS","isOperationError":true},"afterReplay":{"isChildCtxErr":true,"childCtxName":"","isStepErr":true,"stepName":"charge","stepAttempts":1,"leafTypeName":"PaymentError","leafMessage":"payment declined: INSUFFICIENT_FUNDS","isOperationError":true},"successCount":2,"failureCount":1}`,
+		result: `{"preserved":true,"beforeReplay":{"isChildCtxErr":true,"childCtxName":"map-item-1","isStepErr":true,"stepName":"charge","stepAttempts":1,"leafTypeName":"PaymentError","leafMessage":"payment declined: INSUFFICIENT_FUNDS","isOperationError":true},"afterReplay":{"isChildCtxErr":true,"childCtxName":"map-item-1","isStepErr":true,"stepName":"charge","stepAttempts":1,"leafTypeName":"PaymentError","leafMessage":"payment declined: INSUFFICIENT_FUNDS","isOperationError":true},"successCount":2,"failureCount":1}`,
 	},
 	"map-failure-threshold": {
 		nondeterministic: "successCount depends on how many non-failing items settle before the third failure stops the batch",
