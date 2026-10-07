@@ -137,6 +137,10 @@ EXAMPLES="
   logger-slog-handler
   plugin-lifecycle
   telemetry-exporter
+  plugin-child-depth
+  custom-entry-point
+  execution-start-time
+  serde-retryable-error
   serde-basic
   serde-callback-deserializer
   serde-custom-config
