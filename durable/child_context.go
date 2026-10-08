@@ -255,6 +255,34 @@ func isReservedChildSubType(s string) bool {
 	return false
 }
 
+// resolveOperationSubType returns the subtype an operation named name
+// records when its subtype option, named option, holds value: def when
+// value is empty, else value once it is validated. op names the operation
+// in the error, for example "Step". value must satisfy the same rules as
+// a [WithChildSubType] value, and it must not be the subtype of a
+// different SDK operation, [OperationSubTypeRunInChildContext] included.
+// value may equal def, which selects the default.
+func resolveOperationSubType(op, name, option, value, def string) (string, error) {
+	if value == "" || value == def {
+		return def, nil
+	}
+	if len(value) > maxOperationSubTypeLength {
+		return "", fmt.Errorf("durable: %s %q: %s value is %d characters, the limit is %d",
+			op, name, option, len(value), maxOperationSubTypeLength)
+	}
+	for i := 0; i < len(value); i++ {
+		if !isSubTypeChar(value[i]) {
+			return "", fmt.Errorf("durable: %s %q: %s value %q has character %q at index %d, want A-Z, a-z, 0-9, hyphen, or underscore",
+				op, name, option, value, value[i], i)
+		}
+	}
+	if isReservedChildSubType(value) || value == OperationSubTypeRunInChildContext {
+		return "", fmt.Errorf("durable: %s %q: %s value %q is the subtype of an SDK operation and is reserved",
+			op, name, option, value)
+	}
+	return value, nil
+}
+
 // childSummaryFunc returns the summary function configured for a child
 // whose result type is O, or nil when none is set. A function of another
 // result type is a configuration error.

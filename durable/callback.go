@@ -75,6 +75,11 @@ func CreateCallback[O any](ctx Context, name string, opts ...CallbackOption) (*C
 	for _, o := range opts {
 		o.applyCallback(&options)
 	}
+	subType, err := resolveOperationSubType("CreateCallback", name, "WithCallbackSubType", options.subType, OperationSubTypeCallback)
+	if err != nil {
+		return nil, err
+	}
+	options.subType = subType
 
 	id, err := ec.claimOperation(name)
 	if err != nil {
@@ -91,7 +96,7 @@ func CreateCallback[O any](ctx Context, name string, opts ...CallbackOption) (*C
 // ID id is already claimed on ec.
 func createClaimedCallback[O any](ec *execContext, id, name string, options callbackOptions) (*Callback[O], error) {
 	op := ec.state.get(id)
-	if err := validateReplayConsistency(op, string(OperationTypeCallback), OperationSubTypeCallback, name); err != nil {
+	if err := validateReplayConsistency(op, string(OperationTypeCallback), options.subType, name); err != nil {
 		return nil, err
 	}
 	if ec.unfinishedInSucceededContext(op) {
@@ -116,7 +121,7 @@ func createClaimedCallback[O any](ec *execContext, id, name string, options call
 		// An in-flight callback is always replayed: its start was
 		// dispatched by the invocation that created it.
 		isReplay := !ec.state.updatedSinceLastInvocation(id)
-		info := ec.operationHookInfo(id, name, string(OperationTypeCallback), OperationSubTypeCallback, isReplay)
+		info := ec.operationHookInfo(id, name, string(OperationTypeCallback), options.subType, isReplay)
 		info.StartTimestamp = op.startTimestamp
 		switch op.status {
 		case statusSucceeded:
@@ -160,7 +165,7 @@ func createClaimedCallback[O any](ec *execContext, id, name string, options call
 	}
 
 	// First invocation: checkpoint START.
-	update := callbackUpdate(ec, id, name, OperationActionStart)
+	update := callbackUpdate(ec, id, name, options.subType, OperationActionStart)
 	cbOpts, cbErr := buildCallbackOptions(options)
 	if cbErr != nil {
 		return nil, fmt.Errorf("durable: CreateCallback %q: %w", name, cbErr)
@@ -186,7 +191,7 @@ func createClaimedCallback[O any](ec *execContext, id, name string, options call
 	// checkpoint response when the response carried the record, else from
 	// the clock. The end is dispatched by the invocation that observes
 	// the callback settled.
-	info := ec.operationHookInfo(id, name, string(OperationTypeCallback), OperationSubTypeCallback, false)
+	info := ec.operationHookInfo(id, name, string(OperationTypeCallback), options.subType, false)
 	info.StartTimestamp = checkpointedStartTime(created)
 	dispatchOperationStart(ec, info, PluginOperationStarted)
 
@@ -237,6 +242,11 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 	for _, o := range opts {
 		o.applyWaitForCallback(&options)
 	}
+	subType, err := resolveOperationSubType("WaitForCallback", name, "WithCallbackSubType", options.subType, OperationSubTypeCallback)
+	if err != nil {
+		return zero, err
+	}
+	options.subType = subType
 
 	// WaitForCallback is a child context (SubType WaitForCallback) that:
 	// 1. Creates an inner callback (no name)
@@ -388,7 +398,7 @@ func decodeWaitForCallbackResult[O any](ec *execContext, serdes Serdes, id, name
 // callback + run submitter step + return the submitted bytes.
 func runWaitForCallbackBody(child *execContext, submitter func(StepContext, string) error, options callbackOptions) (json.RawMessage, error) {
 	// Step 1: create the inner callback (unnamed, per wire spec). The
-	// caller's timeout and heartbeat timeout apply to it. It uses
+	// caller's timeout, heartbeat timeout, and subtype apply to it. It uses
 	// [RawSerdes], so it returns the submitted bytes unchanged; the result
 	// serdes runs once, at the WaitForCallback layer. The submitter retry
 	// strategy is consumed by the step below.
@@ -396,6 +406,7 @@ func runWaitForCallbackBody(child *execContext, submitter func(StepContext, stri
 		WithCallbackTimeout(options.timeout),
 		WithCallbackHeartbeatTimeout(options.heartbeatTimeout),
 		WithCallbackSerdes(RawSerdes),
+		WithCallbackSubType(options.subType),
 	)
 	if err != nil {
 		return nil, err
@@ -567,12 +578,13 @@ func resolveCallbackFailure[O any](op *operation, name string) (*Callback[O], er
 	return &Callback[O]{id: callbackID, future: newFailedFuture[O](cbErr)}, cbErr
 }
 
-// callbackUpdate assembles the shared fields of a callback operation update.
-func callbackUpdate(ec *execContext, id, name string, action OperationAction) OperationUpdate {
+// callbackUpdate assembles the shared fields of a callback operation
+// update. subType is the callback's resolved subtype.
+func callbackUpdate(ec *execContext, id, name, subType string, action OperationAction) OperationUpdate {
 	update := OperationUpdate{
 		Id:      aws.String(hashID(id)),
 		Type:    OperationTypeCallback,
-		SubType: aws.String(OperationSubTypeCallback),
+		SubType: aws.String(subType),
 		Action:  action,
 	}
 	if name != "" {
@@ -690,11 +702,46 @@ func WithCallbackSerdes(s Serdes) CallbackOption {
 	return callbackOptionFunc(func(o *callbackOptions) { o.serdes = s })
 }
 
+// WithCallbackSubType sets the operation subtype recorded for the
+// callback a [CreateCallback] creates, or the callback a [WaitForCallback]
+// creates inside its context. Without it the callback records
+// [OperationSubTypeCallback]. The WaitForCallback context itself keeps
+// [OperationSubTypeWaitForCallback]. The subtype is written to the
+// checkpoint and reported in [OperationHookInfo].SubType, so a plugin or a
+// reader of the execution history can tell one kind of callback from
+// another without parsing its name:
+//
+//	durable.CreateCallback[string](ctx, "approval",
+//		durable.WithCallbackSubType("ManagerApproval"))
+//
+// subType must be 1 to 32 characters from the set A-Z, a-z, 0-9, hyphen,
+// and underscore; an empty subType selects the default. The subtypes the
+// SDK records for its own operations, the OperationSubType constants
+// other than [OperationSubTypeCallback], are reserved. A value outside
+// these rules is a configuration error the operation returns before it
+// claims an operation ID.
+//
+// The subtype is part of the operation's identity on replay. Every
+// invocation of the execution must supply the same subtype for the same
+// operation; an invocation that finds a different subtype in the
+// checkpoint returns a [*NonDeterministicExecutionError]. A subtype must
+// therefore not depend on the input, on time, or on any other value that
+// can differ between invocations, and changing it in a deployment breaks
+// the executions that are in flight.
+func WithCallbackSubType(subType string) CallbackOption {
+	return callbackOptionFunc(func(o *callbackOptions) { o.subType = subType })
+}
+
 type callbackOptions struct {
 	timeout          time.Duration
 	heartbeatTimeout time.Duration
 	retryStrategy    RetryStrategy
 	serdes           Serdes
+
+	// subType is the [WithCallbackSubType] value while the options are
+	// applied, and the resolved subtype once CreateCallback or
+	// WaitForCallback has resolved it.
+	subType string
 }
 
 // callbackOptionFunc is an option that applies to both CreateCallback and

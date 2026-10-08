@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Added: `WithStepSubType` and `WithCallbackSubType`
+
+`durable.WithStepSubType(subType)` is a `StepOption` for `Step` and
+`StepAsync`. `durable.WithCallbackSubType(subType)` is a `CallbackOption`
+for `CreateCallback` and `WaitForCallback`; under `WaitForCallback` it
+labels the callback the operation creates, and the `WaitForCallback`
+context keeps its own subtype. Each option sets the subtype the operation
+records in its checkpoints and reports in `OperationHookInfo.SubType`, so
+a plugin or a reader of the execution history can tell one kind of step
+or callback from another without parsing names. Without the option a step
+records `Step` and a callback records `Callback`, as before.
+
+The value follows the `WithChildSubType` rules: 1 to 32 characters from
+A-Z, a-z, 0-9, hyphen, and underscore, and an empty value selects the
+default. Every subtype the SDK records for its own operations is
+reserved, except the operation's own default. For a step this includes
+`WaitForCondition`. A value outside these rules is a configuration error
+the operation returns before it claims an operation ID or sends anything.
+
+The subtype is part of the operation's identity on replay. An invocation
+that supplies a different subtype for a checkpointed step or callback
+returns a `*NonDeterministicExecutionError`, so changing a subtype breaks
+the executions in flight.
+
 ### Changed: callback results are returned unchanged by default
 
 A callback created with no serializer option now returns the bytes the

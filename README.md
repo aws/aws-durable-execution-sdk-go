@@ -378,6 +378,12 @@ When the strategy stops, `Step` returns a `*durable.StepError` with the
 attempt count and the recorded `ErrorType` and `Message` of the last
 attempt.
 
+`WithStepSubType` sets the subtype a step records in its checkpoints and
+reports to plugins, in place of `Step`, so the history can tell one kind
+of step from another. `WithCallbackSubType` does the same for a callback.
+Replay compares the subtype with the checkpoint, so changing it breaks the
+executions in flight.
+
 ### Wait
 
 `Wait` pauses the execution for a duration. The invocation ends only when

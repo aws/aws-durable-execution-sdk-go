@@ -48,10 +48,58 @@ func WithSemantics(s StepSemantics) StepOption {
 	return stepOptionFunc(func(o *stepOptions) { o.semantics = s })
 }
 
+// WithStepSubType sets the operation subtype recorded for a [Step] or
+// [StepAsync] operation. Without it the operation records
+// [OperationSubTypeStep]. The subtype is written to the checkpoint and
+// reported in [OperationHookInfo].SubType, so a plugin or a reader of the
+// execution history can tell one kind of step from another without
+// parsing its name:
+//
+//	durable.Step(ctx, "charge", charge, durable.WithStepSubType("Payment"))
+//
+// subType must be 1 to 32 characters from the set A-Z, a-z, 0-9, hyphen,
+// and underscore; an empty subType selects the default. The subtypes the
+// SDK records for its own operations, the OperationSubType constants
+// other than [OperationSubTypeStep], are reserved. This includes
+// [OperationSubTypeWaitForCondition], the subtype of the step a
+// [WaitForCondition] records. A value outside these rules is a
+// configuration error the operation returns before it claims an
+// operation ID.
+//
+// The subtype is part of the operation's identity on replay. Every
+// invocation of the execution must supply the same subtype for the same
+// operation; an invocation that finds a different subtype in the
+// checkpoint returns a [*NonDeterministicExecutionError]. A subtype must
+// therefore not depend on the input, on time, or on any other value that
+// can differ between invocations, and changing it in a deployment breaks
+// the executions that are in flight.
+func WithStepSubType(subType string) StepOption {
+	return stepOptionFunc(func(o *stepOptions) { o.subType = subType })
+}
+
 type stepOptions struct {
 	retry     RetryStrategy
 	serdes    Serdes
 	semantics StepSemantics
+
+	// subType is the [WithStepSubType] value while the options are
+	// applied, and the resolved subtype once resolveStepOptions returns.
+	subType string
+}
+
+// resolveStepOptions applies opts over the defaults and resolves the
+// step's subtype. An invalid subtype is a configuration error.
+func resolveStepOptions(ec *execContext, op, name string, opts []StepOption) (stepOptions, error) {
+	options := stepOptions{retry: ExponentialBackoff(), serdes: ec.serdesDefaults().serdes}
+	for _, o := range opts {
+		o.applyStep(&options)
+	}
+	subType, err := resolveOperationSubType(op, name, "WithStepSubType", options.subType, OperationSubTypeStep)
+	if err != nil {
+		return stepOptions{}, err
+	}
+	options.subType = subType
+	return options, nil
 }
 
 type stepOptionFunc func(*stepOptions)
@@ -80,9 +128,9 @@ func Step[O any](ctx Context, name string, fn func(StepContext) (O, error), opts
 		return zero, fmt.Errorf("durable: Step %q: Context was not created by the SDK", name)
 	}
 
-	options := stepOptions{retry: ExponentialBackoff(), serdes: ec.serdesDefaults().serdes}
-	for _, o := range opts {
-		o.applyStep(&options)
+	options, err := resolveStepOptions(ec, "Step", name, opts)
+	if err != nil {
+		return zero, err
 	}
 
 	id, err := ec.claimOperation(name)
@@ -109,9 +157,9 @@ func StepAsync[O any](ctx Context, name string, fn func(StepContext) (O, error),
 		return newFailedFuture[O](fmt.Errorf("durable: StepAsync %q: Context was not created by the SDK", name))
 	}
 
-	options := stepOptions{retry: ExponentialBackoff(), serdes: ec.serdesDefaults().serdes}
-	for _, o := range opts {
-		o.applyStep(&options)
+	options, err := resolveStepOptions(ec, "StepAsync", name, opts)
+	if err != nil {
+		return newFailedFuture[O](err)
 	}
 
 	id, err := ec.claimOperation(name)
@@ -183,11 +231,11 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 	var zero O
 	op := ec.state.get(id)
 
-	if err := validateReplayConsistency(op, string(OperationTypeStep), OperationSubTypeStep, name); err != nil {
+	if err := validateReplayConsistency(op, string(OperationTypeStep), options.subType, name); err != nil {
 		return zero, err
 	}
 	if ec.unfinishedInSucceededContext(op) {
-		return zero, ec.parkUnfinishedReplay(op, id, string(OperationTypeStep), OperationSubTypeStep, name)
+		return zero, ec.parkUnfinishedReplay(op, id, string(OperationTypeStep), options.subType, name)
 	}
 
 	currentMode := executionMode(ec.mode.Load())
@@ -211,7 +259,7 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 					return zero, fmt.Errorf("durable: step %q: checkpointed %s operation has no step details", name, op.status)
 				}
 				// Fire operation hooks for replayed terminal operations.
-				info := ec.operationHookInfo(id, name, string(OperationTypeStep), OperationSubTypeStep, true)
+				info := ec.operationHookInfo(id, name, string(OperationTypeStep), options.subType, true)
 				info.Attempt = op.step.attempt
 				info.StartTimestamp = op.startTimestamp
 				info.Result = op.step.result
@@ -228,7 +276,7 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 				if op.step == nil {
 					return zero, fmt.Errorf("durable: step %q: checkpointed %s operation has no step details", name, op.status)
 				}
-				info := ec.operationHookInfo(id, name, string(OperationTypeStep), OperationSubTypeStep, true)
+				info := ec.operationHookInfo(id, name, string(OperationTypeStep), options.subType, true)
 				info.Attempt = op.step.attempt
 				info.StartTimestamp = op.startTimestamp
 				info.Error = op.step.record().standIn(nil)
@@ -258,7 +306,7 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 					// is replayed; the end belongs to this invocation when
 					// it records the terminal failure.
 					started = true
-					liveInfo = ec.operationHookInfo(id, name, string(OperationTypeStep), OperationSubTypeStep, true)
+					liveInfo = ec.operationHookInfo(id, name, string(OperationTypeStep), options.subType, true)
 					liveInfo.Attempt = attempt
 					liveInfo.StartTimestamp = op.startTimestamp
 					dispatchOperationStart(ec, liveInfo, PluginOperationStarted)
@@ -291,7 +339,7 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 		// OnOperationStart for live execution, once per invocation.
 		if !started {
 			started = true
-			liveInfo = ec.operationHookInfo(id, name, string(OperationTypeStep), OperationSubTypeStep, isReplay)
+			liveInfo = ec.operationHookInfo(id, name, string(OperationTypeStep), options.subType, isReplay)
 			liveInfo.Attempt = attempt
 			liveInfo.StartTimestamp = time.Now()
 			dispatchOperationStart(ec, liveInfo, PluginOperationStarted)
@@ -338,7 +386,7 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 	var zero O
 
 	if op == nil || op.status != statusStarted {
-		update := stepUpdate(ec, id, name, OperationActionStart)
+		update := stepUpdate(ec, id, name, options.subType, OperationActionStart)
 		if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
 			if errors.Is(err, errCheckpointTerminated) {
 				return zero, errSuspendExecution
@@ -353,7 +401,7 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 			ID:              id,
 			Name:            name,
 			Type:            string(OperationTypeStep),
-			SubType:         OperationSubTypeStep,
+			SubType:         options.subType,
 			Status:          PluginOperationStarted,
 			Attempt:         attempt,
 			IsReplay:        ec.IsReplaying(),
@@ -435,7 +483,7 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 		}
 		// The result cannot be stored, and storing it again cannot
 		// succeed, so the retry strategy is not consulted.
-		return failStep[O](ec, id, name, failure, nil, attempt)
+		return failStep[O](ec, id, name, options.subType, failure, nil, attempt)
 	}
 
 	// Decode the value as replay will see it: from the serialized
@@ -458,7 +506,7 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 		return zero, decodeErr
 	}
 
-	update := stepUpdate(ec, id, name, OperationActionSucceed)
+	update := stepUpdate(ec, id, name, options.subType, OperationActionSucceed)
 	update.Payload = aws.String(string(serialized))
 	if cerr := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); cerr != nil {
 		if errors.Is(cerr, errCheckpointTerminated) {
@@ -490,10 +538,10 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 // failure no retry can resolve, such as a result the serdes cannot
 // marshal, calls it directly, so the step body runs once. trace is the
 // stack trace captured where the failure arose; nil when there is none.
-func failStep[O any](ec *execContext, id, name string, cause error, trace []string, attempt int) (O, error) {
+func failStep[O any](ec *execContext, id, name, subType string, cause error, trace []string, attempt int) (O, error) {
 	var zero O
 	rec := recordOf(cause).withTrace(trace)
-	update := stepUpdate(ec, id, name, OperationActionFail)
+	update := stepUpdate(ec, id, name, subType, OperationActionFail)
 	update.Error = errorObjectFromRecord(rec)
 	if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
 		if errors.Is(err, errCheckpointTerminated) {
@@ -513,11 +561,11 @@ func settleStepFailure[O any](ec *execContext, id, name string, options stepOpti
 
 	decision := options.retry(RetryAttempt{Err: cause, Attempt: attempt})
 	if !decision.Retry {
-		return failStep[O](ec, id, name, cause, trace, attempt)
+		return failStep[O](ec, id, name, options.subType, cause, trace, attempt)
 	}
 	rec := recordOf(cause).withTrace(trace)
 
-	update := stepUpdate(ec, id, name, OperationActionRetry)
+	update := stepUpdate(ec, id, name, options.subType, OperationActionRetry)
 	update.Error = errorObjectFromRecord(rec)
 	// A strategy that retries without choosing a delay gets the documented
 	// default rather than a zero delay, whose scheduling is unspecified.
@@ -557,13 +605,14 @@ func runStepFunc[O any](ctx context.Context, ec *execContext, id, name string, f
 	})
 }
 
-// stepUpdate assembles the shared fields of a step operation update. IDs
-// are hashed to their wire form.
-func stepUpdate(ec *execContext, id, name string, action OperationAction) OperationUpdate {
+// stepUpdate assembles the shared fields of a step operation update.
+// subType is the step's resolved subtype. IDs are hashed to their wire
+// form.
+func stepUpdate(ec *execContext, id, name, subType string, action OperationAction) OperationUpdate {
 	update := OperationUpdate{
 		Id:      aws.String(hashID(id)),
 		Type:    OperationTypeStep,
-		SubType: aws.String(OperationSubTypeStep),
+		SubType: aws.String(subType),
 		Action:  action,
 	}
 	if name != "" {

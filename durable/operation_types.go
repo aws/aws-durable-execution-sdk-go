@@ -9,9 +9,10 @@ package durable
 // operation and distinguishes functions that share a type: [Map],
 // [Parallel], [RunInChildContext], and [WaitForCallback] all record
 // [OperationTypeContext] operations, and each Map item or Parallel branch
-// is itself a context operation with its own subtype. A child context is
-// the one operation whose subtype the caller may set, with
-// [WithChildSubType].
+// is itself a context operation with its own subtype. The Step, Callback,
+// and RunInChildContext subtypes are defaults: [WithStepSubType],
+// [WithCallbackSubType], and [WithChildSubType] record a caller-defined
+// subtype in their place.
 //
 // These constants are the values the SDK writes to the SubType field of
 // each checkpointed operation and reports in [OperationHookInfo].SubType.
@@ -19,17 +20,23 @@ package durable
 // string fields. Plugins should compare against these constants rather
 // than string literals.
 const (
-	// OperationSubTypeStep is the subtype of a [Step] or [StepAsync]
-	// operation. Its type is [OperationTypeStep].
+	// OperationSubTypeStep is the default subtype of a [Step] or
+	// [StepAsync] operation; [WithStepSubType] records a caller-defined
+	// subtype instead. [WithCallbackSubType] and [WithChildSubType] do
+	// the same for a callback and a child context. Its type is
+	// [OperationTypeStep].
 	OperationSubTypeStep = "Step"
 
 	// OperationSubTypeWait is the subtype of a [Wait] or [WaitAsync]
 	// operation. Its type is [OperationTypeWait].
 	OperationSubTypeWait = "Wait"
 
-	// OperationSubTypeCallback is the subtype of a [CreateCallback]
-	// operation, including the callback that [WaitForCallback] creates
-	// inside its context. Its type is [OperationTypeCallback].
+	// OperationSubTypeCallback is the default subtype of a
+	// [CreateCallback] operation, including the callback that
+	// [WaitForCallback] creates inside its context; [WithCallbackSubType]
+	// records a caller-defined subtype instead. [WithStepSubType] and
+	// [WithChildSubType] do the same for a step and a child context. Its
+	// type is [OperationTypeCallback].
 	OperationSubTypeCallback = "Callback"
 
 	// OperationSubTypeChainedInvoke is the subtype of an [Invoke] or
