@@ -47,7 +47,7 @@ func BenchmarkClaimOperation(b *testing.B) {
 				b.ReportAllocs()
 				atDepth(depth, func() {
 					for b.Loop() {
-						if _, err := ec.claimOperation(""); err != nil {
+						if _, err := ec.claimOperation("", OperationSubTypeStep); err != nil {
 							b.Fatal(err)
 						}
 					}

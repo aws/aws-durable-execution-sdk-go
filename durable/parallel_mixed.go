@@ -276,7 +276,7 @@ func ParallelMixed(ctx Context, name string, branches []AnyBranch, opts ...Batch
 		return BatchResult[json.RawMessage]{}, fmt.Errorf("durable: ParallelMixed %q: %w", name, err)
 	}
 
-	id, err := ec.claimOperation(name)
+	id, err := ec.claimOperation(name, OperationSubTypeParallel)
 	if err != nil {
 		return BatchResult[json.RawMessage]{}, err
 	}

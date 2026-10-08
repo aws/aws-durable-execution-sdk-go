@@ -47,7 +47,7 @@ func Wait(ctx Context, name string, d time.Duration, opts ...WaitOption) error {
 		return err
 	}
 
-	id, err := ec.claimOperation(name)
+	id, err := ec.claimOperation(name, OperationSubTypeWait)
 	if err != nil {
 		return err
 	}
@@ -81,7 +81,7 @@ func WaitAsync(ctx Context, name string, d time.Duration, opts ...WaitOption) *F
 		return newFailedFuture[Void](err)
 	}
 
-	id, err := ec.claimOperation(name)
+	id, err := ec.claimOperation(name, OperationSubTypeWait)
 	if err != nil {
 		return newFailedFuture[Void](err)
 	}

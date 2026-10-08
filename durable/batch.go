@@ -102,7 +102,7 @@ func Map[I, O any](ctx Context, name string, items []I, fn func(ctx Context, ite
 		return BatchResult[O]{}, fmt.Errorf("durable: Map %q: %w", name, err)
 	}
 
-	id, err := ec.claimOperation(name)
+	id, err := ec.claimOperation(name, OperationSubTypeMap)
 	if err != nil {
 		return BatchResult[O]{}, err
 	}
@@ -212,7 +212,7 @@ func Parallel[O any](ctx Context, name string, branches []Branch[O], opts ...Bat
 		return BatchResult[O]{}, fmt.Errorf("durable: Parallel %q: %w", name, err)
 	}
 
-	id, err := ec.claimOperation(name)
+	id, err := ec.claimOperation(name, OperationSubTypeParallel)
 	if err != nil {
 		return BatchResult[O]{}, err
 	}
@@ -1223,7 +1223,7 @@ func executeBatchItems[I, O any](
 				childID = flatItemID(parentID, i)
 			} else {
 				var claimErr error
-				childID, claimErr = ec.claimOperation(itemName)
+				childID, claimErr = ec.claimOperation(itemName, childSubType)
 				if claimErr != nil {
 					return BatchResult[O]{}, claimErr
 				}
@@ -1701,7 +1701,7 @@ func runNestedBatchItem[O any](
 	runItem batchItemFunc[O],
 ) (item BatchItem[O], retErr error) {
 	// Claim the child's operation ID from the parent.
-	childID, err := ec.claimOperation(itemName)
+	childID, err := ec.claimOperation(itemName, childSubType)
 	if err != nil {
 		return BatchItem[O]{}, err
 	}

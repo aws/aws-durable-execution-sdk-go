@@ -84,6 +84,34 @@ type HandlerOption interface {
 // checkpoint response without a token suspends the invocation, carrying
 // the requestId and executionArn attributes. Replay suppression never
 // drops it, because it reports the state of the invocation.
+//
+// The SDK also traces its own work at [slog.LevelDebug]. A handler enabled
+// at Debug, installed here or with [ConfigureLogging], receives these
+// records; the handler's level is the only switch. Each carries requestId,
+// executionArn, and tenantId when the invocation has one:
+//
+//   - "operation claimed" when an operation ID is claimed, with
+//     operationId, operationSubtype, and operationName when named.
+//   - "replay complete; executing live" when a context leaves replay, with
+//     the child operation's operationId and operationName in a child
+//     context.
+//   - "checkpoint enqueued" when a checkpoint request is queued, and
+//     "checkpoint flushed" when the service accepts a checkpoint call,
+//     each with updateCount, the number of operation updates it carries.
+//   - "invocation suspending" when the invocation ends because an
+//     operation is pending, with reason: wait, callback, invoke, retry,
+//     condition, or combinator.
+//   - "operation completed" when an operation reaches a terminal state,
+//     with operationId, operationSubtype, operationName when named, and
+//     status, SUCCEEDED or FAILED.
+//
+// A record written while its context replays follows [WithReplayLogMode],
+// as the context's own records do. An operation completed record is
+// replayed when an earlier invocation already observed the outcome, and
+// live when this invocation is the first to observe it, whatever the
+// replay state of its context. The invocation suspending record, and a
+// checkpoint record for a request the invocation makes itself, report the
+// state of the invocation and are never suppressed.
 func WithLogHandler(h slog.Handler) HandlerOption {
 	return handlerOptionFunc(func(o *handlerOptions) { o.logHandler = h })
 }
@@ -395,6 +423,9 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	cp.onTokenWithdrawn = func() {
 		slog.New(ec.scopedLogHandler(ec.logScope)).WarnContext(ctx, tokenWithdrawnMessage)
 	}
+	cp.debugLog = func(rctx context.Context, msg string, updateCount int) {
+		ec.logCheckpoint(rctx, msg, updateCount)
+	}
 	// The suspension signal learns of every checkpoint request and
 	// response, polls the operations goroutines are parked on through the
 	// checkpointer, and schedules no poll within minPollRemaining of the
@@ -585,6 +616,11 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	switch {
 	case errors.Is(wrapErr, errSuspendExecution) || ec.suspend.fired():
 		// OnInvocationEnd with PENDING.
+		// The invocation is pending on an operation unless it ends
+		// because a response withdrew the checkpoint token.
+		if cp.haltCause() == nil {
+			ec.invocationDebugLog(ctx, debugMsgInvocationSuspending, slog.String(logKeyReason, ec.suspend.suspendReason()))
+		}
 		dispatchNotification(pd, func(p *Plugin) {
 			if p.OnInvocationEnd != nil {
 				p.OnInvocationEnd(ctx, InvocationEndHookInfo{

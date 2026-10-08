@@ -363,6 +363,10 @@ type LogConfig struct {
 // handler body runs from its start on every invocation, so a call placed
 // before the first durable operation re-applies the settings each time.
 //
+// A handler installed here that is enabled at [slog.LevelDebug] also
+// receives the SDK's Debug trace of its own work; [WithLogHandler] lists
+// those records.
+//
 // ConfigureLogging does not affect determinism. It claims no operation ID,
 // writes no checkpoint, and changes no operation's ordering or result, so
 // it may be called conditionally and at different points on different

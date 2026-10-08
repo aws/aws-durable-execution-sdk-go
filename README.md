@@ -1112,6 +1112,34 @@ The execution continues on the next invocation. When the withdrawn token
 answers the checkpoint of the execution's final result, the execution has
 finished, and the SDK writes no record.
 
+The SDK also traces its own work at `slog.LevelDebug`. A handler enabled
+at Debug turns the trace on, whether you pass it to `WithLogHandler` or to
+`ConfigureLogging`. No environment variable is involved. Each record
+carries `requestId`, `executionArn`, and `tenantId` when the invocation
+has one.
+
+| Message | When | Fields |
+| --- | --- | --- |
+| `operation claimed` | The SDK claims an operation ID. | `operationId`, `operationSubtype`, `operationName` when named. |
+| `replay complete; executing live` | A context leaves replay. | `operationId` and `operationName` of the child operation, inside a child context. |
+| `checkpoint enqueued` | The SDK queues a checkpoint request. | `updateCount`, the number of operation updates. |
+| `checkpoint flushed` | The service accepts a checkpoint call. | `updateCount`. |
+| `invocation suspending` | The invocation ends because an operation is pending. | `reason`: `wait`, `callback`, `invoke`, `retry`, `condition`, or `combinator`. |
+| `operation completed` | An operation reaches a terminal state. | `operationId`, `operationSubtype`, `operationName` when named, `status` (`SUCCEEDED` or `FAILED`). |
+
+`operationSubtype` is the subtype the operation records, such as `Step`,
+`Wait`, `Callback`, `ChainedInvoke`, `RunInChildContext`,
+`WaitForCallback`, `WaitForCondition`, `Map`, `MapIteration`, `Parallel`,
+or `ParallelBranch`. A trace record written while its context replays
+follows the replay log mode. Under `ReplayLogModeSuppress` it is dropped,
+and under `ReplayLogModeEmit` it carries `replay` set to `true`. An
+`operation completed` record is replayed when an earlier invocation
+already observed the outcome, and live when this invocation is the first
+to observe it, whatever the replay state of its context. The
+`invocation suspending` record, and a checkpoint record for a request the
+invocation makes itself, report the state of the invocation and are never
+dropped.
+
 ## Plugin API
 
 The plugin instrumentation API is experimental. Its hooks, info types,

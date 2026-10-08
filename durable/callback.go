@@ -81,7 +81,7 @@ func CreateCallback[O any](ctx Context, name string, opts ...CallbackOption) (*C
 	}
 	options.subType = subType
 
-	id, err := ec.claimOperation(name)
+	id, err := ec.claimOperation(name, options.subType)
 	if err != nil {
 		return nil, err
 	}
@@ -254,7 +254,7 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 	// 3. Returns the callback result
 	//
 	// We use the RunInChildContext machinery but with our own subtype.
-	id, err := ec.claimOperation(name)
+	id, err := ec.claimOperation(name, OperationSubTypeWaitForCallback)
 	if err != nil {
 		return zero, err
 	}

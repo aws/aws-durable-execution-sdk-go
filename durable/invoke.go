@@ -67,7 +67,7 @@ func Invoke[O, I any](ctx Context, name, functionID string, input I, opts ...Inv
 		o.applyInvoke(&options)
 	}
 
-	id, err := ec.claimOperation(name)
+	id, err := ec.claimOperation(name, OperationSubTypeChainedInvoke)
 	if err != nil {
 		return zero, err
 	}
@@ -98,7 +98,7 @@ func InvokeAsync[O, I any](ctx Context, name, functionID string, input I, opts .
 		o.applyInvoke(&options)
 	}
 
-	id, err := ec.claimOperation(name)
+	id, err := ec.claimOperation(name, OperationSubTypeChainedInvoke)
 	if err != nil {
 		return newFailedFuture[O](err)
 	}

@@ -125,6 +125,12 @@ type checkpointer struct {
 	// without a token halts the checkpointer. Set during invocation
 	// wiring to log the halt.
 	onTokenWithdrawn func()
+
+	// debugLog, when non-nil, writes the checkpoint enqueued and
+	// checkpoint flushed Debug records. ctx is the context of the request
+	// the record reports: the caller's for an enqueued request, the first
+	// request's for a flushed call. Set during invocation wiring.
+	debugLog func(ctx context.Context, msg string, updateCount int)
 	// suspend, when non-nil, is told about every queued and settled
 	// request and is given the records of every checkpoint response, so
 	// that a response reporting an awaited operation finished resumes the
@@ -360,6 +366,9 @@ func (cp *checkpointer) enqueue(ctx context.Context, updates []OperationUpdate, 
 	if cp.suspend != nil && len(updates) > 0 {
 		cp.suspend.touch()
 	}
+	if cp.debugLog != nil {
+		cp.debugLog(ctx, debugMsgCheckpointEnqueued, len(updates))
+	}
 	cp.mu.Lock()
 	cp.queue = append(cp.queue, p)
 	start := !cp.flushing
@@ -503,6 +512,9 @@ func (cp *checkpointer) send(batch []*pendingCheckpoint, token string) error {
 		// already retried it, so the SDK adds no retry. The error ends
 		// the invocation, and the service invokes the execution again.
 		return classified
+	}
+	if cp.debugLog != nil {
+		cp.debugLog(ctx, debugMsgCheckpointFlushed, len(updates))
 	}
 
 	if out.CheckpointToken == "" {

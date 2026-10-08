@@ -189,6 +189,11 @@ type opWatch struct {
 	// change, or zero when it has none. The first poll is sent then.
 	endTime func(*operation) time.Time
 
+	// record returns the operation's current record, or nil when it has
+	// none. It names the kind of event the invocation is pending on when
+	// the invocation suspends.
+	record func() *operation
+
 	waiters []*parkWaiter
 
 	// status is the operation's status the watch last observed.
@@ -249,7 +254,12 @@ func (s *suspendSignal) awaitOperation(state *executionState, id string, abandon
 		if s.watches == nil {
 			s.watches = make(map[string]*opWatch)
 		}
-		watch = &opWatch{wireID: wireID, ready: ready, endTime: endTime}
+		watch = &opWatch{
+			wireID:  wireID,
+			ready:   ready,
+			endTime: endTime,
+			record:  func() *operation { return state.get(id) },
+		}
 		if op != nil {
 			watch.status = op.status
 		}

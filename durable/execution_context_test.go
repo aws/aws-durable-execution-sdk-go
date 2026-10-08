@@ -73,7 +73,7 @@ func TestClaimOperationReplayTransition(t *testing.T) {
 		if !c.IsReplaying() {
 			t.Fatalf("IsReplaying() before claim %d = false, want true", want)
 		}
-		id, err := c.claimOperation("")
+		id, err := c.claimOperation("", OperationSubTypeStep)
 		if err != nil {
 			t.Fatalf("claimOperation %d: %v", want, err)
 		}
@@ -84,7 +84,7 @@ func TestClaimOperationReplayTransition(t *testing.T) {
 
 	// Operation 3 has no checkpoint: mode must flip to live execution at
 	// claim time.
-	if _, err := c.claimOperation(""); err != nil {
+	if _, err := c.claimOperation("", OperationSubTypeStep); err != nil {
 		t.Fatalf("claimOperation 3: %v", err)
 	}
 	if c.IsReplaying() {
@@ -100,7 +100,7 @@ func TestRefreshReplayModeVirtualContextProbe(t *testing.T) {
 		checkpointed("1-1", statusSucceeded),
 	})
 
-	if _, err := c.claimOperation(""); err != nil {
+	if _, err := c.claimOperation("", OperationSubTypeStep); err != nil {
 		t.Fatalf("claimOperation: %v", err)
 	}
 	if !c.IsReplaying() {
@@ -113,7 +113,7 @@ func TestClaimOperationForeignGoroutine(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		_, err := c.claimOperation("")
+		_, err := c.claimOperation("", OperationSubTypeStep)
 		errCh <- err
 	}()
 	err := <-errCh
@@ -126,7 +126,7 @@ func TestClaimOperationForeignGoroutine(t *testing.T) {
 	}
 
 	// The failed claim must not have consumed an operation ID.
-	id, err := c.claimOperation("")
+	id, err := c.claimOperation("", OperationSubTypeStep)
 	if err != nil {
 		t.Fatalf("claimOperation on owner: %v", err)
 	}
@@ -142,14 +142,14 @@ func TestChildContextInheritsStateAndPrefix(t *testing.T) {
 		checkpointed("1-1", statusSucceeded),
 	})
 
-	entityID, err := c.claimOperation("")
+	entityID, err := c.claimOperation("", OperationSubTypeStep)
 	if err != nil {
 		t.Fatalf("claimOperation: %v", err)
 	}
 	child := c.child(entityID, "", currentGoroutineOwner(), executionMode(c.mode.Load()))
 	defer child.enterBody()()
 
-	id, err := child.claimOperation("")
+	id, err := child.claimOperation("", OperationSubTypeStep)
 	if err != nil {
 		t.Fatalf("child claimOperation: %v", err)
 	}

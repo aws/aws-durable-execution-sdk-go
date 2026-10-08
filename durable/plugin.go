@@ -727,7 +727,22 @@ func dispatchOperationEnd(ec *execContext, info OperationHookInfo, status Plugin
 
 // dispatchOperationEndTo is dispatchOperationEnd with the dispatcher chosen
 // by the caller; see dispatchOperationStartTo.
+//
+// It also writes the operation completed Debug record when status is
+// terminal and ctx is the context the operation was claimed on. The record
+// is replayed when info.IsReplay is set, and it does not depend on the
+// plugin depth bound.
 func dispatchOperationEndTo(d *pluginDispatcher, ctx context.Context, info OperationHookInfo, status PluginOperationStatus) {
+	if ec, ok := ctx.(*execContext); ok {
+		replayed := info.IsReplay
+		ec.logOperationCompleted(func() bool { return replayed }, info, status)
+	}
+	notifyOperationEnd(d, ctx, info, status)
+}
+
+// notifyOperationEnd notifies every plugin's OnOperationEnd hook, without
+// writing the operation completed Debug record.
+func notifyOperationEnd(d *pluginDispatcher, ctx context.Context, info OperationHookInfo, status PluginOperationStatus) {
 	info.Status = status
 	dispatchNotification(d, func(p *Plugin) {
 		if p.OnOperationEnd != nil {

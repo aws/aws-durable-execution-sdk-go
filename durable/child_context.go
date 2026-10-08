@@ -373,7 +373,7 @@ func RunInChildContext[O any](ctx Context, name string, fn func(Context) (O, err
 		return runVirtualChild(ec, name, subType, options, fn)
 	}
 
-	id, err := ec.claimOperation(name)
+	id, err := ec.claimOperation(name, subType)
 	if err != nil {
 		return zero, err
 	}
@@ -589,7 +589,7 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 
 	// Claim the operation ID synchronously on the calling goroutine to
 	// preserve deterministic ID minting order across concurrent Go calls.
-	id, err := ec.claimOperation(name)
+	id, err := ec.claimOperation(name, subType)
 	if err != nil {
 		return newFailedFuture[O](err)
 	}
@@ -767,11 +767,11 @@ func Go[O any](ctx Context, name string, fn func(Context) (O, error), opts ...Ch
 // replay has ended. A checkpoint at the claimed position belongs to code
 // that ran a checkpointed operation there, so that is a non-deterministic
 // replay.
-func claimVirtualChild(ec *execContext, name string) (string, error) {
+func claimVirtualChild(ec *execContext, name, subType string) (string, error) {
 	if ec.virtual {
 		return "", fmt.Errorf("durable: child context %q: WithChildVirtual cannot be used inside a virtual child context; make one of the two a checkpointed child context", name)
 	}
-	id, err := ec.claimUncheckpointedOperation(name)
+	id, err := ec.claimUncheckpointedOperation(name, subType)
 	if err != nil {
 		return "", err
 	}
@@ -808,7 +808,7 @@ func claimVirtualChild(ec *execContext, name string) (string, error) {
 // checkpointed child, and the result is round-tripped through the serdes.
 func runVirtualChild[O any](ec *execContext, name, subType string, options childOptions, fn func(Context) (O, error)) (O, error) {
 	var zero O
-	id, err := claimVirtualChild(ec, name)
+	id, err := claimVirtualChild(ec, name, subType)
 	if err != nil {
 		return zero, err
 	}
@@ -828,13 +828,13 @@ func runVirtualChild[O any](ec *execContext, name, subType string, options child
 	})
 	ec.observeChildLive(child, wrappedErr)
 	if wrappedErr != nil {
-		return zero, virtualChildFailure(ec, opInfo, name, options, wrappedErr, fnTrace)
+		return zero, virtualChildFailure(ec, child.IsReplaying, opInfo, name, options, wrappedErr, fnTrace)
 	}
 	var result O
 	if wrappedResult != nil {
 		result, _ = wrappedResult.(O)
 	}
-	return virtualChildSuccess(ec, opInfo, name, options, result)
+	return virtualChildSuccess(ec, child.IsReplaying, opInfo, name, options, result)
 }
 
 // wrapVirtualChildBody runs body, the body of the virtual child context
@@ -870,7 +870,7 @@ func wrapVirtualChildBody(ec *execContext, start OperationHookInfo, mode executi
 // so the goroutine holds no executing span: a pending operation inside it
 // settles the branch as it would under a checkpointed child.
 func runVirtualChildAsync[O any](ec *execContext, name, subType string, options childOptions, fn func(Context) (O, error)) *Future[O] {
-	id, err := claimVirtualChild(ec, name)
+	id, err := claimVirtualChild(ec, name, subType)
 	if err != nil {
 		return newFailedFuture[O](err)
 	}
@@ -916,10 +916,10 @@ func runVirtualChildAsync[O any](ec *execContext, name, subType string, options 
 		fut.newOutcome = child.isLive
 		if fnErr != nil {
 			var zero O
-			fut.settle(zero, virtualChildFailure(ec, opInfo, name, options, fnErr, fnTrace))
+			fut.settle(zero, virtualChildFailure(ec, child.IsReplaying, opInfo, name, options, fnErr, fnTrace))
 			return
 		}
-		fut.settle(virtualChildSuccess(ec, opInfo, name, options, result))
+		fut.settle(virtualChildSuccess(ec, child.IsReplaying, opInfo, name, options, result))
 	}()
 	return fut
 }
@@ -959,29 +959,37 @@ func dispatchVirtualContextStart(ec *execContext, id, name, subType string) Oper
 // dispatchVirtualContextStart). err is the failure the child returns to
 // its caller, nil for a child that succeeded with the serialized result.
 // The child has no checkpoint to take an end time from, so the end is
-// stamped now.
-func dispatchVirtualContextEnd(ec *execContext, start OperationHookInfo, result string, err error) {
+// stamped now. The child records no outcome for a later invocation to
+// replay, so its operation completed Debug record follows replaying, the
+// replay state of the child context itself, rather than the IsReplay of
+// its hook info. The child's state is the one that counts: a child leaves
+// replay when its code receives a new outcome, while its parent can stay
+// replaying until it reads the child's future.
+func dispatchVirtualContextEnd(ec *execContext, replaying func() bool, start OperationHookInfo, result string, err error) {
 	info := ec.operationHookInfo(start.ID, start.Name, start.Type, start.SubType, true)
 	info.ChildrenOmitted = false
 	info.StartTimestamp = start.StartTimestamp
 	info.EndTimestamp = time.Now()
+	status := PluginOperationSucceeded
 	if err != nil {
 		info.Error = err
-		dispatchOperationEnd(ec, info, PluginOperationFailed)
-		return
+		status = PluginOperationFailed
+	} else {
+		info.Result = result
 	}
-	info.Result = result
-	dispatchOperationEnd(ec, info, PluginOperationSucceeded)
+	ec.logOperationCompleted(replaying, info, status)
+	notifyOperationEnd(ec.operationHooks(), ec, info, status)
 }
 
 // virtualChildFailure builds the error a virtual child context returns
 // when its body fails with fnErr, and dispatches the child's end with it.
 // Suspension is not a failure and dispatches no end; see
-// replayedChildFailure for the shape of the error.
-func virtualChildFailure(ec *execContext, start OperationHookInfo, name string, options childOptions, fnErr error, fnTrace []string) error {
+// replayedChildFailure for the shape of the error. replaying is the
+// child's replay state; see dispatchVirtualContextEnd.
+func virtualChildFailure(ec *execContext, replaying func() bool, start OperationHookInfo, name string, options childOptions, fnErr error, fnTrace []string) error {
 	failure := replayedChildFailure(name, options, fnErr, fnTrace)
 	if !errors.Is(failure, errSuspendExecution) {
-		dispatchVirtualContextEnd(ec, start, "", failure)
+		dispatchVirtualContextEnd(ec, replaying, start, "", failure)
 	}
 	return failure
 }
@@ -994,21 +1002,21 @@ func virtualChildFailure(ec *execContext, start OperationHookInfo, name string, 
 // function returns to the caller: a serdes failure in either direction
 // dispatches a failed end carrying the [SerdesError] the caller receives,
 // so every start of a virtual child is followed by exactly one end.
-func virtualChildSuccess[O any](ec *execContext, start OperationHookInfo, name string, options childOptions, result O) (O, error) {
+func virtualChildSuccess[O any](ec *execContext, replaying func() bool, start OperationHookInfo, name string, options childOptions, result O) (O, error) {
 	var zero O
 	serialized, err := options.serdes.Marshal(ec.Context, ec.serdesCtx(start.ID), result)
 	if err != nil {
 		failure := ec.serdesFailure(name, serdesDirectionMarshal, err)
-		dispatchVirtualContextEnd(ec, start, "", failure)
+		dispatchVirtualContextEnd(ec, replaying, start, "", failure)
 		return zero, failure
 	}
 	var out O
 	if err := options.serdes.Unmarshal(ec.Context, ec.serdesCtx(start.ID), serialized, &out); err != nil {
 		failure := ec.serdesFailure(name, serdesDirectionUnmarshal, err)
-		dispatchVirtualContextEnd(ec, start, "", failure)
+		dispatchVirtualContextEnd(ec, replaying, start, "", failure)
 		return zero, failure
 	}
-	dispatchVirtualContextEnd(ec, start, string(serialized), nil)
+	dispatchVirtualContextEnd(ec, replaying, start, string(serialized), nil)
 	return out, nil
 }
 

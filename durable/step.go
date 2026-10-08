@@ -133,7 +133,7 @@ func Step[O any](ctx Context, name string, fn func(StepContext) (O, error), opts
 		return zero, err
 	}
 
-	id, err := ec.claimOperation(name)
+	id, err := ec.claimOperation(name, options.subType)
 	if err != nil {
 		return zero, err
 	}
@@ -162,7 +162,7 @@ func StepAsync[O any](ctx Context, name string, fn func(StepContext) (O, error),
 		return newFailedFuture[O](err)
 	}
 
-	id, err := ec.claimOperation(name)
+	id, err := ec.claimOperation(name, options.subType)
 	if err != nil {
 		return newFailedFuture[O](err)
 	}
@@ -365,7 +365,10 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 			continue
 		}
 
-		// OnOperationEnd for live execution.
+		// OnOperationEnd for live execution. The outcome was recorded by
+		// this invocation, so the end is live even when the step was
+		// re-entered from STARTED, READY, or PENDING.
+		liveInfo.IsReplay = false
 		if err == nil {
 			liveInfo.EndTimestamp = time.Now()
 			dispatchOperationEnd(ec, liveInfo, PluginOperationSucceeded)

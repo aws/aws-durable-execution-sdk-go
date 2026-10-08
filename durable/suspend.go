@@ -139,6 +139,10 @@ type suspendSignal struct {
 	// waiters.
 	watches map[string]*opWatch
 
+	// firedReason is the reason the watches stated when fire started,
+	// before fire removed them; see suspendReason.
+	firedReason string
+
 	// checkpointBusy reports whether a checkpoint request is queued or in
 	// flight. nil when no checkpointer is wired, as in unit tests.
 	checkpointBusy func() bool
@@ -257,6 +261,7 @@ func (s *suspendSignal) fire() {
 	s.once.Do(func() {
 		s.mu.Lock()
 		s.firing = true
+		s.firedReason = s.watchReasonLocked()
 		fs := s.futures
 		s.futures = nil // release references
 		// Every goroutine parked on an operation resumes with the

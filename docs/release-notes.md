@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Added: the SDK logs its lifecycle at Debug
+
+The SDK now writes a record at `slog.LevelDebug` when it claims an
+operation, when a context leaves replay, when it queues a checkpoint
+request, when the service accepts a checkpoint call, when the invocation
+suspends, and when an operation completes. A handler enabled at Debug,
+set with `WithLogHandler` or `ConfigureLogging`, receives them; no option
+or environment variable is involved. The README's Logging section lists
+the messages and their fields.
+
+A `Step` that resumes from a scheduled retry or an interrupted attempt,
+and records its outcome in the current invocation, now reports
+`OnOperationEnd` with `IsReplay` false, as every other live operation end
+does.
+
 ### Changed: stack-trace frames use the base file name
 
 A stack-trace frame the SDK records for a failure of user code now reads

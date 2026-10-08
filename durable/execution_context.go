@@ -436,13 +436,16 @@ func (c *execContext) parentOperationID() string {
 // errSuspendExecution so the operation unwinds without checkpointing.
 //
 // On error, no state is mutated: the operation ID is not consumed and the
-// mode is unchanged.
-func (c *execContext) claimOperation(name string) (string, error) {
+// mode is unchanged. On success it writes the operation claimed Debug
+// record, with subType as the operation's wire subtype.
+func (c *execContext) claimOperation(name, subType string) (string, error) {
 	if err := c.claimable(name); err != nil {
 		return "", err
 	}
 	c.refreshReplayMode()
-	return c.ids.next(), nil
+	id := c.ids.next()
+	c.logOperationClaimed(id, name, subType)
+	return id, nil
 }
 
 // claimUncheckpointedOperation claims the next operation ID for an
@@ -452,11 +455,13 @@ func (c *execContext) claimOperation(name string) (string, error) {
 // checkpoint log, so its absence says nothing about where replay ends; the
 // next checkpointed operation claimed on this context, or inside the
 // virtual child, settles that.
-func (c *execContext) claimUncheckpointedOperation(name string) (string, error) {
+func (c *execContext) claimUncheckpointedOperation(name, subType string) (string, error) {
 	if err := c.claimable(name); err != nil {
 		return "", err
 	}
-	return c.ids.next(), nil
+	id := c.ids.next()
+	c.logOperationClaimed(id, name, subType)
+	return id, nil
 }
 
 // claimable reports whether this context may claim the operation name: the
@@ -541,6 +546,7 @@ func (c *execContext) refreshReplayMode() {
 		return
 	}
 	c.mode.Store(int32(modeExecution))
+	c.logReplayComplete()
 }
 
 // observeOutcome switches this context from replay to live execution when
@@ -588,7 +594,9 @@ func (c *execContext) receiveOutcome(err error, isNew func() bool) {
 	if !isNew() {
 		return
 	}
-	c.mode.CompareAndSwap(int32(modeReplay), int32(modeExecution))
+	if c.mode.CompareAndSwap(int32(modeReplay), int32(modeExecution)) {
+		c.logReplayComplete()
+	}
 }
 
 // observeChildLive switches this context from replay to live execution

@@ -58,13 +58,27 @@ func TestHandler(t *testing.T) {
 	// Each line is one JSON record with the handler's own field names and
 	// the SDK's identifiers as structured attributes. Lines before the
 	// wait appear once: the second invocation replays them suppressed.
+	// The handler is enabled at Debug, so it also receives the SDK's
+	// Debug trace of its own work; those records are checked for the
+	// identifiers and then set aside, leaving the handler code's records.
 	var records []map[string]any
+	sdkTrace := 0
 	for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
 		var rec map[string]any
 		if err := json.Unmarshal([]byte(line), &rec); err != nil {
 			t.Fatalf("log line is not JSON: %v\n%s", err, line)
 		}
+		if msg, _ := rec["message"].(string); rec["level"] == "DEBUG" && sdkTraceMessages[msg] {
+			if _, ok := rec["execution_arn"]; !ok {
+				t.Errorf("SDK trace record %q: missing execution_arn: %v", msg, rec)
+			}
+			sdkTrace++
+			continue
+		}
 		records = append(records, rec)
+	}
+	if sdkTrace == 0 {
+		t.Error("no SDK Debug trace record reached the Debug-level handler")
 	}
 
 	wantMessages := []string{
@@ -153,4 +167,15 @@ func TestHandler(t *testing.T) {
 	if got, _ := records[12]["err"].(string); got != "step context direct error" {
 		t.Errorf("step error record err = %v, want the error text", records[12]["err"])
 	}
+}
+
+// sdkTraceMessages are the messages of the records the SDK writes at Debug
+// about its own work.
+var sdkTraceMessages = map[string]bool{
+	"operation claimed":               true,
+	"replay complete; executing live": true,
+	"checkpoint enqueued":             true,
+	"checkpoint flushed":              true,
+	"invocation suspending":           true,
+	"operation completed":             true,
 }

@@ -370,8 +370,10 @@ func TestEnrichLogContextFollowsReplayLogMode(t *testing.T) {
 			mu.Lock()
 			got := calls
 			mu.Unlock()
-			if got != tc.calls {
-				t.Errorf("EnrichLogContext ran %d times, want %d (records emitted: %v)", got, tc.calls, rec.messages())
+			// The SDK's own Debug records are emitted records too, so
+			// the hook runs for each of them as well.
+			if want := tc.calls + rec.sdkDebugCount(); got != want {
+				t.Errorf("EnrichLogContext ran %d times, want %d (records emitted: %v)", got, want, rec.messages())
 			}
 			for _, r := range rec.all() {
 				if r.attrs["enriched"] != true {

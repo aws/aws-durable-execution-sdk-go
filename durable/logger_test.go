@@ -54,15 +54,34 @@ type recordingHandler struct {
 	mu      *sync.Mutex
 	records *[]recordedLog
 	attrs   []slog.Attr
+	// sdkDebug counts the SDK's own Debug records the handler received
+	// and left out of records.
+	sdkDebug *int
 }
 
 func newRecordingHandler() *recordingHandler {
-	return &recordingHandler{mu: &sync.Mutex{}, records: &[]recordedLog{}}
+	return &recordingHandler{mu: &sync.Mutex{}, records: &[]recordedLog{}, sdkDebug: new(int)}
+}
+
+// sdkDebugCount returns the number of SDK Debug records the handler left
+// out of records.
+func (h *recordingHandler) sdkDebugCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return *h.sdkDebug
 }
 
 func (h *recordingHandler) Enabled(context.Context, slog.Level) bool { return true }
 
 func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error {
+	// The SDK's own Debug records are left out, so a test sees only the
+	// records its handler code emits.
+	if isSDKDebugRecord(r) {
+		h.mu.Lock()
+		*h.sdkDebug++
+		h.mu.Unlock()
+		return nil
+	}
 	attrs := make(map[string]any, len(h.attrs)+r.NumAttrs())
 	for _, a := range h.attrs {
 		attrs[a.Key] = a.Value.Any()
@@ -81,7 +100,7 @@ func (h *recordingHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	merged := make([]slog.Attr, 0, len(h.attrs)+len(attrs))
 	merged = append(merged, h.attrs...)
 	merged = append(merged, attrs...)
-	return &recordingHandler{mu: h.mu, records: h.records, attrs: merged}
+	return &recordingHandler{mu: h.mu, records: h.records, attrs: merged, sdkDebug: h.sdkDebug}
 }
 
 func (h *recordingHandler) WithGroup(string) slog.Handler { return h }
@@ -216,7 +235,7 @@ func TestExecContextLoggerReadsOwnReplayState(t *testing.T) {
 	// Claim the replayed operation, then refresh for the next (absent)
 	// one: the context flips to live execution.
 	ec.owner = currentGoroutineOwner()
-	_, _ = ec.claimOperation("")
+	_, _ = ec.claimOperation("", OperationSubTypeStep)
 	ec.refreshReplayMode()
 	if ec.IsReplaying() {
 		t.Fatal("expected execution mode after flip")
@@ -1157,8 +1176,10 @@ func TestPluginLogContextHookCalledOncePerEmittedRecord(t *testing.T) {
 	if got := rec.messages(); len(got) != 2 || got[0] != "live-1" || got[1] != "live-2" {
 		t.Fatalf("messages = %v, want only the live records [live-1 live-2]", got)
 	}
-	if got := calls.Load(); got != 2 {
-		t.Errorf("hook called %d times, want 2 (once per emitted record, none for suppressed records)", got)
+	// The SDK's own Debug records are emitted records too, so the hook
+	// runs for each of them as well.
+	if got, want := int(calls.Load()), 2+rec.sdkDebugCount(); got != want {
+		t.Errorf("hook called %d times, want %d (once per emitted record, none for suppressed records)", got, want)
 	}
 }
 
@@ -1425,4 +1446,18 @@ func TestQualifiedLogKeyDistinguishesDotsFromGroups(t *testing.T) {
 	if qualifiedLogKey([]string{"g"}, "k") == qualifiedLogKey([]string{"g", "k"}, "") {
 		t.Error("key k under group g must differ from an empty key under group g.k")
 	}
+}
+
+// isSDKDebugRecord reports whether r is one of the Debug records the SDK
+// writes about its own work.
+func isSDKDebugRecord(r slog.Record) bool {
+	if r.Level != slog.LevelDebug {
+		return false
+	}
+	switch r.Message {
+	case debugMsgOperationClaimed, debugMsgReplayComplete, debugMsgCheckpointEnqueued,
+		debugMsgCheckpointFlushed, debugMsgInvocationSuspending, debugMsgOperationCompleted:
+		return true
+	}
+	return false
 }

@@ -55,7 +55,7 @@ func WaitForCondition[S any](ctx Context, name string, check func(StepContext, S
 		serdes = ec.serdesDefaults().serdes
 	}
 
-	id, err := ec.claimOperation(name)
+	id, err := ec.claimOperation(name, OperationSubTypeWaitForCondition)
 	if err != nil {
 		return zero, err
 	}
