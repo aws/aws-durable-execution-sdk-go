@@ -5,7 +5,6 @@ package main
 
 import (
 	"encoding/json"
-	"sort"
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
@@ -43,28 +42,14 @@ func TestHandler(t *testing.T) {
 		t.Fatalf("deserialize result: %v", err)
 	}
 
-	// Verify all three results are present. Branch completion order is
-	// nondeterministic, so sort before comparing.
-	expected := []string{
-		"computed: 7*6=42",
-		"invoked: child returned",
-		"waited: 1s elapsed",
+	want := Output{
+		Compute:          Computation{Expression: "7*6", Value: 42},
+		WaitedSeconds:    1,
+		Invoked:          "invoked: child returned",
+		CompletionReason: "ALL_COMPLETED",
 	}
-	got := make([]string, len(output.Results))
-	copy(got, output.Results)
-	sort.Strings(got)
-
-	if len(got) != len(expected) {
-		t.Fatalf("expected %d results, got %d: %v", len(expected), len(got), got)
-	}
-	for i := range expected {
-		if got[i] != expected[i] {
-			t.Errorf("result[%d] = %q, want %q", i, got[i], expected[i])
-		}
-	}
-
-	if output.CompletionReason != "ALL_COMPLETED" {
-		t.Errorf("expected CompletionReason=ALL_COMPLETED, got %s", output.CompletionReason)
+	if output != want {
+		t.Errorf("output = %+v, want %+v", output, want)
 	}
 
 	// The branches run concurrently and checkpoint in scheduling-dependent

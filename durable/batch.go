@@ -166,8 +166,7 @@ func runClaimedMap[I, O any](ec *execContext, id, name string, items []I, fn fun
 
 // Parallel executes branches concurrently, each in its own child context,
 // and returns the collected results. All branches must produce the same
-// type; for heterogeneous fan-out, use [Go] with futures of different
-// types.
+// type; for branches of different result types, use [ParallelMixed].
 //
 // Each branch runs in a ParallelBranch child context named by [Branch].Name.
 // A branch with an empty Name is named "parallel-branch-<index>", for
@@ -266,7 +265,11 @@ func runClaimedParallel[O any](ec *execContext, id, name string, branches []Bran
 	}
 
 	result, err := executeBatchItems[struct{}, O](ec, start, totalItems, options, OperationSubTypeParallelBranch, func(childCtx Context, index int) (O, []string, error) {
-		return runBatchItemFunc(childCtx, index, branches[index].Func, func() (O, error) {
+		var userFn any = branches[index].Func
+		if options.itemUserFn != nil {
+			userFn = options.itemUserFn(index)
+		}
+		return runBatchItemFunc(childCtx, index, userFn, func() (O, error) {
 			return branches[index].Func(childCtx)
 		})
 	})
@@ -387,6 +390,10 @@ type BatchResult[O any] struct {
 
 	// Reason records why the batch completed.
 	Reason CompletionReason
+
+	// mixed identifies the [ParallelMixed] call that produced the result,
+	// or is nil. It is never checkpointed or serialized.
+	mixed *mixedCall
 }
 
 // Results returns the successful results in input order. Failed or
@@ -777,6 +784,10 @@ func WithNesting(m NestingMode) BatchOption {
 // deterministic and free of side effects: it runs at most once per
 // execution, so a summary that varies between runs is a defect a reader
 // of the history cannot detect.
+//
+// For a [ParallelMixed] call O is [json.RawMessage]: fn receives a
+// BatchResult[json.RawMessage] whose items hold each branch's stored
+// bytes.
 func WithBatchSummary[O any](fn func(result BatchResult[O]) string) BatchOption {
 	return batchOptionFunc(func(o *batchOptions) { o.summary = fn })
 }
@@ -1028,6 +1039,12 @@ type batchOptions struct {
 	// batchItemIDs. It keys every serdes call for an item's result, so
 	// each item's [SerdesContext.OperationID] is distinct.
 	itemID func(index int) string
+
+	// itemUserFn returns the user's function value for the item at an
+	// input index, the origin frame a failure's stack trace names. It is
+	// nil unless the batch runs the user function through a wrapper, as
+	// [ParallelMixed] does.
+	itemUserFn func(index int) any
 }
 
 type batchOptionFunc func(*batchOptions)

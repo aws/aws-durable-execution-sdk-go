@@ -126,7 +126,7 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [parallel-failure-threshold-count](parallel-failure-threshold-count/main.go) | Parallel, fail-fast ToleratedFailureCount=0 (failure propagated) | FAILED |
 | [parallel-failure-threshold-percentage](parallel-failure-threshold-percentage/main.go) | Parallel, ToleratedFailurePercentage (failure propagated) | FAILED |
 | [parallel-virtual-context](parallel-virtual-context/main.go) | Parallel, WithNesting (NestingFlat) | SUCCEEDED |
-| [parallel-heterogeneous](parallel-heterogeneous/main.go) | Parallel, Step, Wait, Invoke | SUCCEEDED |
+| [parallel-heterogeneous](parallel-heterogeneous/main.go) | ParallelMixed, Step, Wait, Invoke | SUCCEEDED |
 | [parallel-custom-summary-generator](parallel-custom-summary-generator/main.go) | Parallel, WithBatchSummary (>256KB) | SUCCEEDED |
 
 ### Future Combinators & Concurrency

@@ -170,6 +170,7 @@ func TestExpectationChecksAcceptObservedResults(t *testing.T) {
 		"map-completion-config-issue":         `{"totalItems":4,"successfulCount":2,"failedCount":0,"startedCount":2,"hasFailures":false,"batchStatus":"SUCCEEDED","completionReason":"MIN_SUCCESSFUL_REACHED","successfulItems":[{"index":0,"itemId":1},{"index":2,"itemId":3}],"failedItems":null}`,
 		"map-custom-summary-generator-replay": `{"totalCount":3,"successCount":2,"startedCount":1,"completionReason":"MIN_SUCCESSFUL_REACHED","itemIndexes":[0,1,2]}`,
 		"map-failure-threshold":               `{"completionReason":"FAILURE_TOLERANCE_EXCEEDED","successCount":0,"failureCount":3,"totalCount":5}`,
+		"parallel-heterogeneous":              `{"compute":{"expression":"7*6","value":42},"waitedSeconds":1,"invokeError":"durable: child context \"invoke\" failed: InvokeError: invoke failed: durable: invoke \"child-function\" of \"target-handler\" failed: ResourceNotFoundException: Function not found","completionReason":"ALL_COMPLETED"}`,
 		"parallel-should-complete":            `{"successCount":2,"startedCount":1,"totalCount":3,"completionReason":"CUSTOM_COMPLETION_SUCCEEDED","results":["Branch B done","Branch C done"]}`,
 		"simple-execution":                    `{"received":"{\n  \"orderId\": \"ORD-12345\"\n}","timestamp":1789772875799,"message":"Handler completed successfully"}`,
 	}

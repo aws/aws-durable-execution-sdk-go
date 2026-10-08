@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### Added: `ParallelMixed`
+
+`ParallelMixed` runs named branches of different result types
+concurrently. Each branch is a `*TypedBranch[T]` built with
+`NewTypedBranch`, and `TypedBranch.Result` reads the branch value from the
+returned `BatchResult[json.RawMessage]` as a `T`. Before, a typed fan-out
+with `WithMaxConcurrency` and `WithCompletion` was available only as
+`Parallel[O]`, whose branches share one result type. `Parallel[any]`
+decoded a struct branch into a `map[string]interface{}` and an int branch
+into a `float64`.
+
+Every `BatchOption` applies as in `Parallel`. A `ParallelMixed` call
+records the same operations and stores the same payloads as a `Parallel`
+over the branch values. Each branch value is marshaled once by its serdes,
+set with `WithTypedBranchSerdes` or else the batch item serdes, and those
+bytes are stored unchanged, so they need not be JSON. `Result` returns the
+branch's item error for a failed branch and a `*BranchNotCompletedError`
+for a branch that never started or was abandoned when the batch completed
+early. It returns an error when the result came from a different
+`ParallelMixed` call. A `WithBatchSummary` function for `ParallelMixed`
+takes a `BatchResult[json.RawMessage]`.
+
+The `parallel-heterogeneous` example uses `ParallelMixed`, and its `timer`
+branch now returns the error from `Wait`.
+
 ### Changed: every combinator failure is a `PromiseCombinatorError`
 
 A failure of `All`, `Any`, `Race`, `Join`, or `Select` is now a

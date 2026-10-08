@@ -370,12 +370,29 @@ var expectations = map[string]expectation{
 	"parallel-error-preservation":           {result: `{"success":["task completed successfully"],"errors":[{"message":"durable: child context \"failing-task\" failed: StepError: durable: step \"failing-task\" failed after 1 attempts: Error: custom error message","isStepError":true}],"totalErrors":1}`},
 	"parallel-failure-threshold-count":      {failed: true, errorType: "BatchError"},
 	"parallel-failure-threshold-percentage": {failed: true, errorType: "BatchError"},
-	"parallel-heterogeneous":                {result: `{"results":["computed: 7*6=42","waited: 1s elapsed"],"completionReason":"ALL_COMPLETED"}`},
-	"parallel-invoke":                       {result: `{"successCount":3}`},
-	"parallel-min-successful":               {result: `{"successCount":2,"totalCount":4,"completionReason":"MIN_SUCCESSFUL_REACHED","results":["Branch 1 result","Branch 2 result"]}`},
-	"parallel-min-successful-callback":      {result: `{"successCount":3,"totalCount":5,"completionReason":"MIN_SUCCESSFUL_REACHED"}`},
-	"parallel-min-successful-threshold":     {result: `{"successCount":2,"startedCount":3,"totalCount":5,"completionReason":"MIN_SUCCESSFUL_REACHED","succeeded":["fast","quick"],"abandoned":["slow","slower","straggler"]}`},
-	"parallel-invalid-max-concurrency":      {failed: true, errorType: "Error"},
+	"parallel-heterogeneous": {
+		nondeterministic: "invokeError ends with the service's message for the companion function the stack does not provide",
+		check: func(t testing.TB, result string) {
+			obj := resultObject(t, result)
+			assertFields(t, obj, map[string]any{
+				"compute":          map[string]any{"expression": "7*6", "value": float64(42)},
+				"waitedSeconds":    float64(1),
+				"completionReason": "ALL_COMPLETED",
+			})
+			if _, ok := obj["invoked"]; ok {
+				t.Errorf("invoked = %v, want absent: the invoke branch fails in the cloud", obj["invoked"])
+			}
+			msg, _ := obj["invokeError"].(string)
+			if want := `durable: child context "invoke" failed: InvokeError: invoke failed: durable: invoke "child-function" of "target-handler" failed: `; !strings.HasPrefix(msg, want) {
+				t.Errorf("invokeError = %q, want the invoke branch failure (prefix %q)", msg, want)
+			}
+		},
+	},
+	"parallel-invoke":                   {result: `{"successCount":3}`},
+	"parallel-min-successful":           {result: `{"successCount":2,"totalCount":4,"completionReason":"MIN_SUCCESSFUL_REACHED","results":["Branch 1 result","Branch 2 result"]}`},
+	"parallel-min-successful-callback":  {result: `{"successCount":3,"totalCount":5,"completionReason":"MIN_SUCCESSFUL_REACHED"}`},
+	"parallel-min-successful-threshold": {result: `{"successCount":2,"startedCount":3,"totalCount":5,"completionReason":"MIN_SUCCESSFUL_REACHED","succeeded":["fast","quick"],"abandoned":["slow","slower","straggler"]}`},
+	"parallel-invalid-max-concurrency":  {failed: true, errorType: "Error"},
 	"parallel-should-complete": {
 		nondeterministic: "startedCount depends on whether the slowest branch has started when the quorum is reached",
 		check: func(t testing.TB, result string) {

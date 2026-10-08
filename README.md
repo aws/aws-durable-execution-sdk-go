@@ -306,6 +306,7 @@ func handler(ctx durable.Context, _ any) (string, error) {
 | `WaitForCallback` | Create a callback, invoke a submitter with the callback ID, and wait. |
 | `Map` | Fan out a function over items with configurable concurrency and completion. |
 | `Parallel` | Run named branches concurrently with configurable completion. |
+| `ParallelMixed` | Run named branches of different result types concurrently with configurable completion. |
 | `All` | Wait for all futures to succeed. Returns results or the first error. |
 | `AllSettled` | Wait for all futures to settle. Returns all outcomes. |
 | `Any` | Return the first future to succeed. Errors if all fail. |
@@ -647,6 +648,65 @@ or whose namer returns `""`, is named `map-item-<index>`, for example
 child context and of the `operationName` log field inside it. It is also
 the key that `BatchResult.Item` and `BatchResult.Result` look up, so
 `results.Result("map-item-1")` returns the value of the second item.
+
+### ParallelMixed
+
+`ParallelMixed` runs branches of different result types concurrently.
+`NewTypedBranch` builds a `*TypedBranch[T]` from a name and a body that
+returns a `T`. `ParallelMixed` takes the branches as a `[]durable.AnyBranch`
+and returns a `BatchResult[json.RawMessage]` and an error.
+`TypedBranch.Result` reads the branch value from that result as a `T`.
+
+```go
+type Profile struct {
+	Name string `json:"name"`
+}
+
+func handler(ctx durable.Context, _ any) (string, error) {
+	profile := durable.NewTypedBranch("profile", func(c durable.Context) (Profile, error) {
+		return durable.Step(c, "load-profile", func(_ durable.StepContext) (Profile, error) {
+			return Profile{Name: "Ana"}, nil
+		})
+	})
+	orders := durable.NewTypedBranch("orders", func(c durable.Context) (int, error) {
+		return durable.Step(c, "count-orders", func(_ durable.StepContext) (int, error) {
+			return 3, nil
+		})
+	})
+	res, err := durable.ParallelMixed(ctx, "load", []durable.AnyBranch{profile, orders},
+		durable.WithMaxConcurrency(2))
+	if err != nil {
+		return "", err
+	}
+	p, err := profile.Result(res)
+	if err != nil {
+		return "", err
+	}
+	n, err := orders.Result(res)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s has %d orders", p.Name, n), nil
+}
+```
+
+Every `BatchOption` applies as in `Parallel`, and completion and failure
+follow the `Parallel` rules above. A `ParallelMixed` call records the same
+operations and stores the same payloads as a `Parallel` over the branch
+values. Each branch value is marshaled once, by the serdes set with
+`WithTypedBranchSerdes` or else by the batch item serdes, and the SDK
+stores those bytes unchanged. Each item of the result holds its branch's
+stored bytes in `Result`, and `TypedBranch.Result` decodes them into the
+branch type.
+
+`TypedBranch.Result` returns the value of a succeeded branch and the item
+error of a failed branch. For a branch that never started, or that was
+abandoned when the batch completed early, it returns a
+`*durable.BranchNotCompletedError`. It returns an error when the result
+came from a different `ParallelMixed` call, or when the branch was never
+passed to one. `WithBatchSummary` under `ParallelMixed` receives
+`BatchResult[json.RawMessage]`, so its function has the type
+`func(durable.BatchResult[json.RawMessage]) string`.
 
 ### Combinators
 
