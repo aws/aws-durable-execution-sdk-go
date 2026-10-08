@@ -9,14 +9,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
-// defaultConditionWaitStrategy returns the wait strategy used when
-// [ConditionConfig].WaitStrategy is nil. It is the strategy the zero
-// [WaitConfig] builds, so the default and a configured strategy share one
-// implementation.
-func defaultConditionWaitStrategy[S any]() WaitStrategy[S] {
-	return newWaitStrategy(WaitConfig[S]{})
-}
-
 // WaitForCondition polls check until the configured wait strategy stops,
 // checkpointing the state between attempts and waiting for the strategy's
 // delay. It returns the final state. When the next check becomes due while
@@ -41,11 +33,18 @@ func defaultConditionWaitStrategy[S any]() WaitStrategy[S] {
 // strategy continues or stops. The SDK does not check the size of a state.
 // The service rejects a checkpoint whose state exceeds its payload limit, and
 // the rejection fails the execution with a [*CheckpointError].
+//
+// cfg.WaitStrategy is required. When it is nil, WaitForCondition returns an
+// error at the call. It then runs no check and records no operation.
 func WaitForCondition[S any](ctx Context, name string, check func(StepContext, S) (S, error), cfg ConditionConfig[S]) (S, error) {
 	var zero S
 	ec, ok := ctx.(*execContext)
 	if !ok {
 		return zero, fmt.Errorf("durable: WaitForCondition %q: Context was not created by the SDK", name)
+	}
+
+	if cfg.WaitStrategy == nil {
+		return zero, fmt.Errorf("durable: WaitForCondition %q: ConditionConfig.WaitStrategy must not be nil", name)
 	}
 
 	serdes := cfg.Serdes
@@ -376,12 +375,8 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 		return zero, "", ec.serdesFailure(name, serdesDirectionUnmarshal, err)
 	}
 
-	// Consult the wait strategy with the deserialized state, substituting
-	// the documented default strategy when none is configured.
+	// Consult the wait strategy with the deserialized state.
 	strategy := cfg.WaitStrategy
-	if strategy == nil {
-		strategy = defaultConditionWaitStrategy[S]()
-	}
 	decision := strategy(deserialized, attempt)
 
 	if !decision.Continue {

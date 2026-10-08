@@ -802,14 +802,14 @@ func TestWaitForConditionStateDeserFailure(t *testing.T) {
 }
 
 func TestWaitForConditionDefaultWaitStrategyInitial(t *testing.T) {
-	// A zero ConditionConfig (nil WaitStrategy) must not panic: the
-	// default strategy applies. First attempt: base delay 5s with full
-	// jitter, so the checkpointed delay is within [1s, 5s].
+	// The strategy WaitConfig[int]{} builds uses its default parameters.
+	// First attempt: base delay 5s with full jitter, so the checkpointed
+	// delay is within [1s, 5s].
 	fake := &fakeLambda{}
 	resp := invokeStep(t, fake, stepPayload(`""`), func(ctx Context, _ string) (string, error) {
 		result, err := WaitForCondition(ctx, "default-strategy", func(_ StepContext, state int) (int, error) {
 			return state + 1, nil
-		}, ConditionConfig[int]{})
+		}, ConditionConfig[int]{WaitStrategy: MustNewWaitStrategy(WaitConfig[int]{})})
 		if err != nil {
 			return "", err
 		}
@@ -841,7 +841,7 @@ func TestWaitForConditionDefaultWaitStrategyInitial(t *testing.T) {
 
 func TestWaitForConditionDefaultWaitStrategyReplay(t *testing.T) {
 	// Re-invocation resuming a checkpointed operation: the default
-	// strategy also applies on replay. With 3 completed attempts this is
+	// parameters of WaitConfig[int]{} also apply on replay. With 3 completed attempts this is
 	// attempt 4: base delay 5 × 1.5³ = 16.875s, full jitter, rounded, so
 	// the checkpointed delay is within [1s, 17s].
 	fake := &fakeLambda{}
@@ -851,7 +851,7 @@ func TestWaitForConditionDefaultWaitStrategyReplay(t *testing.T) {
 	resp := invokeStep(t, fake, payload, func(ctx Context, _ string) (string, error) {
 		result, err := WaitForCondition(ctx, "default-strategy", func(_ StepContext, state int) (int, error) {
 			return state + 1, nil
-		}, ConditionConfig[int]{})
+		}, ConditionConfig[int]{WaitStrategy: MustNewWaitStrategy(WaitConfig[int]{})})
 		if err != nil {
 			return "", err
 		}
@@ -892,7 +892,7 @@ func TestWaitForConditionDefaultWaitStrategyDelayCap(t *testing.T) {
 	invokeStep(t, fake, payload, func(ctx Context, _ string) (string, error) {
 		_, err := WaitForCondition(ctx, "default-strategy", func(_ StepContext, state int) (int, error) {
 			return state + 1, nil
-		}, ConditionConfig[int]{})
+		}, ConditionConfig[int]{WaitStrategy: MustNewWaitStrategy(WaitConfig[int]{})})
 		return "", err
 	})
 
@@ -923,7 +923,7 @@ func TestWaitForConditionDefaultWaitStrategyExhaustion(t *testing.T) {
 	invokeStep(t, fake, payload, func(ctx Context, _ string) (string, error) {
 		_, err := WaitForCondition(ctx, "default-strategy", func(_ StepContext, state int) (int, error) {
 			return state + 1, nil
-		}, ConditionConfig[int]{})
+		}, ConditionConfig[int]{WaitStrategy: MustNewWaitStrategy(WaitConfig[int]{})})
 		got = err
 		return "", err
 	})
@@ -973,7 +973,7 @@ func TestWaitForConditionDefaultStrategyConstants(t *testing.T) {
 }
 
 func TestWaitForConditionDefaultStrategyDelayBounds(t *testing.T) {
-	// Verify that the default wait strategy produces delays with exact
+	// Verify that the strategy WaitConfig[int]{} builds produces delays with exact
 	// upper bounds matching the formula: min(5 × 1.5^(attempt-1), 300),
 	// rounded to whole seconds. Full jitter means the lower bound is 1s.
 	// Running 200 samples per attempt ensures that the upper bound is
@@ -1001,7 +1001,7 @@ func TestWaitForConditionDefaultStrategyDelayBounds(t *testing.T) {
 			samples = 2000
 		}
 		for range samples {
-			decision := defaultConditionWaitStrategy[int]()(0, tc.attempt)
+			decision := MustNewWaitStrategy(WaitConfig[int]{})(0, tc.attempt)
 			if !decision.Continue {
 				t.Fatalf("attempt %d: expected Continue=true", tc.attempt)
 			}
@@ -1035,7 +1035,7 @@ func TestWaitForConditionDefaultStrategyDelayBounds(t *testing.T) {
 func TestWaitForConditionDefaultStrategyExhaustionBoundary(t *testing.T) {
 	// Attempt 59 must continue; attempt 60 must fail with the max-
 	// attempts error. This pins the exhaustion point.
-	decision59 := defaultConditionWaitStrategy[int]()(0, 59)
+	decision59 := MustNewWaitStrategy(WaitConfig[int]{})(0, 59)
 	if !decision59.Continue {
 		t.Fatal("attempt 59: expected Continue=true (not exhausted yet)")
 	}
@@ -1043,7 +1043,7 @@ func TestWaitForConditionDefaultStrategyExhaustionBoundary(t *testing.T) {
 		t.Fatalf("attempt 59: delay %v < 1s", decision59.Delay)
 	}
 
-	decision60 := defaultConditionWaitStrategy[int]()(0, 60)
+	decision60 := MustNewWaitStrategy(WaitConfig[int]{})(0, 60)
 	if decision60.Continue {
 		t.Fatal("attempt 60: expected Continue=false (exhausted)")
 	}
@@ -1055,7 +1055,7 @@ func TestWaitForConditionDefaultStrategyExhaustionBoundary(t *testing.T) {
 	}
 
 	// Attempt 61 also fails (boundary is at 60).
-	decision61 := defaultConditionWaitStrategy[int]()(0, 61)
+	decision61 := MustNewWaitStrategy(WaitConfig[int]{})(0, 61)
 	if decision61.Continue {
 		t.Fatal("attempt 61: expected Continue=false")
 	}
@@ -1073,7 +1073,7 @@ func TestWaitForConditionDefaultStrategyCheckpointDelay(t *testing.T) {
 	invokeStep(t, fake, stepPayload(`""`), func(ctx Context, _ string) (string, error) {
 		_, err := WaitForCondition(ctx, "pinned", func(_ StepContext, state int) (int, error) {
 			return state + 1, nil
-		}, ConditionConfig[int]{})
+		}, ConditionConfig[int]{WaitStrategy: MustNewWaitStrategy(WaitConfig[int]{})})
 		return "", err
 	})
 	updates := updateBatch(t, fake)
@@ -1100,7 +1100,7 @@ func TestWaitForConditionDefaultStrategyCheckpointDelay(t *testing.T) {
 	invokeStep(t, fake, payload, func(ctx Context, _ string) (string, error) {
 		_, err := WaitForCondition(ctx, "pinned", func(_ StepContext, state int) (int, error) {
 			return state + 1, nil
-		}, ConditionConfig[int]{})
+		}, ConditionConfig[int]{WaitStrategy: MustNewWaitStrategy(WaitConfig[int]{})})
 		return "", err
 	})
 	updates = updateBatch(t, fake)
@@ -1127,7 +1127,7 @@ func TestWaitForConditionDefaultStrategyCheckpointDelay(t *testing.T) {
 	invokeStep(t, fake, payload, func(ctx Context, _ string) (string, error) {
 		_, err := WaitForCondition(ctx, "pinned", func(_ StepContext, state int) (int, error) {
 			return state + 1, nil
-		}, ConditionConfig[int]{})
+		}, ConditionConfig[int]{WaitStrategy: MustNewWaitStrategy(WaitConfig[int]{})})
 		return "", err
 	})
 	updates = updateBatch(t, fake)

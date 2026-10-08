@@ -2384,7 +2384,10 @@ func wfcMapHandler(ctx Context, _ any) (wfcVerdict, error) {
 		if item == "b" {
 			return WaitForCondition(c, "await-sensor", func(_ StepContext, s string) (string, error) {
 				return s, errors.New("sensor offline")
-			}, ConditionConfig[string]{InitialState: "PENDING"})
+			}, ConditionConfig[string]{
+				InitialState: "PENDING",
+				WaitStrategy: func(string, int) WaitDecision { return WaitDecision{Continue: false} },
+			})
 		}
 		return item, nil
 	}, WithMaxConcurrency(1))

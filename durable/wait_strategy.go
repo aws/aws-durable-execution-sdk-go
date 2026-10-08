@@ -20,8 +20,7 @@ import (
 type WaitStrategy[S any] func(state S, attempt int) WaitDecision
 
 // Default wait strategy parameters. The zero value of each [WaitConfig]
-// field selects the matching default, and a [ConditionConfig] with a nil
-// WaitStrategy uses the strategy that WaitConfig[S]{} builds.
+// field selects the matching default.
 const (
 	defaultConditionMaxAttempts    = 60
 	defaultConditionInitialDelay   = 5 * time.Second
@@ -34,11 +33,6 @@ const (
 // [NewWaitStrategy] or [MustNewWaitStrategy]. The zero value of each field
 // selects its documented default. Field names match [RetryConfig] where
 // the meaning is the same; only the defaults differ.
-//
-// WaitConfig[S]{} builds the strategy [WaitForCondition] uses when
-// [ConditionConfig].WaitStrategy is nil: poll with a 5 second initial
-// delay multiplied by 1.5 after each attempt, capped at 5 minutes, with
-// full jitter, and fail once 60 attempts have been made.
 type WaitConfig[S any] struct {
 	_ [0]func() // blocks unkeyed literals; keeps fields addable
 

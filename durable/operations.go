@@ -48,12 +48,8 @@ type ConditionConfig[S any] struct {
 	// its unnamed function type so that a [WaitStrategy] value, a function
 	// literal, and a caller-defined function type all assign to it.
 	//
-	// If nil, the strategy that WaitConfig[S]{} builds is used: keep
-	// polling with exponential backoff — a 5 second initial delay
-	// multiplied by 1.5 after each attempt, capped at 300 seconds, with
-	// full jitter — and fail the operation once 60 attempts have been
-	// made. That default has no condition predicate, so it never reports
-	// the condition met; set WaitStrategy to make the wait succeed.
+	// WaitStrategy is required and must not be nil. When it is nil,
+	// [WaitForCondition] returns an error at the call and runs no check.
 	WaitStrategy func(state S, attempt int) WaitDecision
 
 	// Serdes overrides the serializer for the condition state.

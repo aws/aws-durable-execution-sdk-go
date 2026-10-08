@@ -445,11 +445,9 @@ func handler(ctx durable.Context, _ any) (int, error) {
 ```
 
 `NewWaitStrategy` builds a strategy from a `WaitConfig` with a
-`ShouldContinue` predicate, an attempt cap, and exponential backoff. When
-`WaitStrategy` is nil, the SDK polls with a 5 second initial delay
-multiplied by 1.5 after each attempt, capped at 5 minutes, and fails once
-60 attempts have been made. That default never reports the condition met,
-so set `WaitStrategy`.
+`ShouldContinue` predicate, an attempt cap, and exponential backoff.
+`WaitStrategy` is required. When it is nil, `WaitForCondition` returns an
+error at the call, runs no check, and records no operation.
 
 ### Callbacks
 

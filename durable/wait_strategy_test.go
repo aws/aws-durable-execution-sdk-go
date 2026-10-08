@@ -124,33 +124,6 @@ func TestNewWaitStrategyDefaultsPinned(t *testing.T) {
 	}
 }
 
-func TestNewWaitStrategyDefaultMatchesConditionDefault(t *testing.T) {
-	// The strategy WaitForCondition substitutes for a nil WaitStrategy is
-	// the one the zero WaitConfig builds, so both are the same
-	// implementation with the same constants. With jitter the delays are
-	// random, so compare the decisions that jitter does not affect: every
-	// attempt before the cap continues and the cap fails identically.
-	def := defaultConditionWaitStrategy[int]()
-	built := MustNewWaitStrategy(WaitConfig[int]{})
-
-	for attempt := 1; attempt < defaultConditionMaxAttempts; attempt++ {
-		a, b := def(0, attempt), built(0, attempt)
-		if !a.Continue || a.Err != nil || !b.Continue || b.Err != nil {
-			t.Fatalf("attempt %d: default = %+v, built = %+v, want both to continue", attempt, a, b)
-		}
-		if a.Delay < time.Second || b.Delay < time.Second {
-			t.Fatalf("attempt %d: default delay %v, built delay %v, want at least 1s", attempt, a.Delay, b.Delay)
-		}
-	}
-	a, b := def(0, defaultConditionMaxAttempts), built(0, defaultConditionMaxAttempts)
-	if a.Continue || b.Continue || a.Err == nil || b.Err == nil {
-		t.Fatalf("attempt %d: default = %+v, built = %+v, want both to fail", defaultConditionMaxAttempts, a, b)
-	}
-	if a.Err.Error() != b.Err.Error() {
-		t.Errorf("failure messages differ: default %q, built %q", a.Err, b.Err)
-	}
-}
-
 func TestNewWaitStrategyPredicateStops(t *testing.T) {
 	// ShouldContinue sees the observed state. A false result stops the
 	// wait with no error, whatever the attempt number.

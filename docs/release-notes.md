@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Changed: `ConditionConfig.WaitStrategy` is required
+
+`WaitForCondition` now returns the error
+`durable: WaitForCondition "<name>": ConditionConfig.WaitStrategy must not be nil`
+at the call when `ConditionConfig.WaitStrategy` is nil. It runs no check
+and records no operation. Before, a nil `WaitStrategy` selected a default
+strategy that never reported the condition met. That strategy ran the
+check 60 times across 60 invocations and then failed the operation. The
+default, `defaultConditionWaitStrategy`, is removed. To keep its schedule,
+pass `durable.MustNewWaitStrategy(durable.WaitConfig[S]{ShouldContinue: ...})`.
+`InitialState` stays optional, and `NewWaitStrategy`, `MustNewWaitStrategy`,
+and the `WaitConfig` defaults are unchanged.
+
 ### Added: `ParallelMixed`
 
 `ParallelMixed` runs named branches of different result types
