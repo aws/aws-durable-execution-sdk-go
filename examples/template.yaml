@@ -985,6 +985,23 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 120
 
+  PauseResumeFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-pause-resume
+      CodeUri: .aws-sam/build-artifacts/pause-resume/
+      Handler: bootstrap
+      Description: Order approval workflow used to demonstrate pause and resume in a local test
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
   WaitCallbackHeartbeatFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -2686,6 +2703,9 @@ Outputs:
   WaitCallbackErrorInstanceTimeoutFunction:
     Description: Wait Callback Error Instance Timeout Function ARN
     Value: !GetAtt WaitCallbackErrorInstanceTimeoutFunction.Arn
+  PauseResumeFunction:
+    Description: Pause Resume Function ARN
+    Value: !GetAtt PauseResumeFunction.Arn
   CreateCallbackHeartbeatFunction:
     Description: Create Callback Heartbeat Function ARN
     Value: !GetAtt CreateCallbackHeartbeatFunction.Arn

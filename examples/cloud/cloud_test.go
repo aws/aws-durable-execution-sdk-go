@@ -91,7 +91,7 @@ func TestExamples(t *testing.T) {
 	}
 
 	for _, name := range examples {
-		if companions[name] {
+		if companions[name] || localOnly[name] {
 			continue
 		}
 		t.Run(name, func(t *testing.T) {

@@ -11,8 +11,9 @@ import (
 )
 
 // TestExpectationsCoverEveryExample fails when an example built by build.sh
-// has no expectation, when an expectation names an example that is not
-// built, or when an entry is malformed. It runs without the cloud build tag
+// that is neither a companion nor local only has no expectation, when a
+// companion or local-only example has one, when an expectation names an
+// example that is not built, or when an entry is malformed. It runs without the cloud build tag
 // so that adding an example without expected-result data fails the
 // ordinary unit test run.
 func TestExpectationsCoverEveryExample(t *testing.T) {
@@ -27,6 +28,12 @@ func TestExpectationsCoverEveryExample(t *testing.T) {
 		if companions[name] {
 			if _, ok := expectations[name]; ok {
 				t.Errorf("%s: companion functions are never invoked and must not have an expectation", name)
+			}
+			continue
+		}
+		if localOnly[name] {
+			if _, ok := expectations[name]; ok {
+				t.Errorf("%s: local-only examples are never invoked and must not have an expectation", name)
 			}
 			continue
 		}

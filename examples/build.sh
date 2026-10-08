@@ -78,6 +78,7 @@ EXAMPLES="
   wait-callback-error-instance-failure
   wait-callback-error-instance-submitter
   wait-callback-error-instance-timeout
+  pause-resume
   create-callback-heartbeat
   create-callback-serdes
   create-callback-mixed-ops

@@ -82,6 +82,7 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [wait-callback-error-instance-failure](wait-callback-error-instance-failure/main.go) | WaitForCallback, CallbackError | SUCCEEDED |
 | [wait-callback-error-instance-submitter](wait-callback-error-instance-submitter/main.go) | WaitForCallback, submitter CallbackError | SUCCEEDED |
 | [wait-callback-error-instance-timeout](wait-callback-error-instance-timeout/main.go) | WaitForCallback, ErrCallbackTimedOut | SUCCEEDED |
+| [pause-resume](pause-resume/main.go) | Step, WaitForCallback, pause and resume via OmitTokenOnCheckpoint | SUCCEEDED (local only) |
 | [create-callback-simple](create-callback-simple/main.go) | CreateCallback | SUCCEEDED |
 | [create-callback-timeout](create-callback-timeout/main.go) | CreateCallback, timeout | SUCCEEDED |
 | [create-callback-heartbeat](create-callback-heartbeat/main.go) | CreateCallback, heartbeat | SUCCEEDED |

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Added: the `pause-resume` example
+
+The new `examples/pause-resume` example runs an order approval workflow:
+a `reserve-stock` step, a `manager-approval` `WaitForCallback`, and a
+`ship-order` step. Its test pauses the execution with
+`LocalRunner.OmitTokenOnCheckpoint`, resumes it with a second
+`RunUntilComplete`, and approves the order with `SendCallbackSuccess`.
+The example is deployed with the others but is local only. The cloud
+smoke test does not invoke it, because the service has no counterpart
+for withholding a checkpoint token.
+
 ### Added: recorded wait, retry, and error fields on `durabletest` results
 
 The `durabletest` result types now expose more of what an operation

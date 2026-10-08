@@ -20,7 +20,7 @@ import (
 
 // expectation declares how the smoke test verifies one example once its
 // execution has reached a terminal state. Every example in build.sh that is
-// not a companion has exactly one entry in expectations; the unit test in
+// neither a companion nor local only has exactly one entry in expectations; the unit test in
 // expectations_test.go fails when an example is missing or an entry is
 // malformed, so a new example cannot pass by default.
 type expectation struct {
@@ -168,6 +168,14 @@ var companions = map[string]bool{
 	"invoke-simple-target": true,
 	"invoke-tenant-target": true,
 	"callback-sender":      true,
+}
+
+// localOnly are deployed examples whose behaviour exists only in a local
+// test: the test drives the execution with local runner controls that the
+// service has no counterpart for. The smoke test never invokes them, and
+// they have no expectation.
+var localOnly = map[string]bool{
+	"pause-resume": true,
 }
 
 // loadExamples parses the EXAMPLES list out of build.sh so the smoke test

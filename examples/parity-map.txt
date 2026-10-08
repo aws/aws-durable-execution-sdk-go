@@ -79,6 +79,7 @@ parallel/tolerated-failure-count/parallel-tolerated-failure-count               
 parallel/tolerated-failure-percentage/parallel-tolerated-failure-percentage        parallel-tolerated-failure-percentage
 parallel/virtual-context/parallel-virtual-context                                  parallel-virtual-context
 parallel/wait/parallel-wait                                                        parallel-wait
+pause-resume/pause-resume                                                           pause-resume
 promise/all-settled/promise-all-settled                                            future-all-settled
 promise/all-wait/promise-all-wait                                                  future-all-wait
 promise/all/promise-all                                                            future-all

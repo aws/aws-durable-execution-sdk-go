@@ -1,0 +1,30 @@
+[
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "reserve-stock",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "WaitForCallback",
+    "name": "manager-approval",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CALLBACK",
+    "subType": "Callback",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "ship-order",
+    "status": "SUCCEEDED"
+  }
+]
