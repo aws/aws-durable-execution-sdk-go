@@ -3,6 +3,8 @@
 package durabletest
 
 import (
+	"time"
+
 	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
@@ -114,6 +116,9 @@ func applyEvent(op *durable.Operation, ev types.Event) {
 		op.Type = durable.OperationTypeStep
 		op.Status = durable.OperationStatusStarted
 		op.StartTimestamp = ev.EventTimestamp
+		if op.StepDetails != nil {
+			op.StepDetails.NextAttemptTimestamp = nil
+		}
 	case types.EventTypeStepSucceeded:
 		op.Type = durable.OperationTypeStep
 		op.Status = durable.OperationStatusSucceeded
@@ -124,6 +129,7 @@ func applyEvent(op *durable.Operation, ev types.Event) {
 			if d.RetryDetails != nil {
 				sd.Attempt = d.RetryDetails.CurrentAttempt
 			}
+			sd.NextAttemptTimestamp = nextAttempt(ev.EventTimestamp, d.RetryDetails)
 		}
 	case types.EventTypeStepFailed:
 		op.Type = durable.OperationTypeStep
@@ -135,6 +141,7 @@ func applyEvent(op *durable.Operation, ev types.Event) {
 			if d.RetryDetails != nil {
 				sd.Attempt = d.RetryDetails.CurrentAttempt
 			}
+			sd.NextAttemptTimestamp = nextAttempt(ev.EventTimestamp, d.RetryDetails)
 		}
 
 	case types.EventTypeChainedInvokeStarted:
@@ -199,6 +206,17 @@ func applyEvent(op *durable.Operation, ev types.Event) {
 			ensureCallbackDetails(op).Error = errorPayload(d.Error)
 		}
 	}
+}
+
+// nextAttempt returns when the next attempt of a step is due: the event's
+// time plus the retry delay the event records. It returns nil when the
+// event schedules no further attempt.
+func nextAttempt(at *time.Time, retry *types.RetryDetails) *time.Time {
+	if at == nil || retry == nil || retry.NextAttemptDelaySeconds == nil {
+		return nil
+	}
+	next := at.Add(time.Duration(*retry.NextAttemptDelaySeconds) * time.Second)
+	return &next
 }
 
 func ensureStepDetails(op *durable.Operation) *durable.StepDetails {

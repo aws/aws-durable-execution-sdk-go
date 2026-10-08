@@ -978,7 +978,11 @@ func main() {
 ```
 
 `TestResult` also lists every recorded operation in `Operations`, so a test
-can assert that a step ran once across replays. `SendCallbackSuccess`,
+can assert that a step ran once across replays. The operation records
+also carry the scheduled end and duration of a wait, the time of a step's
+next retry, and the error data and stack trace of a failure.
+`TestResult.Error` carries the error data and stack trace of a failed
+execution. `SendCallbackSuccess`,
 `SendCallbackFailure`, and `SendCallbackHeartbeat` resolve a callback the
 handler is blocked on. `CompleteChainedInvoke` and `FailChainedInvoke`
 resolve an `Invoke`. `RegisterFunction` registers a handler for a function

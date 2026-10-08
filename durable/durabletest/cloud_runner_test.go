@@ -164,6 +164,8 @@ func TestCloudRunnerFailed(t *testing.T) {
 				Error: &types.ErrorObject{
 					ErrorType:    aws.String("StepError"),
 					ErrorMessage: aws.String("step failed"),
+					ErrorData:    aws.String(`{"code":42}`),
+					StackTrace:   []string{"main.handler main.go:12", "main.main main.go:20"},
 				},
 			}, nil
 		},
@@ -208,6 +210,13 @@ func TestCloudRunnerFailed(t *testing.T) {
 	}
 	if result.Error.Message != "step failed" {
 		t.Errorf("error message = %q, want %q", result.Error.Message, "step failed")
+	}
+	if result.Error.ErrorData != `{"code":42}` {
+		t.Errorf("error data = %q, want %q", result.Error.ErrorData, `{"code":42}`)
+	}
+	wantTrace := []string{"main.handler main.go:12", "main.main main.go:20"}
+	if strings.Join(result.Error.StackTrace, "\n") != strings.Join(wantTrace, "\n") {
+		t.Errorf("stack trace = %q, want %q", result.Error.StackTrace, wantTrace)
 	}
 
 	op := result.Operation("process")

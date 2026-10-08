@@ -4,6 +4,7 @@ package durabletest
 
 import (
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
@@ -65,5 +66,33 @@ func TestOperationsFromEventsMergesLifecycle(t *testing.T) {
 	}
 	if aws.ToString(op.CallbackDetails.Result) != `"approved"` {
 		t.Errorf("Result = %q, want %q", aws.ToString(op.CallbackDetails.Result), `"approved"`)
+	}
+}
+
+// TestOperationsFromEventsNextAttempt verifies that a step event recording
+// a retry delay sets the next attempt time, and that the next StepStarted
+// event clears it.
+func TestOperationsFromEventsNextAttempt(t *testing.T) {
+	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	failed := types.Event{
+		Id:             aws.String("s-1"),
+		EventType:      types.EventTypeStepFailed,
+		EventTimestamp: aws.Time(at),
+		StepFailedDetails: &types.StepFailedDetails{
+			RetryDetails: &types.RetryDetails{CurrentAttempt: 1, NextAttemptDelaySeconds: aws.Int32(30)},
+		},
+	}
+	ops := operationsFromEvents([]types.Event{failed})
+	if len(ops) != 1 || ops[0].StepDetails == nil || ops[0].StepDetails.NextAttemptTimestamp == nil {
+		t.Fatalf("ops = %+v, want one step with a next attempt", ops)
+	}
+	if got, want := *ops[0].StepDetails.NextAttemptTimestamp, at.Add(30*time.Second); !got.Equal(want) {
+		t.Errorf("NextAttemptTimestamp = %v, want %v", got, want)
+	}
+
+	started := types.Event{Id: aws.String("s-1"), EventType: types.EventTypeStepStarted, EventTimestamp: aws.Time(at.Add(30 * time.Second))}
+	ops = operationsFromEvents([]types.Event{failed, started})
+	if ops[0].StepDetails.NextAttemptTimestamp != nil {
+		t.Errorf("NextAttemptTimestamp = %v after StepStarted, want nil", *ops[0].StepDetails.NextAttemptTimestamp)
 	}
 }

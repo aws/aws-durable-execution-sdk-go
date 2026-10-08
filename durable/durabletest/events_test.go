@@ -201,7 +201,7 @@ func TestInvocationErrorOnFailedExecution(t *testing.T) {
 		t.Errorf("Invocations[0].Error = %+v, want nil (it suspended)", result.Invocations[0].Error)
 	}
 	last := result.Invocations[1]
-	if last.Error == nil || *last.Error != *result.Error {
+	if last.Error == nil || !reflect.DeepEqual(*last.Error, *result.Error) {
 		t.Errorf("Invocations[1].Error = %+v, want %+v", last.Error, result.Error)
 	}
 	types := result.EventTypes()

@@ -116,9 +116,9 @@ type mixedOp struct {
 }
 
 // mixedOps returns the operations of r sorted by ID. A stored batch
-// payload has its stack traces removed: a trace names the frames of the
-// program that ran the batch, so two different programs never record
-// equal traces.
+// payload and an operation's recorded error have their stack traces
+// removed: a trace names the frames of the program that ran the batch, so
+// two different programs never record equal traces.
 func mixedOps(r *durabletest.TestResult) []mixedOp {
 	out := make([]mixedOp, len(r.Operations))
 	for i, op := range r.Operations {
@@ -129,7 +129,13 @@ func mixedOps(r *durabletest.TestResult) []mixedOp {
 		if op.ContextDetails != nil {
 			cd := *op.ContextDetails
 			cd.Result = withoutStackTraces(cd.Result)
+			cd.StackTrace = nil
 			out[i].Context = &cd
+		}
+		if op.StepDetails != nil {
+			sd := *op.StepDetails
+			sd.StackTrace = nil
+			out[i].Step = &sd
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })

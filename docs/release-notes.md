@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Added: recorded wait, retry, and error fields on `durabletest` results
+
+The `durabletest` result types now expose more of what an operation
+records.
+
+- `TestWaitDetails` has `WaitSeconds` and `ScheduledEndTimestamp`.
+- `TestStepDetails` has `NextAttemptTimestamp`, `ErrorData`, and
+  `StackTrace`.
+- `TestCallbackDetails` and `TestContextDetails` have `ErrorData` and
+  `StackTrace`.
+- `TestInvokeDetails` has `StackTrace`.
+- `TestError` has `ErrorData` and `StackTrace`.
+
+A field is zero when the record does not hold its value. `TestError` now
+contains a slice, so two `TestError` values can no longer be compared
+with `==`; compare them with `reflect.DeepEqual`. A callback failed in
+the local runner records no error data or stack trace, because
+`SendCallbackFailure` takes only a type and a message.
+
 ### Added: the SDK logs its lifecycle at Debug
 
 The SDK now writes a record at `slog.LevelDebug` when it claims an

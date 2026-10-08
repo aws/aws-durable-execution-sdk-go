@@ -893,6 +893,12 @@ func (m *memoryClient) completeCallback(callbackID string, result operationResul
 			ErrorType:    strptr(result.errType),
 			ErrorMessage: strptr(result.errMsg),
 		}
+		if result.errData != "" {
+			cd.Error.ErrorData = strptr(result.errData)
+		}
+		if len(result.stackTrace) > 0 {
+			cd.Error.StackTrace = append([]string(nil), result.stackTrace...)
+		}
 		updated.CallbackDetails = &cd
 		now := m.stampTransition(&updated)
 		m.recordOperationEvent(&updated, types.EventTypeCallbackFailed, nil, cd.Error, now)

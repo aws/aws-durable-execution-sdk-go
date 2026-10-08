@@ -261,8 +261,10 @@ func (r *CloudRunner) buildResult(ctx context.Context, arn string, execOut *lamb
 		tr.Status = Failed
 		if execOut.Error != nil {
 			tr.Error = &TestError{
-				Type:    aws.ToString(execOut.Error.ErrorType),
-				Message: aws.ToString(execOut.Error.ErrorMessage),
+				Type:       aws.ToString(execOut.Error.ErrorType),
+				Message:    aws.ToString(execOut.Error.ErrorMessage),
+				ErrorData:  aws.ToString(execOut.Error.ErrorData),
+				StackTrace: copyStrings(execOut.Error.StackTrace),
 			}
 		}
 	default:

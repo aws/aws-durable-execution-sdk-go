@@ -174,6 +174,12 @@ type TestError struct {
 
 	// Message is the human-readable error message.
 	Message string
+
+	// ErrorData is the recorded machine-readable error data, if any.
+	ErrorData string
+
+	// StackTrace is the recorded stack trace, innermost frame first, if any.
+	StackTrace []string
 }
 
 // TestOperation represents a single checkpointed durable operation.
@@ -226,8 +232,8 @@ type TestOperation struct {
 	// operation is a context.
 	ContextDetails *TestContextDetails
 
-	// WaitDetails holds wait-specific details (currently empty; reserved
-	// for future expansion).
+	// WaitDetails holds wait-specific details, if the operation is a
+	// wait.
 	WaitDetails *TestWaitDetails
 }
 
@@ -269,6 +275,17 @@ type TestStepDetails struct {
 
 	// ErrorMessage is the recorded error message.
 	ErrorMessage string
+
+	// NextAttemptTimestamp is when the next retry attempt is scheduled, or
+	// the zero time when no retry is pending.
+	NextAttemptTimestamp time.Time
+
+	// ErrorData is the recorded machine-readable error data, set on failure.
+	ErrorData string
+
+	// StackTrace is the recorded stack trace of the failure, innermost
+	// frame first, set on failure.
+	StackTrace []string
 }
 
 // TestCallbackDetails carries callback-specific checkpoint state.
@@ -284,6 +301,13 @@ type TestCallbackDetails struct {
 
 	// ErrorMessage is the recorded error message (present on FAILED).
 	ErrorMessage string
+
+	// ErrorData is the recorded machine-readable error data, set on failure.
+	ErrorData string
+
+	// StackTrace is the recorded stack trace of the failure, innermost
+	// frame first, set on failure.
+	StackTrace []string
 }
 
 // TestInvokeDetails carries chained-invoke-specific checkpoint state.
@@ -299,6 +323,10 @@ type TestInvokeDetails struct {
 
 	// ErrorData is additional error data (present on some failures).
 	ErrorData string
+
+	// StackTrace is the recorded stack trace of the failure, innermost
+	// frame first, set on failure.
+	StackTrace []string
 }
 
 // TestContextDetails carries child-context-specific checkpoint state.
@@ -315,11 +343,25 @@ type TestContextDetails struct {
 
 	// ErrorMessage is the recorded error message (present on FAILED).
 	ErrorMessage string
+
+	// ErrorData is the recorded machine-readable error data, set on failure.
+	ErrorData string
+
+	// StackTrace is the recorded stack trace of the failure, innermost
+	// frame first, set on failure.
+	StackTrace []string
 }
 
-// TestWaitDetails carries wait-specific checkpoint state. Currently empty;
-// reserved for future expansion.
-type TestWaitDetails struct{}
+// TestWaitDetails carries wait-specific checkpoint state.
+type TestWaitDetails struct {
+	// WaitSeconds is the wait duration in seconds that the WaitStarted
+	// history event records, or 0 when the history has no such event.
+	WaitSeconds int
+
+	// ScheduledEndTimestamp is when the wait is scheduled to complete, or
+	// the zero time when the operation record carries no scheduled end.
+	ScheduledEndTimestamp time.Time
+}
 
 // ResultAs deserializes the raw result of a [Succeeded] [TestResult] into
 // the target type O. It returns an error when the execution did not
@@ -353,6 +395,30 @@ func ResultAs[O any](r *TestResult) (O, error) {
 func (r *TestResult) attachEvents(events []types.Event) {
 	r.Events = events
 	r.Invocations = invocationsFromEvents(events)
+	setWaitSeconds(r.Operations, events)
+}
+
+// setWaitSeconds sets WaitSeconds on each wait operation from the Duration
+// of the first WaitStarted event whose Id is the operation's ID.
+func setWaitSeconds(ops []TestOperation, events []types.Event) {
+	durations := make(map[string]int)
+	for _, ev := range events {
+		if ev.EventType != types.EventTypeWaitStarted || ev.WaitStartedDetails == nil || ev.WaitStartedDetails.Duration == nil {
+			continue
+		}
+		id := aws.ToString(ev.Id)
+		if _, seen := durations[id]; !seen {
+			durations[id] = int(*ev.WaitStartedDetails.Duration)
+		}
+	}
+	for i := range ops {
+		if ops[i].WaitDetails == nil {
+			continue
+		}
+		if secs, ok := durations[ops[i].ID]; ok {
+			ops[i].WaitDetails.WaitSeconds = secs
+		}
+	}
 }
 
 // invocationsFromEvents builds one TestInvocation per InvocationCompleted
@@ -370,8 +436,10 @@ func invocationsFromEvents(events []types.Event) []TestInvocation {
 			inv.EndTime = aws.ToTime(d.EndTimestamp)
 			if d.Error != nil && d.Error.Payload != nil {
 				inv.Error = &TestError{
-					Type:    aws.ToString(d.Error.Payload.ErrorType),
-					Message: aws.ToString(d.Error.Payload.ErrorMessage),
+					Type:       aws.ToString(d.Error.Payload.ErrorType),
+					Message:    aws.ToString(d.Error.Payload.ErrorMessage),
+					ErrorData:  aws.ToString(d.Error.Payload.ErrorData),
+					StackTrace: copyStrings(d.Error.Payload.StackTrace),
 				}
 			}
 		}
@@ -397,8 +465,10 @@ func testResultFromResponse(response []byte, ops []durable.Operation) (*TestResu
 	}
 	if resp.Error != nil {
 		tr.Error = &TestError{
-			Type:    resp.Error.ErrorType,
-			Message: resp.Error.ErrorMessage,
+			Type:       resp.Error.ErrorType,
+			Message:    resp.Error.ErrorMessage,
+			ErrorData:  resp.Error.ErrorData,
+			StackTrace: copyStrings(resp.Error.StackTrace),
 		}
 	}
 	return tr, nil
@@ -427,9 +497,14 @@ func toTestOperations(ops []durable.Operation) []TestOperation {
 				Attempt: sd.Attempt,
 				Result:  ptrStr(sd.Result),
 			}
+			if sd.NextAttemptTimestamp != nil {
+				to.StepDetails.NextAttemptTimestamp = *sd.NextAttemptTimestamp
+			}
 			if sd.Error != nil {
 				to.StepDetails.ErrorType = ptrStr(sd.Error.ErrorType)
 				to.StepDetails.ErrorMessage = ptrStr(sd.Error.ErrorMessage)
+				to.StepDetails.ErrorData = ptrStr(sd.Error.ErrorData)
+				to.StepDetails.StackTrace = copyStrings(sd.Error.StackTrace)
 			}
 		}
 		if cd := op.CallbackDetails; cd != nil {
@@ -440,6 +515,8 @@ func toTestOperations(ops []durable.Operation) []TestOperation {
 			if cd.Error != nil {
 				to.CallbackDetails.ErrorType = ptrStr(cd.Error.ErrorType)
 				to.CallbackDetails.ErrorMessage = ptrStr(cd.Error.ErrorMessage)
+				to.CallbackDetails.ErrorData = ptrStr(cd.Error.ErrorData)
+				to.CallbackDetails.StackTrace = copyStrings(cd.Error.StackTrace)
 			}
 		}
 		if id := op.ChainedInvokeDetails; id != nil {
@@ -450,6 +527,7 @@ func toTestOperations(ops []durable.Operation) []TestOperation {
 				to.InvokeDetails.ErrorType = ptrStr(id.Error.ErrorType)
 				to.InvokeDetails.ErrorMessage = ptrStr(id.Error.ErrorMessage)
 				to.InvokeDetails.ErrorData = ptrStr(id.Error.ErrorData)
+				to.InvokeDetails.StackTrace = copyStrings(id.Error.StackTrace)
 			}
 		}
 		if cd := op.ContextDetails; cd != nil {
@@ -462,12 +540,27 @@ func toTestOperations(ops []durable.Operation) []TestOperation {
 			if cd.Error != nil {
 				to.ContextDetails.ErrorType = ptrStr(cd.Error.ErrorType)
 				to.ContextDetails.ErrorMessage = ptrStr(cd.Error.ErrorMessage)
+				to.ContextDetails.ErrorData = ptrStr(cd.Error.ErrorData)
+				to.ContextDetails.StackTrace = copyStrings(cd.Error.StackTrace)
 			}
 		}
-		if op.WaitDetails != nil {
+		if wd := op.WaitDetails; wd != nil {
 			to.WaitDetails = &TestWaitDetails{}
+			if wd.ScheduledEndTimestamp != nil {
+				to.WaitDetails.ScheduledEndTimestamp = *wd.ScheduledEndTimestamp
+			}
 		}
 		result = append(result, to)
 	}
 	return result
+}
+
+// copyStrings returns a copy of s, or nil when s is empty.
+func copyStrings(s []string) []string {
+	if len(s) == 0 {
+		return nil
+	}
+	out := make([]string, len(s))
+	copy(out, s)
+	return out
 }
