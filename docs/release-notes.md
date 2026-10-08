@@ -17,6 +17,18 @@ longer applies to callback results. To keep JSON decoding, pass
 `WithCallbackDeserializer` on the handler. This applies to
 `CreateCallback` and `WaitForCallback`.
 
+### Changed: `WaitForCallback` stores the submitted bytes
+
+`WaitForCallback` now stores the bytes the external system submitted,
+unchanged, at its child context, as the JavaScript SDK does. Before, it
+stored the deserialized result re-encoded with the handler-level serdes.
+The inner callback now always uses `RawSerdes`. The callback result
+serializer runs once, at the `WaitForCallback` operation, on the first
+run and on replay. It is the per-operation `WithCallbackSerdes`, else the
+handler-level `WithCallbackDeserializer`, else `RawSerdes`. The returned
+value is unchanged. A serializer that fails to deserialize now reports a
+`*SerdesError` whose `Operation` is the `WaitForCallback` name.
+
 ### Added: `RawSerdes`
 
 `RawSerdes` is a `Serdes` that stores bytes verbatim. `Marshal` returns

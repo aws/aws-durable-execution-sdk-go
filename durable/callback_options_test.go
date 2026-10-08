@@ -108,8 +108,8 @@ func wfcbInFlightPayload(callbackResult string) []byte {
 }
 
 func TestWaitForCallbackAppliesCallbackSerdes(t *testing.T) {
-	// WithCallbackSerdes passed to WaitForCallback must reach the callback
-	// the operation creates, so the submitted payload is decoded with it.
+	// WithCallbackSerdes passed to WaitForCallback decodes the submitted
+	// payload into the returned value.
 	fake := &fakeLambda{statePages: [][]Operation{{}}}
 	payload := wfcbInFlightPayload(`"hello"`)
 
@@ -290,4 +290,47 @@ func TestCreateCallbackDefaultDeserialization(t *testing.T) {
 			t.Errorf("callback result = %d, want 42", seen)
 		}
 	})
+}
+
+// TestWaitForCallbackEmptyResult pins that a callback completed with no
+// payload makes WaitForCallback return the zero value of its result type,
+// on the first run and on replay, without calling the result serdes.
+// RawSerdes does not support an O of any, so a call would fail.
+func TestWaitForCallbackEmptyResult(t *testing.T) {
+	handler := func(ctx Context, event string) (any, error) {
+		return WaitForCallback[any](ctx, event, func(StepContext, string) error {
+			return nil
+		})
+	}
+	payloads := map[string][]byte{
+		"first run": wfcbInFlightPayload(""),
+		"replay": callbackPayload(`"cb"`, wireOperation{
+			Id:             hashID("1"),
+			Name:           "cb",
+			Type:           string(OperationTypeContext),
+			SubType:        OperationSubTypeWaitForCallback,
+			Status:         "SUCCEEDED",
+			ContextDetails: &wireContextDetails{},
+		}),
+	}
+	for name, payload := range payloads {
+		t.Run(name, func(t *testing.T) {
+			fake := &fakeLambda{statePages: [][]Operation{{}}}
+			h := Wrap(handler, withLambdaAPI(fake))
+			got, err := h(context.Background(), payload)
+			if err != nil {
+				t.Fatalf("Invoke error: %v", err)
+			}
+			var resp invocationResponse
+			if err := json.Unmarshal(got, &resp); err != nil {
+				t.Fatalf("unmarshal response: %v", err)
+			}
+			if resp.Status != invocationSucceeded {
+				t.Fatalf("response status = %q, want SUCCEEDED (%s)", resp.Status, got)
+			}
+			if got, want := aws.ToString(resp.Result), `null`; got != want {
+				t.Errorf("result = %q, want %q", got, want)
+			}
+		})
+	}
 }

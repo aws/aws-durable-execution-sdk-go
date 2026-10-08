@@ -158,15 +158,16 @@ func TestRetryableSerdesErrorOnLiveUnmarshalRecordsNothing(t *testing.T) {
 	}
 }
 
-// A RetryableSerdesError from the Unmarshal that round-trips the live
-// result of a WaitForCallback ends the invocation before the context
+// A RetryableSerdesError from the Unmarshal that converts the submitted
+// bytes of a WaitForCallback ends the invocation before the context
 // records an outcome. The next invocation runs the context body again and
 // reads the callback result recorded before the failure.
 func TestRetryableSerdesErrorOnWaitForCallbackUnmarshalRecordsNothing(t *testing.T) {
 	var submits int64
-	// The first decode of "approved" is the callback's own result; the
-	// second is the round-trip of the context result.
-	serdes := newTransientUnmarshalSerdes(`"approved"`, 2)
+	// The inner callback returns the submitted bytes unchanged, so the
+	// only decode of "approved" is the WaitForCallback result. The first
+	// one fails.
+	serdes := newTransientUnmarshalSerdes(`"approved"`, 1)
 	h := func(ctx durable.Context, _ struct{}) (string, error) {
 		return durable.WaitForCallback[string](ctx, "approval", func(_ durable.StepContext, _ string) error {
 			atomic.AddInt64(&submits, 1)
@@ -206,12 +207,11 @@ func TestRetryableSerdesErrorOnWaitForCallbackUnmarshalRecordsNothing(t *testing
 	if succeeded != 1 || failed != 0 {
 		t.Errorf("operation approval recorded %d Succeeded and %d Failed events, want 1 and 0", succeeded, failed)
 	}
-	// The callback result is decoded once per run of the context body,
-	// and once more by each round-trip of the context result. A context
-	// whose success was recorded before the failure would be replayed
-	// from that record: one decode in the last invocation instead of two.
-	if n := atomic.LoadInt64(serdes.seen); n != 4 {
-		t.Errorf("decoded the callback result %d times, want 4 (the body ran again after the failure)", n)
+	// The submitted bytes are decoded once per run of the context body:
+	// once in the failed invocation and once in the invocation that
+	// records the success.
+	if n := atomic.LoadInt64(serdes.seen); n != 2 {
+		t.Errorf("decoded the callback result %d times, want 2 (the body ran again after the failure)", n)
 	}
 	if n := atomic.LoadInt64(&submits); n != 1 {
 		t.Errorf("submitter ran %d times, want 1 (its step result is recorded)", n)

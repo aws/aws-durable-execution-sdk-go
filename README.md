@@ -500,7 +500,10 @@ handler. `WithSerdes` does not apply to callback results.
 `WaitForCallback` combines the two halves into one operation. It creates
 the callback, runs the submitter with the callback ID, and blocks until the
 result arrives. The submitter runs as a step, so it may call a service, and
-`WithSubmitterRetry` retries it with a `RetryStrategy`.
+`WithSubmitterRetry` retries it with a `RetryStrategy`. The callback and
+the `WaitForCallback` operation both record the submitted bytes unchanged.
+The result serializer runs once, at the `WaitForCallback` operation, with
+the same precedence as for `CreateCallback`.
 
 ```go
 func handler(ctx durable.Context, _ any) (string, error) {

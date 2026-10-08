@@ -2,6 +2,7 @@ package durable
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -211,14 +212,20 @@ func createClaimedCallback[O any](ec *execContext, id, name string, options call
 // and a submitter step, matching the WaitForCallback wire shape used by
 // all SDK implementations.
 //
-// The submitted payload is deserialized as for [CreateCallback]: by
-// default with [RawSerdes], which returns the submitted bytes unchanged,
-// matching the other Durable Execution SDKs. To decode the payload as JSON,
-// pass WithCallbackSerdes(JSONSerdes).
+// The inner callback and the child context both store the submitted bytes
+// unchanged. The callback result serializer runs once, at the
+// WaitForCallback operation, on the first run and on replay alike. It is,
+// in order of precedence, the per-operation [WithCallbackSerdes], the
+// handler-level [WithCallbackDeserializer], or [RawSerdes], which returns
+// the submitted bytes unchanged, matching the other Durable Execution SDKs.
+// To decode the payload as JSON, pass WithCallbackSerdes(JSONSerdes). A
+// serializer that fails to deserialize fails WaitForCallback with a
+// [*SerdesError] whose Operation is name.
 //
-// WaitForCallback accepts every [CallbackOption], which it applies to the
-// callback it creates, plus [WaitForCallbackOption] values such as
-// [WithSubmitterRetry] that configure the submitter step.
+// WaitForCallback accepts every [CallbackOption]. The timeout and heartbeat
+// timeout apply to the callback it creates, and the serializer applies at
+// the WaitForCallback operation. It also accepts [WaitForCallbackOption]
+// values such as [WithSubmitterRetry] that configure the submitter step.
 func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepContext, callbackID string) error, opts ...WaitForCallbackOption) (O, error) {
 	var zero O
 	ec, ok := ctx.(*execContext)
@@ -250,9 +257,10 @@ func WaitForCallback[O any](ctx Context, name string, submitter func(ctx StepCon
 // id is already claimed on ec.
 func runClaimedWaitForCallback[O any](ec *execContext, id, name string, submitter func(ctx StepContext, callbackID string) error, options callbackOptions) (O, error) {
 	var zero O
-	// One snapshot serves the whole operation, so the result is written
-	// and read back with the same serdes.
-	serdes := ec.serdesDefaults().serdes
+	// The child context records the submitted bytes unchanged. The result
+	// serdes converts them into O on the first run and on replay alike, so
+	// both runs return the same value.
+	serdes := callbackDeserializerForOptions(ec, options)
 
 	op := ec.state.get(id)
 	if err := validateReplayConsistency(op, string(OperationTypeContext), OperationSubTypeWaitForCallback, name); err != nil {
@@ -273,11 +281,7 @@ func runClaimedWaitForCallback[O any](ec *execContext, id, name string, submitte
 			// its end is dispatched before the result is deserialized: a
 			// failing result Serdes does not suppress it.
 			dispatchReplayedContextEnd(ec, id, name, OperationSubTypeWaitForCallback, op, nil)
-			var out O
-			if err := serdes.Unmarshal(ec.Context, ec.serdesCtx(id), []byte(op.childCtx.result), &out); err != nil {
-				return zero, ec.serdesFailure(name, serdesDirectionUnmarshal, err)
-			}
-			return out, nil
+			return decodeWaitForCallbackResult[O](ec, serdes, id, name, []byte(op.childCtx.result))
 
 		case statusFailed:
 			failure := wfcbFailedError(ec, op, id, name)
@@ -310,7 +314,7 @@ func runClaimedWaitForCallback[O any](ec *execContext, id, name string, submitte
 	opInfo := dispatchContextStart(ec, id, name, OperationSubTypeWaitForCallback, op)
 
 	restore := child.enterBody()
-	result, fnErr := runWaitForCallbackBody[O](child, name, submitter, options, serdes)
+	submitted, fnErr := runWaitForCallbackBody(child, submitter, options)
 	restore()
 
 	// From here to the checkpoint of the context's completion the
@@ -343,15 +347,13 @@ func runClaimedWaitForCallback[O any](ec *execContext, id, name string, submitte
 		return zero, fnErr
 	}
 
-	// Checkpoint ContextSucceeded.
-	serialized, serr := serdes.Marshal(ec.Context, ec.serdesCtx(id), result)
-	if serr != nil {
-		return zero, ec.serdesFailure(name, serdesDirectionMarshal, serr)
-	}
-	// Round-trip for consistency (first-run == replay). Decode before
-	// recording the success, so a transient failure ends the invocation
-	// with no outcome recorded.
-	out, decodeErr := decodeLiveResult[O](ec, serdes, id, name, serialized)
+	// Checkpoint ContextSucceeded with the submitted bytes. Decode them
+	// before recording the success, so a transient failure ends the
+	// invocation with no outcome recorded. A permanent failure fails the
+	// same way on replay, so the success is recorded and the error is
+	// returned after it.
+	serialized := []byte(submitted)
+	out, decodeErr := decodeWaitForCallbackResult[O](ec, serdes, id, name, serialized)
 	if isSerdesInvocationEnd(decodeErr) {
 		return zero, decodeErr
 	}
@@ -371,24 +373,32 @@ func runClaimedWaitForCallback[O any](ec *execContext, id, name string, submitte
 	return out, nil
 }
 
-// runWaitForCallbackBody is the inner function of WaitForCallback: create
-// callback + run submitter step + return callback result.
-func runWaitForCallbackBody[O any](child *execContext, name string, submitter func(StepContext, string) error, options callbackOptions, serdes Serdes) (O, error) {
-	var zero O
+// decodeWaitForCallbackResult converts the submitted bytes of a
+// WaitForCallback into its result. An empty submission returns the zero
+// value of O without calling serdes, as [CreateCallback] does.
+func decodeWaitForCallbackResult[O any](ec *execContext, serdes Serdes, id, name string, submitted []byte) (O, error) {
+	if len(submitted) == 0 {
+		var zero O
+		return zero, nil
+	}
+	return decodeLiveResult[O](ec, serdes, id, name, submitted)
+}
 
-	// Step 1: create the inner callback (unnamed, per wire spec). Every
-	// callback-level option the caller passed applies to it; the
-	// submitter retry strategy is consumed by the step below.
-	cbOpts := []CallbackOption{
+// runWaitForCallbackBody is the inner function of WaitForCallback: create
+// callback + run submitter step + return the submitted bytes.
+func runWaitForCallbackBody(child *execContext, submitter func(StepContext, string) error, options callbackOptions) (json.RawMessage, error) {
+	// Step 1: create the inner callback (unnamed, per wire spec). The
+	// caller's timeout and heartbeat timeout apply to it. It uses
+	// [RawSerdes], so it returns the submitted bytes unchanged; the result
+	// serdes runs once, at the WaitForCallback layer. The submitter retry
+	// strategy is consumed by the step below.
+	cb, err := CreateCallback[json.RawMessage](child, "",
 		WithCallbackTimeout(options.timeout),
 		WithCallbackHeartbeatTimeout(options.heartbeatTimeout),
-	}
-	if options.serdes != nil {
-		cbOpts = append(cbOpts, WithCallbackSerdes(options.serdes))
-	}
-	cb, err := CreateCallback[O](child, "", cbOpts...)
+		WithCallbackSerdes(RawSerdes),
+	)
 	if err != nil {
-		return zero, err
+		return nil, err
 	}
 
 	// Step 2: run the submitter as a step (uses default retry unless
@@ -402,15 +412,11 @@ func runWaitForCallbackBody[O any](child *execContext, name string, submitter fu
 		return Void{}, submitter(sc, callbackID)
 	}, stepOpts...)
 	if stepErr != nil {
-		return zero, stepErr
+		return nil, stepErr
 	}
 
 	// Step 3: await the callback result.
-	result, cbErr := cb.Result(child)
-	if cbErr != nil {
-		return zero, cbErr
-	}
-	return result, nil
+	return cb.Result(child)
 }
 
 // wfcbMapError maps the error that escaped the WaitForCallback body to the
@@ -676,9 +682,10 @@ func WithSubmitterRetry(s RetryStrategy) WaitForCallbackOption {
 }
 
 // WithCallbackSerdes overrides the serializer for the callback result. The
-// deserialize path is used when replaying a SUCCEEDED callback to unmarshal
-// the stored payload into the typed result. In [WaitForCallback] it applies
-// to the callback the operation creates.
+// deserialize path converts the submitted payload into the typed result. In
+// [WaitForCallback] it applies at the WaitForCallback operation to the
+// submitted bytes; the callback the operation creates stores and returns
+// those bytes unchanged.
 func WithCallbackSerdes(s Serdes) CallbackOption {
 	return callbackOptionFunc(func(o *callbackOptions) { o.serdes = s })
 }

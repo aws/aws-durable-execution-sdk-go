@@ -321,7 +321,10 @@ func TestWaitForCallbackSuccess(t *testing.T) {
 	if resp.Status != invocationSucceeded {
 		t.Fatalf("response status = %q, want SUCCEEDED", resp.Status)
 	}
-	if got, want := aws.ToString(resp.Result), `"callback-result"`; got != want {
+	// The context stores the submitted bytes, and the default RawSerdes
+	// returns them unchanged, quotes included. The handler result is that
+	// string, encoded as JSON.
+	if got, want := aws.ToString(resp.Result), `"\"callback-result\""`; got != want {
 		t.Errorf("result = %q, want %q", got, want)
 	}
 }
