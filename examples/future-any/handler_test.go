@@ -42,7 +42,7 @@ func TestHandler(t *testing.T) {
 		extest.AssertSignature(t, result, extest.Subset)
 	})
 
-	// Test all-fail case: CombinatorError wraps all individual errors.
+	// Test all-fail case: Any fails with a CombinatorError.
 	t.Run("all-fail", func(t *testing.T) {
 		runner := durabletest.NewLocalRunner(handler)
 		result, err := runner.RunUntilComplete(Input{ShouldFail: true})
@@ -61,8 +61,8 @@ func TestHandler(t *testing.T) {
 		if output.Status != "all-failed" {
 			t.Errorf("expected status %q, got %q", "all-failed", output.Status)
 		}
-		if output.Error == "" {
-			t.Error("expected non-empty error message on all-fail")
+		if want := "all 3 futures failed: All promises were rejected"; output.Error != want {
+			t.Errorf("error = %q, want %q", output.Error, want)
 		}
 
 		// Every future fails before Any returns, so all of them reach a

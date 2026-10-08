@@ -58,29 +58,7 @@ func TestDurabletestRejectsZeroSecondWait(t *testing.T) {
 	}
 }
 
-// Case 3. Race over a nil slice responds PENDING with no pending
-// operation. The service rejects such a response and fails the execution
-// after four of them in a row. The local runner does the same.
-func TestDurabletestFailsPendingWithNothingPending(t *testing.T) {
-	h := func(ctx durable.Context, _ struct{}) (int, error) {
-		return durable.Race[int](ctx, "r", nil)
-	}
-	res, err := durabletest.NewLocalRunner(h).RunUntilComplete(struct{}{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.Status != durabletest.Failed {
-		t.Fatalf("status = %s, want FAILED (the service fails a PENDING-with-nothing-pending execution)", res.Status)
-	}
-	if res.CapReached {
-		t.Fatal("CapReached = true; the runner spun to the cap instead of failing the execution")
-	}
-	if n := len(res.Invocations); n != 4 {
-		t.Fatalf("invocations = %d, want 4", n)
-	}
-}
-
-// Case 4. The handler starts a 1-second wait, runs a step, then awaits the
+// Case 3. The handler starts a 1-second wait, runs a step, then awaits the
 // wait. The wait elapses while the step runs, and the response to the
 // step's checkpoint reports it. So the handler finishes in one Run.
 func TestDurabletestCompletesWaitDuringInvocation(t *testing.T) {

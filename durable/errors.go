@@ -862,7 +862,7 @@ func reconstructSDKError(wireType string, op OperationError, sentinel error) err
 	case "RetryError":
 		return &RetryError{Name: op.Name, ErrorType: rec.errType, Message: rec.message, ErrorData: rec.data, StackTrace: rec.stackTrace, Err: inner}
 	case "PromiseCombinatorError":
-		return &CombinatorError{Name: op.Name, Errors: []error{inner}, recordedMessage: rec.message}
+		return &CombinatorError{Name: op.Name, Errors: []error{inner}, message: rec.message}
 	case "BatchError":
 		return &BatchError{Name: op.Name, Reason: completionReasonOf(rec.message), Errors: []error{inner}, recordedMessage: rec.message}
 	case "BatchCompletionError":
@@ -1143,17 +1143,39 @@ func (e *RetryError) As(target any) bool {
 	return asOperationError(target, e.operationError())
 }
 
-// CombinatorError indicates that a future combinator failed. For [Any],
-// this wraps all individual future errors when no future succeeded.
+// CombinatorError indicates that a future combinator failed. A failure of
+// [All], [Any], [Race], [Join], or [Select] is a CombinatorError, so one
+// [errors.As] check matches a failure of any of them.
+//
+// On the value a combinator produces, Errors and the message hold the
+// combinator's decided failure:
+//
+//   - For [All] and [Join], Errors holds the first error in input order.
+//   - For [Race], Errors holds the error of the first future to settle
+//     with a failure.
+//   - For [Select], Errors holds the failing winning branch's error.
+//   - For [Any], Errors holds every future's error, in input order. It is
+//     empty when Any received no futures.
+//
+// The message is the decided failure's message. For All, Race, Join, and
+// Select it is the first error's message. For Any it is exactly
+// "All promises were rejected", whether every future failed or there were
+// none.
+//
+// [AllSettled] never produces a CombinatorError for a failing future. It
+// resolves, and each failed future's error is in [Settled].Err.
 //
 // The combinator runs in a child context, so the error a caller receives
-// is a [ChildContextError] whose cause is a CombinatorError rebuilt from
-// the recorded failure: Errors then holds one stand-in carrying the
-// recorded message, on the first invocation and on replay alike. Match on
-// the type and on [ChildContextError.ErrorType]. See [OperationError].
+// is a [ChildContextError] whose ErrorType is "PromiseCombinatorError" and
+// whose cause is a CombinatorError. Every combinator, Select included,
+// records its failure as a FAILED operation, and the cause is rebuilt from
+// that failure. Its Errors then holds one stand-in carrying the recorded
+// message, on the first invocation and on replay alike. So the produced
+// Errors content above is not what a caller inspects. Match on the type
+// and on [ChildContextError.ErrorType]. See [OperationError].
 //
-// A value rebuilt from a checkpoint record keeps the recorded Error()
-// text, so the count it reports is the count at the time of failure.
+// A value built by hand with no message reports
+// `durable: combinator "<name>": all futures failed (<n> errors)`.
 type CombinatorError struct {
 	// Name is the combinator operation's name.
 	Name string
@@ -1161,14 +1183,37 @@ type CombinatorError struct {
 	// Errors contains the individual future errors.
 	Errors []error
 
-	// recordedMessage is the Error() text of a value rebuilt from a
-	// checkpoint record. It is empty for a value the combinator produced.
-	recordedMessage string
+	// message is the Error() text of a value a combinator produced or
+	// rebuilt from a checkpoint record. It is empty for a value built by
+	// hand.
+	message string
+}
+
+// anyRejectedMessage is the message of an [Any] failure. The JavaScript
+// SDK reports the same text.
+const anyRejectedMessage = "All promises were rejected"
+
+// newCombinatorFailure builds the [CombinatorError] for a combinator whose
+// decided failure is the single error err. Its message is err's message.
+func newCombinatorFailure(name string, err error) *CombinatorError {
+	return &CombinatorError{Name: name, Errors: []error{err}, message: err.Error()}
+}
+
+// wrapCombinatorFailure returns the error a combinator body returns for
+// err. A suspension passes through unchanged, because it is not a
+// failure: the invocation ends and the combinator resumes later. Any
+// other error, a [CombinatorError] from a nested combinator included, is
+// the decided failure and is wrapped by [newCombinatorFailure].
+func wrapCombinatorFailure(name string, err error) error {
+	if err == nil || errors.Is(err, errSuspendExecution) || errors.Is(err, errCheckpointTerminated) {
+		return err
+	}
+	return newCombinatorFailure(name, err)
 }
 
 func (e *CombinatorError) Error() string {
-	if e.recordedMessage != "" {
-		return e.recordedMessage
+	if e.message != "" {
+		return e.message
 	}
 	return fmt.Sprintf("durable: combinator %q: all futures failed (%d errors)", e.Name, len(e.Errors))
 }

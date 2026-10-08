@@ -104,12 +104,13 @@ func TestSelectReplayKeepsWinnerWhenTimingReverses(t *testing.T) {
 
 // TestSelectReplayKeepsFailedWinner is the failure counterpart: the winning
 // branch fails on the first invocation, and the replay returns the same
-// winner name and an error that still names that branch.
+// winner name and the same PromiseCombinatorError failure.
 func TestSelectReplayKeepsFailedWinner(t *testing.T) {
 	type observation struct {
 		Winner    string `json:"winner"`
 		ErrName   string `json:"errName"`
-		ErrMsg    string `json:"errMsg"`
+		ErrType   string `json:"errType"`
+		ErrData   string `json:"errData"`
 		ErrString string `json:"errString"`
 	}
 	var observations []observation
@@ -132,10 +133,12 @@ func TestSelectReplayKeepsFailedWinner(t *testing.T) {
 		// replay this test checks would not happen.
 		time.Sleep(50 * time.Millisecond)
 		obs := observation{Winner: winner}
+		var combErr *durable.CombinatorError
 		var childErr *durable.ChildContextError
-		if errors.As(err, &childErr) {
+		if errors.As(err, &combErr) && errors.As(err, &childErr) {
 			obs.ErrName = childErr.Name
-			obs.ErrMsg = childErr.Message
+			obs.ErrType = childErr.ErrorType
+			obs.ErrData = childErr.ErrorData
 		}
 		if err != nil {
 			obs.ErrString = err.Error()
@@ -169,8 +172,8 @@ func TestSelectReplayKeepsFailedWinner(t *testing.T) {
 		t.Fatalf("recorded %d observations, want 2", len(observations))
 	}
 	want := observation{
-		Winner: "broken", ErrName: "broken", ErrMsg: "upstream unavailable",
-		ErrString: `durable: child context "broken" failed: Error: upstream unavailable`,
+		Winner: "broken", ErrName: "quote", ErrType: "PromiseCombinatorError", ErrData: `{"winner":"broken"}`,
+		ErrString: `durable: child context "quote" failed: PromiseCombinatorError: durable: child context "broken" failed: Error: upstream unavailable`,
 	}
 	for i, obs := range observations {
 		if obs != want {

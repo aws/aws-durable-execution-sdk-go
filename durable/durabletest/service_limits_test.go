@@ -216,27 +216,6 @@ func TestWaitUnderOneSecondIsRejected(t *testing.T) {
 	}
 }
 
-func TestPendingWithNothingPendingFailsAfterFourInvocations(t *testing.T) {
-	h := func(ctx durable.Context, _ struct{}) (int, error) {
-		return durable.Race[int](ctx, "r", nil)
-	}
-	result := runToEnd(t, h)
-
-	if result.Status != durabletest.Failed {
-		t.Fatalf("status = %s, want FAILED", result.Status)
-	}
-	if result.Error == nil || result.Error.Type != "InvalidParameterValueException" ||
-		result.Error.Message != "Cannot return PENDING status with no pending operations." {
-		t.Fatalf("error = %+v, want InvalidParameterValueException: Cannot return PENDING status with no pending operations.", result.Error)
-	}
-	if n := len(result.Invocations); n != 4 {
-		t.Errorf("invocations = %d, want 4", n)
-	}
-	if result.CapReached {
-		t.Error("CapReached = true, want false")
-	}
-}
-
 // A PENDING response with a pending operation is a legitimate suspension.
 // It neither counts toward the rejection nor fails the execution.
 func TestPendingWithPendingOperationIsAccepted(t *testing.T) {

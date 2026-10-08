@@ -1,6 +1,6 @@
 // Command future-any demonstrates durable.Any: return the first future to
-// succeed. If all futures fail, Any returns a *CombinatorError wrapping all
-// individual errors.
+// succeed. If all futures fail, Any fails with a *CombinatorError whose
+// message is "All promises were rejected".
 //
 // Input: {"shouldFail": true} makes all steps fail, demonstrating the
 // aggregate error path.
@@ -44,13 +44,17 @@ func handler(ctx durable.Context, event Input) (Result, error) {
 		return "second success", nil
 	}, durable.WithRetry(durable.NoRetry()))
 
-	val, err := durable.Any(ctx, "any", []*durable.Future[string]{f1, f2, f3})
+	futures := []*durable.Future[string]{f1, f2, f3}
+	val, err := durable.Any(ctx, "any", futures)
 	if err != nil {
+		// The CombinatorError the caller receives is rebuilt from the
+		// recorded failure, so it does not hold one error per future.
+		// The count reported here is the number of input futures.
 		var combErr *durable.CombinatorError
 		if errors.As(err, &combErr) {
 			return Result{
 				Status: "all-failed",
-				Error:  fmt.Sprintf("all %d futures failed", len(combErr.Errors)),
+				Error:  fmt.Sprintf("all %d futures failed: %s", len(futures), combErr.Error()),
 			}, nil
 		}
 		return Result{}, err

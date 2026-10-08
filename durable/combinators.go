@@ -2,6 +2,7 @@ package durable
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 )
 
@@ -20,11 +21,15 @@ import (
 // re-awaiting the futures. opts configure that child-context operation;
 // [WithChildSerdes] selects the serializer for the aggregate result.
 //
+// A failure is returned as a [*ChildContextError] whose ErrorType is
+// "PromiseCombinatorError" and whose cause is a [*CombinatorError]. Its
+// message is the message of the first error in input order.
+//
 // Empty input returns an empty slice immediately (matching Promise.all([])).
 func All[O any](ctx Context, name string, fs []*Future[O], opts ...ChildOption) ([]O, error) {
 	return RunInChildContext(ctx, name, func(childCtx Context) ([]O, error) {
 		if err := awaitBarrier(childCtx, asAwaitables(fs), true); err != nil {
-			return nil, err
+			return nil, wrapCombinatorFailure(name, err)
 		}
 		// Every future settled successfully, so each Result call below
 		// returns immediately.
@@ -74,8 +79,11 @@ func (f *Future[O]) await(ctx Context) error {
 //
 // Join uses [RunInChildContext] internally, so its outcome is checkpointed:
 // on replay, the stored outcome is returned without re-awaiting the
-// futures, and a failure is returned as a [*ChildContextError] wrapping
-// the first error. opts configure that child-context operation.
+// futures. opts configure that child-context operation.
+//
+// A failure is returned as a [*ChildContextError] whose ErrorType is
+// "PromiseCombinatorError" and whose cause is a [*CombinatorError]. Its
+// message is the message of the first error in argument order.
 //
 // Empty input returns nil immediately.
 //
@@ -88,7 +96,7 @@ func (f *Future[O]) await(ctx Context) error {
 //	ok, _ := fb.Result(ctx)
 func Join(ctx Context, name string, fs []Awaitable, opts ...ChildOption) error {
 	_, err := RunInChildContext(ctx, name, func(childCtx Context) (Void, error) {
-		return Void{}, awaitBarrier(childCtx, fs, false)
+		return Void{}, wrapCombinatorFailure(name, awaitBarrier(childCtx, fs, false))
 	}, opts...)
 	return err
 }
@@ -154,27 +162,38 @@ func asAwaitables[O any](fs []*Future[O]) []Awaitable {
 // re-awaiting the futures. opts configure that child-context operation;
 // [WithChildSerdes] selects the serializer for the aggregate result.
 //
+// A failing future never fails AllSettled and never produces a
+// [*CombinatorError]: AllSettled resolves, and the future's error is in
+// Settled[i].Err. A failure to serialize the aggregate result is a
+// [*SerdesError], as for any child context.
+//
 // Empty input returns an empty slice immediately.
 func AllSettled[O any](ctx Context, name string, fs []*Future[O], opts ...ChildOption) ([]Settled[O], error) {
 	return RunInChildContext(ctx, name, func(_ Context) ([]Settled[O], error) {
-		results := make([]Settled[O], len(fs))
-		var sawSuspend bool
-		for i, f := range fs {
-			val, err := f.result()
-			switch {
-			case err == nil:
-				results[i] = Settled[O]{Value: val}
-			case errors.Is(err, errSuspendExecution):
-				sawSuspend = true
-			default:
-				results[i] = Settled[O]{Err: err}
-			}
-		}
-		if sawSuspend {
-			return nil, errSuspendExecution
-		}
-		return results, nil
+		return allSettledOutcomes(fs)
 	}, opts...)
+}
+
+// allSettledOutcomes awaits every future in fs and returns their outcomes
+// in input order, or the suspension sentinel when any future suspended.
+func allSettledOutcomes[O any](fs []*Future[O]) ([]Settled[O], error) {
+	results := make([]Settled[O], len(fs))
+	var sawSuspend bool
+	for i, f := range fs {
+		val, err := f.result()
+		switch {
+		case err == nil:
+			results[i] = Settled[O]{Value: val}
+		case errors.Is(err, errSuspendExecution):
+			sawSuspend = true
+		default:
+			results[i] = Settled[O]{Err: err}
+		}
+	}
+	if sawSuspend {
+		return nil, errSuspendExecution
+	}
+	return results, nil
 }
 
 // Any records a combinator operation and returns the value of the first
@@ -184,21 +203,25 @@ func AllSettled[O any](ctx Context, name string, fs []*Future[O], opts ...ChildO
 // blocking points, then propagates the suspension; suspension takes
 // precedence over terminal outcomes observed after it because the
 // suspended branch completes only on a later invocation. If every future
-// fails with a non-suspension error, Any returns a [*CombinatorError]
-// wrapping all individual errors.
+// fails with a non-suspension error, Any fails with a [*CombinatorError]
+// wrapping all individual errors, whose message is
+// "All promises were rejected". The failure is returned as a
+// [*ChildContextError] whose ErrorType is "PromiseCombinatorError" and
+// whose cause is that [*CombinatorError].
 //
 // Any uses [RunInChildContext] internally, so the winning result is
 // checkpointed: on replay, the same winner is returned deterministically
 // regardless of future settlement order. opts configure that child-context
 // operation; [WithChildSerdes] selects the serializer for the winner.
 //
-// Empty input fails immediately with a [*CombinatorError] (no futures can
-// succeed), matching Promise.any([]).
+// Empty input fails immediately with a [*CombinatorError] whose message is
+// "All promises were rejected" and whose Errors is empty, because no
+// future can succeed. This matches Promise.any([]).
 func Any[O any](ctx Context, name string, fs []*Future[O], opts ...ChildOption) (O, error) {
 	return RunInChildContext(ctx, name, func(childCtx Context) (O, error) {
 		var zero O
 		if len(fs) == 0 {
-			return zero, &CombinatorError{Name: name, Errors: nil}
+			return zero, &CombinatorError{Name: name, Errors: nil, message: anyRejectedMessage}
 		}
 
 		// The futures are awaited together on this goroutine: it parks
@@ -248,7 +271,7 @@ func Any[O any](ctx Context, name string, fs []*Future[O], opts ...ChildOption) 
 		}
 		if !sawSuspend {
 			// All failed.
-			return zero, &CombinatorError{Name: name, Errors: errs}
+			return zero, &CombinatorError{Name: name, Errors: errs, message: anyRejectedMessage}
 		}
 		return zero, errSuspendExecution
 	}, opts...)
@@ -272,21 +295,19 @@ func Any[O any](ctx Context, name string, fs []*Future[O], opts ...ChildOption) 
 // that must branch on the winner's identity should use [Select], which
 // runs named branches and checkpoints the winner's name with its value.
 //
-// Empty input suspends (no future will ever settle), matching
-// Promise.race([]) which returns a forever-pending promise.
+// A failure is returned as a [*ChildContextError] whose ErrorType is
+// "PromiseCombinatorError" and whose cause is a [*CombinatorError]. Its
+// message is the message of the first future to settle with a failure.
+//
+// Empty input returns an error immediately, without recording an
+// operation, because no future can ever settle.
 func Race[O any](ctx Context, name string, fs []*Future[O], opts ...ChildOption) (O, error) {
+	if len(fs) == 0 {
+		var zero O
+		return zero, fmt.Errorf("durable: Race %q: no futures", name)
+	}
 	return RunInChildContext(ctx, name, func(childCtx Context) (O, error) {
 		var zero O
-		if len(fs) == 0 {
-			// No futures to settle. Match Promise.race([]):
-			// suspend cleanly since this will never resolve.
-			ec, ok := childCtx.(*execContext)
-			if ok {
-				ec.blocked.Store(true)
-				ec.suspend.commitPending(ec.abandon)
-			}
-			return zero, errSuspendExecution
-		}
 
 		// The futures are awaited together on this goroutine; see Any.
 		for _, f := range fs {
@@ -309,7 +330,10 @@ func Race[O any](ctx Context, name string, fs []*Future[O], opts ...ChildOption)
 					continue
 				}
 				if !sawSuspend {
-					return f.value, f.err
+					if f.err != nil {
+						return zero, newCombinatorFailure(name, f.err)
+					}
+					return f.value, nil
 				}
 				// A terminal outcome after a suspension is discarded:
 				// the loop keeps draining so every branch reaches a

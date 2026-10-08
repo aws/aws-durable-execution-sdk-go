@@ -505,15 +505,22 @@ func TestRaceFirstSettlesError(t *testing.T) {
 }
 
 func TestRaceEmpty(t *testing.T) {
-	// Race([]) suspends: no future will ever settle (matches Promise.race([])).
+	// Race([]) fails at once: no future can ever settle. It records no
+	// operation.
 	fake := &fakeLambda{}
 	resp := invokeStep(t, fake, childPayload(`"x"`), func(ctx Context, _ string) (string, error) {
 		_, err := Race(ctx, "race-empty", []*Future[string]{})
-		return "", err
+		if err == nil || errors.Is(err, errSuspendExecution) {
+			return "", errors.New("expected an immediate error")
+		}
+		return err.Error(), nil
 	})
 
-	if want := `{"Status":"PENDING"}`; resp != want {
+	if want := `{"Status":"SUCCEEDED","Result":"\"durable: Race \\\"race-empty\\\": no futures\""}`; resp != want {
 		t.Errorf("response = %s, want %s", resp, want)
+	}
+	if n := len(fake.gotUpdateBatches); n != 0 {
+		t.Errorf("recorded %d checkpoint batches, want none", n)
 	}
 }
 
@@ -1025,7 +1032,7 @@ func TestRaceEarlyTerminalNoSuspension(t *testing.T) {
 	if err == nil || errors.Is(err, errSuspendExecution) {
 		t.Fatalf("Race error = %v, want the pre-settled terminal error", err)
 	}
-	if want := `durable: child context "race-early" failed: Error: race-loser`; err.Error() != want {
+	if want := `durable: child context "race-early" failed: PromiseCombinatorError: race-loser`; err.Error() != want {
 		t.Errorf("Race error = %q, want %q", err.Error(), want)
 	}
 }
@@ -1517,5 +1524,32 @@ func TestCombinatorsReplayWithChildSerdes(t *testing.T) {
 			})
 			assertSerdesError(t, got, "op", "unmarshal", cause)
 		})
+	}
+}
+
+// TestWrapCombinatorFailure checks the error a combinator body returns
+// for its decided failure. A failure is wrapped in a CombinatorError
+// holding that one error, with that error's message. A CombinatorError
+// from a nested combinator is wrapped the same way. A suspension and nil
+// pass through unchanged.
+func TestWrapCombinatorFailure(t *testing.T) {
+	boom := errors.New("boom")
+	got := wrapCombinatorFailure("all", boom)
+	var combErr *CombinatorError
+	if !errors.As(got, &combErr) {
+		t.Fatalf("wrapCombinatorFailure(boom) = %T, want *CombinatorError", got)
+	}
+	if combErr.Name != "all" || len(combErr.Errors) != 1 || combErr.Errors[0] != boom || combErr.Error() != "boom" {
+		t.Errorf("CombinatorError = {Name %q, Errors %v, Error %q}, want {all, [boom], boom}", combErr.Name, combErr.Errors, combErr.Error())
+	}
+	wrapped, ok := wrapCombinatorFailure("outer", got).(*CombinatorError)
+	if !ok || wrapped == got || wrapped.Name != "outer" || len(wrapped.Errors) != 1 || wrapped.Errors[0] != got || wrapped.Error() != "boom" {
+		t.Errorf("wrapping a CombinatorError = %#v, want a new CombinatorError {outer, [the inner error], boom}", wrapped)
+	}
+	if err := wrapCombinatorFailure("all", errSuspendExecution); err != errSuspendExecution {
+		t.Errorf("wrapCombinatorFailure(suspend) = %v, want the suspension sentinel", err)
+	}
+	if err := wrapCombinatorFailure("all", nil); err != nil {
+		t.Errorf("wrapCombinatorFailure(nil) = %v, want nil", err)
 	}
 }

@@ -1,15 +1,20 @@
 package durable
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
 )
 
-// selectOutcome is the checkpointed result of a [Select] operation: the
-// name of the winning branch and its settled outcome. The outcome reuses
-// [Settled], so a failed winner's error is recorded with its wire type and
-// rebuilt on replay the same way [AllSettled] rebuilds a rejected outcome.
+// selectOutcome is the checkpointed result of a [Select] whose winning
+// branch succeeded: the name of the winning branch and its settled
+// outcome, in the shape [AllSettled] stores. A failed winner is not stored
+// here. It is recorded as a FAILED operation, see [Select].
+//
+// A record whose outcome holds a rejected error is still read. Select
+// returns the same failure shape for it as for a FAILED record, with the
+// rebuilt branch error as the cause's single error.
 type selectOutcome[O any] struct {
 	Winner  string     `json:"winner"`
 	Outcome Settled[O] `json:"outcome"`
@@ -28,20 +33,28 @@ type selectOutcome[O any] struct {
 // over terminal outcomes observed after it because the suspended branch
 // completes only on a later invocation.
 //
-// If the winning branch fails, err is that branch's error, a
-// [*ChildContextError] naming the branch, and winner names it too. The
-// Select operation itself is recorded as SUCCEEDED in that case, with the
-// winner's failure as part of its result, so replay returns the same
-// winner and the same error; the failing branch's own child context is
-// recorded as FAILED.
+// If the winning branch fails, winner names it and err is a
+// [*ChildContextError] named after the Select operation, whose ErrorType
+// is "PromiseCombinatorError" and whose cause is a [*CombinatorError].
+// The message is the branch error's message. The Select operation is
+// recorded as FAILED with ErrorType "PromiseCombinatorError", the same
+// type every combinator failure records. The winner's name is recorded
+// with that failure as its ErrorData, the JSON object {"winner":"<name>"},
+// so replay returns the same winner and the same error. The
+// ChildContextError's ErrorData field holds that object. The failing
+// branch's own child context is recorded as FAILED too. A
+// [WithChildErrorMapper] mapper receives that ChildContextError, and
+// Select returns the mapper's error in its place. winner still names the
+// failed branch, because Select reads it from the recorded failure before
+// the mapper runs.
 //
 // Select uses [RunInChildContext] internally, so the winner's name and
 // value are checkpointed together: on replay, the same winner is returned
 // even when a different branch would finish first if the branches ran
 // again. opts configure that child-context operation; [WithChildSerdes]
-// selects the serializer for the checkpointed record, an object with a
-// "winner" field holding the name and an "outcome" field holding the
-// value or error in the shape [AllSettled] stores.
+// selects the serializer for the checkpointed record of a successful
+// winner, an object with a "winner" field holding the name and an
+// "outcome" field holding the value in the shape [AllSettled] stores.
 //
 // Empty branches returns an error immediately, without recording an
 // operation, because no branch could ever win. Duplicate branch names are
@@ -58,6 +71,23 @@ func Select[O any](ctx Context, name string, branches []Branch[O], opts ...Child
 		}
 		seen[b.Name] = struct{}{}
 	}
+
+	// The winner is read from the recorded failure before a configured
+	// error mapper runs. A mapper may return an error that no longer holds
+	// the [*ChildContextError], so the winner cannot be read from the
+	// mapped error.
+	var failedWinner string
+	captureWinner := childOptionFunc(func(o *childOptions) {
+		mapper := o.errorMapper
+		o.errorMapper = func(childErr *ChildContextError) error {
+			failedWinner = selectWinnerOf(name, childErr)
+			if mapper == nil {
+				return nil
+			}
+			return mapper(childErr)
+		}
+	})
+	opts = append(slices.Clip(opts), captureWinner)
 
 	out, err := RunInChildContext(ctx, name, func(childCtx Context) (selectOutcome[O], error) {
 		var none selectOutcome[O]
@@ -92,11 +122,11 @@ func Select[O any](ctx Context, name string, branches []Branch[O], opts ...Child
 					continue
 				}
 				if !sawSuspend {
-					outcome := Settled[O]{Value: f.value}
+					winner := branches[idx[j]].Name
 					if f.err != nil {
-						outcome = Settled[O]{Err: f.err}
+						return none, selectFailure(name, winner, f.err)
 					}
-					return selectOutcome[O]{Winner: branches[idx[j]].Name, Outcome: outcome}, nil
+					return selectOutcome[O]{Winner: winner, Outcome: Settled[O]{Value: f.value}}, nil
 				}
 				// A terminal outcome after a suspension is discarded: the
 				// loop keeps draining so every branch reaches a blocking
@@ -109,7 +139,44 @@ func Select[O any](ctx Context, name string, branches []Branch[O], opts ...Child
 		return none, errSuspendExecution
 	}, opts...)
 	if err != nil {
-		return "", zero, err
+		return failedWinner, zero, err
 	}
-	return out.Winner, out.Outcome.Value, out.Outcome.Err
+	if out.Outcome.Err != nil {
+		// A record whose result holds a rejected outcome rebuilds the same
+		// failure shape as a FAILED record.
+		comb := newCombinatorFailure(name, out.Outcome.Err)
+		return out.Winner, zero, &ChildContextError{Name: name, ErrorType: "PromiseCombinatorError", Message: comb.Error(), Err: comb}
+	}
+	return out.Winner, out.Outcome.Value, nil
+}
+
+// selectWinnerData is the ErrorData recorded with a failed [Select]: the
+// name of the branch whose failure decided it.
+type selectWinnerData struct {
+	Winner string `json:"winner"`
+}
+
+// selectFailure returns the error that escapes the [Select] body when the
+// winning branch failed with branchErr. The [*CombinatorError] makes the
+// child context record ErrorType "PromiseCombinatorError". The ErrorData
+// wrapper records the winner's name, which [selectWinnerOf] reads back
+// from the rebuilt error on the first invocation and on replay alike.
+func selectFailure(name, winner string, branchErr error) error {
+	data, _ := marshalNoHTMLEscape(selectWinnerData{Winner: winner})
+	return WithErrorData(newCombinatorFailure(name, branchErr), string(data))
+}
+
+// selectWinnerOf returns the winner recorded with err, the error the
+// [Select] child context named name returned. It returns "" when err is
+// not a recorded Select failure.
+func selectWinnerOf(name string, err error) string {
+	var childErr *ChildContextError
+	if !errors.As(err, &childErr) || childErr.Name != name || childErr.ErrorType != "PromiseCombinatorError" {
+		return ""
+	}
+	var data selectWinnerData
+	if json.Unmarshal([]byte(childErr.ErrorData), &data) != nil {
+		return ""
+	}
+	return data.Winner
 }

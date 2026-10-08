@@ -689,9 +689,15 @@ func handler(ctx durable.Context, _ any) (int, error) {
 }
 ```
 
-`Any` returns the value of the first future to succeed. It fails with a
-`*durable.CombinatorError` when every future fails. `Race` returns the
-outcome of the first future to settle, success or failure.
+`Any` returns the value of the first future to succeed, and fails when
+every future fails. `Race` returns the outcome of the first future to
+settle, success or failure. A failure of `All`, `Any`, `Race`, `Join`, or
+`Select` is a `*durable.ChildContextError` whose `ErrorType` is
+`"PromiseCombinatorError"` and whose cause matches
+`*durable.CombinatorError`. Its message is the first error's message, or
+`All promises were rejected` for `Any`. `AllSettled` does not fail for a
+failing future. The future's error is in `Settled[i].Err`. `Race` and
+`Any` with no futures return an error at once.
 
 ```go
 func handler(ctx durable.Context, _ any) (int, error) {

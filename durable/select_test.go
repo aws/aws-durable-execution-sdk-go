@@ -29,6 +29,23 @@ func reportSelect(winner, value string, err error) (string, error) {
 	return string(b), nil
 }
 
+// selectFailureError checks that err is the failure of the Select
+// operation named name: a *ChildContextError with ErrorType
+// PromiseCombinatorError whose cause is a *CombinatorError holding one
+// error. It returns that *ChildContextError.
+func selectFailureError(t *testing.T, err error, name string) *ChildContextError {
+	t.Helper()
+	var outer *ChildContextError
+	if !errors.As(err, &outer) || outer.Name != name || outer.ErrorType != "PromiseCombinatorError" {
+		t.Fatalf("Select error = %T %v, want *ChildContextError %q with ErrorType PromiseCombinatorError", err, err, name)
+	}
+	var combErr *CombinatorError
+	if !errors.As(err, &combErr) || len(combErr.Errors) != 1 {
+		t.Fatalf("Select error = %v, want a *CombinatorError cause holding one error", err)
+	}
+	return outer
+}
+
 // decodeSelectReport parses the SUCCEEDED response of a handler that
 // returned reportSelect's JSON.
 func decodeSelectReport(t *testing.T, resp string) selectReport {
@@ -46,12 +63,6 @@ func decodeSelectReport(t *testing.T, resp string) selectReport {
 		t.Fatalf("unmarshal select report %q: %v", inner, err)
 	}
 	return report
-}
-
-// selectPayload is the checkpoint payload Select stores for its winner.
-type selectPayload struct {
-	Winner  string          `json:"winner"`
-	Outcome json.RawMessage `json:"outcome"`
 }
 
 func TestSelectFirstTerminalWins(t *testing.T) {
@@ -83,10 +94,12 @@ func TestSelectFirstTerminalWins(t *testing.T) {
 }
 
 func TestSelectWinnerFailureNamesWinner(t *testing.T) {
-	// A branch that fails first wins: err is that branch's error, a
-	// ChildContextError naming the branch, and winner names it too. The
-	// Select operation is recorded as SUCCEEDED with the failure inside its
-	// result; the branch's own child context is recorded as FAILED.
+	// A branch that fails first wins: winner names it, and err is a
+	// ChildContextError named after the Select operation with ErrorType
+	// PromiseCombinatorError and a CombinatorError cause. The Select
+	// operation is recorded as FAILED with ErrorType PromiseCombinatorError
+	// and the winner's name as its ErrorData. The branch's own child
+	// context is recorded as FAILED too.
 	fake := &fakeLambda{}
 	gate := make(chan struct{})
 	errCh := make(chan error, 1)
@@ -107,39 +120,74 @@ func TestSelectWinnerFailureNamesWinner(t *testing.T) {
 	if got.Winner != "bad" || got.Value != "" {
 		t.Errorf("Select = %+v, want winner bad with zero value", got)
 	}
-	err := <-errCh
-	var childErr *ChildContextError
-	if !errors.As(err, &childErr) {
-		t.Fatalf("Select error = %T %v, want *ChildContextError", err, err)
-	}
-	if childErr.Name != "bad" || childErr.Message != "boom" {
-		t.Errorf("ChildContextError = {Name %q, Message %q}, want {bad, boom}", childErr.Name, childErr.Message)
+	outer := selectFailureError(t, <-errCh, "pick")
+	wantMsg := `durable: child context "bad" failed: Error: boom`
+	if outer.Message != wantMsg || outer.ErrorData != `{"winner":"bad"}` {
+		t.Errorf("Select error = {Message %q, ErrorData %q}, want {%q, %q}", outer.Message, outer.ErrorData, wantMsg, `{"winner":"bad"}`)
 	}
 
-	var stored selectPayload
-	if err := json.Unmarshal([]byte(succeedPayload(t, fake, "1")), &stored); err != nil {
-		t.Fatalf("unmarshal Select payload: %v", err)
-	}
-	if stored.Winner != "bad" {
-		t.Errorf("stored winner = %q, want bad", stored.Winner)
-	}
-	var outcome settledJSON[string]
-	if err := json.Unmarshal(stored.Outcome, &outcome); err != nil {
-		t.Fatalf("unmarshal stored outcome: %v", err)
-	}
-	if outcome.Status != "rejected" || outcome.ErrorType != "ChildContextError" ||
-		outcome.Operation == nil || outcome.Operation.Name != "bad" {
-		t.Errorf("stored outcome = %+v, want rejected ChildContextError for branch bad", outcome)
-	}
-
-	var branchFailed bool
+	var selectFailed, branchFailed bool
 	for _, u := range updateBatch(t, fake) {
-		if u.Type == OperationTypeContext && u.Action == OperationActionFail && aws.ToString(u.Id) == hashID("1-1") {
+		if u.Type != OperationTypeContext {
+			continue
+		}
+		id := aws.ToString(u.Id)
+		if id == hashID("1") && u.Action == OperationActionSucceed {
+			t.Error("Select operation 1 was recorded as SUCCEEDED, want FAILED")
+		}
+		if id == hashID("1") && u.Action == OperationActionFail {
+			selectFailed = true
+			if u.Error == nil || aws.ToString(u.Error.ErrorType) != "PromiseCombinatorError" ||
+				aws.ToString(u.Error.ErrorMessage) != wantMsg || aws.ToString(u.Error.ErrorData) != `{"winner":"bad"}` {
+				t.Errorf("Select failure record = %+v, want ErrorType PromiseCombinatorError, message %q, ErrorData {\"winner\":\"bad\"}", u.Error, wantMsg)
+			}
+		}
+		if id == hashID("1-1") && u.Action == OperationActionFail {
 			branchFailed = true
 		}
 	}
+	if !selectFailed {
+		t.Error("Select operation 1 was not recorded as FAILED")
+	}
 	if !branchFailed {
 		t.Error("branch child context 1-1 was not recorded as FAILED")
+	}
+}
+
+// TestSelectFailureRecordsWinnerWithoutHTMLEscaping asserts that the
+// winner name in a failed Select's ErrorData keeps <, >, and & literal,
+// as every other stored JSON value does.
+func TestSelectFailureRecordsWinnerWithoutHTMLEscaping(t *testing.T) {
+	const winner = "<a&b>"
+	const wantData = `{"winner":"<a&b>"}`
+	fake := &fakeLambda{}
+	errCh := make(chan error, 1)
+	invokeStep(t, fake, childPayload(`"x"`), func(ctx Context, _ string) (string, error) {
+		gotWinner, value, err := Select(ctx, "pick", []Branch[string]{
+			{Name: winner, Func: func(Context) (string, error) { return "", errors.New("boom") }},
+		})
+		errCh <- err
+		return reportSelect(gotWinner, value, err)
+	})
+
+	if outer := selectFailureError(t, <-errCh, "pick"); outer.ErrorData != wantData {
+		t.Errorf("Select error ErrorData = %q, want %q", outer.ErrorData, wantData)
+	}
+	var recorded bool
+	for _, u := range updateBatch(t, fake) {
+		if u.Type != OperationTypeContext || aws.ToString(u.Id) != hashID("1") || u.Action != OperationActionFail {
+			continue
+		}
+		recorded = true
+		if u.Error == nil {
+			t.Fatal("Select failure record has no Error")
+		}
+		if got := aws.ToString(u.Error.ErrorData); got != wantData {
+			t.Errorf("Select failure record ErrorData = %q, want %q", got, wantData)
+		}
+	}
+	if !recorded {
+		t.Error("Select operation 1 was not recorded as FAILED")
 	}
 }
 
@@ -173,8 +221,42 @@ func TestSelectReplayReturnsCheckpointedWinner(t *testing.T) {
 }
 
 func TestSelectReplayReturnsCheckpointedFailure(t *testing.T) {
-	// A stored rejected outcome replays as the winning branch's error: a
-	// ChildContextError naming the branch, with winner naming it too.
+	// A FAILED Select operation replays from its checkpoint: no branch body
+	// runs, winner is read from the recorded ErrorData, and err has the
+	// same shape as on the first invocation.
+	fake := &fakeLambda{}
+	msg := `durable: child context "bad" failed: Error: boom`
+	payload := childPayload(`"x"`,
+		checkpointedChild("1", "FAILED", &wireContextDetails{
+			Error: &wireFullError{ErrorType: "PromiseCombinatorError", ErrorMessage: msg, ErrorData: `{"winner":"bad"}`},
+		}),
+	)
+	errCh := make(chan error, 1)
+	resp := invokeStep(t, fake, payload, func(ctx Context, _ string) (string, error) {
+		winner, value, err := Select(ctx, "pick", []Branch[string]{
+			{Name: "bad", Func: func(Context) (string, error) {
+				t.Error("branch bad ran on replay")
+				return "", errors.New("boom")
+			}},
+		})
+		errCh <- err
+		return reportSelect(winner, value, err)
+	})
+
+	got := decodeSelectReport(t, resp)
+	if got.Winner != "bad" {
+		t.Errorf("Select on replay = %+v, want winner bad", got)
+	}
+	if outer := selectFailureError(t, <-errCh, "pick"); outer.Message != msg {
+		t.Errorf("Select error message on replay = %q, want %q", outer.Message, msg)
+	}
+}
+
+func TestSelectReplayRejectedOutcomeResult(t *testing.T) {
+	// A SUCCEEDED Select record whose result holds a rejected outcome
+	// replays as the same failure shape: winner names the branch, and err
+	// is a PromiseCombinatorError ChildContextError holding the branch's
+	// rebuilt error.
 	fake := &fakeLambda{}
 	stored := `{"winner":"bad","outcome":{"status":"rejected","error":"boom","errorType":"ChildContextError",` +
 		`"operation":{"name":"bad","errorType":"Error","message":"boom"}}}`
@@ -197,9 +279,8 @@ func TestSelectReplayReturnsCheckpointedFailure(t *testing.T) {
 	if got.Winner != "bad" {
 		t.Errorf("Select on replay = %+v, want winner bad", got)
 	}
-	var childErr *ChildContextError
-	if err := <-errCh; !errors.As(err, &childErr) || childErr.Name != "bad" || childErr.Message != "boom" {
-		t.Errorf("Select error on replay = %v, want ChildContextError for branch bad with message boom", err)
+	if outer := selectFailureError(t, <-errCh, "pick"); outer.Message != `durable: child context "bad" failed: Error: boom` {
+		t.Errorf("Select error message on replay = %q, want the branch error's message", outer.Message)
 	}
 }
 
@@ -379,5 +460,72 @@ func TestSelectHonoursChildSerdes(t *testing.T) {
 	want := `{"WINNER":"ONLY","OUTCOME":{"STATUS":"FULFILLED","VALUE":"VALUE"}}`
 	if payload := succeedPayload(t, fake, "1"); payload != want {
 		t.Errorf("Select SUCCEED payload = %s, want %s", payload, want)
+	}
+}
+
+// errSelectMapped is the unrelated error the mapper in the tests below
+// returns in place of the Select failure.
+var errSelectMapped = errors.New("mapped select failure")
+
+func mapSelectFailure(*ChildContextError) error { return errSelectMapped }
+
+func TestSelectErrorMapperKeepsWinner(t *testing.T) {
+	// A mapper that replaces the failure with an unrelated error does not
+	// erase the winner. Select returns the winner read from the recorded
+	// failure and the mapper's error unchanged.
+	fake := &fakeLambda{}
+	gate := make(chan struct{})
+	errCh := make(chan error, 1)
+	resp := invokeStep(t, fake, childPayload(`"x"`), func(ctx Context, _ string) (string, error) {
+		winner, value, err := Select(ctx, "pick", []Branch[string]{
+			{Name: "bad", Func: func(Context) (string, error) { return "", errors.New("boom") }},
+			{Name: "slow", Func: func(Context) (string, error) {
+				<-gate
+				return "slow-result", nil
+			}},
+		}, WithChildErrorMapper(mapSelectFailure))
+		close(gate)
+		errCh <- err
+		return reportSelect(winner, value, err)
+	})
+
+	got := decodeSelectReport(t, resp)
+	if got.Winner != "bad" || got.Value != "" {
+		t.Errorf("Select = %+v, want winner bad with zero value", got)
+	}
+	if err := <-errCh; err != errSelectMapped {
+		t.Errorf("Select error = %T %v, want the mapper's error", err, err)
+	}
+}
+
+func TestSelectReplayErrorMapperKeepsWinner(t *testing.T) {
+	// On replay of a FAILED Select the mapper runs on the rebuilt failure.
+	// Its unrelated error is returned, and the winner is still read from
+	// the recorded ErrorData.
+	fake := &fakeLambda{}
+	msg := `durable: child context "bad" failed: Error: boom`
+	payload := childPayload(`"x"`,
+		checkpointedChild("1", "FAILED", &wireContextDetails{
+			Error: &wireFullError{ErrorType: "PromiseCombinatorError", ErrorMessage: msg, ErrorData: `{"winner":"bad"}`},
+		}),
+	)
+	errCh := make(chan error, 1)
+	resp := invokeStep(t, fake, payload, func(ctx Context, _ string) (string, error) {
+		winner, value, err := Select(ctx, "pick", []Branch[string]{
+			{Name: "bad", Func: func(Context) (string, error) {
+				t.Error("branch bad ran on replay")
+				return "", errors.New("boom")
+			}},
+		}, WithChildErrorMapper(mapSelectFailure))
+		errCh <- err
+		return reportSelect(winner, value, err)
+	})
+
+	got := decodeSelectReport(t, resp)
+	if got.Winner != "bad" {
+		t.Errorf("Select on replay = %+v, want winner bad", got)
+	}
+	if err := <-errCh; err != errSelectMapped {
+		t.Errorf("Select error on replay = %T %v, want the mapper's error", err, err)
 	}
 }

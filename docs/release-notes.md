@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### Changed: every combinator failure is a `PromiseCombinatorError`
+
+A failure of `All`, `Any`, `Race`, `Join`, or `Select` is now a
+`*ChildContextError` whose `ErrorType` is `"PromiseCombinatorError"` and
+whose cause matches `*CombinatorError`. Before, only `Any` failed this
+way. `All`, `Race`, `Join`, and `Select` returned the failing future's
+error, so their `ErrorType` was that error's type, such as `"StepError"`.
+So one `errors.As(err, &combErr)` check now matches a failure of any
+combinator, and the execution history records the same type for each.
+The JavaScript SDK records the same type.
+
+The message of the failure is the message of the decided failure: the
+first error's message for `All`, `Race`, `Join`, and `Select`. For `Any`
+it is `All promises were rejected`, which is the JavaScript SDK's
+message. Before, `Any` reported `all futures failed (<n> errors)`.
+
+A failed `Select` is now recorded as `FAILED` with `ErrorType`
+`"PromiseCombinatorError"`. Before, it was recorded as `SUCCEEDED` with the
+winner and its failure inside the result. The winner's name is recorded
+as the failure's `ErrorData`, the JSON object `{"winner":"<name>"}`, so
+`winner` still names the failing branch on the first invocation and on
+replay.
+
+`AllSettled` is unchanged: a failing future resolves `AllSettled`, and
+its error is in `Settled[i].Err`.
+
+`Race` with no futures now returns an error at once and records no
+operation. Before, it suspended, and no future could ever end the
+suspension. `Any` with no futures fails at once with
+`All promises were rejected`.
+
 ### Changed: stored JSON keeps `<`, `>` and `&` literal
 
 The SDK no longer HTML-escapes `<`, `>` and `&` in the JSON it stores.

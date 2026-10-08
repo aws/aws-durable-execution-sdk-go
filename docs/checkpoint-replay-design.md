@@ -466,25 +466,28 @@ callback in their input always suspends the aggregate.
 
 ### Edge cases
 
-Edge cases mirror the JavaScript promise combinators:
+Edge cases on empty input:
 
-- `All` and `AllSettled` on empty input return an empty slice immediately.
-- `Any` on empty input fails immediately with a `*CombinatorError`.
-- `Race` on empty input suspends, since no future will ever settle.
+- `All` and `AllSettled` return an empty slice immediately.
+- `Any` fails immediately with a `*CombinatorError` whose message is
+  `All promises were rejected`, matching `Promise.any([])`.
+- `Race` returns an error immediately and records no operation, because
+  no future can ever settle. A suspension would never end.
 
 ### Select
 
 `Select` is `Race` over named branches. It runs each `Branch` in its own
 child context and applies the same first-terminal-wins and drain rules to
-the resulting futures. Its checkpointed aggregate holds the winning
-branch's name together with the settled outcome (value or error), so replay
-returns the same winner and the same error even when another branch would
-finish first if the branches ran again. A failed winner does not fail the
-`Select` operation's own record: the operation is recorded as `SUCCEEDED`
-with the rejected outcome inside its result, and the error returned to the
-caller is the branch's `*ChildContextError`, rebuilt from that record on
-replay. Empty input and duplicate branch names are rejected before any
-operation is claimed.
+the resulting futures. A successful winner is checkpointed as the
+`Select` operation's result, which holds the branch's name together with
+its value. A failed winner fails the `Select` operation: it is recorded as
+`FAILED` with `ErrorType` `"PromiseCombinatorError"`, and the winner's name
+is recorded as the failure's `ErrorData`. Either way replay returns the
+same winner and the same outcome even when another branch would finish
+first if the branches ran again. The error returned to the caller is a
+`*ChildContextError` with a `*CombinatorError` cause, rebuilt from the
+record on the first invocation and on replay. Empty input and duplicate
+branch names are rejected before any operation is claimed.
 
 ## Goroutine Ownership
 
