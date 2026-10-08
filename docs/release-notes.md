@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Changed: `Wait` and `WaitAsync` require at least one second
+
+`Wait` returns the error
+`durable: Wait "<name>": duration must be at least 1 second` at the call
+when the duration is under one second. `WaitAsync` returns a future that
+fails with `durable: WaitAsync "<name>": duration must be at least 1 second`.
+Neither records an operation for the rejected call. Before, a duration of
+0 sent `WaitSeconds` 0, which the service rejects, and a duration from 1 ns
+to 999 ms was rounded up to one second. A negative duration now fails with
+the same error. A duration of one second or more is rounded up to whole
+seconds, as before.
+
+A `WaitDecision.Delay` of 0 is now raised to one second, so
+`WaitForCondition` schedules every check at least one second later. Before,
+it sent a delay of 0. A positive delay under one second still rounds up to
+one second.
+
 ### Changed: `ConditionConfig.WaitStrategy` is required
 
 `WaitForCondition` now returns the error
@@ -290,10 +307,16 @@ the last successful invocation.
 The `durabletest` local runner now rejects every checkpoint update the
 service rejects, with the service's error code and message. A step result
 or `WaitForCondition` state over 262144 bytes, an error object over 262144
-bytes, an `Invoke` input over 1048576 bytes, a handler result over 6291456
-bytes, and a wait of zero seconds now fail the execution with a
-`CheckpointError`. Before, the runner stored them, and the execution
-reached `SUCCEEDED` or `PENDING` locally but failed against the service.
+bytes, an `Invoke` input over 1048576 bytes, and a handler result over 6291456
+bytes now fail the execution with a `CheckpointError`. Before, the runner
+stored them, and the execution reached `SUCCEEDED` or `PENDING` locally
+but failed against the service.
+
+The runner also rejects a checkpointed wait of zero seconds, as the
+service does. `durable.Wait` never sends one. It rejects a duration under
+one second at the call, with a plain error, and records no operation. The
+runner's check applies only to a malformed checkpoint that reaches the
+client directly.
 
 The runner now fails an execution whose handler answers `PENDING` with no
 pending operation four times in a row. The error type is

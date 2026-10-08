@@ -61,10 +61,15 @@
 // limits and rejects an update the service rejects, with the service's
 // error code and message: a step result or WaitForCondition state over
 // 262144 bytes, an error object over 262144 bytes, an invoke input over
-// 1048576 bytes, a handler result checkpointed on the execution over
-// 6291456 bytes, and a zero-second wait. The SDK handles the
-// rejection as it handles the service's: it fails the execution with a
-// [*durable.CheckpointError].
+// 1048576 bytes, and a handler result checkpointed on the execution over
+// 6291456 bytes. The SDK handles the rejection as it handles the
+// service's: it fails the execution with a [*durable.CheckpointError].
+//
+// The client also rejects a checkpointed wait of zero seconds, as the
+// service does. [durable.Wait] never sends one: it rejects a duration under
+// one second at the call, with a plain error, and records no operation. So
+// this check applies only to a malformed checkpoint sent to the client
+// directly.
 //
 // The client also reports an operation's completion in the invocation that
 // observes it, not only between invocations. It keeps a virtual clock,

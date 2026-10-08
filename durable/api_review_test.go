@@ -9,6 +9,8 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
 // --- Item 1: ExecutionStartTime tests ---
@@ -380,8 +382,9 @@ func TestWaitForConditionOverflowDelayReturnsError(t *testing.T) {
 	}
 }
 
-func TestWaitForConditionZeroDelayAccepted(t *testing.T) {
-	// Zero delay is valid: it means "retry immediately."
+func TestWaitForConditionZeroDelayRaisedToOneSecond(t *testing.T) {
+	// A zero delay is accepted and raised to one second: the RETRY
+	// checkpoint carries NextAttemptDelaySeconds 1.
 	fake := &fakeLambda{}
 	resp := invokeStep(t, fake, stepPayload(`"x"`), func(ctx Context, _ string) (string, error) {
 		_, err := WaitForCondition(ctx, "zero-delay", func(_ StepContext, state int) (int, error) {
@@ -391,7 +394,7 @@ func TestWaitForConditionZeroDelayAccepted(t *testing.T) {
 				return WaitDecision{Continue: true, Delay: 0}
 			},
 		})
-		// The operation suspends (PENDING) with delay=0, which is valid.
+		// The operation suspends (PENDING) after its RETRY checkpoint.
 		if err != nil {
 			return "", err
 		}
@@ -399,6 +402,22 @@ func TestWaitForConditionZeroDelayAccepted(t *testing.T) {
 	})
 	if want := `{"Status":"PENDING"}`; resp != want {
 		t.Errorf("response = %s, want %s", resp, want)
+	}
+	var retries int
+	for _, u := range updateBatch(t, fake) {
+		if u.Action != OperationActionRetry {
+			continue
+		}
+		retries++
+		if u.StepOptions == nil {
+			t.Fatal("RETRY update has no StepOptions")
+		}
+		if got := aws.ToInt32(u.StepOptions.NextAttemptDelaySeconds); got != 1 {
+			t.Errorf("NextAttemptDelaySeconds = %d, want 1", got)
+		}
+	}
+	if retries != 1 {
+		t.Errorf("RETRY updates = %d, want 1", retries)
 	}
 }
 

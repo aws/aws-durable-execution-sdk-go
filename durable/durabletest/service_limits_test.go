@@ -23,7 +23,6 @@ const (
 	errorObjectMessage = "Error object size must be less than or equal to 262144 bytes."
 	invokeInputMessage = "CHAINED_INVOKE input payload size must be less than or equal to 1048576 bytes."
 	executionResultMsg = "1 validation error detected: Value at 'updates.1.member.payload' failed to satisfy constraint: Member must have length less than or equal to 6291456"
-	zeroWaitMessage    = "1 validation error detected: Value '0' at 'updates.1.member.waitOptions.waitSeconds' failed to satisfy constraint: Member must have value greater than or equal to 1"
 )
 
 // errorRecorder keeps the error an operation returned inside the handler,
@@ -196,8 +195,9 @@ func TestExecutionResultOverServiceLimitIsRejected(t *testing.T) {
 	}
 }
 
-// The SDK rounds a wait's duration up to whole seconds, so a zero duration
-// is the one under a second that produces WaitSeconds 0.
+// Wait rejects a duration under one second at the call, so no WAIT update
+// reaches the client. The client's own WaitSeconds check is covered by
+// TestValidateCheckpointRejectsZeroWaitSeconds.
 func TestWaitUnderOneSecondIsRejected(t *testing.T) {
 	var rec errorRecorder
 	h := func(ctx durable.Context, _ struct{}) (string, error) {
@@ -209,10 +209,12 @@ func TestWaitUnderOneSecondIsRejected(t *testing.T) {
 	}
 	result := runToEnd(t, h)
 
-	assertServiceRejection(t, rec.get(), "ValidationException", zeroWaitMessage)
-	assertFailedWith(t, result, zeroWaitMessage)
+	if err := rec.get(); err == nil || !strings.Contains(err.Error(), "duration must be at least 1 second") {
+		t.Fatalf("Wait error = %v, want the one-second minimum error", err)
+	}
+	assertFailedWith(t, result, "duration must be at least 1 second")
 	if op := result.Operation("short"); op != nil {
-		t.Errorf("short = %+v, want no stored wait: the client stores nothing from a rejected request", op)
+		t.Errorf("short = %+v, want no stored wait: Wait records nothing for a rejected duration", op)
 	}
 }
 

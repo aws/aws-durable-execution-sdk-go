@@ -26,7 +26,10 @@ import (
 // [*WaitForConditionError].
 //
 // If the wait strategy's Continue field is true, its Delay determines how
-// long the execution waits before the next check. When Continue is false, the
+// long the execution waits before the next check. A Delay of 0 is raised to
+// one second. A positive Delay is rounded up to whole seconds, so a positive
+// Delay under one second waits one second. A negative Delay makes
+// WaitForCondition return an error. When Continue is false, the
 // final state is checkpointed and returned.
 //
 // Every state that check returns is serialized and checkpointed, whether the
@@ -408,6 +411,12 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 	delaySec, delayErr := durationToSeconds(decision.Delay)
 	if delayErr != nil {
 		return zero, "", fmt.Errorf("durable: WaitForCondition %q: retry delay: %w", name, delayErr)
+	}
+	// The service schedules a retry in whole seconds of at least one. A
+	// positive delay under one second already rounds up to 1; a zero delay
+	// is raised to 1 so that every scheduled poll waits at least a second.
+	if delaySec < 1 {
+		delaySec = 1
 	}
 	update := waitForConditionUpdate(ec, id, name, OperationActionRetry)
 	update.Payload = aws.String(string(serialized))

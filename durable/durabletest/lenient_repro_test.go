@@ -37,8 +37,8 @@ func TestDurabletestRejectsOversizedStepResult(t *testing.T) {
 	}
 }
 
-// Case 2. A wait of zero seconds checkpoints WaitSeconds 0. The service
-// rejects WaitSeconds 0, and so does the local client.
+// Case 2. Wait rejects a zero duration at the call, before any checkpoint,
+// so the execution fails without a WAIT update.
 func TestDurabletestRejectsZeroSecondWait(t *testing.T) {
 	h := func(ctx durable.Context, _ struct{}) (string, error) {
 		if err := durable.Wait(ctx, "w", 0); err != nil {
@@ -51,10 +51,10 @@ func TestDurabletestRejectsZeroSecondWait(t *testing.T) {
 		t.Fatal(err)
 	}
 	if res.Status != durabletest.Failed {
-		t.Fatalf("status = %s, want FAILED (the service rejects a 0-second wait)", res.Status)
+		t.Fatalf("status = %s, want FAILED (Wait rejects a 0-second duration)", res.Status)
 	}
-	if res.Error == nil || !strings.Contains(res.Error.Message, zeroWaitMessage) {
-		t.Fatalf("error = %+v, want the service's waitSeconds message", res.Error)
+	if res.Error == nil || !strings.Contains(res.Error.Message, "duration must be at least 1 second") {
+		t.Fatalf("error = %+v, want the one-second minimum error", res.Error)
 	}
 }
 

@@ -29,7 +29,10 @@ type waitOptions struct{}
 // immediately. name identifies the wait for tracking and debugging; pass
 // "" for an unnamed wait.
 //
-// The duration is rounded up to a whole number of seconds.
+// The duration must be at least one second. For a shorter duration,
+// including zero and any negative duration, Wait returns an error at the
+// call: it records no operation and writes no checkpoint. A duration of one
+// second or more is rounded up to a whole number of seconds.
 func Wait(ctx Context, name string, d time.Duration, opts ...WaitOption) error {
 	ec, ok := ctx.(*execContext)
 	if !ok {
@@ -39,6 +42,9 @@ func Wait(ctx Context, name string, d time.Duration, opts ...WaitOption) error {
 	var options waitOptions
 	for _, o := range opts {
 		o.applyWait(&options)
+	}
+	if err := validateWaitDuration("Wait", name, d); err != nil {
+		return err
 	}
 
 	id, err := ec.claimOperation(name)
@@ -54,6 +60,10 @@ func Wait(ctx Context, name string, d time.Duration, opts ...WaitOption) error {
 // WaitAsync is [Wait], except that the wait completes through the returned
 // future, allowing other durable operations to proceed concurrently.
 //
+// The duration must be at least one second, as for [Wait]. For a shorter
+// duration WaitAsync records no operation and returns a future that fails
+// with the error.
+//
 // The future settles when the wait elapses, in the invocation that observes
 // it. On invocation suspension, the returned future is settled with
 // errSuspendExecution so goroutines blocked on [Future.Result] unwind.
@@ -66,6 +76,9 @@ func WaitAsync(ctx Context, name string, d time.Duration, opts ...WaitOption) *F
 	var options waitOptions
 	for _, o := range opts {
 		o.applyWait(&options)
+	}
+	if err := validateWaitDuration("WaitAsync", name, d); err != nil {
+		return newFailedFuture[Void](err)
 	}
 
 	id, err := ec.claimOperation(name)
@@ -93,6 +106,21 @@ func WaitAsync(ctx Context, name string, d time.Duration, opts ...WaitOption) *F
 	}()
 
 	return fut
+}
+
+// minWaitDuration is the shortest duration [Wait] and [WaitAsync] accept.
+// The service requires a wait of at least one whole second.
+const minWaitDuration = time.Second
+
+// validateWaitDuration returns an error when d is under [minWaitDuration].
+// op is the public function name used in the message. The check runs before
+// the operation claims its replay position, so a rejected wait records
+// nothing.
+func validateWaitDuration(op, name string, d time.Duration) error {
+	if d < minWaitDuration {
+		return fmt.Errorf("durable: %s %q: duration must be at least 1 second", op, name)
+	}
+	return nil
 }
 
 // runWait performs the wait logic for a previously-claimed operation ID.

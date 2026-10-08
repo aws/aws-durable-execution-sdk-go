@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
 )
@@ -457,6 +459,26 @@ func TestRetryBackoffDelay(t *testing.T) {
 			t.Fatalf("status = %s, want PENDING; error = %+v", result.Status, result.Error)
 		}
 		requireOp(t, result, "g-backoff-1", "WAIT", "STARTED")
+	})
+
+	t.Run("positive sub-second waits one second", func(t *testing.T) {
+		result, err := run(t, 200*time.Millisecond)
+		if result.Status != durabletest.Pending {
+			t.Fatalf("status = %s, want PENDING; error = %+v; retry error = %v", result.Status, result.Error, err)
+		}
+		requireOp(t, result, "g-backoff-1", "WAIT", "STARTED")
+		var found bool
+		for _, ev := range result.Events {
+			if d := ev.WaitStartedDetails; d != nil && aws.ToString(ev.Name) == "g-backoff-1" {
+				found = true
+				if got := aws.ToInt32(d.Duration); got != 1 {
+					t.Errorf("g-backoff-1 Duration = %d, want 1", got)
+				}
+			}
+		}
+		if !found {
+			t.Error("no WaitStarted event recorded for g-backoff-1")
+		}
 	})
 
 	t.Run("negative is an error", func(t *testing.T) {

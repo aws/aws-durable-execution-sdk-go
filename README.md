@@ -386,6 +386,11 @@ function again when the duration elapses. A wait that elapses while other
 work runs returns in the same invocation. On replay a completed wait
 returns at once.
 
+The duration must be at least one second. For a shorter duration, `Wait`
+returns an error at the call and records no operation, and `WaitAsync`
+returns a future that fails with that error. A duration of one second or
+more is rounded up to whole seconds, so 1.5 seconds waits 2 seconds.
+
 ```go
 func handler(ctx durable.Context, _ any) (string, error) {
 	if err := durable.Wait(ctx, "cooldown", 60*time.Second); err != nil {
@@ -443,6 +448,11 @@ func handler(ctx durable.Context, _ any) (int, error) {
 		})
 }
 ```
+
+The service schedules each check in whole seconds. A `Delay` of 0 is
+raised to one second. A positive `Delay` is rounded up to whole seconds,
+so a positive `Delay` under one second waits one second. A negative
+`Delay` fails `WaitForCondition` with an error.
 
 `NewWaitStrategy` builds a strategy from a `WaitConfig` with a
 `ShouldContinue` predicate, an attempt cap, and exponential backoff.
@@ -877,8 +887,8 @@ finishes or blocks on external action.
 
 The runner checks each checkpoint against the service's limits and
 rejects the same updates the service rejects, with the service's error
-code and message. Examples are a step result over 262144 bytes and a wait
-of zero seconds. It also fails an execution whose handler answers
+code and message. Examples are a step result over 262144 bytes and an
+`Invoke` input over 1048576 bytes. It also fails an execution whose handler answers
 `PENDING` four times in a row with no pending operation, as the service
 does. It reports an operation's completion during an invocation the same
 way the service does. A wait or step retry that becomes due while other

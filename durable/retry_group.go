@@ -3,6 +3,7 @@ package durable
 import (
 	"errors"
 	"fmt"
+	"time"
 )
 
 // RetryOption configures a [Retry] operation.
@@ -115,10 +116,14 @@ func Retry[O any](ctx Context, name string, fn func(ctx Context, attempt int) (O
 		if delay == 0 {
 			delay = DefaultRetryDelay
 		}
-		if _, derr := durationToSeconds(delay); derr != nil {
+		// The backoff is a Wait, which accepts only whole seconds of at
+		// least one. So a positive delay is rounded up to whole seconds
+		// before it is passed on, and a delay under one second waits one.
+		secs, derr := durationToSeconds(delay)
+		if derr != nil {
 			return zero, fmt.Errorf("durable: Retry %q: retry delay: %w", name, derr)
 		}
-		if werr := Wait(ctx, retryOperationName(name, "backoff", attempt), delay); werr != nil {
+		if werr := Wait(ctx, retryOperationName(name, "backoff", attempt), time.Duration(secs)*time.Second); werr != nil {
 			return zero, werr
 		}
 	}
