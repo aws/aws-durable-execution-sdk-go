@@ -96,7 +96,7 @@ func TestResetClearsOpenCallbacksAndPreservesConfig(t *testing.T) {
 		if err != nil {
 			return "", err
 		}
-		cb, err := durable.CreateCallback[string](ctx, "cb")
+		cb, err := durable.CreateCallback[string](ctx, "cb", durable.WithCallbackSerdes(durable.JSONSerdes))
 		if err != nil {
 			return "", err
 		}

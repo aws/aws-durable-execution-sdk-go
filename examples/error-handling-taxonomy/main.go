@@ -111,7 +111,7 @@ func handler(ctx durable.Context, _ any) (Output, error) {
 	// produce a CallbackTimeoutError and a failed WaitForCallback submitter
 	// a CallbackSubmitterError.
 	cb, err := durable.CreateCallback[string](ctx, "failing-callback",
-		durable.WithCallbackTimeout(30*time.Second))
+		durable.WithCallbackTimeout(30*time.Second), durable.WithCallbackSerdes(durable.JSONSerdes))
 	if err != nil {
 		return Output{}, err
 	}

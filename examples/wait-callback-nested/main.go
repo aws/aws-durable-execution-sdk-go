@@ -53,6 +53,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 			return selfComplete(sctx, callbackID, "outer-value")
 		},
 		durable.WithCallbackTimeout(30*time.Second),
+		durable.WithCallbackSerdes(durable.JSONSerdes),
 	)
 	if err != nil {
 		return Result{}, err
@@ -66,6 +67,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 					return selfComplete(sctx, callbackID, "inner-value")
 				},
 				durable.WithCallbackTimeout(30*time.Second),
+				durable.WithCallbackSerdes(durable.JSONSerdes),
 			)
 			if err != nil {
 				return NestedResult{}, err
@@ -82,6 +84,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 							return selfComplete(sctx, callbackID, "deep-value")
 						},
 						durable.WithCallbackTimeout(30*time.Second),
+						durable.WithCallbackSerdes(durable.JSONSerdes),
 					)
 					if err != nil {
 						return InnerResult{}, err

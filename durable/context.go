@@ -184,10 +184,9 @@ type Serdes interface {
 
 // Deserializer deserializes callback payloads submitted by external
 // systems. It is set for the whole handler with [WithCallbackDeserializer].
-// Without one, callbacks decode payloads with the handler-level [Serdes],
-// which defaults to encoding/json; see [CreateCallback] for the full
-// precedence and for how this differs from the other Durable Execution
-// SDKs.
+// Without one, callbacks decode payloads with [RawSerdes], which returns
+// the submitted bytes unchanged, matching the other Durable Execution SDKs.
+// See [CreateCallback] for the full precedence.
 type Deserializer interface {
 	Unmarshal(data []byte, v any) error
 }
@@ -229,8 +228,8 @@ type SerdesConfig struct {
 	// CallbackDeserializer replaces the default deserializer for callback
 	// payloads submitted by external systems. It has the same role as
 	// [WithCallbackDeserializer]. Once set it cannot be cleared: to return
-	// callbacks to the standard serdes, set Serdes and pass a
-	// CallbackDeserializer that delegates to it.
+	// callbacks to the default, pass a CallbackDeserializer that delegates
+	// to [RawSerdes].
 	CallbackDeserializer Deserializer
 }
 

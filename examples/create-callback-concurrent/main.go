@@ -25,17 +25,17 @@ type Result struct {
 
 func handler(ctx durable.Context, _ any) (Result, error) {
 	cb1, err := durable.CreateCallback[string](ctx, "api-call-1",
-		durable.WithCallbackTimeout(30*time.Second))
+		durable.WithCallbackTimeout(30*time.Second), durable.WithCallbackSerdes(durable.JSONSerdes))
 	if err != nil {
 		return Result{}, err
 	}
 	cb2, err := durable.CreateCallback[string](ctx, "api-call-2",
-		durable.WithCallbackTimeout(30*time.Second))
+		durable.WithCallbackTimeout(30*time.Second), durable.WithCallbackSerdes(durable.JSONSerdes))
 	if err != nil {
 		return Result{}, err
 	}
 	cb3, err := durable.CreateCallback[string](ctx, "api-call-3",
-		durable.WithCallbackTimeout(30*time.Second))
+		durable.WithCallbackTimeout(30*time.Second), durable.WithCallbackSerdes(durable.JSONSerdes))
 	if err != nil {
 		return Result{}, err
 	}

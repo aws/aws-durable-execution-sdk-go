@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Changed: callback results are returned unchanged by default
+
+A callback created with no serializer option now returns the bytes the
+external system submitted, unchanged, as the JavaScript and Python SDKs
+do. Before, the SDK decoded them as JSON with the handler-level serdes.
+So `CreateCallback[string]` completed with `"approved"` now returns
+`"approved"` with its quotes, and completed with `42` returns `42`
+instead of failing. The default is the new `RawSerdes`, which supports a
+result type of `string`, `[]byte`, or `json.RawMessage`; any other result
+type fails with a `*SerdesError` that names the type. `WithSerdes` no
+longer applies to callback results. To keep JSON decoding, pass
+`WithCallbackSerdes(JSONSerdes)` on the operation or
+`WithCallbackDeserializer` on the handler. This applies to
+`CreateCallback` and `WaitForCallback`.
+
+### Added: `RawSerdes`
+
+`RawSerdes` is a `Serdes` that stores bytes verbatim. `Marshal` returns
+the bytes of a `string`, `[]byte`, or `json.RawMessage`, and `Unmarshal`
+copies the stored bytes into a `*string`, `*[]byte`, or
+`*json.RawMessage`. Any other type is rejected with an error that names
+the type.
+
 ### Changed: `Wait` and `WaitAsync` require at least one second
 
 `Wait` returns the error

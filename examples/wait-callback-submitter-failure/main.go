@@ -21,6 +21,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 			return fmt.Errorf("submitter failed: service unavailable")
 		},
 		durable.WithSubmitterRetry(durable.NoRetry()),
+		durable.WithCallbackSerdes(durable.JSONSerdes),
 	)
 	if err != nil {
 		var cbErr *durable.CallbackError

@@ -42,6 +42,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 			InitialDelay: 1 * time.Second,
 			MaxDelay:     8 * time.Second,
 		})),
+		durable.WithCallbackSerdes(durable.JSONSerdes),
 	)
 	if err != nil {
 		return Result{}, err

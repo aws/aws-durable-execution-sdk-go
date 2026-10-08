@@ -59,6 +59,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 			return selfComplete(sctx, callbackID, CallbackData{Step: 1})
 		},
 		durable.WithCallbackTimeout(30*time.Second),
+		durable.WithCallbackSerdes(durable.JSONSerdes),
 	)
 	if err != nil {
 		return Result{}, fmt.Errorf("first callback: %w", err)
@@ -84,6 +85,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 			return selfComplete(sctx, callbackID, CallbackData{Step: 2})
 		},
 		durable.WithCallbackTimeout(30*time.Second),
+		durable.WithCallbackSerdes(durable.JSONSerdes),
 	)
 	if err != nil {
 		return Result{}, fmt.Errorf("second callback: %w", err)

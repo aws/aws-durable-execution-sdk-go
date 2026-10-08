@@ -37,6 +37,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 			return err
 		},
 		durable.WithCallbackTimeout(30*time.Second),
+		durable.WithCallbackSerdes(durable.JSONSerdes),
 	)
 	if err != nil {
 		return Result{}, err

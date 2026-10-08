@@ -133,7 +133,7 @@ func TestCreateCallbackReplaySuccess(t *testing.T) {
 	)
 
 	handler := func(ctx Context, event string) (string, error) {
-		cb, err := CreateCallback[string](ctx, event)
+		cb, err := CreateCallback[string](ctx, event, WithCallbackSerdes(JSONSerdes))
 		if err != nil {
 			return "", err
 		}

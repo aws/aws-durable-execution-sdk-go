@@ -34,6 +34,7 @@ func handler(ctx durable.Context, _ any) (string, error) {
 					return completeCallback(sctx, callbackID, "cb1-done")
 				},
 				durable.WithCallbackTimeout(30*time.Second),
+				durable.WithCallbackSerdes(durable.JSONSerdes),
 			)
 			if err != nil {
 				return nil, err
@@ -44,6 +45,7 @@ func handler(ctx durable.Context, _ any) (string, error) {
 					return completeCallback(sctx, callbackID, "cb2-done")
 				},
 				durable.WithCallbackTimeout(30*time.Second),
+				durable.WithCallbackSerdes(durable.JSONSerdes),
 			)
 			if err != nil {
 				return nil, err
@@ -54,6 +56,7 @@ func handler(ctx durable.Context, _ any) (string, error) {
 					return completeCallback(sctx, callbackID, "cb3-done")
 				},
 				durable.WithCallbackTimeout(30*time.Second),
+				durable.WithCallbackSerdes(durable.JSONSerdes),
 			)
 			if err != nil {
 				return nil, err

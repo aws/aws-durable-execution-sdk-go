@@ -39,7 +39,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 
 	// CreateCallback.
 	cb, err := durable.CreateCallback[string](ctx, "process-user",
-		durable.WithCallbackTimeout(30*time.Second))
+		durable.WithCallbackTimeout(30*time.Second), durable.WithCallbackSerdes(durable.JSONSerdes))
 	if err != nil {
 		return Result{}, err
 	}

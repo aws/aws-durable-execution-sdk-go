@@ -27,7 +27,7 @@ func TestWirePayloadReadByDurable(t *testing.T) {
 		if err != nil {
 			return "", err
 		}
-		cb, err := durable.CreateCallback[string](ctx, "callback")
+		cb, err := durable.CreateCallback[string](ctx, "callback", durable.WithCallbackSerdes(durable.JSONSerdes))
 		if err != nil {
 			return "", err
 		}

@@ -528,7 +528,7 @@ func waitForCallbackHandler(rec *opRecorder, submitErr error, got *errBox) func(
 	return Wrap(func(ctx Context, _ string) (string, error) {
 		out, err := WaitForCallback[string](ctx, "wfcb", func(StepContext, string) error {
 			return submitErr
-		}, WithSubmitterRetry(NoRetry()))
+		}, WithSubmitterRetry(NoRetry()), WithCallbackSerdes(JSONSerdes))
 		got.set(err)
 		return out, err
 	}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))

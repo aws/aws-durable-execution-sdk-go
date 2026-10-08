@@ -467,7 +467,7 @@ exposes `ID()`, the identifier to hand to an external system, and
 system completes a callback with the `SendDurableExecutionCallbackSuccess`
 or `SendDurableExecutionCallbackFailure` API. The result is a JSON
 document. From the CLI, the command below completes the callback with the
-string `"approved"`. The callback ID also appears in the
+JSON string `"approved"`. The callback ID also appears in the
 `CallbackStarted` event of the execution history.
 
 ```console
@@ -487,6 +487,15 @@ func handler(ctx durable.Context, _ any) (string, error) {
 	return cb.Result(ctx)
 }
 ```
+
+By default `Result` returns the submitted bytes unchanged, as the other
+durable execution SDKs do. The default is `durable.RawSerdes`, which
+supports a result type of `string`, `[]byte`, or `json.RawMessage`. So the
+handler above returns `"approved"` with its quotes, and a submitted `42`
+returns the string `42`. To decode the submitted bytes as JSON into the
+result type, pass `durable.WithCallbackSerdes(durable.JSONSerdes)` to the
+operation, or set `durable.WithCallbackDeserializer` for the whole
+handler. `WithSerdes` does not apply to callback results.
 
 `WaitForCallback` combines the two halves into one operation. It creates
 the callback, runs the submitter with the callback ID, and blocks until the

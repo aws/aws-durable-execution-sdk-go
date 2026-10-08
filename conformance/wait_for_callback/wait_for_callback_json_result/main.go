@@ -10,7 +10,8 @@ type approvalResult struct {
 
 func handler(ctx durable.Context, name string) (string, error) {
 	result, err := durable.WaitForCallback[approvalResult](ctx, name,
-		func(_ durable.StepContext, _ string) error { return nil })
+		func(_ durable.StepContext, _ string) error { return nil },
+		durable.WithCallbackSerdes(durable.JSONSerdes))
 	if err != nil {
 		return "", err
 	}

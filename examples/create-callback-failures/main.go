@@ -24,7 +24,7 @@ type Result struct {
 
 func handler(ctx durable.Context, _ any) (Result, error) {
 	cb, err := durable.CreateCallback[string](ctx, "failing-operation",
-		durable.WithCallbackTimeout(30*time.Second))
+		durable.WithCallbackTimeout(30*time.Second), durable.WithCallbackSerdes(durable.JSONSerdes))
 	if err != nil {
 		return Result{}, err
 	}

@@ -56,6 +56,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 			return selfComplete(sctx, callbackID, ParentData{ParentData: "parent-value"})
 		},
 		durable.WithCallbackTimeout(30*time.Second),
+		durable.WithCallbackSerdes(durable.JSONSerdes),
 	)
 	if err != nil {
 		return Result{}, err
@@ -73,6 +74,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 					return selfComplete(sctx, callbackID, ChildData{ChildData: 42})
 				},
 				durable.WithCallbackTimeout(30*time.Second),
+				durable.WithCallbackSerdes(durable.JSONSerdes),
 			)
 			if err != nil {
 				return ChildResult{}, fmt.Errorf("child callback: %w", err)

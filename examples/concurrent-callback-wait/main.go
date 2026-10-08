@@ -35,6 +35,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 				return completeCallback(sctx, callbackID, "callback-done")
 			},
 			durable.WithCallbackTimeout(30*time.Second),
+			durable.WithCallbackSerdes(durable.JSONSerdes),
 		)
 		return durable.Void{}, err
 	})

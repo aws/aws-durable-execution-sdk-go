@@ -495,7 +495,7 @@ func TestRunUntilCompleteBlocksOnCallback(t *testing.T) {
 
 func TestCallbackSuccessFlow(t *testing.T) {
 	handler := func(ctx durable.Context, event string) (string, error) {
-		cb, err := durable.CreateCallback[string](ctx, "approval")
+		cb, err := durable.CreateCallback[string](ctx, "approval", durable.WithCallbackSerdes(durable.JSONSerdes))
 		if err != nil {
 			return "", err
 		}
@@ -544,9 +544,9 @@ func TestCallbackSuccessFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResultAs error: %v", err)
 	}
-	// SendCallbackSuccess JSON-serializes the payload. The SDK's
-	// CreateCallback[string] deserializes it back, so the string
-	// roundtrips correctly.
+	// SendCallbackSuccess JSON-serializes the payload. The callback opts
+	// in to JSONSerdes, so CreateCallback[string] decodes it back and the
+	// string roundtrips.
 	if output != "got:yes" {
 		t.Errorf("result = %q, want %q", output, "got:yes")
 	}

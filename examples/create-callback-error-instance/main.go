@@ -31,7 +31,7 @@ type Result struct {
 func handler(ctx durable.Context, _ any) (Result, error) {
 	// Test 1: Callback timeout.
 	cb1, err := durable.CreateCallback[string](ctx, "timeout-test",
-		durable.WithCallbackTimeout(3*time.Second))
+		durable.WithCallbackTimeout(3*time.Second), durable.WithCallbackSerdes(durable.JSONSerdes))
 	if err != nil {
 		return Result{}, err
 	}
@@ -39,7 +39,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 
 	// Test 2: Callback failure.
 	cb2, err := durable.CreateCallback[string](ctx, "failure-test",
-		durable.WithCallbackTimeout(30*time.Second))
+		durable.WithCallbackTimeout(30*time.Second), durable.WithCallbackSerdes(durable.JSONSerdes))
 	if err != nil {
 		return Result{}, err
 	}

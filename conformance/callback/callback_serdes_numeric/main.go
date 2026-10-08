@@ -10,7 +10,7 @@ type numericResult struct {
 }
 
 func handler(ctx durable.Context, name string) (numericResult, error) {
-	cb, err := durable.CreateCallback[int](ctx, name)
+	cb, err := durable.CreateCallback[int](ctx, name, durable.WithCallbackSerdes(durable.JSONSerdes))
 	if err != nil {
 		return numericResult{}, err
 	}

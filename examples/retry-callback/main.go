@@ -46,6 +46,7 @@ func handler(ctx durable.Context, event Input) (Result, error) {
 				return nil
 			},
 			durable.WithCallbackTimeout(5*time.Second),
+			durable.WithCallbackSerdes(durable.JSONSerdes),
 		)
 		if err == nil {
 			return Result{Value: value, Attempts: attempt}, nil

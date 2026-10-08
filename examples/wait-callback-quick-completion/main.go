@@ -39,6 +39,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 				})
 			return err
 		},
+		durable.WithCallbackSerdes(durable.JSONSerdes),
 	)
 	if err != nil {
 		return Result{}, err

@@ -70,7 +70,7 @@ func handler(ctx durable.Context, _ any) (string, error) {
 
 	// Lines between starting an asynchronous operation and reading its
 	// result, and lines after Future.Result and Callback.Result.
-	cb, err := durable.CreateCallback[string](ctx, "approval", durable.WithCallbackTimeout(time.Minute))
+	cb, err := durable.CreateCallback[string](ctx, "approval", durable.WithCallbackTimeout(time.Minute), durable.WithCallbackSerdes(durable.JSONSerdes))
 	if err != nil {
 		return "", err
 	}
@@ -96,7 +96,7 @@ func handler(ctx durable.Context, _ any) (string, error) {
 		func(sc durable.StepContext, callbackID string) error {
 			return sendCallback(sc, callbackID, "approved")
 		},
-		durable.WithCallbackTimeout(time.Minute)); err != nil {
+		durable.WithCallbackTimeout(time.Minute), durable.WithCallbackSerdes(durable.JSONSerdes)); err != nil {
 		return "", err
 	}
 	log(ctx, "after-wait-for-cb")

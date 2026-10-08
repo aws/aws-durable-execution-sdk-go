@@ -83,7 +83,7 @@ func TestBeginInvocationSnapshotsAndClearsAtomically(t *testing.T) {
 // and finish in that same invocation.
 func TestCallbackResolvedAfterPayloadBuiltResumesSameInvocation(t *testing.T) {
 	handler := func(ctx durable.Context, _ string) (string, error) {
-		cb, err := durable.CreateCallback[string](ctx, "approval")
+		cb, err := durable.CreateCallback[string](ctx, "approval", durable.WithCallbackSerdes(durable.JSONSerdes))
 		if err != nil {
 			return "", err
 		}

@@ -413,7 +413,7 @@ func ptrTo(s string) *string { return &s }
 func TestPollReportsCallbackFinished(t *testing.T) {
 	client := &pollAnsweringClient{}
 	h := Wrap[string, string](func(ctx Context, _ string) (string, error) {
-		cb, err := CreateCallback[string](ctx, "approval")
+		cb, err := CreateCallback[string](ctx, "approval", WithCallbackSerdes(JSONSerdes))
 		if err != nil {
 			return "", err
 		}

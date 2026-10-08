@@ -38,7 +38,7 @@ func handler(ctx durable.Context, _ any) (Output, error) {
 				func(sctx durable.StepContext, callbackID string) error {
 					return sendCallback(sctx, callbackID, "callback-1 result")
 				},
-				durable.WithCallbackTimeout(30*time.Second))
+				durable.WithCallbackTimeout(30*time.Second), durable.WithCallbackSerdes(durable.JSONSerdes))
 		}},
 		{Name: "step-2", Func: func(ctx durable.Context) (string, error) {
 			return durable.Step(ctx, "step-2", func(sctx durable.StepContext) (string, error) {
@@ -50,7 +50,7 @@ func handler(ctx durable.Context, _ any) (Output, error) {
 				func(sctx durable.StepContext, callbackID string) error {
 					return sendCallback(sctx, callbackID, "callback-2 result")
 				},
-				durable.WithCallbackTimeout(30*time.Second))
+				durable.WithCallbackTimeout(30*time.Second), durable.WithCallbackSerdes(durable.JSONSerdes))
 		}},
 		{Name: "step-3", Func: func(ctx durable.Context) (string, error) {
 			return durable.Step(ctx, "step-3", func(sctx durable.StepContext) (string, error) {

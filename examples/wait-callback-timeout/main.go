@@ -24,6 +24,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 			return nil
 		},
 		durable.WithCallbackTimeout(3*time.Second),
+		durable.WithCallbackSerdes(durable.JSONSerdes),
 	)
 	if err != nil {
 		var cbErr *durable.CallbackError

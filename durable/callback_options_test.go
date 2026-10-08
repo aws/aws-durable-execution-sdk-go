@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -137,12 +138,14 @@ func TestWaitForCallbackAppliesCallbackSerdes(t *testing.T) {
 
 // TestCreateCallbackDefaultDeserialization pins the default callback
 // deserializer: without WithCallbackSerdes or WithCallbackDeserializer, the
-// submitted payload is decoded with the handler-level Serdes, which is
-// encoding/json. A JSON string payload decodes into a Go string without its
-// quotes, a numeric payload decodes into an int, and a bare (non-JSON) string
-// payload is a deserialization error rather than a passthrough.
+// submitted payload is returned unchanged by RawSerdes. A JSON string
+// payload keeps its quotes, a numeric payload read into a string is the
+// digits, and a non-JSON payload is passed through. A result type RawSerdes
+// does not support fails with a *SerdesError that names the type.
+// WithCallbackSerdes(JSONSerdes) on the operation and WithCallbackDeserializer
+// on the handler each select JSON decoding.
 func TestCreateCallbackDefaultDeserialization(t *testing.T) {
-	invoke := func(t *testing.T, payload string, handler Handler[string, string]) invocationResponse {
+	invoke := func(t *testing.T, payload string, handler Handler[string, string], hopts ...HandlerOption) invocationResponse {
 		t.Helper()
 		fake := &fakeLambda{statePages: [][]Operation{{}}}
 		in := callbackPayload(`"cb"`,
@@ -151,7 +154,7 @@ func TestCreateCallbackDefaultDeserialization(t *testing.T) {
 				Result:     payload,
 			}),
 		)
-		h := Wrap(handler, withLambdaAPI(fake))
+		h := Wrap(handler, append([]HandlerOption{withLambdaAPI(fake)}, hopts...)...)
 		got, err := h(context.Background(), in)
 		if err != nil {
 			t.Fatalf("Invoke error: %v", err)
@@ -163,48 +166,84 @@ func TestCreateCallbackDefaultDeserialization(t *testing.T) {
 		return resp
 	}
 
-	t.Run("json string payload decodes into string", func(t *testing.T) {
-		resp := invoke(t, `"hello"`, func(ctx Context, event string) (string, error) {
-			cb, err := CreateCallback[string](ctx, event)
+	stringCallback := func(opts ...CallbackOption) Handler[string, string] {
+		return func(ctx Context, event string) (string, error) {
+			cb, err := CreateCallback[string](ctx, event, opts...)
 			if err != nil {
 				return "", err
 			}
 			return cb.Result(ctx)
-		})
+		}
+	}
+	// wantResult checks the handler's returned string, which the
+	// invocation response stores as JSON.
+	wantResult := func(t *testing.T, resp invocationResponse, want string) {
+		t.Helper()
 		if resp.Status != invocationSucceeded {
 			t.Fatalf("status = %q, want SUCCEEDED", resp.Status)
 		}
-		if got, want := aws.ToString(resp.Result), `"hello"`; got != want {
-			t.Errorf("result = %q, want %q", got, want)
+		var got string
+		if err := json.Unmarshal([]byte(aws.ToString(resp.Result)), &got); err != nil {
+			t.Fatalf("decode result %q: %v", aws.ToString(resp.Result), err)
 		}
+		if got != want {
+			t.Errorf("callback result = %q, want %q", got, want)
+		}
+	}
+
+	t.Run("json string payload keeps its quotes", func(t *testing.T) {
+		wantResult(t, invoke(t, `"hello"`, stringCallback()), `"hello"`)
 	})
 
-	t.Run("numeric payload decodes into int", func(t *testing.T) {
-		var seen int
-		resp := invoke(t, `42`, func(ctx Context, event string) (string, error) {
-			cb, err := CreateCallback[int](ctx, event)
+	t.Run("numeric payload into a string is the digits", func(t *testing.T) {
+		wantResult(t, invoke(t, `42`, stringCallback()), `42`)
+	})
+
+	t.Run("bare string payload is passed through", func(t *testing.T) {
+		wantResult(t, invoke(t, `hello`, stringCallback()), `hello`)
+	})
+
+	t.Run("byte slice and raw message results hold the payload", func(t *testing.T) {
+		var gotBytes []byte
+		var gotRaw json.RawMessage
+		resp := invoke(t, `{"a":1}`, func(ctx Context, event string) (string, error) {
+			b, err := CreateCallback[[]byte](ctx, event)
 			if err != nil {
 				return "", err
 			}
-			n, err := cb.Result(ctx)
-			if err != nil {
+			if gotBytes, err = b.Result(ctx); err != nil {
 				return "", err
 			}
-			seen = n
 			return "ok", nil
 		})
 		if resp.Status != invocationSucceeded {
-			t.Fatalf("status = %q, want SUCCEEDED", resp.Status)
+			t.Fatalf("[]byte status = %q, want SUCCEEDED", resp.Status)
 		}
-		if seen != 42 {
-			t.Errorf("callback result = %d, want 42", seen)
+		if string(gotBytes) != `{"a":1}` {
+			t.Errorf("[]byte result = %q, want %q", gotBytes, `{"a":1}`)
+		}
+		resp = invoke(t, `{"a":1}`, func(ctx Context, event string) (string, error) {
+			r, err := CreateCallback[json.RawMessage](ctx, event)
+			if err != nil {
+				return "", err
+			}
+			if gotRaw, err = r.Result(ctx); err != nil {
+				return "", err
+			}
+			return "ok", nil
+		})
+		if resp.Status != invocationSucceeded {
+			t.Fatalf("json.RawMessage status = %q, want SUCCEEDED", resp.Status)
+		}
+		if string(gotRaw) != `{"a":1}` {
+			t.Errorf("json.RawMessage result = %q, want %q", gotRaw, `{"a":1}`)
 		}
 	})
 
-	t.Run("bare string payload is not passed through", func(t *testing.T) {
+	t.Run("unsupported result type fails with a SerdesError", func(t *testing.T) {
 		var resultErr error
-		resp := invoke(t, `hello`, func(ctx Context, event string) (string, error) {
-			cb, err := CreateCallback[string](ctx, event)
+		resp := invoke(t, `42`, func(ctx Context, event string) (string, error) {
+			cb, err := CreateCallback[int](ctx, event)
 			if err != nil {
 				return "", err
 			}
@@ -220,6 +259,35 @@ func TestCreateCallbackDefaultDeserialization(t *testing.T) {
 		}
 		if serdesErr.Direction != serdesDirectionUnmarshal {
 			t.Errorf("Direction = %q, want %q", serdesErr.Direction, serdesDirectionUnmarshal)
+		}
+		if !strings.Contains(serdesErr.Error(), "*int") {
+			t.Errorf("error %q does not name the type *int", serdesErr.Error())
+		}
+	})
+
+	t.Run("WithCallbackSerdes(JSONSerdes) decodes the payload", func(t *testing.T) {
+		wantResult(t, invoke(t, `"hello"`, stringCallback(WithCallbackSerdes(JSONSerdes))), `hello`)
+	})
+
+	t.Run("WithCallbackDeserializer decodes every payload", func(t *testing.T) {
+		jsonDeser := DeserializerFunc(json.Unmarshal)
+		wantResult(t, invoke(t, `"hello"`, stringCallback(), WithCallbackDeserializer(jsonDeser)), `hello`)
+		var seen int
+		resp := invoke(t, `42`, func(ctx Context, event string) (string, error) {
+			cb, err := CreateCallback[int](ctx, event)
+			if err != nil {
+				return "", err
+			}
+			if seen, err = cb.Result(ctx); err != nil {
+				return "", err
+			}
+			return "ok", nil
+		}, WithCallbackDeserializer(jsonDeser))
+		if resp.Status != invocationSucceeded {
+			t.Fatalf("status = %q, want SUCCEEDED", resp.Status)
+		}
+		if seen != 42 {
+			t.Errorf("callback result = %d, want 42", seen)
 		}
 	})
 }

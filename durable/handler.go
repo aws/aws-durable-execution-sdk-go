@@ -111,10 +111,11 @@ func WithSerdes(s Serdes) HandlerOption {
 // WithCallbackDeserializer sets the default deserializer for callback
 // payloads submitted by external systems. This is used when deserializing
 // the result of a SUCCEEDED callback during replay. Per-operation
-// [WithCallbackSerdes] takes precedence. Without it, callbacks use the
-// handler-level [Serdes] set with [WithSerdes] (default: [JSONSerdes]),
-// not a raw-string passthrough; see [CreateCallback]. To replace the
-// default from inside the handler, see [ConfigureSerdes].
+// [WithCallbackSerdes] takes precedence. Without it, callbacks use
+// [RawSerdes], which returns the submitted bytes unchanged, matching the
+// other Durable Execution SDKs; see [CreateCallback]. The handler-level
+// [Serdes] set with [WithSerdes] does not apply to callback payloads. To
+// replace the default from inside the handler, see [ConfigureSerdes].
 func WithCallbackDeserializer(d Deserializer) HandlerOption {
 	return handlerOptionFunc(func(o *handlerOptions) { o.callbackDeserializer = d })
 }

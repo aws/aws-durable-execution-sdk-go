@@ -219,7 +219,7 @@ func TestInvocationErrorOnFailedExecution(t *testing.T) {
 // chained-invoke settlement.
 func TestCallbackAndInvokeEvents(t *testing.T) {
 	handler := func(ctx durable.Context, event string) (string, error) {
-		cb, err := durable.CreateCallback[string](ctx, "approval")
+		cb, err := durable.CreateCallback[string](ctx, "approval", durable.WithCallbackSerdes(durable.JSONSerdes))
 		if err != nil {
 			return "", err
 		}

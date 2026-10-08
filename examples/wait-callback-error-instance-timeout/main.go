@@ -27,6 +27,7 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 			return nil // Submitter succeeds but no completion arrives.
 		},
 		durable.WithCallbackTimeout(3*time.Second),
+		durable.WithCallbackSerdes(durable.JSONSerdes),
 	)
 	if err != nil {
 		cbErr = err

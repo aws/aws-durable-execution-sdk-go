@@ -242,7 +242,7 @@ func TestSuspendWaitsForCallbackContextCompletion(t *testing.T) {
 				return WaitForCallback[string](c, "cb", func(sc StepContext, _ string) error {
 					_, err := body(sc)
 					return err
-				})
+				}, WithCallbackSerdes(JSONSerdes))
 			})
 			return func() (string, error) { return fut.Result(ctx) }
 		})

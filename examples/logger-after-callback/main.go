@@ -36,6 +36,7 @@ func handler(ctx durable.Context, _ any) (result, error) {
 			return completeCallback(sctx, callbackID, "callback-resolved")
 		},
 		durable.WithCallbackTimeout(30*time.Second),
+		durable.WithCallbackSerdes(durable.JSONSerdes),
 	)
 	if err != nil {
 		return result{}, err

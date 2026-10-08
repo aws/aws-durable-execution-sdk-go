@@ -23,7 +23,7 @@ type Result struct {
 
 func handler(ctx durable.Context, _ any) (Result, error) {
 	cb, err := durable.CreateCallback[string](ctx, "long-running-task",
-		durable.WithCallbackHeartbeatTimeout(10*time.Second))
+		durable.WithCallbackHeartbeatTimeout(10*time.Second), durable.WithCallbackSerdes(durable.JSONSerdes))
 	if err != nil {
 		return Result{}, err
 	}

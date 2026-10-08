@@ -152,3 +152,55 @@ func (s typedSerdes[T]) Unmarshal(ctx context.Context, meta SerdesContext, data 
 	*target = out
 	return nil
 }
+
+// RawSerdes stores bytes verbatim. Marshal returns the bytes of a string,
+// []byte, or [json.RawMessage] unchanged. Unmarshal copies the stored bytes
+// into a *string, *[]byte, or *[json.RawMessage]. A value of any other type
+// is rejected with an error the operation reports as a [*SerdesError] that
+// names the type. RawSerdes is the default deserializer for callback
+// results, matching the JavaScript and Python SDKs.
+//
+// RawSerdes holds no state, so it is safe for concurrent use from any
+// number of goroutines and executions.
+var RawSerdes = rawSerdes{}
+
+// rawSerdes is the type of [RawSerdes].
+type rawSerdes struct{}
+
+var _ Serdes = rawSerdes{}
+
+func (rawSerdes) Marshal(_ context.Context, _ SerdesContext, v any) ([]byte, error) {
+	switch x := v.(type) {
+	case string:
+		return []byte(x), nil
+	case []byte:
+		return x, nil
+	case json.RawMessage:
+		return []byte(x), nil
+	default:
+		return nil, fmt.Errorf("durable: RawSerdes: Marshal got %T, want string, []byte, or json.RawMessage", v)
+	}
+}
+
+func (rawSerdes) Unmarshal(_ context.Context, _ SerdesContext, data []byte, v any) error {
+	switch x := v.(type) {
+	case *string:
+		if x != nil {
+			*x = string(data)
+			return nil
+		}
+	case *[]byte:
+		if x != nil {
+			*x = bytes.Clone(data)
+			return nil
+		}
+	case *json.RawMessage:
+		if x != nil {
+			*x = json.RawMessage(bytes.Clone(data))
+			return nil
+		}
+	default:
+		return fmt.Errorf("durable: RawSerdes: Unmarshal got %T, want *string, *[]byte, or *json.RawMessage", v)
+	}
+	return fmt.Errorf("durable: RawSerdes: Unmarshal got a nil %T", v)
+}

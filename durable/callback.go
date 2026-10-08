@@ -52,12 +52,14 @@ func (c *Callback[O]) Result(ctx Context) (O, error) {
 //
 // The submitted payload is deserialized into O with, in order of
 // precedence, the per-operation [WithCallbackSerdes], the handler-level
-// [WithCallbackDeserializer], or the handler-level [Serdes] set with
-// [WithSerdes], which defaults to encoding/json. So a payload of "42"
-// deserializes into an int and a payload of "\"ok\"" into a string. This
-// differs from the other Durable Execution SDKs, whose callbacks default to
-// returning the raw payload string; in Go the result is typed, so it goes
-// through the same JSON decoding as every other operation result.
+// [WithCallbackDeserializer], or [RawSerdes]. RawSerdes returns the
+// submitted bytes unchanged, matching the other Durable Execution SDKs: a
+// payload of "approved" with its quotes returns the string "approved" with
+// its quotes, and a payload of 42 returns the string 42. So the default
+// supports an O of string, []byte, or [encoding/json.RawMessage]. Any other
+// O fails with a [*SerdesError]. To decode the payload as JSON, pass
+// WithCallbackSerdes(JSONSerdes). The handler-level [Serdes] set with
+// [WithSerdes] does not apply to callback payloads.
 //
 // CreateCallback accepts only [CallbackOption] values. Options that
 // configure the submitter step of [WaitForCallback], such as
@@ -208,6 +210,11 @@ func createClaimedCallback[O any](ec *execContext, id, name string, options call
 // Internally WaitForCallback wraps a child context containing a callback
 // and a submitter step, matching the WaitForCallback wire shape used by
 // all SDK implementations.
+//
+// The submitted payload is deserialized as for [CreateCallback]: by
+// default with [RawSerdes], which returns the submitted bytes unchanged,
+// matching the other Durable Execution SDKs. To decode the payload as JSON,
+// pass WithCallbackSerdes(JSONSerdes).
 //
 // WaitForCallback accepts every [CallbackOption], which it applies to the
 // callback it creates, plus [WaitForCallbackOption] values such as
@@ -701,7 +708,7 @@ func (f waitForCallbackOptionFunc) applyWaitForCallback(o *callbackOptions) { f(
 // callbackDeserializerForOptions returns the effective Serdes for
 // deserializing a callback result, respecting the precedence:
 // per-op WithCallbackSerdes > handler-level WithCallbackDeserializer >
-// handler-level Serdes (default encoding/json).
+// RawSerdes.
 func callbackDeserializerForOptions(ec *execContext, opts callbackOptions) Serdes {
 	if opts.serdes != nil {
 		return opts.serdes
@@ -710,7 +717,7 @@ func callbackDeserializerForOptions(ec *execContext, opts callbackOptions) Serde
 	if d.callbackDeserializer != nil {
 		return deserializerSerdes{d: d.callbackDeserializer}
 	}
-	return d.serdes
+	return RawSerdes
 }
 
 // deserializerSerdes adapts a [Deserializer] to the [Serdes] interface.

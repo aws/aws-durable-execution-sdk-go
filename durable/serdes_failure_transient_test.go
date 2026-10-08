@@ -171,7 +171,7 @@ func TestRetryableSerdesErrorOnWaitForCallbackUnmarshalRecordsNothing(t *testing
 		return durable.WaitForCallback[string](ctx, "approval", func(_ durable.StepContext, _ string) error {
 			atomic.AddInt64(&submits, 1)
 			return nil
-		})
+		}, durable.WithCallbackSerdes(serdes))
 	}
 	runner := durabletest.NewLocalRunner(h, durable.WithSerdes(serdes))
 
