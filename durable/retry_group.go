@@ -80,6 +80,10 @@ func (f retryOptionFunc) applyRetryOption(o *retryOptions) { f(o) }
 // calls it again for every recorded failed attempt, and a different
 // decision would diverge from the recorded operations. Pass "" as name
 // for unnamed attempt and backoff operations.
+//
+// An invalid argument (a nil fn, a nil strategy, or a [Context] the SDK
+// did not create) returns an error. The JavaScript SDK throws a TypeError
+// for the same input.
 func Retry[O any](ctx Context, name string, fn func(ctx Context, attempt int) (O, error), strategy RetryStrategy, opts ...RetryOption) (O, error) {
 	var zero O
 	if _, ok := ctx.(*execContext); !ok {

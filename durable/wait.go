@@ -67,6 +67,10 @@ func Wait(ctx Context, name string, d time.Duration, opts ...WaitOption) error {
 // The future settles when the wait elapses, in the invocation that observes
 // it. On invocation suspension, the returned future is settled with
 // errSuspendExecution so goroutines blocked on [Future.Result] unwind.
+//
+// A future the handler never awaits records no start operation in the
+// history, and its body may not run to completion. The execution still
+// succeeds. The JavaScript SDK records the start operation.
 func WaitAsync(ctx Context, name string, d time.Duration, opts ...WaitOption) *Future[Void] {
 	ec, ok := ctx.(*execContext)
 	if !ok {

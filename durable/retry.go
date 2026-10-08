@@ -222,6 +222,10 @@ type RetryConfig struct {
 
 	// MaxAttempts is the maximum number of total attempts, including the
 	// first. The default is 3. It must not be negative.
+	// The zero value selects this default; it does not mean one attempt.
+	// For one attempt, use [NoRetry] or set this field to 1. The
+	// JavaScript and Python SDKs instead read maxAttempts: 0 as one
+	// attempt, so port a JavaScript maxAttempts of 0 or 1 to [NoRetry].
 	MaxAttempts int
 
 	// InitialDelay is the delay before the first retry. The default is
@@ -405,6 +409,10 @@ type LinearRetryConfig struct {
 
 	// MaxAttempts is the maximum number of total attempts, including the
 	// first. The default is 6. It must not be negative.
+	// The zero value selects this default; it does not mean one attempt.
+	// For one attempt, use [NoRetry] or set this field to 1. The
+	// JavaScript and Python SDKs instead read maxAttempts: 0 as one
+	// attempt, so port a JavaScript maxAttempts of 0 or 1 to [NoRetry].
 	MaxAttempts int
 
 	// InitialDelay is the delay before the first retry. The default is
@@ -424,6 +432,9 @@ type LinearRetryConfig struct {
 	// Jitter is the jitter strategy applied to computed delays. The
 	// default is [JitterNone], so the default sequence is exact. When
 	// set, it must be one of the defined [JitterStrategy] constants.
+	// [RetryConfig.Jitter] and [WaitConfig.Jitter] default to
+	// [JitterFull]. Every durable execution SDK's linear retry preset
+	// uses no jitter, so this default matches them.
 	Jitter JitterStrategy
 
 	// RetryableErrors restricts retries to errors that at least one

@@ -18,6 +18,9 @@ import (
 // Start registers handler as the Lambda function handler and begins
 // processing invocations. It is the durable analogue of lambda.Start and
 // does not return.
+//
+// An invalid handler option panics, because handler options are read once
+// at program start.
 func Start[I, O any](handler Handler[I, O], opts ...HandlerOption) {
 	lambda.Start(rawPayloadHandler(Wrap(handler, opts...)))
 }

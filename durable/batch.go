@@ -83,6 +83,11 @@ import (
 // is recorded in the result it stores. Only the Go return value reports
 // the failure. Replaying a checkpointed batch returns the same result and
 // the same [BatchError], rebuilt from the stored items and reason.
+//
+// An invalid option (a non-positive [WithMaxConcurrency], an invalid
+// [WithCompletion], or a failing summary function) returns a plain error
+// with a zero [BatchResult], which the caller must propagate. The
+// JavaScript SDK ends the execution for the same input.
 func Map[I, O any](ctx Context, name string, items []I, fn func(ctx Context, item I, index int) (O, error), opts ...BatchOption) (BatchResult[O], error) {
 	ec, ok := ctx.(*execContext)
 	if !ok {
@@ -183,6 +188,11 @@ func runClaimedMap[I, O any](ec *execContext, id, name string, items []I, fn fun
 // completion decision failed the batch with no failed item. A failure
 // within a configured tolerance returns the result and a nil err. The batch's checkpoint records the operation as SUCCEEDED
 // regardless, and replay returns the same error.
+//
+// An invalid option (a non-positive [WithMaxConcurrency], an invalid
+// [WithCompletion], or a failing summary function) returns a plain error
+// with a zero [BatchResult], which the caller must propagate. The
+// JavaScript SDK ends the execution for the same input.
 func Parallel[O any](ctx Context, name string, branches []Branch[O], opts ...BatchOption) (BatchResult[O], error) {
 	ec, ok := ctx.(*execContext)
 	if !ok {

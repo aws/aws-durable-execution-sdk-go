@@ -565,6 +565,12 @@ func runClaimedChild[O any](ec *execContext, id, name, subType string, summary f
 //
 // On invocation suspension, the returned future is settled with
 // errSuspendExecution so goroutines blocked on [Future.Result] unwind.
+//
+// A future the handler never awaits still records its start operation,
+// because the child context checkpoints its start before RunInChildContextAsync returns
+// (a [WithChildVirtual] child records none). Its body may not run to
+// completion. The execution still succeeds. The JavaScript SDK also
+// records the start operation.
 func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O, error), opts ...ChildOption) *Future[O] {
 	ec, ok := ctx.(*execContext)
 	if !ok {
@@ -752,6 +758,12 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 // consecutive Go calls from one goroutine are replay-deterministic. Inside
 // fn, the provided Context is owned by fn's goroutine, and all durable
 // operations on it are safe, including nested Go calls.
+//
+// A future the handler never awaits still records its start operation,
+// because the child context checkpoints its start before Go returns
+// (a [WithChildVirtual] child records none). Its body may not run to
+// completion. The execution still succeeds. The JavaScript SDK also
+// records the start operation.
 func Go[O any](ctx Context, name string, fn func(Context) (O, error), opts ...ChildOption) *Future[O] {
 	return RunInChildContextAsync(ctx, name, fn, opts...)
 }

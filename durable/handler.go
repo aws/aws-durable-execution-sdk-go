@@ -30,6 +30,9 @@ type Handler[I, O any] func(ctx Context, event I) (O, error)
 // type, and encoding/json expects base64 text for []byte, while the
 // durable invocation payload is a JSON object. Register it through the
 // runtime's raw byte interface instead, as [Start] does.
+//
+// An invalid handler option panics, because handler options are read once
+// at program start.
 func Wrap[I, O any](handler Handler[I, O], opts ...HandlerOption) func(context.Context, []byte) ([]byte, error) {
 	if handler == nil {
 		panic("durable: handler must not be nil")

@@ -151,6 +151,10 @@ func Step[O any](ctx Context, name string, fn func(StepContext) (O, error), opts
 // same invocation, as for [Step]. On invocation suspension, the returned
 // future is settled with errSuspendExecution so goroutines blocked on
 // [Future.Result] unwind.
+//
+// A future the handler never awaits records no start operation in the
+// history, and its body may not run to completion. The execution still
+// succeeds. The JavaScript SDK records the start operation.
 func StepAsync[O any](ctx Context, name string, fn func(StepContext) (O, error), opts ...StepOption) *Future[O] {
 	ec, ok := ctx.(*execContext)
 	if !ok {

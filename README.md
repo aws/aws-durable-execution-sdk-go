@@ -1199,6 +1199,43 @@ keyed fields, because fields may be added, and tolerate status values you
 do not know. The [insight](insight/README.md) module is a complete plugin
 built on this API.
 
+## Deliberate differences from the JavaScript SDK
+
+The behaviors below differ from the JavaScript SDK on purpose. Keep them
+in mind when you port a handler.
+
+1. The zero value of `MaxAttempts` selects the default: 3 for
+   `RetryConfig`, 6 for `LinearRetryConfig`, and 60 for `WaitConfig`. It
+   does not mean one attempt. A JavaScript `maxAttempts: 0` or
+   `maxAttempts: 1` ports to `durable.NoRetry()` for a retry strategy, and
+   to `MaxAttempts: 1` for a `WaitConfig`.
+2. `LinearRetryConfig.Jitter` defaults to `JitterNone`, so the default
+   linear delays are exactly 1 s, 2 s, 3 s, 4 s, and 5 s. `RetryConfig`
+   and `WaitConfig` default to `JitterFull`. Both defaults match the
+   JavaScript SDK's presets.
+3. `Map` and `Parallel` return a plain `error` for an invalid option: a
+   non-positive `WithMaxConcurrency`, an invalid `WithCompletion`, or a
+   failing summary function. The JavaScript SDK ends the execution for
+   the same input.
+4. `Start` and `Wrap` panic on an invalid handler option, because handler
+   options are read once at program start. The JavaScript SDK does not
+   validate handler options at construction.
+5. A `WaitForCondition` check-function failure returns a
+   `*durable.WaitForConditionError` in Go, and a `StepError` in the
+   JavaScript SDK. Python returns a `WaitForConditionError`, as Go does.
+6. `All` returns the values in input order, and `Race` returns the
+   outcome of the first future to settle without saying which future won.
+   Both match `Promise.all` and `Promise.race`. Use `Select` when the
+   caller needs the winner's name.
+7. `Retry` returns an `error` for an invalid argument: a nil function, a
+   nil strategy, or a `Context` the SDK did not create. The JavaScript
+   SDK throws a `TypeError` for the same input.
+8. A `StepAsync`, `WaitAsync`, or `InvokeAsync` future that the handler
+   never awaits records no start operation, and its body may not run.
+   The execution still succeeds. The JavaScript SDK records the start
+   operation. A `Go` or `RunInChildContextAsync` future records its start
+   before the call returns, whether or not the handler awaits it.
+
 ## Examples
 
 `examples/` holds one deployable function per pattern.

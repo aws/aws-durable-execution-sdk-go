@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Documented: deliberate differences from the JavaScript SDK
+
+The README has a new section, "Deliberate differences from the JavaScript
+SDK", and the godoc of the affected APIs states each difference. It
+covers the `MaxAttempts` zero value, the linear retry jitter default,
+invalid `Map` and `Parallel` options, invalid handler options, the
+`WaitForCondition` check-function error, `All` and `Race` ordering,
+invalid `Retry` arguments, and futures the handler never awaits. No
+behavior changed.
+
 ### Added: the `pause-resume` example
 
 The new `examples/pause-resume` example runs an order approval workflow:

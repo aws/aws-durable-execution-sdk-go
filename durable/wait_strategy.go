@@ -40,6 +40,11 @@ type WaitConfig[S any] struct {
 	// Reaching it with the condition still unmet fails the operation with
 	// a [*WaitForConditionError]. The default is 60. It must not be
 	// negative.
+	// The zero value selects this default; it does not mean one check.
+	// For one check, set this field to 1. The JavaScript and Python SDKs
+	// instead read maxAttempts: 0 as one check, so port a JavaScript
+	// maxAttempts of 0 or 1 to MaxAttempts: 1. [NoRetry] is the
+	// counterpart for a [RetryStrategy] and does not apply here.
 	MaxAttempts int
 
 	// InitialDelay is the delay before the second check. The default is

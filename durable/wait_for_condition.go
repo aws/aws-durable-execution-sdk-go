@@ -23,7 +23,9 @@ import (
 //
 // If check returns an error, the operation fails immediately: there is no
 // internal retry. The error is checkpointed and returned as a
-// [*WaitForConditionError].
+// [*WaitForConditionError]. The JavaScript SDK returns a check-function
+// failure as a StepError; Python returns a WaitForConditionError as Go
+// does.
 //
 // If the wait strategy's Continue field is true, its Delay determines how
 // long the execution waits before the next check. A Delay of 0 is raised to

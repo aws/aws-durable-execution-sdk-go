@@ -25,6 +25,9 @@ import (
 // "PromiseCombinatorError" and whose cause is a [*CombinatorError]. Its
 // message is the message of the first error in input order.
 //
+// Returning the values in input order matches the JavaScript SDK's
+// Promise.all.
+//
 // Empty input returns an empty slice immediately (matching Promise.all([])).
 func All[O any](ctx Context, name string, fs []*Future[O], opts ...ChildOption) ([]O, error) {
 	return RunInChildContext(ctx, name, func(childCtx Context) ([]O, error) {
@@ -294,6 +297,8 @@ func Any[O any](ctx Context, name string, fs []*Future[O], opts ...ChildOption) 
 // Race returns the winner's value but not which future produced it. Code
 // that must branch on the winner's identity should use [Select], which
 // runs named branches and checkpoints the winner's name with its value.
+// It does not report which future won; use [Select] for the winner's
+// name. This matches the JavaScript SDK's Promise.race.
 //
 // A failure is returned as a [*ChildContextError] whose ErrorType is
 // "PromiseCombinatorError" and whose cause is a [*CombinatorError]. Its
