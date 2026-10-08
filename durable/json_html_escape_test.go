@@ -48,8 +48,7 @@ func TestJSONSerdesDoesNotHTMLEscape(t *testing.T) {
 	}
 	t.Logf("JSONSerdes output: %s", out)
 	assertNoHTMLEscape(t, "JSONSerdes.Marshal", string(out))
-	// Required invariants that must be preserved: nil stays null, map keys
-	// stay sorted. Both already hold on main.
+	// Nil stays null and map keys stay sorted.
 	if !strings.Contains(string(out), `"nested":null`) {
 		t.Errorf("JSONSerdes.Marshal: nil field not encoded as null: %s", out)
 	}

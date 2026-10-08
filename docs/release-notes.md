@@ -261,8 +261,7 @@ The fields the object does not hold are zero: `StepError.Attempts`,
 other error in the chain is rebuilt as a value that reports the recorded
 type and message, so `errors.As` against a caller's own error type no
 longer matches an item error, also in `NestingFlat` mode. Match on the
-recorded type with `wireErrorType`-style checks such as
-`ChildContextError.ErrorType`. The SDK sentinels `ErrCallbackTimedOut`,
+recorded type, such as `ChildContextError.ErrorType`. The SDK sentinels `ErrCallbackTimedOut`,
 `ErrInvokeTimedOut`, `ErrExecutionStopped`, and `ErrExecutionCancelled`
 still match with `errors.Is`.
 
@@ -386,7 +385,7 @@ enclosing context, for example the handler's `ctx` captured in a closure.
 The SDK recorded that operation beside the step or the child instead of
 under it. On replay the body did not run again, so the operation IDs no
 longer lined up. The execution then either kept a wrong history or failed
-with a `NonDeterministicReplayError`.
+with a `NonDeterministicExecutionError`.
 
 Such a call now fails at the call with the new `durable.ErrWrongContext`
 when the body runs on the goroutine that owns the enclosing context. That
@@ -504,26 +503,30 @@ timed out.
 ### Changed: a checkpoint response without a token is classified by what the call carried
 
 A checkpoint response without a `CheckpointToken` means the service will
-accept no further checkpoints from the current invocation. The SDK now
-handles it the way the JavaScript SDK 2.6.0 does.
+accept no further checkpoints from the current invocation. The SDK treated
+it as a plain error, which failed the execution. It now stops
+checkpointing and handles the response the way the JavaScript SDK 2.6.0
+does.
 
 - When the call carried the execution's terminal update, the execution
   finished, and the invocation reports the terminal outcome. A result too
-  large for the response now reports `SUCCEEDED` in this case. Before, it
-  reported `PENDING`.
+  large for the response reports `SUCCEEDED` in this case.
 - When the handler returns a result or an error while a branch's
   checkpoint call is in flight, the invocation waits for that call. If its
-  response carries no token, the invocation reports `PENDING`. Before, it
-  reported the handler's outcome.
+  response carries no token, the invocation reports `PENDING`.
 - When a response without a token suspends the invocation, the SDK writes
   one WARN record through the handler's log handler: `Checkpoint response
   contained no CheckpointToken: the service will accept no further
   checkpoints from this invocation. Suspending; the execution continues on
-  the next invocation.` Replay suppression never drops it. Before, the SDK
-  wrote no record.
+  the next invocation.` Replay suppression never drops it.
 
 A response without a token to a poll suspends the invocation with
 `PENDING`, as for any other call that does not carry the terminal update.
+
+An operation that had not checkpointed replays on the next invocation.
+`durabletest.LocalRunner.OmitTokenOnCheckpoint(n)` makes the n-th
+checkpoint call return no token, so a handler's behavior on this path can
+be tested locally.
 
 ### Changed: the default client sets request timeouts, and checkpoint calls are not retried by the SDK
 
@@ -737,7 +740,7 @@ claims an operation ID.
 
 The subtype is part of the operation's identity on replay: an invocation
 that supplies a different subtype for a checkpointed child context
-returns a `*NonDeterministicReplayError`. Keep it constant across
+returns a `*NonDeterministicExecutionError`. Keep it constant across
 invocations and deployments.
 
 ### Added: `WithChildVirtual`
@@ -1245,19 +1248,21 @@ example `CompletionConfig{ToleratedFailureCount: aws.Int(len(items))}`.
 A config that sets only `MinSuccessful` tolerates every failure, as
 before.
 
-**Failed items are returned as `err`.** `Map` and `Parallel` returned a
+**A failed batch is returned as `err`.** `Map` and `Parallel` returned a
 non-nil error only for SDK-level failures; the item failures lived in
-`BatchResult.Err()`, which the caller had to check separately. When at
-least one item failed, they now return a `*BatchError` as `err` and still
+`BatchResult.Err()`, which the caller had to check separately. When the
+batch fails as a unit, they now return the error as `err` and still
 return the populated `BatchResult`, so partial results remain available
-for compensation. `BatchError` has `Name`, `Reason` (the batch's
-`CompletionReason`), and `Errors` (the per-item errors in input order);
-it unwraps to the item errors for `errors.Is` and `errors.As`, and matches
-`*OperationError`. `BatchResult.Err()` and `BatchCompletionError` are
-removed. A `BatchError` is returned whenever an item failed, so a failure
-within a configured tolerance also produces one; its `Reason` is then
-`CompletionAllCompleted` or `CompletionMinSuccessfulReached` rather than
-`CompletionFailureToleranceExceeded`. Replace
+for compensation. A batch fails as a unit when its `Reason` is
+`CompletionFailureToleranceExceeded` or `CompletionCustomFailed`. The
+error is a `*BatchError` when an item failed. `BatchError` has `Name`,
+`Reason` (the batch's `CompletionReason`), and `Errors` (the per-item
+errors in input order); it unwraps to the item errors for `errors.Is` and
+`errors.As`, and matches `*OperationError`. A `ShouldComplete` decision
+that fails the batch with no failed item returns a
+`*BatchCompletionError` instead. A failure within a configured tolerance
+returns a nil error; read it from `Failed()` and `Errors()`.
+`BatchResult.Err()` is removed. Replace
 
 ```go
 result, err := durable.Map(ctx, "reserve", items, fn, opts...)
@@ -1279,7 +1284,7 @@ switch {
 case err == nil:
 	// use result
 case errors.As(err, &berr):
-	// items failed; result is populated for compensation
+	// the batch failed; result is populated for compensation
 default:
 	return err // suspension or SDK failure: propagate unchanged
 }
@@ -1456,26 +1461,12 @@ with an error. The execution continues in the invocation that holds the
 fresh token.
 
 `CheckpointError.Retryable()` is false for this rejection even though
-`Scope()` is `ErrorScopeInvocation`: the token never becomes valid again,
-so the SDK does not retry the call. For every other invocation-scoped
-failure `Retryable()` is still true.
+`Scope()` is `ErrorScopeInvocation`, because no retry can make the token
+valid again. For every other invocation-scoped failure `Retryable()` is
+still true.
 
 The invocation ends with the error even when handler code ignores the
 step's error and returns a value.
-
-### New: a checkpoint response without a token ends the invocation PENDING
-
-A checkpoint response that carries no `CheckpointToken` means the service
-will accept no further checkpoints from the current invocation. The SDK
-previously treated it as a plain error, which failed the execution. It now
-stops checkpointing and ends the invocation with `Status: PENDING`, as for
-any other suspension; operations that had not checkpointed replay on the
-next invocation. The invocation responds PENDING even when handler code
-ignores the step's error and returns a value.
-
-`durabletest.LocalRunner.OmitTokenOnCheckpoint(n)` makes the n-th
-checkpoint call return no token, so a handler's behavior on this path can
-be tested locally.
 
 ### Breaking: operation errors expose the recorded failure; the cause is a stand-in
 
@@ -1545,11 +1536,9 @@ submitter's.
 error is rebuilt as its type, so `errors.As` matches it; an unknown type
 yields a stand-in carrying the name and message. Values written in the
 older message-only form still deserialize. Detail fields outside
-`OperationError` (such as `StepError.Attempts` or
-`ResultTooLargeError.SizeBytes`) are zero after the round trip; a rebuilt
-`NonDeterministicReplayError` or `ResultTooLargeError` keeps the recorded
-text as its `Error()`, and a rebuilt `BatchError` recovers its
-`Reason`.
+`OperationError` (such as `StepError.Attempts`) are zero after the round
+trip; a rebuilt `NonDeterministicExecutionError` keeps the recorded text
+as its `Error()`, and a rebuilt `BatchError` recovers its `Reason`.
 
 Checkpoints that record a callback timeout under the older
 `Callback.Timeout` or `Callback.Heartbeat` names still read back as a

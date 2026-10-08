@@ -92,13 +92,8 @@ func runReplay(t *testing.T, h durable.Handler[struct{}, string], recorded map[s
 
 // TestNonDeterminismWireNameAndMessage asserts that a replay mismatch
 // records the wire ErrorType "NonDeterministicExecutionError" and names
-// both the expected and the actual operation.
-//
-// On main the wire ErrorType is "NonDeterministicReplayError". For a
-// name-only mismatch the message reads
-// `... (name "b"): expected STEP/Step but found STEP/Step ...`: it names
-// the expected name "b" but not the actual checkpointed name "a", and the
-// type clause repeats "STEP/Step" on both sides.
+// both the expected and the actual operation, so a name-only mismatch
+// shows the checkpointed name as well as the current one.
 func TestNonDeterminismWireNameAndMessage(t *testing.T) {
 	t.Run("name mismatch", func(t *testing.T) {
 		// Checkpoint holds a step named "a"; the handler creates "b" there.
@@ -135,7 +130,7 @@ func TestNonDeterminismWireNameAndMessage(t *testing.T) {
 
 // TestBatchCustomFailedWireType asserts that a batch failed by a custom
 // completion decision with no failed item records the wire ErrorType
-// "BatchCompletionError". On main it records "BatchError".
+// "BatchCompletionError", not "BatchError".
 func TestBatchCustomFailedWireType(t *testing.T) {
 	h := func(ctx durable.Context, _ struct{}) (int, error) {
 		res, err := durable.Map(ctx, "m", []int{0, 1, 2},
