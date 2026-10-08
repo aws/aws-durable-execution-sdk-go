@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -795,4 +796,121 @@ func assertReplayedItemTrace(t *testing.T, ops []wireOperation, want []string) {
 		t.Fatalf("replayed item Err = %v, want *ChildContextError", itemErr)
 	}
 	assertSameTrace(t, "replayed item StackTrace", childErr.StackTrace, want)
+}
+
+// assertFramesHaveBaseFileNames fails t for every frame whose file component
+// contains a path separator. A frame reads "function file:line", so the file
+// component is the text after the last space and before the last colon.
+func assertFramesHaveBaseFileNames(t *testing.T, trace []string) {
+	t.Helper()
+	for i, frame := range trace {
+		fileLine := frame[strings.LastIndex(frame, " ")+1:]
+		file := fileLine[:strings.LastIndex(fileLine, ":")]
+		if strings.ContainsAny(file, `/\`) {
+			t.Errorf("frame[%d] = %q has a directory in its file component %q", i, frame, file)
+		}
+	}
+}
+
+func TestFormatFrameUsesBaseFileName(t *testing.T) {
+	const function = "example.com/app/pkg.Work"
+	file := filepath.Join(string(filepath.Separator), "build", "src", "pkg", "work.go")
+	got := formatFrame(function, file, 42)
+	want := function + " " + filepath.Base(file) + ":42"
+	if got != want {
+		t.Errorf("formatFrame() = %q, want %q", got, want)
+	}
+	assertFramesHaveBaseFileNames(t, []string{got})
+}
+
+func TestCapturedFramesHaveBaseFileNames(t *testing.T) {
+	trace := stackTraceOuter(0)
+	if len(trace) == 0 {
+		t.Fatal("trace is empty")
+	}
+	assertFramesHaveBaseFileNames(t, trace)
+	if !strings.Contains(trace[0], " stack_trace_test.go:") {
+		t.Errorf("trace[0] = %q, want the file component stack_trace_test.go", trace[0])
+	}
+}
+
+func TestHandlerReturnedErrorFramesHaveBaseFileNames(t *testing.T) {
+	resp := invokeStep(t, &fakeLambda{}, stepPayload(`""`), handlerFails)
+	got := failedResponse(t, resp)
+	if len(got.StackTrace) == 0 {
+		t.Fatal("response has no StackTrace")
+	}
+	assertFramesHaveBaseFileNames(t, got.StackTrace)
+}
+
+func TestWithStackTracesFalseRecordsNoneForReturnedErrors(t *testing.T) {
+	fake := &fakeLambda{}
+	var stepErr *StepError
+	h := Wrap(func(ctx Context, _ string) (string, error) {
+		_, err := Step(ctx, "s", stepBodyFails, WithRetry(NoRetry()))
+		if !errors.As(err, &stepErr) {
+			t.Errorf("Step() error = %v, want *StepError", err)
+		}
+		return "", err
+	}, withLambdaAPI(fake), WithStackTraces(false))
+	raw, err := h(context.Background(), stepPayload(`""`))
+	if err != nil {
+		t.Fatalf("Invoke() error: %v", err)
+	}
+	if stepErr == nil || stepErr.StackTrace != nil {
+		t.Errorf("StepError = %+v, want one with no StackTrace", stepErr)
+	}
+	if got := failedResponse(t, string(raw)); got.StackTrace != nil {
+		t.Errorf("response StackTrace = %v, want none", got.StackTrace)
+	}
+
+	h = Wrap(handlerFails, withLambdaAPI(&fakeLambda{}), WithStackTraces(false))
+	raw, err = h(context.Background(), stepPayload(`""`))
+	if err != nil {
+		t.Fatalf("Invoke() error: %v", err)
+	}
+	if got := failedResponse(t, string(raw)); got.StackTrace != nil {
+		t.Errorf("handler response StackTrace = %v, want none", got.StackTrace)
+	}
+}
+
+// suppliedTraceWithDirectories is a trace a user error carries itself. Its
+// frames hold directories, which the SDK must record unchanged.
+var suppliedTraceWithDirectories = []string{
+	"example.com/app.charge /src/app/charge.go:10",
+	`example.com/app.main C:\src\app\main.go:5`,
+}
+
+// stepBodyFailsWithSuppliedTrace is a step body that returns an error
+// supplying suppliedTraceWithDirectories.
+func stepBodyFailsWithSuppliedTrace(StepContext) (string, error) {
+	return "", &tracedError{trace: suppliedTraceWithDirectories}
+}
+
+func TestSuppliedStackTraceIsRecordedUnchanged(t *testing.T) {
+	fake := &fakeLambda{}
+	var stepErr *StepError
+	resp := invokeStep(t, fake, stepPayload(`""`), func(ctx Context, _ string) (string, error) {
+		_, err := Step(ctx, "s", stepBodyFailsWithSuppliedTrace, WithRetry(NoRetry()))
+		if !errors.As(err, &stepErr) {
+			t.Errorf("Step() error = %v, want *StepError", err)
+		}
+		return "", err
+	})
+	updates := updateBatch(t, fake)
+	if len(updates) != 2 || updates[1].Error == nil {
+		t.Fatalf("updates = %+v, want START then FAIL with an error", updates)
+	}
+	assertSameTrace(t, "FAIL update StackTrace", updates[1].Error.StackTrace, suppliedTraceWithDirectories)
+	if stepErr == nil {
+		t.Fatal("no *StepError observed")
+	}
+	assertSameTrace(t, "StepError.StackTrace", stepErr.StackTrace, suppliedTraceWithDirectories)
+	assertSameTrace(t, "response StackTrace", failedResponse(t, resp).StackTrace, suppliedTraceWithDirectories)
+}
+
+func TestMaxStackTraceFramesIs32(t *testing.T) {
+	if MaxStackTraceFrames != 32 {
+		t.Errorf("MaxStackTraceFrames = %d, want 32", MaxStackTraceFrames)
+	}
 }

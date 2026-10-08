@@ -3,6 +3,7 @@ package durable
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
@@ -33,9 +34,13 @@ const MaxStackTraceFrames = 32
 //     "StackTrace() []string" method anywhere in its chain is recorded with
 //     that trace instead.
 //
-// Each frame is one string of the form "function file:line", innermost
-// frame first, and at most [MaxStackTraceFrames] frames are kept. The
-// frames are recorded in the operation's checkpoint and in the FAILED
+// Each frame is one string of the form "function base.go:line", innermost
+// frame first. The function component is the fully qualified function name,
+// including its package import path. The file component is the base name of
+// the source file, so a recorded frame never contains a directory from the
+// machine that built the binary, whether or not it was built with -trimpath.
+// A trace an error supplies itself is recorded unchanged. At most
+// [MaxStackTraceFrames] frames are kept. The frames are recorded in the operation's checkpoint and in the FAILED
 // invocation response, and the typed operation errors expose them as
 // StackTrace. An operation error that already carries a trace keeps it
 // when a later operation or the handler returns it, so the recorded trace
@@ -43,14 +48,13 @@ const MaxStackTraceFrames = 32
 //
 // Pass false to record no stack traces. Failures then carry an empty
 // StackTrace on every path. Disable capture when checkpoints must stay as
-// small as possible or when file paths from the build must not leave the
-// function.
+// small as possible.
 func WithStackTraces(enabled bool) HandlerOption {
 	return handlerOptionFunc(func(o *handlerOptions) { o.noStackTraces = !enabled })
 }
 
 // captureStackTrace returns the calling goroutine's stack as one string per
-// frame, innermost first, formatted "function file:line". The frame of
+// frame, innermost first, formatted as [formatFrame] describes. The frame of
 // captureStackTrace itself and the skip frames above it are omitted, and
 // so are the Go runtime's own frames, so a trace taken inside a recovered
 // panic begins at the panicking function. At most [MaxStackTraceFrames]
@@ -81,9 +85,12 @@ func captureStackTrace(skip int) []string {
 	return trace
 }
 
-// formatFrame renders one trace frame as "function file:line".
+// formatFrame renders one trace frame as "function base.go:line". The file
+// component is reduced to its base name. The runtime reports the path the
+// source had on the build machine, so keeping it would put that machine's
+// directory into every checkpoint and invocation response.
 func formatFrame(function, file string, line int) string {
-	return fmt.Sprintf("%s %s:%d", function, file, line)
+	return fmt.Sprintf("%s %s:%d", function, filepath.Base(file), line)
 }
 
 // functionFrame returns the trace frame naming fn's own declaration: its

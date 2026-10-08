@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Changed: stack-trace frames use the base file name
+
+A stack-trace frame the SDK records for a failure of user code now reads
+`function base.go:line`. The file component is the base name of the source
+file, so a frame no longer contains the directory the binary was built in,
+and the frame is the same whether or not the binary was built with
+`go build -trimpath`. The function component is unchanged. A trace an error
+supplies through a `StackTrace() []string` method is still recorded
+unchanged. Because a frame no longer carries build paths,
+`WithStackTraces(false)` is needed only to keep checkpoints smaller.
+
 ### Added: `WithStepSubType` and `WithCallbackSubType`
 
 `durable.WithStepSubType(subType)` is a `StepOption` for `Step` and
