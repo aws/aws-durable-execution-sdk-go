@@ -47,6 +47,9 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [invoke-tenant-id](invoke-tenant-id/main.go) | Invoke, WithTenantID | SUCCEEDED |
 | [invoke-tenant-target](invoke-tenant-target/main.go) | (target function for invoke-tenant-id) | — |
 | [chained-invoke](chained-invoke/main.go) | Invoke (sequential chain) | SUCCEEDED |
+| [invoke-async](invoke-async/main.go) | InvokeAsync (concurrent invokes awaited through futures) | SUCCEEDED |
+| [invoke-serdes](invoke-serdes/main.go) | Invoke, WithInvokePayloadSerdes, WithInvokeResultSerdes, SerdesOf | SUCCEEDED |
+| [invoke-error-sentinels](invoke-error-sentinels/main.go) | Invoke, InvokeError, ErrInvokeTimedOut, ErrExecutionStopped, ErrExecutionCancelled | SUCCEEDED |
 | [child-context-basic](child-context-basic/main.go) | RunInChildContext | SUCCEEDED |
 | [child-context-virtual](child-context-virtual/main.go) | RunInChildContext, WithChildVirtual (no CONTEXT events for the wrapper) | SUCCEEDED |
 | [child-context-serdes](child-context-serdes/main.go) | RunInChildContext, WithChildSerdes | SUCCEEDED |
