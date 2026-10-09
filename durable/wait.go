@@ -35,7 +35,7 @@ func Wait(ctx Context, name string, d time.Duration) error {
 		return err
 	}
 
-	err = runWait(ec, id, name, d)
+	err = runWait(ec, id, name, d, nil)
 	ec.observeOutcome(id, err)
 	return err
 }
@@ -51,9 +51,11 @@ func Wait(ctx Context, name string, d time.Duration) error {
 // it. On invocation suspension, the returned future is settled with
 // errSuspendExecution so goroutines blocked on [Future.Result] unwind.
 //
-// A future the handler never awaits records no start operation in the
-// history, and its body may not run to completion. The execution still
-// succeeds. The JavaScript SDK records the start operation.
+// WaitAsync queues the wait's start operation before it returns, so a
+// future the handler never awaits is still recorded, and the SDK sends the
+// start before the invocation responds. The invocation does not wait for a
+// future that nothing awaits: it answers with the handler's outcome. The
+// JavaScript SDK behaves the same way.
 func WaitAsync(ctx Context, name string, d time.Duration) *Future[Void] {
 	ec, ok := ctx.(*execContext)
 	if !ok {
@@ -68,11 +70,28 @@ func WaitAsync(ctx Context, name string, d time.Duration) *Future[Void] {
 	if err != nil {
 		return newFailedFuture[Void](err)
 	}
-	if ec.unfinishedInSucceededContext(ec.state.get(id)) {
+	op := ec.state.get(id)
+	if ec.unfinishedInSucceededContext(op) {
 		return newUnfinishedReplayFuture[Void](ec.suspend)
 	}
 
+	// The START of a wait with no record is queued on the calling
+	// goroutine, so it is queued before the handler can return.
+	var start *queuedStart
+	if op == nil {
+		waitSec, err := durationToSeconds(d)
+		if err != nil {
+			return newFailedFuture[Void](fmt.Errorf("durable: Wait %q: %w", name, err))
+		}
+		start, err = ec.checkpointer.queueStart(ec, waitStartUpdate(ec, id, name, waitSec), true)
+		if err != nil {
+			return newFailedFuture[Void](errSuspendExecution)
+		}
+	}
+
 	fut := newFuture[Void]().bind(ec.state, id)
+	gate := &awaitGate{}
+	fut.gate = gate
 	registerFuture(ec.suspend, fut)
 
 	// Snapshot the serializer and logging defaults on the owning goroutine:
@@ -84,7 +103,8 @@ func WaitAsync(ctx Context, name string, d time.Duration) *Future[Void] {
 		defer tok.release()
 		branch := ec.branchWith(currentGoroutineOwner(), defaults)
 		branch.adoptBranchToken(tok)
-		err := runWait(branch, id, name, d)
+		branch.gate = gate
+		err := runWait(branch, id, name, d, start)
 		fut.settle(Void{}, err)
 	}()
 
@@ -124,7 +144,18 @@ func validateWaitDuration(op, name string, d time.Duration) error {
 // replayed as SUCCEEDED dispatches only a replayed end with the
 // checkpointed timestamps: its start was dispatched by the invocation that
 // recorded it.
-func runWait(ec *execContext, id, name string, d time.Duration) error {
+//
+// start, when non-nil, is the START that WaitAsync queued for a wait with
+// no record. The wait then sends no START of its own: it waits for the call
+// that carries the queued one and continues as after its own START.
+func runWait(ec *execContext, id, name string, d time.Duration, start *queuedStart) error {
+	if start != nil {
+		waitSec, err := durationToSeconds(d)
+		if err != nil {
+			return fmt.Errorf("durable: Wait %q: %w", name, err)
+		}
+		return startedWait(ec, id, name, waitSec, start.await(ec))
+	}
 	op := ec.state.get(id)
 	if err := validateReplayConsistency(op, string(OperationTypeWait), OperationSubTypeWait, name); err != nil {
 		return err
@@ -157,6 +188,12 @@ func runWait(ec *execContext, id, name string, d time.Duration) error {
 		return fmt.Errorf("durable: Wait %q: %w", name, err)
 	}
 
+	update := waitStartUpdate(ec, id, name, waitSec)
+	return startedWait(ec, id, name, waitSec, ec.checkpointer.checkpoint(ec, []OperationUpdate{update}))
+}
+
+// waitStartUpdate returns the START update of the wait id.
+func waitStartUpdate(ec *execContext, id, name string, waitSec int32) OperationUpdate {
 	update := OperationUpdate{
 		Id:      aws.String(hashID(id)),
 		Type:    OperationTypeWait,
@@ -172,11 +209,18 @@ func runWait(ec *execContext, id, name string, d time.Duration) error {
 	if parent := ec.parentOperationID(); parent != "" {
 		update.ParentId = aws.String(hashID(parent))
 	}
-	if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
-		if errors.Is(err, errCheckpointTerminated) {
+	return update
+}
+
+// startedWait continues a live wait after its START checkpoint returned
+// startErr: it dispatches the wait's start and parks until the wait
+// elapses.
+func startedWait(ec *execContext, id, name string, waitSec int32, startErr error) error {
+	if startErr != nil {
+		if errors.Is(startErr, errCheckpointTerminated) {
 			return errSuspendExecution
 		}
-		return err
+		return startErr
 	}
 
 	// The wait is recorded. Its start timestamp comes from the checkpoint

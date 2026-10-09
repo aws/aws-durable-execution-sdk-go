@@ -1,8 +1,8 @@
 [
   {
-    "type": "STEP",
-    "subType": "Step",
-    "name": "complete",
-    "status": "SUCCEEDED"
+    "type": "WAIT",
+    "subType": "Wait",
+    "name": "background-wait",
+    "status": "STARTED"
   }
 ]

@@ -92,6 +92,38 @@ type parkWaiter struct {
 	detached bool
 }
 
+// awaitGate records whether anything awaits the future of an asynchronous
+// operation started by StepAsync, WaitAsync, or InvokeAsync. Until the
+// future is awaited, the goroutine that runs the operation parks as a
+// detached waiter. So a future that nothing awaits does not hold the
+// invocation at PENDING when the handler returns. When the future is
+// awaited, the waiters already parked become attached, and later parks
+// are attached. Its fields are guarded by suspendSignal.mu.
+type awaitGate struct {
+	// awaited is set at the first await of the future.
+	awaited bool
+
+	// waiters are the detached waiters parked before the first await.
+	waiters []*parkWaiter
+}
+
+// markAwaited records the first await of the future gated by g, and
+// attaches every waiter parked on its operation so far. Later calls have
+// no effect.
+func (s *suspendSignal) markAwaited(g *awaitGate) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if g.awaited {
+		return
+	}
+	g.awaited = true
+	for _, w := range g.waiters {
+		w.detached = false
+	}
+	g.waiters = nil
+	s.gen++
+}
+
 // newWaiterLocked returns a parked waiter. Caller holds mu.
 func (s *suspendSignal) newWaiterLocked(abandon *abandonHandle, detached bool) *parkWaiter {
 	w := &parkWaiter{ch: make(chan struct{}), abandon: abandon, detached: detached}
@@ -232,8 +264,10 @@ func (w *opWatch) stopTimerLocked() {
 // before the operation is ready.
 //
 // detached marks a goroutine whose block does not hold the invocation at
-// PENDING when the handler returns; see parkWaiter.detached.
-func (s *suspendSignal) awaitOperation(state *executionState, id string, abandon *abandonHandle, detached bool, ready func(*operation) bool, endTime func(*operation) time.Time) (*operation, error) {
+// PENDING when the handler returns; see parkWaiter.detached. gate, when
+// non-nil, makes the block detached until the gated future is awaited;
+// see awaitGate.
+func (s *suspendSignal) awaitOperation(state *executionState, id string, abandon *abandonHandle, detached bool, gate *awaitGate, ready func(*operation) bool, endTime func(*operation) time.Time) (*operation, error) {
 	wireID := hashID(id)
 	s.mu.Lock()
 	if s.firing || abandon.abandoned() {
@@ -248,7 +282,11 @@ func (s *suspendSignal) awaitOperation(state *executionState, id string, abandon
 		s.mu.Unlock()
 		return op, nil
 	}
-	w := s.newWaiterLocked(abandon, detached)
+	gated := gate != nil && !gate.awaited
+	w := s.newWaiterLocked(abandon, detached || gated)
+	if gated {
+		gate.waiters = append(gate.waiters, w)
+	}
 	watch := s.watches[wireID]
 	if watch == nil {
 		if s.watches == nil {
@@ -520,7 +558,7 @@ func nextAttemptTime(fallback time.Time) func(*operation) time.Time {
 // marks the context blocked, so user code that swallows the error cannot
 // start further operations on it, and returns errSuspendExecution.
 func (c *execContext) awaitOperation(id string, ready func(*operation) bool, endTime func(*operation) time.Time) (*operation, error) {
-	op, err := c.suspend.awaitOperation(c.state, id, c.abandon, false, ready, endTime)
+	op, err := c.suspend.awaitOperation(c.state, id, c.abandon, false, c.gate, ready, endTime)
 	if err != nil {
 		c.blocked.Store(true)
 		return nil, err

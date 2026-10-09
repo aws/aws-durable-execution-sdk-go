@@ -460,11 +460,43 @@ var expectations = map[string]expectation{
 			}
 		},
 	},
-	"parallel-tolerated-failure":            {result: `{"successCount":3,"failureCount":2,"totalCount":5,"completionReason":"ALL_COMPLETED","hasFailure":true}`},
-	"parallel-tolerated-failure-percentage": {result: `{"successCount":2,"failureCount":2,"totalCount":4,"completionReason":"FAILURE_TOLERANCE_EXCEEDED","hasFailure":true,"successResults":["result-1","result-3"]}`},
-	"parallel-virtual-context":              {result: `{"results":["fetched","processed","validated"],"totalCount":3,"successCount":3}`},
-	"parallel-wait":                         {result: `"Completed waits"`},
-	"plugin-lifecycle":                      {result: `{"message":"plugin lifecycle complete","hooks":[{"hook":"OnInvocationStart"},{"hook":"OnOperationStart","operationName":"compute"},{"hook":"OnOperationAttemptStart","operationName":"compute","attempt":1},{"hook":"OnOperationAttemptEnd","operationName":"compute","attempt":1},{"hook":"OnOperationEnd","operationName":"compute"}]}`},
+	"parallel-tolerated-failure": {result: `{"successCount":3,"failureCount":2,"totalCount":5,"completionReason":"ALL_COMPLETED","hasFailure":true}`},
+	"parallel-tolerated-failure-percentage": {
+		nondeterministic: "which succeeding branches finish before the second failure exceeds the tolerance depends on when the checkpoint calls that record the branches return",
+		check: func(t testing.TB, result string) {
+			obj := resultObject(t, result)
+			assertFields(t, obj, map[string]any{
+				"failureCount": float64(2), "totalCount": float64(4), "completionReason": "FAILURE_TOLERANCE_EXCEEDED", "hasFailure": true,
+			})
+			n, ok := obj["successCount"].(float64)
+			if !ok || (n != 0 && n != 1 && n != 2) {
+				t.Fatalf("successCount = %v, want 0, 1, or 2", obj["successCount"])
+			}
+			var raw []any
+			if obj["successResults"] != nil {
+				raw, ok = obj["successResults"].([]any)
+				if !ok {
+					t.Fatalf("successResults = %v, want a list", obj["successResults"])
+				}
+			}
+			if len(raw) != int(n) {
+				t.Fatalf("successResults = %v, want %v entries", raw, n)
+			}
+			allowed := []string{"result-1", "result-3"}
+			last := -1
+			for _, r := range raw {
+				s, _ := r.(string)
+				i := slices.Index(allowed, s)
+				if i <= last {
+					t.Fatalf("successResults = %v, want distinct entries of %v in that order", raw, allowed)
+				}
+				last = i
+			}
+		},
+	},
+	"parallel-virtual-context": {result: `{"results":["fetched","processed","validated"],"totalCount":3,"successCount":3}`},
+	"parallel-wait":            {result: `"Completed waits"`},
+	"plugin-lifecycle":         {result: `{"message":"plugin lifecycle complete","hooks":[{"hook":"OnInvocationStart"},{"hook":"OnOperationStart","operationName":"compute"},{"hook":"OnOperationAttemptStart","operationName":"compute","attempt":1},{"hook":"OnOperationAttemptEnd","operationName":"compute","attempt":1},{"hook":"OnOperationEnd","operationName":"compute"}]}`},
 
 	"retry-callback":   {failed: true, errorType: "CallbackTimeoutError"},
 	"retry-exhaustion": {failed: true, errorType: "StepError"},

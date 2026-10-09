@@ -72,7 +72,7 @@ func Invoke[O, I any](ctx Context, name, functionID string, input I, opts ...Inv
 		return zero, err
 	}
 
-	out, err := runInvoke[O, I](ec, id, name, functionID, input, options)
+	out, err := runInvoke[O, I](ec, id, name, functionID, input, options, nil)
 	ec.observeOutcome(id, err)
 	return out, err
 }
@@ -87,9 +87,11 @@ func Invoke[O, I any](ctx Context, name, functionID string, input I, opts ...Inv
 // the returned future is settled with errSuspendExecution so goroutines
 // blocked on [Future.Result] unwind.
 //
-// A future the handler never awaits records no start operation in the
-// history, and its body may not run to completion. The execution still
-// succeeds. The JavaScript SDK records the start operation.
+// InvokeAsync queues the invoke's start operation before it returns, so a
+// future the handler never awaits is still recorded and the function is
+// invoked, and the SDK sends the start before the invocation responds. The
+// invocation does not wait for a future that nothing awaits: it answers
+// with the handler's outcome. The JavaScript SDK behaves the same way.
 func InvokeAsync[O, I any](ctx Context, name, functionID string, input I, opts ...InvokeOption) *Future[O] {
 	ec, ok := ctx.(*execContext)
 	if !ok {
@@ -106,11 +108,28 @@ func InvokeAsync[O, I any](ctx Context, name, functionID string, input I, opts .
 	if err != nil {
 		return newFailedFuture[O](err)
 	}
-	if ec.unfinishedInSucceededContext(ec.state.get(id)) {
+	op := ec.state.get(id)
+	if ec.unfinishedInSucceededContext(op) {
 		return newUnfinishedReplayFuture[O](ec.suspend)
 	}
 
+	// The START of an invoke with no record is queued on the calling
+	// goroutine, so it is queued before the handler can return.
+	var start *queuedStart
+	if op == nil {
+		update, err := invokeStartUpdate(ec, id, name, functionID, input, options)
+		if err != nil {
+			return newFailedFuture[O](err)
+		}
+		start, err = ec.checkpointer.queueStart(ec, update, true)
+		if err != nil {
+			return newFailedFuture[O](errSuspendExecution)
+		}
+	}
+
 	fut := newFuture[O]().bind(ec.state, id)
+	gate := &awaitGate{}
+	fut.gate = gate
 	registerFuture(ec.suspend, fut)
 
 	// Snapshot the serializer and logging defaults on the owning goroutine:
@@ -122,7 +141,8 @@ func InvokeAsync[O, I any](ctx Context, name, functionID string, input I, opts .
 		defer tok.release()
 		branch := ec.branchWith(currentGoroutineOwner(), defaults)
 		branch.adoptBranchToken(tok)
-		result, runErr := runInvoke[O, I](branch, id, name, functionID, input, options)
+		branch.gate = gate
+		result, runErr := runInvoke[O, I](branch, id, name, functionID, input, options, start)
 		fut.settle(result, runErr)
 	}()
 
@@ -146,8 +166,17 @@ func InvokeAsync[O, I any](ctx Context, name, functionID string, input I, opts .
 // invocation suspends first. An invoke replayed with a terminal status
 // dispatches only a replayed end with the checkpointed timestamps and
 // outcome: its start was dispatched by the invocation that recorded it.
-func runInvoke[O, I any](ec *execContext, id, name, functionID string, input I, options invokeOptions) (O, error) {
+//
+// start, when non-nil, is the START that InvokeAsync queued for an invoke
+// with no record. The invoke then sends no START of its own: it waits for
+// the call that carries the queued one and continues as after its own
+// START.
+func runInvoke[O, I any](ec *execContext, id, name, functionID string, input I, options invokeOptions, start *queuedStart) (O, error) {
 	var zero O
+
+	if start != nil {
+		return startedInvoke[O](ec, id, name, functionID, options, start.await(ec))
+	}
 
 	op := ec.state.get(id)
 	if err := validateReplayConsistency(op, string(OperationTypeChainedInvoke), OperationSubTypeChainedInvoke, name); err != nil {
@@ -172,9 +201,19 @@ func runInvoke[O, I any](ec *execContext, id, name, functionID string, input I, 
 		}
 	}
 
+	update, err := invokeStartUpdate(ec, id, name, functionID, input, options)
+	if err != nil {
+		return zero, err
+	}
+	return startedInvoke[O](ec, id, name, functionID, options, ec.checkpointer.checkpoint(ec, []OperationUpdate{update}))
+}
+
+// invokeStartUpdate marshals input and returns the START update of the
+// invoke id. A marshal failure returns the error serdesFailure reports.
+func invokeStartUpdate[I any](ec *execContext, id, name, functionID string, input I, options invokeOptions) (OperationUpdate, error) {
 	payload, err := options.payloadSerdes.Marshal(ec.Context, ec.serdesCtx(id), input)
 	if err != nil {
-		return zero, ec.serdesFailure(name, serdesDirectionMarshal, err)
+		return OperationUpdate{}, ec.serdesFailure(name, serdesDirectionMarshal, err)
 	}
 
 	update := OperationUpdate{
@@ -196,11 +235,19 @@ func runInvoke[O, I any](ec *execContext, id, name, functionID string, input I, 
 	if parent := ec.parentOperationID(); parent != "" {
 		update.ParentId = aws.String(hashID(parent))
 	}
-	if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
-		if errors.Is(err, errCheckpointTerminated) {
+	return update, nil
+}
+
+// startedInvoke continues a live invoke after its START checkpoint
+// returned startErr: it dispatches the invoke's start and parks until the
+// invoked function finishes.
+func startedInvoke[O any](ec *execContext, id, name, functionID string, options invokeOptions, startErr error) (O, error) {
+	if startErr != nil {
+		var zero O
+		if errors.Is(startErr, errCheckpointTerminated) {
 			return zero, errSuspendExecution
 		}
-		return zero, err
+		return zero, startErr
 	}
 
 	// The invoke is recorded. Its start timestamp comes from the checkpoint

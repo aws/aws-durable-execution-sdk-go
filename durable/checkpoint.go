@@ -411,10 +411,55 @@ func (cp *checkpointer) checkpointNoWait(ctx context.Context, update OperationUp
 	return nil
 }
 
+// queuedStart is the START of an asynchronous operation that StepAsync,
+// WaitAsync, or InvokeAsync queued on the calling goroutine before it
+// returned. pending is the queued request when the operation must not
+// continue before the request's call returns, and nil when the operation
+// continues at once (see checkpointNoWait).
+type queuedStart struct {
+	pending *pendingCheckpoint
+}
+
+// queueStart queues update, the START of an asynchronous operation, and
+// returns without waiting for the call that carries it. wait reports
+// whether the operation must wait for that call before it continues; the
+// operation then calls queuedStart.await. It returns
+// errCheckpointTerminated, and queues nothing, when the checkpointer is
+// already terminated.
+//
+// The START is queued before the call returns, so a future the handler
+// never awaits still records its START: the handler returns after the
+// call, and terminateAtQueueEnd sends every request queued before it.
+func (cp *checkpointer) queueStart(ctx context.Context, update OperationUpdate, wait bool) (*queuedStart, error) {
+	if cp.terminated.Load() {
+		return nil, errCheckpointTerminated
+	}
+	p := cp.submit(ctx, []OperationUpdate{update}, false)
+	if !wait {
+		return &queuedStart{}, nil
+	}
+	return &queuedStart{pending: p}, nil
+}
+
+// await waits for the call that carries the queued START, when the
+// operation must wait for it, and returns the call's outcome as checkpoint
+// would. It returns nil at once when the operation need not wait.
+func (q *queuedStart) await(ctx context.Context) error {
+	if q.pending == nil {
+		return nil
+	}
+	return awaitPending(ctx, q.pending)
+}
+
 // enqueue queues one request, starts the flusher if none is running, and
 // waits for the request's outcome or for ctx to be done.
 func (cp *checkpointer) enqueue(ctx context.Context, updates []OperationUpdate, final bool) error {
-	p := cp.submit(ctx, updates, final)
+	return awaitPending(ctx, cp.submit(ctx, updates, final))
+}
+
+// awaitPending waits for the outcome of the queued request p or for ctx to
+// be done.
+func awaitPending(ctx context.Context, p *pendingCheckpoint) error {
 	select {
 	case err := <-p.done:
 		return err

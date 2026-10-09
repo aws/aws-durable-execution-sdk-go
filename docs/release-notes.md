@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Changed: a future the handler never awaits records its start, as in the JavaScript SDK
+
+`StepAsync`, `WaitAsync`, and `InvokeAsync` now queue their START before
+the call returns, so the SDK sends it before the invocation responds. A
+future that nothing awaits no longer keeps the invocation PENDING: the
+invocation answers with the handler's outcome. Before, a never-awaited
+operation was recorded or not depending on goroutine scheduling, and a
+never-awaited wait, invoke, or retrying step could keep the execution open
+until it finished.
+
 ### Changed: START checkpoints are sent without waiting, as in the JavaScript SDK
 
 A step under `AtLeastOncePerRetry`, `RunInChildContext`, `Go`,
@@ -37,8 +47,7 @@ SDK", and the godoc of the affected APIs states each difference. It
 covers the `MaxAttempts` zero value, the linear retry jitter default,
 invalid `Map` and `Parallel` options, invalid handler options, the
 `WaitForCondition` check-function error, `All` and `Race` ordering,
-invalid `Retry` arguments, and futures the handler never awaits. No
-behavior changed.
+and invalid `Retry` arguments. No behavior changed.
 
 ### Added: the `pause-resume` example
 

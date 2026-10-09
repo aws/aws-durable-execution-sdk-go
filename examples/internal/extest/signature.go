@@ -47,8 +47,7 @@ const (
 
 	// Subset requires every operation in the golden file to be present
 	// and tolerates operations that are not listed. Use it when an
-	// operation is optional, such as a fire-and-forget WaitAsync that may
-	// or may not reach a checkpoint, or when early completion leaves a
+	// operation is optional, such as when early completion leaves a
 	// scheduling-dependent set of branches unstarted.
 	Subset
 )

@@ -135,9 +135,9 @@ func AssertGoldenSignatureUnordered(t testing.TB, result *TestResult, goldenPath
 
 // AssertSignatureContains verifies that the event signature of result
 // contains all of the required operations (as a subset). Additional
-// operations in the actual signature are tolerated. Use this when a
-// fire-and-forget async operation may or may not produce a checkpoint
-// entry depending on goroutine timing (e.g. [durable.WaitAsync]).
+// operations in the actual signature are tolerated. Use this when the
+// set of operations depends on goroutine timing, for example when early
+// completion leaves some branches unstarted.
 //
 // Each required signature must appear at least once in the actual
 // signature. Duplicate required entries require multiple actual matches.

@@ -34,7 +34,7 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [wait-basic](wait-basic/main.go) | Wait | SUCCEEDED |
 | [wait-named](wait-named/main.go) | Wait (named) | SUCCEEDED |
 | [wait-configurable](wait-configurable/main.go) | Wait (input-driven duration) | SUCCEEDED |
-| [wait-unawaited](wait-unawaited/main.go) | Wait, Step (fire-and-forget) | SUCCEEDED |
+| [wait-unawaited](wait-unawaited/main.go) | WaitAsync never awaited | SUCCEEDED |
 | [wait-for-condition](wait-for-condition/main.go) | WaitForCondition | SUCCEEDED |
 | [multiple-waits](multiple-waits/main.go) | Wait (multiple sequential) | SUCCEEDED |
 
@@ -351,7 +351,7 @@ source:
 |------|------------|-----------|
 | `extest.Ordered` | Same operations in the same order | Operations run sequentially (the default) |
 | `extest.Unordered` | Same operations and counts, any order | Map, Parallel, Go, or Async branches checkpoint in scheduling-dependent order |
-| `extest.Subset` | Every listed operation is present; others are tolerated | An operation is optional: a fire-and-forget `WaitAsync`, or branches left unstarted by early completion (`Race`, `Any`, `Select`, `MinSuccessful`, a failure threshold) |
+| `extest.Subset` | Every listed operation is present; others are tolerated | An operation is optional: branches left unstarted by early completion (`Race`, `Any`, `Select`, `MinSuccessful`, a failure threshold) |
 
 A test scenario whose operations differ from the default scenario's
 asserts its own file with `extest.AssertSignatureFile`, named

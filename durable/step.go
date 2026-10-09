@@ -137,7 +137,7 @@ func Step[O any](ctx Context, name string, fn func(StepContext) (O, error), opts
 	if err != nil {
 		return zero, err
 	}
-	out, err := runStep(ec, id, name, fn, options)
+	out, err := runStep(ec, id, name, fn, options, nil)
 	ec.observeOutcome(id, err)
 	return out, err
 }
@@ -152,9 +152,12 @@ func Step[O any](ctx Context, name string, fn func(StepContext) (O, error), opts
 // future is settled with errSuspendExecution so goroutines blocked on
 // [Future.Result] unwind.
 //
-// A future the handler never awaits records no start operation in the
-// history, and its body may not run to completion. The execution still
-// succeeds. The JavaScript SDK records the start operation.
+// StepAsync queues the step's start operation before it returns, so a
+// future the handler never awaits is still recorded, and the SDK sends the
+// start before the invocation responds. The invocation does not wait for a
+// future that nothing awaits: it answers with the handler's outcome, so
+// the step body may not run to completion. The JavaScript SDK behaves the
+// same way.
 func StepAsync[O any](ctx Context, name string, fn func(StepContext) (O, error), opts ...StepOption) *Future[O] {
 	ec, ok := ctx.(*execContext)
 	if !ok {
@@ -170,11 +173,26 @@ func StepAsync[O any](ctx Context, name string, fn func(StepContext) (O, error),
 	if err != nil {
 		return newFailedFuture[O](err)
 	}
-	if ec.unfinishedInSucceededContext(ec.state.get(id)) {
+	op := ec.state.get(id)
+	if ec.unfinishedInSucceededContext(op) {
 		return newUnfinishedReplayFuture[O](ec.suspend)
 	}
 
+	// The START of a step with no record is queued on the calling
+	// goroutine, so it is queued before the handler can return. Under
+	// AtMostOncePerRetry the body waits for the call that carries it.
+	var start *queuedStart
+	if op == nil {
+		update := stepUpdate(ec, id, name, options.subType, OperationActionStart)
+		start, err = ec.checkpointer.queueStart(ec, update, options.semantics == AtMostOncePerRetry)
+		if err != nil {
+			return newFailedFuture[O](errSuspendExecution)
+		}
+	}
+
 	fut := newFuture[O]().bind(ec.state, id)
+	gate := &awaitGate{}
+	fut.gate = gate
 	registerFuture(ec.suspend, fut)
 
 	// Snapshot the serializer and logging defaults on the owning goroutine:
@@ -186,7 +204,8 @@ func StepAsync[O any](ctx Context, name string, fn func(StepContext) (O, error),
 		defer tok.release()
 		branch := ec.branchWith(currentGoroutineOwner(), defaults)
 		branch.adoptBranchToken(tok)
-		result, runErr := runStep(branch, id, name, fn, options)
+		branch.gate = gate
+		result, runErr := runStep(branch, id, name, fn, options, start)
 		fut.settle(result, runErr)
 	}()
 
@@ -231,9 +250,18 @@ func retryDue(err error) time.Time {
 // start instead, with IsReplay true and the checkpointed start time. The end is
 // dispatched with the step's outcome; a step that is still waiting for an
 // attempt when the invocation suspends dispatches no end.
-func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, error), options stepOptions) (O, error) {
+//
+// start, when non-nil, is the START that StepAsync queued for a step with
+// no record. The first attempt then sends no START of its own; a later
+// attempt after a RETRY sends its START as usual.
+func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, error), options stepOptions, start *queuedStart) (O, error) {
 	var zero O
 	op := ec.state.get(id)
+	if start != nil {
+		// The step had no record when its START was queued. A record the
+		// START response has merged since then is this attempt's own.
+		op = nil
+	}
 
 	if err := validateReplayConsistency(op, string(OperationTypeStep), options.subType, name); err != nil {
 		return zero, err
@@ -356,8 +384,9 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 		result, err := func() (O, error) {
 			ec.suspend.enterExecuting()
 			defer ec.suspend.exitExecuting()
-			return executeStepAttempt(ec, id, name, fn, options, op, attempt)
+			return executeStepAttempt(ec, id, name, fn, options, op, attempt, start)
 		}()
+		start = nil
 		lastAttempt = attempt
 
 		if errors.Is(err, errRetryScheduled) {
@@ -388,11 +417,19 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 }
 
 // executeStepAttempt runs one attempt of the step body and checkpoints its
-// outcome.
-func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepContext) (O, error), options stepOptions, op *operation, attempt int) (O, error) {
+// outcome. start, when non-nil, is the attempt's START, already queued by
+// StepAsync.
+func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepContext) (O, error), options stepOptions, op *operation, attempt int, start *queuedStart) (O, error) {
 	var zero O
 
-	if op == nil || op.status != statusStarted {
+	if start != nil {
+		if err := start.await(ec); err != nil {
+			if errors.Is(err, errCheckpointTerminated) {
+				return zero, errSuspendExecution
+			}
+			return zero, err
+		}
+	} else if op == nil || op.status != statusStarted {
 		// Under AtLeastOncePerRetry the body runs again on the next
 		// invocation when the START was not recorded, so the START is
 		// queued without waiting. Under AtMostOncePerRetry the body must

@@ -104,6 +104,12 @@ type execContext struct {
 	// context.
 	abandon *abandonHandle
 
+	// gate, when non-nil, is the await gate of the asynchronous operation
+	// this branch context runs (see awaitGate). It is set only on the
+	// branch context of StepAsync, WaitAsync, and InvokeAsync, which runs
+	// that one operation and nothing else; nil for every other context.
+	gate *awaitGate
+
 	// branchTok is the active-branch token for the goroutine that owns this
 	// context. A pending callback's pre-result hook releases it so the
 	// calling branch is deregistered exactly once. It is shared by a

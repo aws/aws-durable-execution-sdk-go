@@ -53,6 +53,10 @@ type Future[O any] struct {
 	// for a future that is not bound to an operation, which never
 	// switches a context to live.
 	newOutcome func() bool
+
+	// gate, when non-nil, is the await gate of the asynchronous operation
+	// that settles the future (see awaitGate). The first await marks it.
+	gate *awaitGate
 }
 
 // Result blocks until the operation settles, then returns its outcome.
@@ -101,8 +105,12 @@ func (f *Future[O]) bind(state *executionState, id string) *Future[O] {
 	return f
 }
 
-// activate runs the pre-result hook exactly once.
+// activate marks the future awaited and runs the pre-result hook exactly
+// once.
 func (f *Future[O]) activate() {
+	if f.gate != nil && f.s != nil {
+		f.s.markAwaited(f.gate)
+	}
 	if f.preResult != nil {
 		f.preResultOnce.Do(f.preResult)
 	}
@@ -276,7 +284,7 @@ func newPendingCallbackFuture[O any](ec *execContext, id string, outcome func(*o
 		tok := ec.suspend.registerBranchToken()
 		go func() {
 			defer tok.release()
-			op, err := ec.suspend.awaitOperation(ec.state, id, ec.abandon, true, terminalRecord, noEndTime)
+			op, err := ec.suspend.awaitOperation(ec.state, id, ec.abandon, true, nil, terminalRecord, noEndTime)
 			if err != nil {
 				var zero O
 				f.settle(zero, err)

@@ -2,10 +2,13 @@ package durable_test
 
 import (
 	"reflect"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
@@ -133,8 +136,10 @@ func TestSelectReportsName(t *testing.T) {
 	}
 }
 
-// A StepAsync the handler never awaits records no operation and no
-// StepStarted event, and the execution still succeeds.
+// A StepAsync the handler never awaits records its start, because the
+// call queues the START before it returns. The invocation answers with the
+// handler's outcome in that invocation. The body may or may not finish
+// before the handler returns, so the step is STARTED or SUCCEEDED.
 func TestUnawaitedStep(t *testing.T) {
 	var ran int32
 	handler := func(ctx durable.Context, _ any) (string, error) {
@@ -148,23 +153,12 @@ func TestUnawaitedStep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("unawaited-step status=%s bgOpRecorded=%v events=%v bodyRan=%d",
-		r.Status, r.Operation("bg") != nil, r.EventTypes(), atomic.LoadInt32(&ran))
-	if r.Status != durabletest.Succeeded {
-		t.Fatalf("status = %s, want SUCCEEDED", r.Status)
-	}
-	if r.Operation("bg") != nil {
-		t.Fatal("never-awaited step recorded an operation")
-	}
-	for _, e := range r.EventTypes() {
-		if e == "StepStarted" {
-			t.Fatal("never-awaited step recorded a StepStarted event")
-		}
-	}
+	t.Logf("unawaited-step status=%s events=%v bodyRan=%d", r.Status, r.EventTypes(), atomic.LoadInt32(&ran))
+	assertUnawaitedRecorded(t, r, "bg", "StepStarted", "STARTED", "SUCCEEDED")
 }
 
-// A WaitAsync the handler never awaits records no operation and no
-// WaitStarted event, and the execution still succeeds.
+// A WaitAsync the handler never awaits records its start and does not
+// keep the invocation PENDING: the execution succeeds in one invocation.
 func TestUnawaitedWait(t *testing.T) {
 	handler := func(ctx durable.Context, _ any) (string, error) {
 		_ = durable.WaitAsync(ctx, "bgwait", time.Hour)
@@ -174,19 +168,53 @@ func TestUnawaitedWait(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("unawaited-wait status=%s bgwaitOpRecorded=%v events=%v",
-		r.Status, r.Operation("bgwait") != nil, r.EventTypes())
+	t.Logf("unawaited-wait status=%s events=%v", r.Status, r.EventTypes())
+	assertUnawaitedRecorded(t, r, "bgwait", "WaitStarted", "STARTED")
+}
+
+// assertUnawaitedRecorded asserts that the execution in r succeeded in
+// exactly one invocation, that the operation name is recorded with one of
+// statuses, and that the history holds a startEvent event for it.
+func assertUnawaitedRecorded(t *testing.T, r *durabletest.TestResult, name, startEvent string, statuses ...string) {
+	t.Helper()
 	if r.Status != durabletest.Succeeded {
 		t.Fatalf("status = %s, want SUCCEEDED", r.Status)
 	}
-	if r.Operation("bgwait") != nil {
-		t.Fatal("never-awaited wait recorded an operation")
+	if n := countEvents(r, "InvocationCompleted"); n != 1 {
+		t.Fatalf("InvocationCompleted events = %d, want 1 (events %v)", n, r.EventTypes())
 	}
+	op := r.Operation(name)
+	if op == nil {
+		t.Fatalf("never-awaited %s recorded no operation", name)
+	}
+	if !slices.Contains(statuses, op.Status) {
+		t.Fatalf("never-awaited %s status = %s, want one of %v", name, op.Status, statuses)
+	}
+	if eventIndex(r, startEvent, name) < 0 {
+		t.Fatalf("history holds no %s event for %s: %v", startEvent, name, r.EventTypes())
+	}
+}
+
+// countEvents returns the number of events of type eventType in r.
+func countEvents(r *durabletest.TestResult, eventType string) int {
+	n := 0
 	for _, e := range r.EventTypes() {
-		if e == "WaitStarted" {
-			t.Fatal("never-awaited wait recorded a WaitStarted event")
+		if e == eventType {
+			n++
 		}
 	}
+	return n
+}
+
+// eventIndex returns the index of the first event of type eventType for
+// the operation name in r, or -1.
+func eventIndex(r *durabletest.TestResult, eventType, name string) int {
+	for i, ev := range r.Events {
+		if string(ev.EventType) == eventType && aws.ToString(ev.Name) == name {
+			return i
+		}
+	}
+	return -1
 }
 
 // A Go or RunInChildContextAsync future the handler never awaits records
@@ -235,8 +263,9 @@ func TestUnawaitedChildContext(t *testing.T) {
 	}
 }
 
-// An InvokeAsync future the handler never awaits records no operation and
-// no ChainedInvokeStarted event, and the execution still succeeds.
+// An InvokeAsync future the handler never awaits records its start and
+// does not keep the invocation PENDING: the execution succeeds in one
+// invocation.
 func TestUnawaitedInvoke(t *testing.T) {
 	handler := func(ctx durable.Context, _ any) (string, error) {
 		_ = durable.InvokeAsync[string](ctx, "bginvoke", "target-function:$LATEST", "in")
@@ -246,12 +275,6 @@ func TestUnawaitedInvoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("unawaited-invoke status=%s bginvokeRecorded=%v events=%v",
-		r.Status, r.Operation("bginvoke") != nil, r.EventTypes())
-	if r.Status != durabletest.Succeeded {
-		t.Fatalf("status = %s, want SUCCEEDED", r.Status)
-	}
-	if r.Operation("bginvoke") != nil {
-		t.Fatal("never-awaited invoke recorded an operation")
-	}
+	t.Logf("unawaited-invoke status=%s events=%v", r.Status, r.EventTypes())
+	assertUnawaitedRecorded(t, r, "bginvoke", "ChainedInvokeStarted", "STARTED")
 }

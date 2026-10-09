@@ -1,6 +1,7 @@
-// Command wait-unawaited demonstrates scheduling a wait operation via
-// [durable.WaitAsync] without blocking on the result. The function
-// completes immediately while the wait is scheduled in the background.
+// Command wait-unawaited demonstrates starting a wait operation with
+// [durable.WaitAsync] and never awaiting it. WaitAsync records the
+// start of the wait before it returns. The function then returns its
+// result without waiting for the wait to elapse.
 package main
 
 import (
@@ -10,15 +11,12 @@ import (
 )
 
 func handler(ctx durable.Context, _ any) (string, error) {
-	// Schedule a wait without blocking on it. The function returns its
-	// result immediately; the scheduled wait proceeds independently.
+	// Start a wait without awaiting it. Its start is recorded before
+	// WaitAsync returns. Nothing awaits the future, so the invocation
+	// does not wait for it to elapse.
 	_ = durable.WaitAsync(ctx, "background-wait", 5*time.Second)
 
-	// A brief step to ensure the async operation is dispatched before
-	// the handler returns.
-	return durable.Step(ctx, "complete", func(_ durable.StepContext) (string, error) {
-		return "result", nil
-	})
+	return "result", nil
 }
 
 func main() { durable.Start(handler) }

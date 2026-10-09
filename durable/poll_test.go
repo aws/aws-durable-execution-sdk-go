@@ -133,7 +133,7 @@ func (h *pollHarness) pollCount() int {
 func (h *pollHarness) await(id string, ready func(*operation) bool, endTime func(*operation) time.Time) <-chan error {
 	done := make(chan error, 1)
 	go func() {
-		_, err := h.s.awaitOperation(h.state, id, nil, false, ready, endTime)
+		_, err := h.s.awaitOperation(h.state, id, nil, false, nil, ready, endTime)
 		done <- err
 	}()
 	return done

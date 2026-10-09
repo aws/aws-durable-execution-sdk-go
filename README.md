@@ -1236,13 +1236,7 @@ in mind when you port a handler.
 7. `Retry` returns an `error` for an invalid argument: a nil function, a
    nil strategy, or a `Context` the SDK did not create. The JavaScript
    SDK throws a `TypeError` for the same input.
-8. A `StepAsync`, `WaitAsync`, or `InvokeAsync` future that the handler
-   never awaits records no start operation, and its body may not run.
-   The execution still succeeds. The JavaScript SDK records the start
-   operation. A `Go` or `RunInChildContextAsync` future queues its start
-   before the call returns, and the SDK sends it before the invocation
-   responds, whether or not the handler awaits the future.
-9. A child context waits for its SUCCEED or FAIL to be recorded before it
+8. A child context waits for its SUCCEED or FAIL to be recorded before it
    returns. The JavaScript SDK does not wait. The outcome of a
    combinator, `Select`, `Map`, or `Parallel` can depend on timing, so it
    must be recorded before later code acts on it.

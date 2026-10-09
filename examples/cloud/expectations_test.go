@@ -171,17 +171,18 @@ func TestExpectationAssert(t *testing.T) {
 // predicate that rejects the real result is caught before a cloud run.
 func TestExpectationChecksAcceptObservedResults(t *testing.T) {
 	samples := map[string]string{
-		"concurrent-callback-wait":            `{"elapsedMs":1263}`,
-		"future-any":                          `{"status":"succeeded","value":"first success"}`,
-		"future-race-wait":                    `{"elapsedMs":1182}`,
-		"map-completion-config-issue":         `{"totalItems":4,"successfulCount":2,"failedCount":0,"startedCount":2,"hasFailures":false,"batchStatus":"SUCCEEDED","completionReason":"MIN_SUCCESSFUL_REACHED","successfulItems":[{"index":0,"itemId":1},{"index":2,"itemId":3}],"failedItems":null}`,
-		"map-custom-summary-generator-replay": `{"totalCount":3,"successCount":2,"startedCount":1,"completionReason":"MIN_SUCCESSFUL_REACHED","itemIndexes":[0,1,2]}`,
-		"map-failure-threshold":               `{"completionReason":"FAILURE_TOLERANCE_EXCEEDED","successCount":0,"failureCount":3,"totalCount":5}`,
-		"parallel-heterogeneous":              `{"compute":{"expression":"7*6","value":42},"waitedSeconds":1,"invokeError":"durable: child context \"invoke\" failed: InvokeError: invoke failed: durable: invoke \"child-function\" of \"target-handler\" failed: ResourceNotFoundException: Function not found","completionReason":"ALL_COMPLETED"}`,
-		"map-min-successful":                  `{"successCount":2,"totalCount":5,"completionReason":"MIN_SUCCESSFUL_REACHED","results":["Item 4 processed","Item 5 processed"]}`,
-		"parallel-min-successful":             `{"successCount":2,"totalCount":4,"completionReason":"MIN_SUCCESSFUL_REACHED","results":["Branch 2 result","Branch 4 result"]}`,
-		"parallel-should-complete":            `{"successCount":1,"startedCount":2,"totalCount":3,"completionReason":"CUSTOM_COMPLETION_SUCCEEDED","results":["Branch A done"]}`,
-		"simple-execution":                    `{"received":"{\n  \"orderId\": \"ORD-12345\"\n}","timestamp":1789772875799,"message":"Handler completed successfully"}`,
+		"concurrent-callback-wait":              `{"elapsedMs":1263}`,
+		"future-any":                            `{"status":"succeeded","value":"first success"}`,
+		"future-race-wait":                      `{"elapsedMs":1182}`,
+		"map-completion-config-issue":           `{"totalItems":4,"successfulCount":2,"failedCount":0,"startedCount":2,"hasFailures":false,"batchStatus":"SUCCEEDED","completionReason":"MIN_SUCCESSFUL_REACHED","successfulItems":[{"index":0,"itemId":1},{"index":2,"itemId":3}],"failedItems":null}`,
+		"map-custom-summary-generator-replay":   `{"totalCount":3,"successCount":2,"startedCount":1,"completionReason":"MIN_SUCCESSFUL_REACHED","itemIndexes":[0,1,2]}`,
+		"map-failure-threshold":                 `{"completionReason":"FAILURE_TOLERANCE_EXCEEDED","successCount":0,"failureCount":3,"totalCount":5}`,
+		"parallel-heterogeneous":                `{"compute":{"expression":"7*6","value":42},"waitedSeconds":1,"invokeError":"durable: child context \"invoke\" failed: InvokeError: invoke failed: durable: invoke \"child-function\" of \"target-handler\" failed: ResourceNotFoundException: Function not found","completionReason":"ALL_COMPLETED"}`,
+		"map-min-successful":                    `{"successCount":2,"totalCount":5,"completionReason":"MIN_SUCCESSFUL_REACHED","results":["Item 4 processed","Item 5 processed"]}`,
+		"parallel-min-successful":               `{"successCount":2,"totalCount":4,"completionReason":"MIN_SUCCESSFUL_REACHED","results":["Branch 2 result","Branch 4 result"]}`,
+		"parallel-tolerated-failure-percentage": `{"successCount":1,"failureCount":2,"totalCount":4,"completionReason":"FAILURE_TOLERANCE_EXCEEDED","hasFailure":true,"successResults":["result-3"]}`,
+		"parallel-should-complete":              `{"successCount":1,"startedCount":2,"totalCount":3,"completionReason":"CUSTOM_COMPLETION_SUCCEEDED","results":["Branch A done"]}`,
+		"simple-execution":                      `{"received":"{\n  \"orderId\": \"ORD-12345\"\n}","timestamp":1789772875799,"message":"Handler completed successfully"}`,
 	}
 	for name, exp := range expectations {
 		if exp.check == nil {

@@ -26,21 +26,8 @@ func TestHandler(t *testing.T) {
 		t.Errorf("expected %q, got %q", "result", output)
 	}
 
-	// The "complete" step must always be present. The "background-wait"
-	// (fired via WaitAsync) may or may not reach a checkpoint before the
-	// handler returns, so the golden lists only the step.
-	extest.AssertSignature(t, result, extest.Subset)
-
-	// Verify that if background-wait appears, it has the expected shape.
-	sig := durabletest.EventSignature(result)
-	for _, op := range sig {
-		if op.Name == "background-wait" {
-			if op.Type != "WAIT" {
-				t.Errorf("expected background-wait type WAIT, got %s", op.Type)
-			}
-			if op.Status != "STARTED" && op.Status != "SUCCEEDED" {
-				t.Errorf("expected background-wait status STARTED or SUCCEEDED, got %s", op.Status)
-			}
-		}
-	}
+	// WaitAsync records the start of background-wait before it returns,
+	// so the wait is always recorded. The handler returns before the
+	// wait elapses, so the wait stays STARTED.
+	extest.AssertSignature(t, result, extest.Ordered)
 }
