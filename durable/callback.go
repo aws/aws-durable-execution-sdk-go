@@ -307,8 +307,9 @@ func runClaimedWaitForCallback[O any](ec *execContext, id, name string, submitte
 
 	// Checkpoint ContextStarted (SubType WaitForCallback) if first time.
 	if op == nil {
+		// The START is queued without waiting (see checkpointNoWait).
 		update := wfcbContextUpdate(ec, id, name, OperationActionStart)
-		if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
+		if err := ec.checkpointer.checkpointNoWait(ec, update); err != nil {
 			if errors.Is(err, errCheckpointTerminated) {
 				return zero, errSuspendExecution
 			}

@@ -283,9 +283,12 @@ func TestOperationLifecycleWaitForConditionFailed(t *testing.T) {
 // that a checkpoint refused because the invocation has terminated produces
 // no end event, at every checkpoint of a poll attempt: the START, the FAIL
 // after a check error, the FAIL after a strategy error, the terminal
-// SUCCEED, and the RETRY. The operation has no outcome; the invocation
+// SUCCEED, and the RETRY. The service withholds the token on the call that
+// carries the chosen update. The operation has no outcome; the invocation
 // responds PENDING and the next one replays it. The hooks dispatched
-// before the refused checkpoint are unchanged.
+// before the refused checkpoint are unchanged. The START is queued without
+// waiting, so the check runs even when the call that carries the START
+// is the one without a token.
 func TestOperationLifecycleWaitForConditionCheckpointTerminatedNoEnd(t *testing.T) {
 	errCheck := errors.New("check failed")
 	continueForever := func(int, int) WaitDecision { return WaitDecision{Continue: true, Delay: time.Second} }
@@ -293,43 +296,46 @@ func TestOperationLifecycleWaitForConditionCheckpointTerminatedNoEnd(t *testing.
 	increment := func(_ StepContext, s int) (int, error) { return s + 1, nil }
 	for _, tc := range []struct {
 		name string
-		// okCalls is the number of checkpoint calls that succeed before
-		// the service responds without a token.
-		okCalls int32
-		check   func(StepContext, int) (int, error)
-		stop    func(int, int) WaitDecision
-		want    []string
+		// withhold is the action of the update whose call the service
+		// answers without a token.
+		withhold OperationAction
+		check    func(StepContext, int) (int, error)
+		stop     func(int, int) WaitDecision
+		want     []string
 	}{
 		{
-			name: "start", okCalls: 0, check: increment, stop: continueForever,
-			want: []string{"start:STARTED:1:false"},
+			name: "start", withhold: OperationActionStart, check: increment, stop: continueForever,
+			want: []string{"start:STARTED:1:false", "astart:1:false", "aend:1:SUCCEEDED"},
 		},
 		{
-			name: "fail after check error", okCalls: 1,
+			name: "fail after check error", withhold: OperationActionFail,
 			check: func(StepContext, int) (int, error) { return 0, errCheck }, stop: continueForever,
 			want: []string{"start:STARTED:1:false", "astart:1:false", "aend:1:FAILED"},
 		},
 		{
-			name: "fail after strategy error", okCalls: 1, check: increment,
+			name: "fail after strategy error", withhold: OperationActionFail, check: increment,
 			stop: func(int, int) WaitDecision { return WaitDecision{Continue: false, Err: errors.New("gave up")} },
 			want: []string{"start:STARTED:1:false", "astart:1:false", "aend:1:SUCCEEDED"},
 		},
 		{
-			name: "succeed", okCalls: 1, check: increment, stop: stopNow,
+			name: "succeed", withhold: OperationActionSucceed, check: increment, stop: stopNow,
 			want: []string{"start:STARTED:1:false", "astart:1:false", "aend:1:SUCCEEDED"},
 		},
 		{
-			name: "retry", okCalls: 1, check: increment, stop: continueForever,
+			name: "retry", withhold: OperationActionRetry, check: increment, stop: continueForever,
 			want: []string{"start:STARTED:1:false", "astart:1:false", "aend:1:SUCCEEDED"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var seen atomic.Int32
-			fake, calls := countingClient(func(in CheckpointInput) (CheckpointOutput, error) {
-				if seen.Add(1) <= tc.okCalls {
-					return CheckpointOutput{CheckpointToken: in.CheckpointToken}, nil
+			var withheld atomic.Bool
+			fake, _ := countingClient(func(in CheckpointInput) (CheckpointOutput, error) {
+				for _, u := range in.Updates {
+					if u.Type == OperationTypeStep && u.Action == tc.withhold {
+						withheld.Store(true)
+						return CheckpointOutput{}, nil
+					}
 				}
-				return CheckpointOutput{}, nil
+				return CheckpointOutput{CheckpointToken: in.CheckpointToken}, nil
 			})
 			rec := &wfcRecorder{}
 			handler := Wrap(func(ctx Context, _ string) (int, error) {
@@ -341,8 +347,8 @@ func TestOperationLifecycleWaitForConditionCheckpointTerminatedNoEnd(t *testing.
 				t.Fatalf("Invoke error = %v, want PENDING response", err)
 			}
 			assertPluginResponseStatus(t, resp, invocationPending)
-			if got := calls.Load(); got != tc.okCalls+1 {
-				t.Errorf("checkpoint calls = %d, want %d", got, tc.okCalls+1)
+			if !withheld.Load() {
+				t.Errorf("no call carried a %s update", tc.withhold)
 			}
 			events, ops, _ := rec.take()
 			assertStrings(t, events, tc.want...)

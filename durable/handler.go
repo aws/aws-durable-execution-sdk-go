@@ -562,15 +562,19 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 				// recording further state.
 				return nil, errSuspendExecution
 			}
-			// The handler returned a result or an error. A checkpoint an
-			// unawaited branch sent may still be in flight, and its
+			// The handler returned a result or an error. A START queued
+			// without waiting may not be sent yet, and a checkpoint an
+			// unawaited branch sent may still be in flight; its
 			// response decides whether the service still follows this
-			// invocation. Terminate the checkpointer so no new branch
-			// request is sent, wait for the call in flight to settle,
-			// and read the halt cause again: a response without a token
-			// means the outcome cannot be reported, and the invocation
-			// responds PENDING. The context's end bounds the wait.
-			cp.terminate()
+			// invocation. Terminate the checkpointer at the end of the
+			// queue, so every request queued so far is still sent and
+			// no later branch request is, wait for those calls to
+			// settle, and read the halt cause again: a failed call ends
+			// the invocation with its error, and a response without a
+			// token means the outcome cannot be reported, so the
+			// invocation responds PENDING. The context's end bounds the
+			// wait.
+			cp.terminateAtQueueEnd()
 			cp.awaitIdle(ctx)
 			if halt := cp.haltCause(); halt != nil {
 				return nil, halt

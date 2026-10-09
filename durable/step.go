@@ -393,8 +393,18 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 	var zero O
 
 	if op == nil || op.status != statusStarted {
+		// Under AtLeastOncePerRetry the body runs again on the next
+		// invocation when the START was not recorded, so the START is
+		// queued without waiting. Under AtMostOncePerRetry the body must
+		// not run before the START is recorded, so the START is awaited.
 		update := stepUpdate(ec, id, name, options.subType, OperationActionStart)
-		if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
+		var err error
+		if options.semantics == AtMostOncePerRetry {
+			err = ec.checkpointer.checkpoint(ec, []OperationUpdate{update})
+		} else {
+			err = ec.checkpointer.checkpointNoWait(ec, update)
+		}
+		if err != nil {
 			if errors.Is(err, errCheckpointTerminated) {
 				return zero, errSuspendExecution
 			}

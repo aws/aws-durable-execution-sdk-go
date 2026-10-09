@@ -437,8 +437,9 @@ func runClaimedChild[O any](ec *execContext, id, name, subType string, summary f
 	}
 
 	if op == nil {
+		// The START is queued without waiting (see checkpointNoWait).
 		update := childUpdate(ec, id, name, subType, OperationActionStart)
-		if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
+		if err := ec.checkpointer.checkpointNoWait(ec, update); err != nil {
 			if errors.Is(err, errCheckpointTerminated) {
 				return zero, errSuspendExecution
 			}
@@ -567,8 +568,9 @@ func runClaimedChild[O any](ec *execContext, id, name, subType string, summary f
 // errSuspendExecution so goroutines blocked on [Future.Result] unwind.
 //
 // A future the handler never awaits still records its start operation,
-// because the child context checkpoints its start before RunInChildContextAsync returns
-// (a [WithChildVirtual] child records none). Its body may not run to
+// because the child context queues its start before RunInChildContextAsync returns and
+// the SDK sends it before the invocation responds (a [WithChildVirtual]
+// child records none). Its body may not run to
 // completion. The execution still succeeds. The JavaScript SDK also
 // records the start operation.
 func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O, error), opts ...ChildOption) *Future[O] {
@@ -614,8 +616,9 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 
 	// Checkpoint START if this is the first invocation of this child.
 	if op == nil {
+		// The START is queued without waiting (see checkpointNoWait).
 		update := childUpdate(ec, id, name, subType, OperationActionStart)
-		if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
+		if err := ec.checkpointer.checkpointNoWait(ec, update); err != nil {
 			if errors.Is(err, errCheckpointTerminated) {
 				return newFailedFuture[O](errSuspendExecution)
 			}
@@ -760,8 +763,9 @@ func RunInChildContextAsync[O any](ctx Context, name string, fn func(Context) (O
 // operations on it are safe, including nested Go calls.
 //
 // A future the handler never awaits still records its start operation,
-// because the child context checkpoints its start before Go returns
-// (a [WithChildVirtual] child records none). Its body may not run to
+// because the child context queues its start before Go returns and
+// the SDK sends it before the invocation responds (a [WithChildVirtual]
+// child records none). Its body may not run to
 // completion. The execution still succeeds. The JavaScript SDK also
 // records the start operation.
 func Go[O any](ctx Context, name string, fn func(Context) (O, error), opts ...ChildOption) *Future[O] {
@@ -1193,7 +1197,9 @@ func childFailureRecord(op *operation) errorRecord {
 //
 //   - A context that runs its body dispatches a start first. A live
 //     context, one with no checkpoint yet, reports STARTED with IsReplay
-//     false after its START checkpoint. A context re-entered while its
+//     false after its START is queued. The START is not awaited, so the
+//     start reports the START response's timestamp when it has arrived,
+//     and the local clock otherwise. A context re-entered while its
 //     checkpoint is still unsettled reports the checkpointed status with
 //     IsReplay true. Either way the start is dispatched before the body,
 //     and before WrapChildContextFn, so a plugin can correlate the two.

@@ -251,7 +251,8 @@ func TestOrphanBranchRefusedBeforeInvocationPostProcessing(t *testing.T) {
 // orphan branch's checkpoint call is in flight as the handler returns an
 // oversized result, the invocation waits for that call, then sends its
 // final write with the token the call rotated to, while the orphan's own
-// request is refused.
+// request is refused. The orphan's step uses AtMostOncePerRetry, so its
+// START is awaited and its body does not run once the START is refused.
 func TestOversizedResultCheckpointedBehindInFlightOrphan(t *testing.T) {
 	large := resultOfSerializedSize(lambdaResponseSizeLimit + 1)
 
@@ -293,7 +294,7 @@ func TestOversizedResultCheckpointedBehindInFlightOrphan(t *testing.T) {
 		_ = Go(ctx, "orphan", func(c Context) (string, error) {
 			_, err := Step(c, "orphan-step", func(_ StepContext) (string, error) {
 				return "late", nil
-			})
+			}, WithSemantics(AtMostOncePerRetry))
 			stepErr <- err
 			return "orphan", err
 		})
@@ -324,18 +325,26 @@ func TestOversizedResultCheckpointedBehindInFlightOrphan(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	// Calls: the child context START issued by the handler, the orphan's
-	// step START held in flight, then the final result write.
-	if len(batches) != 3 {
-		t.Fatalf("checkpoint calls = %d, want 3 (child START, orphan step START, final result)", len(batches))
+	// The orphan's step START is held in flight. The child context START
+	// the handler queued travels in that call or before it. The next and
+	// last call is the final result write, sent with the token the held
+	// call rotated to. The orphan's step records nothing after its START.
+	held := -1
+	for i, batch := range batches {
+		if carriesName(batch, "orphan-step") {
+			if held >= 0 {
+				t.Fatalf("call %d carried %+v, want the orphan's step START in one call only", i, batch)
+			}
+			held = i
+		}
 	}
-	if !carriesName(batches[1], "orphan-step") {
-		t.Fatalf("second call carried %+v, want the orphan's step START", batches[1])
+	if held < 0 || held != len(batches)-2 {
+		t.Fatalf("calls = %+v, want the orphan's step START in the call before the final write", batches)
 	}
-	if tokens[2] != "token-2" {
-		t.Errorf("final write sent with token %q, want token-2 (rotated by the orphan's in-flight call)", tokens[2])
+	if want := "token-" + strconv.Itoa(held+1); tokens[held+1] != want {
+		t.Errorf("final write sent with token %q, want %s (rotated by the orphan's in-flight call)", tokens[held+1], want)
 	}
-	final := batches[2]
+	final := batches[held+1]
 	if len(final) != 1 || final[0].Type != OperationTypeExecution || final[0].Action != OperationActionSucceed {
 		t.Fatalf("final call carried %+v, want one EXECUTION/SUCCEED update", final)
 	}

@@ -32,8 +32,10 @@ func TestHandler(t *testing.T) {
 		t.Errorf("expected TotalCount=4, got %d", output.TotalCount)
 	}
 
-	// The Parallel completes after two successes, so an abandoned branch
-	// may or may not have started its step. The golden lists the
-	// operations every run produces.
+	// The Parallel completes after two successes. Which branches succeed
+	// and which are abandoned depends on when the checkpoint calls that
+	// record them return, and an abandoned branch may or may not have
+	// started its step. The golden lists the operations every run
+	// produces: the batch, two succeeded steps, and the wait.
 	extest.AssertSignature(t, result, extest.Subset)
 }

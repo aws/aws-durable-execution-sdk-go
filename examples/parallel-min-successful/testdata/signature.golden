@@ -6,30 +6,6 @@
     "status": "SUCCEEDED"
   },
   {
-    "type": "CONTEXT",
-    "subType": "ParallelBranch",
-    "name": "branch-1",
-    "status": "SUCCEEDED"
-  },
-  {
-    "type": "CONTEXT",
-    "subType": "ParallelBranch",
-    "name": "branch-2",
-    "status": "SUCCEEDED"
-  },
-  {
-    "type": "CONTEXT",
-    "subType": "ParallelBranch",
-    "name": "branch-3",
-    "status": "STARTED"
-  },
-  {
-    "type": "CONTEXT",
-    "subType": "ParallelBranch",
-    "name": "branch-4",
-    "status": "STARTED"
-  },
-  {
     "type": "STEP",
     "subType": "Step",
     "status": "SUCCEEDED"

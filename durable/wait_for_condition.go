@@ -260,8 +260,9 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 	// Checkpoint START if this is a new attempt. If status is already
 	// STARTED the previous invocation already checkpointed it.
 	if op == nil || op.status != statusStarted {
+		// The START is queued without waiting (see checkpointNoWait).
 		update := waitForConditionUpdate(ec, id, name, OperationActionStart)
-		if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
+		if err := ec.checkpointer.checkpointNoWait(ec, update); err != nil {
 			return zero, "", suspendIfTerminated(err)
 		}
 	}

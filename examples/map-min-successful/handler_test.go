@@ -32,8 +32,9 @@ func TestHandler(t *testing.T) {
 		t.Errorf("expected TotalCount=5, got %d", output.TotalCount)
 	}
 
-	// The Map completes after two successes, so an abandoned iteration may
-	// or may not have started its step. The golden lists the operations
-	// every run produces.
+	// The Map completes after two successes. Which iterations succeed and
+	// which are abandoned depends on when the checkpoint calls that record
+	// them return, and an abandoned iteration may or may not have started
+	// its step. The golden lists the operations every run produces.
 	extest.AssertSignature(t, result, extest.Subset)
 }

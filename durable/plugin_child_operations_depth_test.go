@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
 // depthRecorder records every operation-level hook by operation name, so a
@@ -119,37 +121,38 @@ func (r *depthRecorder) assertReported(t *testing.T, want, wantOmitted []string)
 	}
 }
 
-// countingPluginClient counts checkpoint calls and the operation updates
-// they carry, so a test can assert a depth bound leaves checkpointing
-// unchanged.
-type countingPluginClient struct {
+// recordingPluginClient records the operation updates checkpoint calls
+// carry, in the order the client receives them, so a test can assert a
+// depth bound leaves checkpointing unchanged.
+type recordingPluginClient struct {
 	fakePluginClient
-	calls, updates int
+	sent []string
 }
 
-func (c *countingPluginClient) Checkpoint(ctx context.Context, in CheckpointInput) (CheckpointOutput, error) {
+func (c *recordingPluginClient) Checkpoint(ctx context.Context, in CheckpointInput) (CheckpointOutput, error) {
 	c.mu.Lock()
-	c.calls++
-	c.updates += len(in.Updates)
+	for _, u := range in.Updates {
+		c.sent = append(c.sent, fmt.Sprintf("%s %s %s %s", u.Action, u.Type, aws.ToString(u.SubType), aws.ToString(u.Name)))
+	}
 	c.mu.Unlock()
 	return c.fakePluginClient.Checkpoint(ctx, in)
 }
 
-func (c *countingPluginClient) counts() (int, int) {
+func (c *recordingPluginClient) updates() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.calls, c.updates
+	return slices.Clone(c.sent)
 }
 
 // runDepthHandler wraps fn with the recorder's plugin and, when depth is
 // non-negative, WithPluginChildOperationsDepth(depth); it runs one
 // invocation with ops as the initial state (nil for an empty execution)
 // and asserts the response status. It returns the recorder and the
-// checkpoint counts.
-func runDepthHandler(t *testing.T, depth int, fn func(Context, string) (string, error), ops []wireOperation, wantStatus string) (*depthRecorder, int, int) {
+// operation updates the client received, in order.
+func runDepthHandler(t *testing.T, depth int, fn func(Context, string) (string, error), ops []wireOperation, wantStatus string) (*depthRecorder, []string) {
 	t.Helper()
 	rec := &depthRecorder{}
-	client := &countingPluginClient{}
+	client := &recordingPluginClient{}
 	opts := []HandlerOption{WithPlugins(rec.plugin(t)), withLambdaAPI(client)}
 	if depth >= 0 {
 		opts = append(opts, WithPluginChildOperationsDepth(depth))
@@ -160,8 +163,7 @@ func runDepthHandler(t *testing.T, depth int, fn func(Context, string) (string, 
 		t.Fatal(err)
 	}
 	assertPluginResponseStatus(t, resp, wantStatus)
-	calls, updates := client.counts()
-	return rec, calls, updates
+	return rec, client.updates()
 }
 
 // TestWithPluginChildOperationsDepthRejectsNegative asserts Wrap panics
@@ -210,7 +212,7 @@ func TestWithPluginChildOperationsDepthOptionCapture(t *testing.T) {
 // depth of math.MaxInt behaves as the default and reports the whole tree,
 // rather than suppressing every operation through an overflowed bound.
 func TestPluginChildOperationsDepthMaxIntReportsEverything(t *testing.T) {
-	rec, _, _ := runDepthHandler(t, math.MaxInt, depthTreeHandler, nil, invocationSucceeded)
+	rec, _ := runDepthHandler(t, math.MaxInt, depthTreeHandler, nil, invocationSucceeded)
 	rec.assertReported(t, []string{"outer", "mid", "inner", "leaf", "top"}, nil)
 }
 
@@ -251,15 +253,15 @@ func TestPluginChildOperationsDepthChildContexts(t *testing.T) {
 		{3, all, []string{"leaf"}},
 		{4, all, nil},
 	}
-	wantCalls, wantUpdates := -1, -1
+	var wantUpdates []string
 	for _, tc := range cases {
 		t.Run(fmt.Sprintf("depth=%d", tc.depth), func(t *testing.T) {
-			rec, calls, updates := runDepthHandler(t, tc.depth, depthTreeHandler, nil, invocationSucceeded)
+			rec, updates := runDepthHandler(t, tc.depth, depthTreeHandler, nil, invocationSucceeded)
 			rec.assertReported(t, tc.want, tc.omitted)
-			if wantCalls < 0 {
-				wantCalls, wantUpdates = calls, updates
-			} else if calls != wantCalls || updates != wantUpdates {
-				t.Errorf("checkpoints = %d calls, %d updates; want %d calls, %d updates as without a bound", calls, updates, wantCalls, wantUpdates)
+			if wantUpdates == nil {
+				wantUpdates = updates
+			} else if !slices.Equal(updates, wantUpdates) {
+				t.Errorf("updates = %v; want %v as without a bound", updates, wantUpdates)
 			}
 		})
 	}
@@ -270,7 +272,7 @@ func TestPluginChildOperationsDepthChildContexts(t *testing.T) {
 // well as the start and end hooks, and that an operation at the bound still
 // receives all of them.
 func TestPluginChildOperationsDepthOmitsEveryHookKind(t *testing.T) {
-	rec, _, _ := runDepthHandler(t, 2, depthTreeHandler, nil, invocationSucceeded)
+	rec, _ := runDepthHandler(t, 2, depthTreeHandler, nil, invocationSucceeded)
 	if got := rec.hooksFor("leaf"); got != nil {
 		t.Errorf("leaf hooks = %v, want none", got)
 	}
@@ -348,7 +350,7 @@ func TestPluginChildOperationsDepthBatch(t *testing.T) {
 			handler := depthBatchHandler(variant == "nested-in-child", opts...)
 			for depth, w := range depths {
 				t.Run(fmt.Sprintf("%s/concurrency=%d/depth=%d", variant, conc, depth), func(t *testing.T) {
-					rec, _, _ := runDepthHandler(t, depth, handler, nil, invocationSucceeded)
+					rec, _ := runDepthHandler(t, depth, handler, nil, invocationSucceeded)
 					rec.assertReported(t, w.reported, w.omitted)
 				})
 			}
@@ -378,7 +380,7 @@ func TestPluginChildOperationsDepthBatchReplayed(t *testing.T) {
 			}
 			return fmt.Sprint(br.SuccessCount()), nil
 		}
-		first, _, _ := runDepthHandler(t, 1, fn, nil, invocationPending)
+		first, _ := runDepthHandler(t, 1, fn, nil, invocationPending)
 		first.assertReported(t, []string{"batch", "item-0", "item-1"}, []string{"item-0", "item-1"})
 
 		resumeOps := []wireOperation{
@@ -388,7 +390,7 @@ func TestPluginChildOperationsDepthBatchReplayed(t *testing.T) {
 			contextOp("3", "1", OperationSubTypeMapIteration, "item-1", "STARTED", nil),
 			{Id: hashID("3-1"), ParentId: hashID("3"), Status: "SUCCEEDED", Type: "WAIT", SubType: "Wait", Name: "pause"},
 		}
-		second, _, _ := runDepthHandler(t, 1, fn, resumeOps, invocationSucceeded)
+		second, _ := runDepthHandler(t, 1, fn, resumeOps, invocationSucceeded)
 		second.assertReported(t, []string{"batch", "item-0", "item-1"}, []string{"item-0", "item-1"})
 		if got := second.hooksFor("item-1"); !slices.Equal(got, []string{"start", "end"}) {
 			t.Errorf("resumed item-1 hooks = %v, want start, end", got)
@@ -414,9 +416,9 @@ func TestPluginChildOperationsDepthBatchReplayed(t *testing.T) {
 			contextOp("3", "1", OperationSubTypeMapIteration, "item-1", "STARTED", nil),
 			contextOp("4", "1", OperationSubTypeMapIteration, "item-2", "STARTED", nil),
 		}
-		rec, _, _ := runDepthHandler(t, 0, fn, ops, invocationSucceeded)
+		rec, _ := runDepthHandler(t, 0, fn, ops, invocationSucceeded)
 		rec.assertReported(t, []string{"batch"}, []string{"batch"})
-		rec, _, _ = runDepthHandler(t, 1, fn, ops, invocationSucceeded)
+		rec, _ = runDepthHandler(t, 1, fn, ops, invocationSucceeded)
 		rec.assertReported(t, []string{"batch", "item-0", "item-1", "item-2"}, []string{"item-0", "item-1", "item-2"})
 	})
 }

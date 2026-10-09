@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Changed: START checkpoints are sent without waiting, as in the JavaScript SDK
+
+A step under `AtLeastOncePerRetry`, `RunInChildContext`, `Go`,
+`RunInChildContextAsync`, `Map`, `Parallel` and their items,
+`WaitForCallback`, and `WaitForCondition` no longer wait for their START
+checkpoint before their code runs. The START is queued and sent with a
+later call. So a `Map` or `Parallel` no longer waits one checkpoint round
+trip before it starts each item. Every operation still waits for its
+SUCCEED or FAIL, and a step under `AtMostOncePerRetry` still waits for
+its START.
+
+A failed checkpoint call now ends the invocation whatever its scope, even
+when handler code catches the error, as in the JavaScript SDK.
+
 ### Fixed: `LocalRunner` reports the execution start time
 
 Under `LocalRunner`, `durable.ExecutionStartTime` returned the zero

@@ -140,8 +140,9 @@ func runClaimedMap[I, O any](ec *execContext, id, name string, items []I, fn fun
 
 	// Checkpoint the parent Map context START.
 	if op == nil {
+		// The START is queued without waiting (see checkpointNoWait).
 		update := batchParentUpdate(ec, id, name, OperationSubTypeMap, OperationActionStart)
-		if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
+		if err := ec.checkpointer.checkpointNoWait(ec, update); err != nil {
 			return BatchResult[O]{}, err
 		}
 	}
@@ -258,8 +259,9 @@ func runClaimedParallel[O any](ec *execContext, id, name string, branches []Bran
 
 	// Checkpoint the parent Parallel context START.
 	if op == nil {
+		// The START is queued without waiting (see checkpointNoWait).
 		update := batchParentUpdate(ec, id, name, OperationSubTypeParallel, OperationActionStart)
-		if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
+		if err := ec.checkpointer.checkpointNoWait(ec, update); err != nil {
 			return BatchResult[O]{}, err
 		}
 	}
@@ -1279,8 +1281,9 @@ func executeBatchItems[I, O any](
 				// index order. A branch that is never admitted (early
 				// completion) leaves no checkpoint and is omitted.
 				if options.nesting != NestingFlat && !pc.terminal && pc.op == nil {
+					// The START is queued without waiting (see checkpointNoWait).
 					update := batchChildUpdate(ec, pc.childID, pc.name, childSubType, parentID, OperationActionStart)
-					if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
+					if err := ec.checkpointer.checkpointNoWait(ec, update); err != nil {
 						admitErr = err
 						return
 					}
@@ -1726,8 +1729,9 @@ func runNestedBatchItem[O any](
 
 	// Checkpoint child context START.
 	if op == nil {
+		// The START is queued without waiting (see checkpointNoWait).
 		update := batchChildUpdate(ec, childID, itemName, childSubType, parentID, OperationActionStart)
-		if err := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); err != nil {
+		if err := ec.checkpointer.checkpointNoWait(ec, update); err != nil {
 			return BatchItem[O]{}, err
 		}
 	}
@@ -2556,7 +2560,7 @@ func batchChildUpdate(ec *execContext, childID, childName, childSubType, parentI
 // of dispatchContextStart: at most one start and at most one end per
 // invocation, dispatched on the enclosing context, so the batch's ParentID
 // names the context that claimed it. A live batch dispatches STARTED after
-// its START checkpoint and its end after its SUCCEEDED checkpoint. The
+// its START is queued and its end after its SUCCEEDED checkpoint. The
 // batch's checkpoint is SUCCEEDED even when items failed, so the end
 // reports SUCCEEDED and carries the checkpointed payload as Result; item
 // failures are visible on the item events and in the returned BatchError.
@@ -2567,7 +2571,7 @@ func batchChildUpdate(ec *execContext, childID, childName, childSubType, parentI
 // In NestingNormal mode each item is a checkpointed child context whose
 // parent is the batch, so its events name the batch as ParentID, not the
 // context that claimed its ID. A live item dispatches STARTED before its
-// body, once its START checkpoint is recorded, and SUCCEEDED or FAILED
+// body, once its START is queued, and SUCCEEDED or FAILED
 // after its terminal checkpoint. An item re-entered while its checkpoint
 // is still STARTED dispatches a replayed start with that status. An item
 // the batch abandoned on early completion has no terminal checkpoint; the

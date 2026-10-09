@@ -399,7 +399,7 @@ func TestPluginChildOperationsDepthVirtualChild(t *testing.T) {
 	for _, tc := range cases {
 		for depth, w := range tc.byDepth {
 			t.Run(fmt.Sprintf("%s/depth=%d", tc.name, depth), func(t *testing.T) {
-				rec, _, _ := runDepthHandler(t, depth, tc.handler, nil, invocationSucceeded)
+				rec, _ := runDepthHandler(t, depth, tc.handler, nil, invocationSucceeded)
 				rec.assertReported(t, w.reported, w.omitted)
 			})
 		}

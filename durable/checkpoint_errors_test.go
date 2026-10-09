@@ -6,9 +6,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"slices"
-	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	smithy "github.com/aws/smithy-go"
@@ -518,41 +517,44 @@ func emptyGetState(_ context.Context, _ GetExecutionStateInput) (GetExecutionSta
 }
 
 func TestCheckpointTokenRotationAfterFailedCall(t *testing.T) {
-	// A failed call leaves the token unchanged, so the next call sends the
-	// same token. After a successful call, later calls use the new token.
-	var mu sync.Mutex
-	callCount := 0
-	tokens := []string{}
+	// A failed call halts the checkpointer whatever its scope: it may
+	// carry a START that no caller waits for, so no later call may be
+	// sent. An invocation-scoped failure is recorded as the halt cause,
+	// and every later checkpoint is refused without a call.
+	// failed is set once the client has returned the failure. A call that
+	// arrives after that is recorded in callAfterFailure.
+	var failed, callAfterFailure atomic.Bool
+	var firstToken atomic.Value
 
 	fake := &fakeLambdaFunc{
 		checkpoint: func(_ context.Context, in CheckpointInput) (CheckpointOutput, error) {
-			mu.Lock()
-			callCount++
-			n := callCount
-			tokens = append(tokens, in.CheckpointToken)
-			mu.Unlock()
-			if n == 1 {
-				return CheckpointOutput{}, &smithy.GenericAPIError{Code: "ServiceException", Fault: smithy.FaultServer}
+			if failed.Load() {
+				callAfterFailure.Store(true)
+				return CheckpointOutput{CheckpointToken: "token-after-failure"}, nil
 			}
-			return CheckpointOutput{CheckpointToken: "token-" + strconv.Itoa(n)}, nil
+			firstToken.Store(in.CheckpointToken)
+			failed.Store(true)
+			return CheckpointOutput{}, &smithy.GenericAPIError{Code: "ServiceException", Fault: smithy.FaultServer}
 		},
 		getState: emptyGetState,
 	}
 
 	cp := newCheckpointer(fake, "arn:test", "token-0")
-	if err := cp.checkpoint(context.Background(), nil); err == nil {
-		t.Fatal("first checkpoint() = nil, want the server fault")
+	err := cp.checkpoint(context.Background(), nil)
+	var cpErr *CheckpointError
+	if !errors.As(err, &cpErr) || cpErr.Scope() != ErrorScopeInvocation {
+		t.Fatalf("first checkpoint() = %v, want an invocation-scoped *CheckpointError", err)
 	}
-	if err := cp.checkpoint(context.Background(), nil); err != nil {
-		t.Fatalf("checkpoint() 2 = %v", err)
+	if got := firstToken.Load(); got != "token-0" {
+		t.Errorf("failed call sent token %v, want token-0", got)
 	}
-	if err := cp.checkpoint(context.Background(), []OperationUpdate{}); err != nil {
-		t.Fatalf("checkpoint() 3 = %v", err)
+	if halt := cp.haltCause(); halt != err {
+		t.Errorf("haltCause() = %v, want the first call's error %v", halt, err)
 	}
-	mu.Lock()
-	defer mu.Unlock()
-	want := []string{"token-0", "token-0", "token-2"}
-	if !slices.Equal(tokens, want) {
-		t.Errorf("tokens sent = %v, want %v", tokens, want)
+	if err := cp.checkpoint(context.Background(), nil); !errors.Is(err, errCheckpointTerminated) {
+		t.Fatalf("checkpoint() after the failure = %v, want errCheckpointTerminated", err)
+	}
+	if callAfterFailure.Load() {
+		t.Error("the client received a call after the failed call")
 	}
 }

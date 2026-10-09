@@ -685,24 +685,38 @@ func TestStepPanicIsFailedAttempt(t *testing.T) {
 }
 
 func TestStepCheckpointErrorPropagates(t *testing.T) {
-	wantErr := errors.New("throttled")
-	fake := &fakeLambda{checkpointErr: wantErr}
-	var gotErr error
-	h := Wrap(func(ctx Context, _ string) (string, error) {
-		out, err := Step(ctx, "s", func(StepContext) (string, error) { return "x", nil })
-		gotErr = err
-		return out, err
-	}, withLambdaAPI(fake))
-	_, invokeErr := h(context.Background(), stepPayload(`""`))
+	// Under AtMostOncePerRetry the step waits for its START, so Step
+	// returns the client's error. Under AtLeastOncePerRetry the START is
+	// queued without waiting: when its call fails after the body ran, the
+	// SUCCEED is refused and Step returns the suspension signal instead.
+	// Either way the failure halts the checkpointer, so the invocation
+	// ends with the client's error.
+	for name, sem := range map[string]StepSemantics{"AtMostOncePerRetry": AtMostOncePerRetry, "AtLeastOncePerRetry": AtLeastOncePerRetry} {
+		t.Run(name, func(t *testing.T) {
+			wantErr := errors.New("throttled")
+			fake := &fakeLambda{checkpointErr: wantErr}
+			var gotErr error
+			h := Wrap(func(ctx Context, _ string) (string, error) {
+				out, err := Step(ctx, "s", func(StepContext) (string, error) { return "x", nil },
+					WithSemantics(sem))
+				gotErr = err
+				return out, err
+			}, withLambdaAPI(fake))
+			_, invokeErr := h(context.Background(), stepPayload(`""`))
 
-	if !errors.Is(gotErr, wantErr) {
-		t.Errorf("Step() error = %v, want wrapping %v", gotErr, wantErr)
-	}
-	// An unstructured checkpoint failure is invocation-scoped, so passing
-	// it through ends the invocation with an error rather than a FAILED
-	// response.
-	if !errors.Is(invokeErr, wantErr) {
-		t.Errorf("Invoke() error = %v, want wrapping %v", invokeErr, wantErr)
+			if sem == AtMostOncePerRetry && !errors.Is(gotErr, wantErr) {
+				t.Errorf("Step() error = %v, want wrapping %v", gotErr, wantErr)
+			}
+			if gotErr == nil {
+				t.Error("Step() error = nil, want the client's error or the suspension signal")
+			}
+			// An unstructured checkpoint failure is invocation-scoped, so
+			// it ends the invocation with an error rather than a FAILED
+			// response.
+			if !errors.Is(invokeErr, wantErr) {
+				t.Errorf("Invoke() error = %v, want wrapping %v", invokeErr, wantErr)
+			}
+		})
 	}
 }
 

@@ -57,8 +57,12 @@ type pendingCheckpoint struct {
 	done chan error
 
 	// final marks the invocation's own final write (see checkpointFinal).
-	// Termination refuses every other request; a final request is sent.
+	// Termination refuses every other request queued after the cutoff
+	// (see terminateAtQueueEnd); a final request is sent.
 	final bool
+
+	// seq is the request's position in queue order.
+	seq uint64
 }
 
 // checkpointer persists operation updates for one durable execution and
@@ -85,23 +89,31 @@ type checkpointer struct {
 	queue    []*pendingCheckpoint
 	flushing bool
 
+	// nextSeq is the seq of the next queued request. cutoff, when
+	// cutoffSet is true, is the seq that terminateAtQueueEnd fixed:
+	// requests with a lower seq are still sent after termination.
+	// Guarded by mu.
+	nextSeq   uint64
+	cutoff    uint64
+	cutoffSet bool
+
 	// terminated is atomically set when the handler's outcome is decided,
 	// on every exit. Checked without holding mu so that terminate() never
 	// blocks behind an in-flight checkpoint API call. An in-flight checkpoint
 	// discovers termination after its API call returns: the token the call
-	// rotated to is kept, because the service holds it, but the requests in
-	// the call are refused. Only the invocation's final write (see
-	// checkpointFinal) is sent after termination.
+	// rotated to is kept, because the service holds it, but the branch
+	// requests in the call are refused. After termination only the
+	// invocation's final write (see checkpointFinal) and the requests
+	// queued before the cutoff of terminateAtQueueEnd are sent.
 	terminated atomic.Bool
 
 	// haltErr is set when the checkpointer terminates itself because the
 	// service will accept no further checkpoints from this invocation. It
 	// is the error the invocation must end with, whatever the handler
 	// returns: errSuspendExecution when a checkpoint response carried no
-	// token, the stale-token *CheckpointError when the service rejected
-	// the token as superseded, or an execution-scoped *CheckpointError when
-	// the service rejected a call in a way that fails the execution. The
-	// first cause recorded wins. Guarded by mu.
+	// token, or the classified *CheckpointError of any failed call: the
+	// stale-token error, an execution-scoped error, or an invocation-scoped
+	// error. The first cause recorded wins. Guarded by mu.
 	haltErr error
 
 	// state is the shared execution state. When non-nil, the checkpointer
@@ -227,6 +239,36 @@ func (cp *checkpointer) terminate() {
 	cp.terminated.Store(true)
 }
 
+// terminateAtQueueEnd terminates the checkpointer after fixing a cutoff at
+// the end of the queue. The handler calls it when it returns a result or an
+// error. The requests queued before the cutoff are still sent, in queue
+// order, including a batch the flusher has already taken off the queue.
+// Every request queued after the cutoff is refused, except the invocation's
+// final write. The flusher sends calls in queue order and sends nothing
+// after a refused request, so the service only ever receives a prefix of the
+// queue. A START queued without waiting just before the handler returned is
+// therefore sent before the invocation responds.
+//
+// When the checkpointer is already terminated, no cutoff is fixed: a
+// request may already have been refused, and a later cutoff would let a
+// request queued after it be sent.
+func (cp *checkpointer) terminateAtQueueEnd() {
+	cp.mu.Lock()
+	if !cp.cutoffSet && !cp.terminated.Load() {
+		cp.cutoff = cp.nextSeq
+		cp.cutoffSet = true
+	}
+	cp.terminated.Store(true)
+	cp.mu.Unlock()
+}
+
+// sendableLocked reports whether p may be sent once the checkpointer is
+// terminated: p is the invocation's final write, or it was queued before
+// the cutoff of terminateAtQueueEnd. The caller holds mu.
+func (cp *checkpointer) sendableLocked(p *pendingCheckpoint) bool {
+	return p.final || (cp.cutoffSet && p.seq < cp.cutoff)
+}
+
 // halt terminates the checkpointer because the service will accept no
 // further checkpoints from this invocation, or because a serdes reported a
 // transient failure and the invocation must end without recording more
@@ -300,14 +342,17 @@ func (cp *checkpointer) haltCause() error {
 // default client's AWS standard retryer is the only retry: it retries
 // server faults, throttling, and connection errors before the call
 // returns. On any failure the token remains unchanged and every request in
-// the failed call receives the error. An invocation-scoped failure ends
-// the invocation, and the service invokes the execution again.
+// the failed call receives the error.
 //
-// Three outcomes halt the checkpointer for the rest of the invocation. A
-// stale-token rejection (see [CheckpointError]) returns the classified
-// error and ends the invocation with it. An execution-scoped failure
-// returns the classified error and makes the invocation respond FAILED
-// with it. A response without a token to a call that does not carry the
+// These outcomes halt the checkpointer for the rest of the invocation. A
+// failed call returns the classified error (see [CheckpointError]) and
+// ends the invocation with it, even when handler code catches it: a
+// stale-token rejection or an invocation-scoped failure ends the
+// invocation with an error, and the service invokes the execution again;
+// an execution-scoped failure makes the invocation respond FAILED. The
+// halt matters for requests queued by checkpointNoWait: no caller receives
+// their error, and no later call may carry updates of an operation whose
+// START the service did not record. A response without a token to a call that does not carry the
 // execution's terminal update returns errCheckpointTerminated and ends the
 // invocation with PENDING. A response without a token to a call that
 // carries the execution's terminal update means the execution finished;
@@ -332,12 +377,12 @@ func (cp *checkpointer) checkpoint(ctx context.Context, updates []OperationUpdat
 // not refuse this write, which belongs to the invocation itself.
 //
 // The write travels through the same flusher as every other request, so it
-// is sent after any call already in flight and with the token that call
-// rotated to. It is refused only when the service has stopped accepting
-// this invocation's checkpoints: after an earlier response without a token
-// it returns errCheckpointTerminated, and after a stale-token rejection or
-// an execution-scoped failure it returns that error, exactly as checkpoint
-// would. A response without a token to the write itself means the
+// is sent after any call already in flight and after the requests queued
+// before the cutoff of terminateAtQueueEnd, with the token the last of
+// those calls rotated to. It is refused only when the service has stopped
+// accepting this invocation's checkpoints: after an earlier response
+// without a token it returns errCheckpointTerminated, and after an earlier
+// failed call it returns that call's error, exactly as checkpoint would. A response without a token to the write itself means the
 // execution finished, so the write succeeds.
 //
 // Only the invocation goroutine calls checkpointFinal, at most once, after
@@ -346,9 +391,41 @@ func (cp *checkpointer) checkpointFinal(ctx context.Context, updates []Operation
 	return cp.enqueue(ctx, updates, true)
 }
 
+// checkpointNoWait queues update and returns without waiting for the call
+// that carries it. It returns errCheckpointTerminated, and queues nothing,
+// when the checkpointer is already terminated.
+//
+// It is for the START of an operation whose code runs again on the next
+// invocation when the START was not recorded, so the code does not need the
+// START recorded first. The request counts as outstanding until its call
+// returns, so the invocation does not suspend while it is queued. A failure
+// of its call halts the checkpointer (see checkpoint), so the invocation
+// ends with that error. The operation's later SUCCEED, FAIL, or RETRY is
+// queued after the START and awaited, and the flusher sends calls in queue
+// order, so when that wait returns the START is recorded too.
+func (cp *checkpointer) checkpointNoWait(ctx context.Context, update OperationUpdate) error {
+	if cp.terminated.Load() {
+		return errCheckpointTerminated
+	}
+	cp.submit(ctx, []OperationUpdate{update}, false)
+	return nil
+}
+
 // enqueue queues one request, starts the flusher if none is running, and
 // waits for the request's outcome or for ctx to be done.
 func (cp *checkpointer) enqueue(ctx context.Context, updates []OperationUpdate, final bool) error {
+	p := cp.submit(ctx, updates, final)
+	select {
+	case err := <-p.done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// submit queues one request, assigns its position in queue order, and
+// starts the flusher if none is running. It does not wait.
+func (cp *checkpointer) submit(ctx context.Context, updates []OperationUpdate, final bool) *pendingCheckpoint {
 	p := &pendingCheckpoint{
 		ctx:     ctx,
 		updates: updates,
@@ -370,6 +447,8 @@ func (cp *checkpointer) enqueue(ctx context.Context, updates []OperationUpdate, 
 		cp.debugLog(ctx, debugMsgCheckpointEnqueued, len(updates))
 	}
 	cp.mu.Lock()
+	p.seq = cp.nextSeq
+	cp.nextSeq++
 	cp.queue = append(cp.queue, p)
 	start := !cp.flushing
 	if start {
@@ -380,13 +459,7 @@ func (cp *checkpointer) enqueue(ctx context.Context, updates []OperationUpdate, 
 	if start {
 		go cp.flush()
 	}
-
-	select {
-	case err := <-p.done:
-		return err
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return p
 }
 
 // flush is the single flusher. It drains the queue one batch at a time and
@@ -411,7 +484,17 @@ func (cp *checkpointer) flush() {
 		}
 
 		err := cp.send(batch, token)
+		// A branch request whose call returns after termination is
+		// refused all the same, even when the call recorded it: the
+		// branch treats the refusal as suspension and runs no further
+		// code that depends on it in this invocation. Only the
+		// invocation's final write learns that its call succeeded.
+		refuseBranches := err == nil && cp.terminated.Load()
 		for _, p := range batch {
+			if refuseBranches && !p.final {
+				cp.deliver(p, errCheckpointTerminated)
+				continue
+			}
 			cp.deliver(p, err)
 		}
 	}
@@ -421,8 +504,8 @@ func (cp *checkpointer) flush() {
 // returns it with the token it must be sent with. The caller holds mu.
 //
 // Requests whose context is already done are settled with ctx.Err() and
-// skipped. Once the checkpointer is terminated, requests other than the
-// invocation's final write are settled with errCheckpointTerminated and
+// skipped. Once the checkpointer is terminated, requests that
+// sendableLocked rejects are settled with errCheckpointTerminated and
 // skipped. The batch grows while the next request fits under
 // [checkpointBatchLimitBytes] and [checkpointMaxBatchUpdates]. A request that
 // would push the batch over either limit stays queued for the next call. A
@@ -443,10 +526,10 @@ func (cp *checkpointer) takeBatchLocked() ([]*pendingCheckpoint, string) {
 			consumed++
 			continue
 		}
-		if terminated && !p.final {
+		if terminated && !cp.sendableLocked(p) {
 			// Termination refuses queued branch requests without a call.
-			// A final request is always queued after terminate(), so a
-			// batch that carries one carries no branch request.
+			// It refuses every request queued after the cutoff, so a
+			// refused request is never followed by a sent one.
 			cp.deliver(p, errCheckpointTerminated)
 			consumed++
 			continue
@@ -471,16 +554,25 @@ func (cp *checkpointer) takeBatchLocked() ([]*pendingCheckpoint, string) {
 // removed during batch assembly.
 func (cp *checkpointer) send(batch []*pendingCheckpoint, token string) error {
 	ctx := batch[0].ctx
-	// A batch never mixes the invocation's final write with branch
-	// requests (see takeBatchLocked), so the first request speaks for all.
-	final := batch[0].final
+	// Every request in one batch is sendable after termination, or none
+	// is: the batch is taken in queue order, the cutoff lies at a queue
+	// position, and a final request is queued only after termination
+	// fixed the cutoff. So the first request speaks for all. Termination
+	// and the cutoff are read together under mu, so a batch taken off the
+	// queue before the cutoff was fixed is still sent.
+	cp.mu.Lock()
+	sendable := cp.sendableLocked(batch[0])
+	terminated := cp.terminated.Load()
+	cp.mu.Unlock()
 	var updates []OperationUpdate
 	for _, p := range batch {
 		updates = append(updates, p.updates...)
 	}
 
-	if err := cp.refusal(final); err != nil {
-		return err
+	if terminated {
+		if err := cp.refusal(sendable); err != nil {
+			return err
+		}
 	}
 
 	out, err := cp.client.Checkpoint(ctx, CheckpointInput{
@@ -509,8 +601,12 @@ func (cp *checkpointer) send(batch []*pendingCheckpoint, token string) error {
 			return classified
 		}
 		// An invocation-scoped failure. The client's own retryer has
-		// already retried it, so the SDK adds no retry. The error ends
-		// the invocation, and the service invokes the execution again.
+		// already retried it, so the SDK adds no retry. Halt: the call
+		// may carry a START that no caller waits for, so no later call
+		// may be sent, and the invocation ends with this error even if
+		// handler code catches it. The service invokes the execution
+		// again.
+		cp.halt(classified)
 		return classified
 	}
 	if cp.debugLog != nil {
@@ -569,29 +665,25 @@ func (cp *checkpointer) send(batch []*pendingCheckpoint, token string) error {
 	// The API call succeeded. The service rotated the token, so the
 	// local token follows it above whatever happened meanwhile: the
 	// invocation's final write, if any, must carry the token the
-	// service now expects. If termination was signaled while the call
-	// was in flight, the branch requests it carried are refused all
-	// the same: the branch treats the refusal as suspension and
-	// records nothing further in this invocation.
-	if !final && cp.terminated.Load() {
-		return errCheckpointTerminated
-	}
+	// service now expects. flush refuses the branch requests of a call
+	// that returns after termination (see flush).
 	return nil
 }
 
 // refusal reports whether a request must be refused before its call is
 // sent, and with what error. A branch request is refused once the
-// checkpointer is terminated. The invocation's final write is refused only
-// once the checkpointer has halted because the service stopped accepting
-// this invocation's checkpoints: with errCheckpointTerminated after a
-// response without a token, so the invocation responds PENDING, or with the
-// recorded stale-token rejection or execution-scoped failure, so the
-// invocation ends with it.
-func (cp *checkpointer) refusal(final bool) error {
+// checkpointer is terminated, unless sendable reports that it was queued
+// before the cutoff of terminateAtQueueEnd. The invocation's final write
+// and a request queued before the cutoff are refused only once the
+// checkpointer has halted because the service stopped accepting this
+// invocation's checkpoints: with errCheckpointTerminated after a response
+// without a token, so the invocation responds PENDING, or with the recorded
+// failure of an earlier call, so the invocation ends with it.
+func (cp *checkpointer) refusal(sendable bool) error {
 	if !cp.terminated.Load() {
 		return nil
 	}
-	if !final {
+	if !sendable {
 		return errCheckpointTerminated
 	}
 	halt := cp.haltCause()

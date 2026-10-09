@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 )
@@ -880,7 +881,10 @@ func TestOperationLifecycleChildContextReplayedSucceededSerdesFailure(t *testing
 
 // TestOperationLifecycleChildContextLiveEndUsesCheckpointTimestamp asserts
 // that the live end of a child context reports the end timestamp the
-// terminal checkpoint response carried, when it carried one.
+// terminal checkpoint response carried, when it carried one. The START is
+// queued without waiting, so its response may not have arrived when the
+// start hook runs: the start reports the response's timestamp when it
+// has, and the local clock otherwise.
 func TestOperationLifecycleChildContextLiveEndUsesCheckpointTimestamp(t *testing.T) {
 	rec := &opRecorder{}
 	client := &fakePluginClient{}
@@ -897,15 +901,17 @@ func TestOperationLifecycleChildContextLiveEndUsesCheckpointTimestamp(t *testing
 		StartTimestamp: &start, EndTimestamp: &end,
 		ContextDetails: &ContextDetails{Result: aws.String(`"v"`)},
 	}}
+	before := time.Now()
 	resp, err := handler(makePluginContext(), makePluginPayload(t, "arn:test:lifecycle", "tok1", nil))
+	after := time.Now()
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertPluginResponseStatus(t, resp, invocationSucceeded)
 	evs := rec.take()
 	assertSequence(t, evs, "start:child:STARTED:false", "end:child:SUCCEEDED:false")
-	if !evs[0].info.StartTimestamp.Equal(lifecycleStart) {
-		t.Errorf("start StartTimestamp = %v, want %v", evs[0].info.StartTimestamp, lifecycleStart)
+	if got := evs[0].info.StartTimestamp; !got.Equal(lifecycleStart) && (got.Before(before) || got.After(after)) {
+		t.Errorf("start StartTimestamp = %v, want %v or the local clock during the invocation", got, lifecycleStart)
 	}
 	if !evs[1].info.EndTimestamp.Equal(lifecycleEnd) {
 		t.Errorf("end EndTimestamp = %v, want %v", evs[1].info.EndTimestamp, lifecycleEnd)

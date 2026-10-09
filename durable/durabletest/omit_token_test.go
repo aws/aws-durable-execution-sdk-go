@@ -16,20 +16,21 @@ func TestOmitTokenOnCheckpointEndsInvocationPending(t *testing.T) {
 	// response without a token. The invocation ends PENDING without an
 	// error, the first step is recorded as STARTED, and neither step body
 	// has run. The next invocation resumes from the recorded state and
-	// completes.
+	// completes. The steps use AtMostOncePerRetry, so each waits for its
+	// START and the START travels in a call of its own.
 	var firstRuns, secondRuns atomic.Int32
 	handler := func(ctx durable.Context, event string) (string, error) {
 		a, err := durable.Step(ctx, "first", func(_ durable.StepContext) (string, error) {
 			firstRuns.Add(1)
 			return "A", nil
-		})
+		}, durable.WithSemantics(durable.AtMostOncePerRetry))
 		if err != nil {
 			return "", err
 		}
 		b, err := durable.Step(ctx, "second", func(_ durable.StepContext) (string, error) {
 			secondRuns.Add(1)
 			return "B", nil
-		})
+		}, durable.WithSemantics(durable.AtMostOncePerRetry))
 		if err != nil {
 			return "", err
 		}
@@ -85,9 +86,10 @@ func TestOmitTokenOnCheckpointEndsInvocationPending(t *testing.T) {
 }
 
 func TestOmitTokenOnCheckpointTargetsNthCall(t *testing.T) {
-	// A step checkpoints twice: START, then SUCCEED. Scheduling the
-	// omission on the second call lets the first step's START through and
-	// withholds the token on its SUCCEED. The SUCCEED is still recorded,
+	// A step under AtMostOncePerRetry checkpoints twice and waits each
+	// time: START, then SUCCEED. Scheduling the omission on the second
+	// call lets the first step's START through and withholds the token on
+	// its SUCCEED. The SUCCEED is still recorded,
 	// so the first step does not run again, and the second step has not
 	// started.
 	var firstRuns atomic.Int32
@@ -95,7 +97,7 @@ func TestOmitTokenOnCheckpointTargetsNthCall(t *testing.T) {
 		if _, err := durable.Step(ctx, "first", func(_ durable.StepContext) (string, error) {
 			firstRuns.Add(1)
 			return "A", nil
-		}); err != nil {
+		}, durable.WithSemantics(durable.AtMostOncePerRetry)); err != nil {
 			return "", err
 		}
 		return durable.Step(ctx, "second", func(_ durable.StepContext) (string, error) {

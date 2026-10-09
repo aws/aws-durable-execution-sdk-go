@@ -20,12 +20,20 @@ type Output struct {
 }
 
 func handler(ctx durable.Context, _ any) (Output, error) {
-	// The branches sleep instead of running a Step so their finish order
-	// is observable: branch A is slow, so the (B AND C) arm of the rule is
-	// what completes the batch, and A is still in flight at that moment.
-	// The batch then abandons A: it is reported STARTED in the result and
-	// its child context stays STARTED in the checkpoint log, even though
-	// its body finishes before Parallel returns.
+	// The branches sleep instead of running a Step. Branch A sleeps the
+	// longest, so its body finishes last. A branch counts as succeeded
+	// only when the checkpoint call that records its SUCCEED returns, and
+	// those calls can return in a different order than the bodies finish.
+	// So either arm of the rule can complete the batch:
+	//
+	//  1. B and C are recorded first. The (B AND C) arm completes the
+	//     batch while A is in flight. The batch abandons A: it is reported
+	//     STARTED in the result, and its child context stays STARTED in
+	//     the checkpoint log, even though its body finishes before
+	//     Parallel returns.
+	//  2. A is recorded before B or C. The A arm completes the batch, and
+	//     whichever of B and C is not yet recorded is abandoned in the
+	//     same way.
 	branch := func(delay time.Duration, result string) durable.Branch[string] {
 		return durable.Branch[string]{Func: func(durable.Context) (string, error) {
 			time.Sleep(delay)

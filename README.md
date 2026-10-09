@@ -115,7 +115,8 @@ AWS config. The client sets a 5 second connect timeout, a 50 second
 response timeout, and a 55 second total request timeout. Its AWS standard
 retryer retries server faults, throttling, and connection errors. The SDK
 adds no retry of its own. A checkpoint call that still fails ends the
-invocation, and the service invokes the function again.
+invocation, and the service invokes the function again. This holds even
+when handler code catches the error.
 
 ```console
 sam deploy --template-file template.yaml \
@@ -341,6 +342,11 @@ default `AtLeastOncePerRetry` semantics the SDK runs the body again on
 resume. So the body may run more than once for one attempt, and it should
 be idempotent. `AtMostOncePerRetry` treats the interrupted attempt as a
 failure instead and consults the retry strategy.
+
+Under `AtLeastOncePerRetry` the body runs without waiting for the step's
+START to be recorded. The step still waits for its SUCCEED or FAIL to be
+recorded before it returns. Under `AtMostOncePerRetry` the SDK waits for
+the START to be recorded before the body runs.
 
 `WithRetry` sets the retry strategy. The default is `ExponentialBackoff()`,
 which makes 6 attempts in total, starting 5 seconds apart, doubling each
@@ -1233,8 +1239,13 @@ in mind when you port a handler.
 8. A `StepAsync`, `WaitAsync`, or `InvokeAsync` future that the handler
    never awaits records no start operation, and its body may not run.
    The execution still succeeds. The JavaScript SDK records the start
-   operation. A `Go` or `RunInChildContextAsync` future records its start
-   before the call returns, whether or not the handler awaits it.
+   operation. A `Go` or `RunInChildContextAsync` future queues its start
+   before the call returns, and the SDK sends it before the invocation
+   responds, whether or not the handler awaits the future.
+9. A child context waits for its SUCCEED or FAIL to be recorded before it
+   returns. The JavaScript SDK does not wait. The outcome of a
+   combinator, `Select`, `Map`, or `Parallel` can depend on timing, so it
+   must be recorded before later code acts on it.
 
 ## Examples
 

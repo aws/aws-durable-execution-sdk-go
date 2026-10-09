@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -148,6 +149,30 @@ func assertFields(t testing.TB, obj map[string]any, want map[string]any) {
 			t.Fatalf("field %q: want %v, got %v", k, w, g)
 		}
 	}
+}
+
+// assertResultsAmong checks that obj["results"] holds n distinct strings
+// taken from allowed, in the order they appear in allowed, and returns
+// them. It is used for a batch that completes early, where which items
+// complete first depends on timing.
+func assertResultsAmong(t testing.TB, obj map[string]any, n int, allowed ...string) []string {
+	t.Helper()
+	raw, ok := obj["results"].([]any)
+	if !ok || len(raw) != n {
+		t.Fatalf("results = %v, want %d of %v", obj["results"], n, allowed)
+	}
+	results := make([]string, 0, n)
+	last := -1
+	for _, r := range raw {
+		s, _ := r.(string)
+		i := slices.Index(allowed, s)
+		if i <= last {
+			t.Fatalf("results = %v, want %d distinct entries of %v in that order", raw, n, allowed)
+		}
+		last = i
+		results = append(results, s)
+	}
+	return results
 }
 
 // assertPositiveDuration checks that obj[key] is a positive number. It is
@@ -360,8 +385,17 @@ var expectations = map[string]expectation{
 	"map-high-concurrency-invoke": {
 		result: `{"results":["{\"status\":\"completed\",\"input\":{\"message\":\"payload-0\"}}","{\"status\":\"completed\",\"input\":{\"message\":\"payload-1\"}}","{\"status\":\"completed\",\"input\":{\"message\":\"payload-2\"}}","{\"status\":\"completed\",\"input\":{\"message\":\"payload-3\"}}","{\"status\":\"completed\",\"input\":{\"message\":\"payload-4\"}}","{\"status\":\"completed\",\"input\":{\"message\":\"payload-5\"}}","{\"status\":\"completed\",\"input\":{\"message\":\"payload-6\"}}","{\"status\":\"completed\",\"input\":{\"message\":\"payload-7\"}}","{\"status\":\"completed\",\"input\":{\"message\":\"payload-8\"}}","{\"status\":\"completed\",\"input\":{\"message\":\"payload-9\"}}","{\"status\":\"completed\",\"input\":{\"message\":\"payload-10\"}}","{\"status\":\"completed\",\"input\":{\"message\":\"payload-11\"}}","{\"status\":\"completed\",\"input\":{\"message\":\"payload-12\"}}","{\"status\":\"completed\",\"input\":{\"message\":\"payload-13\"}}","{\"status\":\"completed\",\"input\":{\"message\":\"payload-14\"}}"]}`,
 	},
-	"map-large-scale":                  {result: `{"success":true,"message":"Successfully processed 50 items with substantial data using map","summary":{"itemsProcessed":50,"totalDataSizeMB":4,"totalDataSizeBytes":5120000,"maxConcurrency":10,"averageItemSize":102400,"allItemsProcessed":true}}`},
-	"map-min-successful":               {result: `{"successCount":2,"totalCount":5,"completionReason":"MIN_SUCCESSFUL_REACHED","results":["Item 1 processed","Item 2 processed"]}`},
+	"map-large-scale": {result: `{"success":true,"message":"Successfully processed 50 items with substantial data using map","summary":{"itemsProcessed":50,"totalDataSizeMB":4,"totalDataSizeBytes":5120000,"maxConcurrency":10,"averageItemSize":102400,"allItemsProcessed":true}}`},
+	"map-min-successful": {
+		nondeterministic: "which two items complete first depends on when the checkpoint calls that record the items return",
+		check: func(t testing.TB, result string) {
+			obj := resultObject(t, result)
+			assertFields(t, obj, map[string]any{
+				"successCount": float64(2), "totalCount": float64(5), "completionReason": "MIN_SUCCESSFUL_REACHED",
+			})
+			assertResultsAmong(t, obj, 2, "Item 1 processed", "Item 2 processed", "Item 3 processed", "Item 4 processed", "Item 5 processed")
+		},
+	},
 	"map-tolerated-failure-count":      {result: `{"successCount":3,"failureCount":2,"totalCount":5,"completionReason":"ALL_COMPLETED","hasFailure":true}`},
 	"map-tolerated-failure-percentage": {result: `{"successCount":6,"failureCount":3,"totalCount":9,"completionReason":"FAILURE_TOLERANCE_EXCEEDED","hasFailure":true,"results":["Item 0 processed","Item 1 processed","Item 3 processed","Item 4 processed","Item 6 processed","Item 7 processed"]}`},
 	"map-virtual-context":              {result: `{"processedItems":[2,4,6,8,10],"totalCount":5,"successCount":5}`},
@@ -396,18 +430,34 @@ var expectations = map[string]expectation{
 			}
 		},
 	},
-	"parallel-invoke":                   {result: `{"successCount":3}`},
-	"parallel-min-successful":           {result: `{"successCount":2,"totalCount":4,"completionReason":"MIN_SUCCESSFUL_REACHED","results":["Branch 1 result","Branch 2 result"]}`},
+	"parallel-invoke": {result: `{"successCount":3}`},
+	"parallel-min-successful": {
+		nondeterministic: "which two branches complete first depends on when the checkpoint calls that record the branches return",
+		check: func(t testing.TB, result string) {
+			obj := resultObject(t, result)
+			assertFields(t, obj, map[string]any{
+				"successCount": float64(2), "totalCount": float64(4), "completionReason": "MIN_SUCCESSFUL_REACHED",
+			})
+			assertResultsAmong(t, obj, 2, "Branch 1 result", "Branch 2 result", "Branch 3 result", "Branch 4 result")
+		},
+	},
 	"parallel-min-successful-callback":  {result: `{"successCount":3,"totalCount":5,"completionReason":"MIN_SUCCESSFUL_REACHED"}`},
 	"parallel-min-successful-threshold": {result: `{"successCount":2,"startedCount":3,"totalCount":5,"completionReason":"MIN_SUCCESSFUL_REACHED","succeeded":["fast","quick"],"abandoned":["slow","slower","straggler"]}`},
 	"parallel-invalid-max-concurrency":  {failed: true, errorType: "Error"},
 	"parallel-should-complete": {
-		nondeterministic: "startedCount depends on whether the slowest branch has started when the quorum is reached",
+		nondeterministic: "which branches complete first, and so which arm of the rule completes the batch, depends on when the checkpoint calls that record the branches return",
 		check: func(t testing.TB, result string) {
-			assertFields(t, resultObject(t, result), map[string]any{
-				"successCount": float64(2), "totalCount": float64(3), "completionReason": "CUSTOM_COMPLETION_SUCCEEDED",
-				"results": []any{"Branch B done", "Branch C done"},
+			obj := resultObject(t, result)
+			assertFields(t, obj, map[string]any{
+				"totalCount": float64(3), "completionReason": "CUSTOM_COMPLETION_SUCCEEDED",
 			})
+			n, _ := obj["successCount"].(float64)
+			results := assertResultsAmong(t, obj, int(n), "Branch A done", "Branch B done", "Branch C done")
+			// The rule completes the batch when branch A succeeds, or when
+			// branches B and C both succeed.
+			if !slices.Contains(results, "Branch A done") && !slices.Equal(results, []string{"Branch B done", "Branch C done"}) {
+				t.Fatalf("results = %v, want branch A, or branches B and C", results)
+			}
 		},
 	},
 	"parallel-tolerated-failure":            {result: `{"successCount":3,"failureCount":2,"totalCount":5,"completionReason":"ALL_COMPLETED","hasFailure":true}`},
