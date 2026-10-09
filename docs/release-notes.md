@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Fixed: `LocalRunner` reports the execution start time
+
+Under `LocalRunner`, `durable.ExecutionStartTime` returned the zero
+time. It now returns the time the local execution started, the same
+value on every invocation of the execution, as in Lambda. After
+`Reset`, the next execution gets a new start time.
+
 ### Changed: `Wait` and `WaitAsync` take no options
 
 `Wait` and `WaitAsync` no longer end in `opts ...WaitOption`, and the

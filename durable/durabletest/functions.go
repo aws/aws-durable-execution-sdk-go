@@ -595,9 +595,10 @@ func (e *localExecution) buildPayload(eventJSON []byte, allOps []operationSnapsh
 
 	// Execution operation always first.
 	wireOps = append(wireOps, wire.Operation{
-		Id:     "exec-op",
-		Status: "STARTED",
-		Type:   "EXECUTION",
+		Id:             localExecutionOperationID,
+		Status:         "STARTED",
+		Type:           "EXECUTION",
+		StartTimestamp: wire.Timestamp{Time: e.client.executionStartTime(), Valid: true},
 		ExecutionDetails: &wire.ExecutionDetails{
 			InputPayload: string(eventJSON),
 		},

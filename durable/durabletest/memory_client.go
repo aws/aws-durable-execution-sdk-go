@@ -57,6 +57,13 @@ type memoryClient struct {
 	executionStarted bool
 	executionEnded   bool
 
+	// executionStart is the time the execution started: the clock when the
+	// ExecutionStarted event was recorded. Every invocation payload carries
+	// it as the execution operation's StartTimestamp, which the handler
+	// reports from durable.ExecutionStartTime. Zero until the execution
+	// starts.
+	executionStart time.Time
+
 	// clock is the client's virtual clock. It is set when the execution
 	// starts and moves forward only when the client advances it: to report
 	// a timed operation finished while the handler ran other work (see
@@ -152,6 +159,7 @@ func (m *memoryClient) resetLocked() {
 	m.eventSeq = 0
 	m.executionStarted = false
 	m.executionEnded = false
+	m.executionStart = time.Time{}
 	m.checkpointedEnd = nil
 	m.clock = time.Now().UTC()
 	m.changed = nil
@@ -170,6 +178,14 @@ func (m *memoryClient) now() time.Time {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.nowLocked()
+}
+
+// executionStartTime returns the time the execution started; see
+// executionStart.
+func (m *memoryClient) executionStartTime() time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.executionStart
 }
 
 // advanceToLocked moves the client's clock forward to t. A t that is not

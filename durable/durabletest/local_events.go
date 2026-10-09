@@ -51,6 +51,7 @@ func (m *memoryClient) recordExecutionStarted(input string) {
 	}
 	m.executionStarted = true
 	m.clock = time.Now().UTC()
+	m.executionStart = m.clock
 	m.recordEvent(types.Event{
 		EventType: types.EventTypeExecutionStarted,
 		Id:        aws.String(localExecutionOperationID),

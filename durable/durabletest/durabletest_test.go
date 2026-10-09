@@ -466,6 +466,72 @@ func TestRunUntilCompleteWaitAdvances(t *testing.T) {
 	}
 }
 
+func TestExecutionStartTime(t *testing.T) {
+	// The handler records durable.ExecutionStartTime on every invocation.
+	// The wait makes RunUntilComplete invoke it twice.
+	var seen []time.Time
+	handler := func(ctx durable.Context, event string) (string, error) {
+		seen = append(seen, durable.ExecutionStartTime(ctx))
+		if err := durable.Wait(ctx, "pause", 60*time.Second); err != nil {
+			return "", err
+		}
+		return "done", nil
+	}
+
+	runner := durabletest.NewLocalRunner(handler)
+	result, err := runner.RunUntilComplete("go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != durabletest.Succeeded {
+		t.Fatalf("expected SUCCEEDED, got %s", result.Status)
+	}
+	if len(seen) != 2 {
+		t.Fatalf("handler invoked %d times, want 2", len(seen))
+	}
+
+	// The start time is the time of the ExecutionStarted event. The two
+	// values come from the same clock reading, so they are equal exactly.
+	// The replay sees the same value.
+	start := executionStartedAt(t, result.Events)
+	if start.IsZero() {
+		t.Fatal("ExecutionStarted event has the zero time")
+	}
+	for i, got := range seen {
+		if !got.Equal(start) {
+			t.Errorf("invocation %d: ExecutionStartTime = %v, want %v", i+1, got, start)
+		}
+	}
+
+	// A reset starts a new execution, with a new start time.
+	runner.Reset()
+	seen = nil
+	result, err = runner.RunUntilComplete("go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	restart := executionStartedAt(t, result.Events)
+	if restart.Equal(start) {
+		t.Errorf("start time after Reset = %v, want a new start time", restart)
+	}
+	if len(seen) == 0 || !seen[0].Equal(restart) {
+		t.Errorf("ExecutionStartTime after Reset = %v, want %v", seen, restart)
+	}
+}
+
+// executionStartedAt returns the time of the ExecutionStarted event in
+// events.
+func executionStartedAt(t *testing.T, events []types.Event) time.Time {
+	t.Helper()
+	for _, ev := range events {
+		if ev.EventType == types.EventTypeExecutionStarted && ev.EventTimestamp != nil {
+			return *ev.EventTimestamp
+		}
+	}
+	t.Fatal("no ExecutionStarted event")
+	return time.Time{}
+}
+
 func TestRunUntilCompleteBlocksOnCallback(t *testing.T) {
 	// A handler that creates a callback. RunUntilComplete should return
 	// PENDING since the callback requires external resolution.
