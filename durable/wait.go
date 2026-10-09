@@ -8,19 +8,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
-// WaitOption configures a single [Wait] or [WaitAsync] operation.
-//
-// The interface is sealed: only this package can implement it. No option
-// constructors exist yet. The parameter is present so that options can be
-// added later without changing the signatures of Wait and WaitAsync.
-type WaitOption interface {
-	applyWait(*waitOptions)
-}
-
-// waitOptions holds the resolved configuration of one wait operation. It
-// has no fields yet; see [WaitOption].
-type waitOptions struct{}
-
 // Wait pauses the execution for duration d. When the wait elapses while
 // other work of the handler is still running, Wait returns in the same
 // invocation. When nothing else can make progress, the invocation ends
@@ -33,16 +20,12 @@ type waitOptions struct{}
 // including zero and any negative duration, Wait returns an error at the
 // call: it records no operation and writes no checkpoint. A duration of one
 // second or more is rounded up to a whole number of seconds.
-func Wait(ctx Context, name string, d time.Duration, opts ...WaitOption) error {
+func Wait(ctx Context, name string, d time.Duration) error {
 	ec, ok := ctx.(*execContext)
 	if !ok {
 		return fmt.Errorf("durable: Wait %q: Context was not created by the SDK", name)
 	}
 
-	var options waitOptions
-	for _, o := range opts {
-		o.applyWait(&options)
-	}
 	if err := validateWaitDuration("Wait", name, d); err != nil {
 		return err
 	}
@@ -71,16 +54,12 @@ func Wait(ctx Context, name string, d time.Duration, opts ...WaitOption) error {
 // A future the handler never awaits records no start operation in the
 // history, and its body may not run to completion. The execution still
 // succeeds. The JavaScript SDK records the start operation.
-func WaitAsync(ctx Context, name string, d time.Duration, opts ...WaitOption) *Future[Void] {
+func WaitAsync(ctx Context, name string, d time.Duration) *Future[Void] {
 	ec, ok := ctx.(*execContext)
 	if !ok {
 		return newFailedFuture[Void](fmt.Errorf("durable: WaitAsync %q: Context was not created by the SDK", name))
 	}
 
-	var options waitOptions
-	for _, o := range opts {
-		o.applyWait(&options)
-	}
 	if err := validateWaitDuration("WaitAsync", name, d); err != nil {
 		return newFailedFuture[Void](err)
 	}

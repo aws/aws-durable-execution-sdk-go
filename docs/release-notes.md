@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Changed: `Wait` and `WaitAsync` take no options
+
+`Wait` and `WaitAsync` no longer end in `opts ...WaitOption`, and the
+`WaitOption` type is removed. The package never exported a constructor
+for `WaitOption`, so no option could be passed. A call without options
+compiles unchanged.
+
 ### Documented: deliberate differences from the JavaScript SDK
 
 The README has a new section, "Deliberate differences from the JavaScript

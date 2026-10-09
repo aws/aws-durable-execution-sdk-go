@@ -60,7 +60,6 @@ type WaitDecision struct {
 
 type (
 	StepOption            interface{}
-	WaitOption            interface{}
 	InvokeOption          interface{}
 	ChildOption           interface{}
 	BatchOption           interface{}
@@ -90,9 +89,9 @@ func StepAsync[O any](ctx Context, name string, fn func(StepContext) (O, error),
 	return nil
 }
 
-func Wait(ctx Context, name string, d time.Duration, opts ...WaitOption) error { return nil }
+func Wait(ctx Context, name string, d time.Duration) error { return nil }
 
-func WaitAsync(ctx Context, name string, d time.Duration, opts ...WaitOption) *Future[Void] {
+func WaitAsync(ctx Context, name string, d time.Duration) *Future[Void] {
 	return nil
 }
 
