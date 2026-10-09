@@ -1,0 +1,32 @@
+[
+  {
+    "type": "CONTEXT",
+    "subType": "Map",
+    "name": "replicate",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "MapIteration",
+    "name": "replica-0",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "MapIteration",
+    "name": "replica-1",
+    "status": "FAILED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "MapIteration",
+    "name": "replica-2",
+    "status": "FAILED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "MapIteration",
+    "name": "replica-3",
+    "status": "FAILED"
+  }
+]

@@ -1400,6 +1400,40 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 60
 
+  MapSerdesFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-map-serdes
+      CodeUri: .aws-sam/build-artifacts/map-serdes/
+      Handler: bootstrap
+      Description: Map with a per-item serdes and a whole-result serdes
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  MapCompletionPolicyFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-map-completion-policy
+      CodeUri: .aws-sam/build-artifacts/map-completion-policy/
+      Handler: bootstrap
+      Description: Map with a ShouldComplete policy composed from rules
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
   ParallelBasicFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -2763,6 +2797,12 @@ Outputs:
   MapFlatSummarizedReplayFunction:
     Description: Map Flat Summarized Replay Function ARN
     Value: !GetAtt MapFlatSummarizedReplayFunction.Arn
+  MapSerdesFunction:
+    Description: Map Serdes Function ARN
+    Value: !GetAtt MapSerdesFunction.Arn
+  MapCompletionPolicyFunction:
+    Description: Map Completion Policy Function ARN
+    Value: !GetAtt MapCompletionPolicyFunction.Arn
   ParallelBasicFunction:
     Description: Parallel Basic Function ARN
     Value: !GetAtt ParallelBasicFunction.Arn

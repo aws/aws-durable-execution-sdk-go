@@ -333,6 +333,7 @@ var expectations = map[string]expectation{
 			})
 		},
 	},
+	"map-completion-policy": {result: `{"committed":true,"reason":"CUSTOM_COMPLETION_SUCCEEDED","acknowledged":["replica-0","replica-1","replica-2"],"failed":[],"notAttempted":2}`},
 	"map-custom-summary-generator-replay": {
 		nondeterministic: "startedCount depends on whether the slow item has started when MinSuccessful is reached",
 		check: func(t testing.TB, result string) {
@@ -362,6 +363,7 @@ var expectations = map[string]expectation{
 	},
 	"map-large-scale":                  {result: `{"success":true,"message":"Successfully processed 50 items with substantial data using map","summary":{"itemsProcessed":50,"totalDataSizeMB":4,"totalDataSizeBytes":5120000,"maxConcurrency":10,"averageItemSize":102400,"allItemsProcessed":true}}`},
 	"map-min-successful":               {result: `{"successCount":2,"totalCount":5,"completionReason":"MIN_SUCCESSFUL_REACHED","results":["Item 1 processed","Item 2 processed"]}`},
+	"map-serdes":                       {result: `{"orderId":"ORD-12345","lines":[{"sku":"WIDGET-A","quantity":2,"totalCents":5998},{"sku":"GADGET-B","quantity":1,"totalCents":4999}],"rejected":[],"totalCents":10997}`},
 	"map-tolerated-failure-count":      {result: `{"successCount":3,"failureCount":2,"totalCount":5,"completionReason":"ALL_COMPLETED","hasFailure":true}`},
 	"map-tolerated-failure-percentage": {result: `{"successCount":6,"failureCount":3,"totalCount":9,"completionReason":"FAILURE_TOLERANCE_EXCEEDED","hasFailure":true,"results":["Item 0 processed","Item 1 processed","Item 3 processed","Item 4 processed","Item 6 processed","Item 7 processed"]}`},
 	"map-virtual-context":              {result: `{"processedItems":[2,4,6,8,10],"totalCount":5,"successCount":5}`},
