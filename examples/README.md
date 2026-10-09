@@ -61,6 +61,9 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [block-example](block-example/main.go) | RunInChildContext (nested), Step, Wait, struct result | SUCCEEDED |
 | [child-ops-preservation](child-ops-preservation/main.go) | RunInChildContext, operation ordering | SUCCEEDED |
 | [child-ops-invalid-depth](child-ops-invalid-depth/main.go) | RunInChildContext, depth validation | FAILED |
+| [child-context-error-mapper](child-context-error-mapper/main.go) | RunInChildContext, WithChildErrorMapper (handler-owned error type, mapped again on replay) | SUCCEEDED |
+| [child-context-summary](child-context-summary/main.go) | RunInChildContext, WithChildSummary (>256KB result, ReplayChildren) | SUCCEEDED |
+| [child-context-subtype](child-context-subtype/main.go) | RunInChildContext, WithChildSubType | SUCCEEDED |
 
 ### Callbacks
 

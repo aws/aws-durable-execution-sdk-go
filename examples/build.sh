@@ -57,6 +57,9 @@ EXAMPLES="
   block-example
   child-ops-preservation
   child-ops-invalid-depth
+  child-context-error-mapper
+  child-context-summary
+  child-context-subtype
   callback-sender
   wait-callback-basic
   wait-callback-timeout
