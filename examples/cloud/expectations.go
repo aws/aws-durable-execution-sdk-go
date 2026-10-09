@@ -466,10 +466,12 @@ var expectations = map[string]expectation{
 	"parallel-wait":                         {result: `"Completed waits"`},
 	"plugin-lifecycle":                      {result: `{"message":"plugin lifecycle complete","hooks":[{"hook":"OnInvocationStart"},{"hook":"OnOperationStart","operationName":"compute"},{"hook":"OnOperationAttemptStart","operationName":"compute","attempt":1},{"hook":"OnOperationAttemptEnd","operationName":"compute","attempt":1},{"hook":"OnOperationEnd","operationName":"compute"}]}`},
 
-	"retry-callback":   {failed: true, errorType: "CallbackTimeoutError"},
-	"retry-exhaustion": {failed: true, errorType: "StepError"},
-	"retry-linear":     {result: `{"message":"request confirmed on attempt 4","attempts":4}`},
-	"retry-invoke":     {result: `{"response":{"message":"success on attempt 3","attempt":3},"attempts":3}`},
+	"retry-callback":     {failed: true, errorType: "CallbackTimeoutError"},
+	"retry-group":        {result: `{"status":"confirmed","priceCents":4250,"attempts":4}`},
+	"retry-group-inline": {result: `{"priceCents":4250,"attempts":3}`},
+	"retry-exhaustion":   {failed: true, errorType: "StepError"},
+	"retry-linear":       {result: `{"message":"request confirmed on attempt 4","attempts":4}`},
+	"retry-invoke":       {result: `{"response":{"message":"success on attempt 3","attempt":3},"attempts":3}`},
 
 	"serde-basic":                   {result: `{"user":{"firstName":"","lastName":"","email":""},"greeting":"Hello, I'm  . My email is "}`},
 	"serde-callback-deserializer":   {result: `{"first":"HELLO FIRST","second":"HELLO SECOND"}`},
@@ -517,6 +519,7 @@ var expectations = map[string]expectation{
 	"wait-callback-timeout":                  {result: `{"timedOut":true,"error":"durable: callback \"timeout-callback\" failed: Callback.Timeout: Callback timed out"}`},
 	"wait-configurable":                      {result: `"wait finished"`},
 	"wait-for-condition":                     {result: `3`},
+	"wait-for-condition-backoff":             {result: `{"checks":4,"ready":true}`},
 	"wait-named":                             {result: `"wait finished"`},
 	"wait-unawaited":                         {result: `"result"`},
 }

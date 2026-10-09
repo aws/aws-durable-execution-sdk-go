@@ -32,11 +32,14 @@ EXAMPLES="
   retry-invoke
   retry-invoke-target
   retry-callback
+  retry-group
+  retry-group-inline
   wait-basic
   wait-named
   wait-configurable
   wait-unawaited
   wait-for-condition
+  wait-for-condition-backoff
   multiple-waits
   invoke-simple
   invoke-simple-target

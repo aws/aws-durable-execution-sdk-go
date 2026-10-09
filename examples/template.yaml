@@ -249,6 +249,40 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 120
 
+  RetryGroupFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-retry-group
+      CodeUri: .aws-sam/build-artifacts/retry-group/
+      Handler: bootstrap
+      Description: Retry over a group of operations, matched on the recorded error
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  RetryGroupInlineFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-retry-group-inline
+      CodeUri: .aws-sam/build-artifacts/retry-group-inline/
+      Handler: bootstrap
+      Description: Retry without per-attempt child contexts, matched on the live error
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
   # --- Slice 2: Wait & WaitForCondition examples ---
 
   WaitBasicFunction:
@@ -331,6 +365,23 @@ Resources:
       CodeUri: .aws-sam/build-artifacts/wait-for-condition/
       Handler: bootstrap
       Description: Polling loop with checkpointed state between attempts
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  WaitForConditionBackoffFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-wait-for-condition-backoff
+      CodeUri: .aws-sam/build-artifacts/wait-for-condition-backoff/
+      Handler: bootstrap
+      Description: WaitForCondition polled on an exponential backoff wait strategy
       Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
@@ -2565,6 +2616,12 @@ Outputs:
   RetryCallbackFunction:
     Description: Retry Callback Function ARN
     Value: !GetAtt RetryCallbackFunction.Arn
+  RetryGroupFunction:
+    Description: Retry Group Function ARN
+    Value: !GetAtt RetryGroupFunction.Arn
+  RetryGroupInlineFunction:
+    Description: Retry Group Inline Function ARN
+    Value: !GetAtt RetryGroupInlineFunction.Arn
   WaitBasicFunction:
     Description: Wait Basic Function ARN
     Value: !GetAtt WaitBasicFunction.Arn
@@ -2580,6 +2637,9 @@ Outputs:
   WaitForConditionFunction:
     Description: Wait For Condition Function ARN
     Value: !GetAtt WaitForConditionFunction.Arn
+  WaitForConditionBackoffFunction:
+    Description: Wait For Condition Backoff Function ARN
+    Value: !GetAtt WaitForConditionBackoffFunction.Arn
   MultipleWaitsFunction:
     Description: Multiple Waits Function ARN
     Value: !GetAtt MultipleWaitsFunction.Arn

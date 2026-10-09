@@ -26,6 +26,8 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [retry-invoke](retry-invoke/main.go) | Invoke, retry loop | SUCCEEDED |
 | [retry-invoke-target](retry-invoke-target/main.go) | (target function for retry-invoke) | — |
 | [retry-callback](retry-callback/main.go) | WaitForCallback, retry loop | FAILED |
+| [retry-group](retry-group/main.go) | Retry (per-attempt child context), NewRetryStrategy, ErrorTypeIs, ErrorContains, ErrorMatches, WithAttemptChildOptions, WithChildErrorMapper | SUCCEEDED |
+| [retry-group-inline](retry-group-inline/main.go) | Retry, WithAttemptChildContext(false), MustNewRetryStrategy, ErrorAs, ErrorIs, JitterHalf | SUCCEEDED |
 
 ### Wait & WaitForCondition
 
@@ -36,6 +38,7 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [wait-configurable](wait-configurable/main.go) | Wait (input-driven duration) | SUCCEEDED |
 | [wait-unawaited](wait-unawaited/main.go) | Wait, Step (fire-and-forget) | SUCCEEDED |
 | [wait-for-condition](wait-for-condition/main.go) | WaitForCondition | SUCCEEDED |
+| [wait-for-condition-backoff](wait-for-condition-backoff/main.go) | WaitForCondition, MustNewWaitStrategy, NewWaitStrategy (delays 1 s, 2 s, 4 s) | SUCCEEDED |
 | [multiple-waits](multiple-waits/main.go) | Wait (multiple sequential) | SUCCEEDED |
 
 ### Invoke & Child Context
