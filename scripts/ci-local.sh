@@ -5,11 +5,13 @@
 # Usage:
 #   scripts/ci-local.sh [module...]
 #
-# Modules default to all five: . insight conformance examples analysis
-# (e.g. `scripts/ci-local.sh examples` to check only the examples module).
-# With no module argument the repository-level checks also run: the release
-# script tests and the external-consumability check of the published nested
-# modules.
+# Modules default to the five modules of the SDK repository, . insight
+# conformance examples analysis, and the release tool's module,
+# .github/scripts/release (e.g. `scripts/ci-local.sh examples` to check
+# only the examples module). With no module argument the repository-level
+# checks also run: the release tool checks that durable.Version and the SDK
+# version that each nested module requires agree, and builds a new module
+# that imports each published module.
 #
 # Requires: Go and golangci-lint at the versions pinned in .mise.toml
 # (`mise install` sets both up).
@@ -21,7 +23,7 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 if [ $# -gt 0 ]; then
     MODULES=$*
 else
-    MODULES=". insight conformance examples analysis"
+    MODULES=". insight conformance examples analysis .github/scripts/release"
 fi
 
 for mod in $MODULES; do
@@ -69,11 +71,11 @@ done
 
 # Repository-level checks (only when no module list was given).
 if [ $# -eq 0 ]; then
-    echo "==> release tooling"
-    echo " -> scripts/release_test.sh"
-    sh "$ROOT/scripts/release_test.sh"
-    echo " -> scripts/verify-consumable.sh --root-from-checkout"
-    sh "$ROOT/scripts/verify-consumable.sh" --root-from-checkout
+    echo "==> release tool"
+    echo " -> release check"
+    go run -C "$ROOT/.github/scripts/release" . check
+    echo " -> release consumer"
+    go run -C "$ROOT/.github/scripts/release" . consumer
 fi
 
 echo "All checks passed."

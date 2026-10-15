@@ -1,152 +1,55 @@
 name: Release
 
-# Releases the root module, the SDK, and the published nested modules
-# whose versions are given. The SDK is the only module at v1. insight and
-# analysis each have a version of their own, below v1, and the workflow
-# releases one of them only when its version input is set. The job runs
-# scripts/release.sh, which sets the SDK's Version constant, pins each
-# nested module to the root version being released, commits those changes,
-# and creates the tags the Go toolchain expects (vX.Y.Z, and <dir>/vX.Y.Z
-# for each nested module released). The root module tag is pushed first;
-# the nested module tags follow only after a throwaway consumer has built
-# the nested modules against the published root module. See
-# CONTRIBUTING.md, "Releasing".
+# Runs when a GitHub Release is published. Publishing the release creates
+# its tag, and for Go the tag is the release: the go command fetches a
+# module version from its Git tag, through the module proxy. So this
+# workflow publishes nothing and pushes nothing. It checks the release:
 #
-# Releases come from the default branch only. The workflow refuses any other
-# ref chosen at dispatch time.
+# 1. The tag points at a commit on main.
+# 2. For an SDK release, the tagged commit sets durable.Version to the
+#    released version.
+# 3. The module proxy serves the version from the tagged commit. Asking
+#    the proxy for the version also makes pkg.go.dev list it.
+# 4. A new module that imports the released module from the proxy builds.
 #
-# A rerun resumes a release that stopped part way. The release script keeps
-# tags of these versions that already point at the release commit and
-# creates the missing ones, so rerunning the workflow with the same versions
-# on the release commit pushes whatever was not pushed before.
+# A failed check cannot be undone by deleting the tag, because the module
+# proxy keeps serving a version it has fetched. Fix it with the next
+# version. See RELEASING.md.
 
 on:
-  workflow_dispatch:
-    inputs:
-      version:
-        description: "Version of the root module, for example v1.0.0 or v1.1.0-rc.1"
-        required: true
-        type: string
-      insight_version:
-        description: "Version of the insight module, below v1, for example v0.1.0. Leave empty to not release insight."
-        required: false
-        default: ""
-        type: string
-      analysis_version:
-        description: "Version of the analysis module, below v1, for example v0.1.0. Leave empty to not release analysis."
-        required: false
-        default: ""
-        type: string
+  release:
+    types: [published]
 
 permissions:
   contents: read
 
 jobs:
-  release:
-    name: release ${{ inputs.version }}
+  verify:
+    name: verify ${{ github.event.release.tag_name }}
     runs-on: ubuntu-latest
-    permissions:
-      contents: write # push the release commit and the tags
-    concurrency:
-      group: go-release
-      cancel-in-progress: false
-    env:
-      VERSION: ${{ inputs.version }}
-      INSIGHT_VERSION: ${{ inputs.insight_version }}
-      ANALYSIS_VERSION: ${{ inputs.analysis_version }}
-      RELEASE_BRANCH: ${{ github.event.repository.default_branch }}
+    # The module proxy can take up to 30 minutes to serve a new version,
+    # and the release tool waits up to 35.
+    timeout-minutes: 45
     steps:
-      # Runs before checkout so that a wrong ref does nothing at all.
-      - name: Require the default branch
-        env:
-          SELECTED_REF: ${{ github.ref_name }}
-          REF_TYPE: ${{ github.ref_type }}
-        run: |
-          if [ "$REF_TYPE" != branch ] || [ "$SELECTED_REF" != "$RELEASE_BRANCH" ]; then
-            echo "::error::releases run from the default branch '$RELEASE_BRANCH' only; got $REF_TYPE '$SELECTED_REF'"
-            exit 1
-          fi
-
+      # For a release event, checkout checks out the release's tag at the
+      # commit the event names.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ github.event.repository.default_branch }}
-          # The release script checks where this version's tags point, so
-          # it needs the full tag list.
+          # The release tool checks that the tag is on main, so it needs
+          # the history of main.
           fetch-depth: 0
+          persist-credentials: false
 
-      # This job builds every nested module, so its toolchain must satisfy
-      # the newest go directive among them (analysis needs Go 1.25 for
-      # golang.org/x/tools; the SDK modules need Go 1.24). setup-go pins
-      # GOTOOLCHAIN=local, so the toolchain cannot upgrade itself.
-      - name: Pick the newest go directive
-        id: go
-        run: |
-          version=$(sed -n 's/^go //p' go.mod insight/go.mod analysis/go.mod | sort -V | tail -n 1)
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-
+      # The newest Go release builds every module, whatever its go
+      # directive. The release tool fetches modules into an empty module
+      # cache, so a dependency cache would go unused.
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.0.0
         with:
-          go-version: ${{ steps.go.outputs.version }}
-          cache-dependency-path: insight/go.sum
+          go-version: stable
+          cache: false
 
-      - name: Pin, commit, and tag
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          set -- "$VERSION"
-          if [ -n "$INSIGHT_VERSION" ]; then set -- "$@" "insight/$INSIGHT_VERSION"; fi
-          if [ -n "$ANALYSIS_VERSION" ]; then set -- "$@" "analysis/$ANALYSIS_VERSION"; fi
-          sh scripts/release.sh "$@"
-
-      - name: Push the release commit and the root module tag
-        run: git push origin "HEAD:$RELEASE_BRANCH" "$VERSION"
-
-      # The nested modules now pin a root version that exists. Build them
-      # from this checkout against that root version from the module proxy.
-      # The proxy serves a new tag shortly after the push; retry until it does.
-      - name: Verify the nested modules against the published root module
-        run: |
-          for attempt in 1 2 3 4 5 6; do
-            if sh scripts/verify-consumable.sh; then exit 0; fi
-            echo "attempt $attempt failed; retrying in 30s"
-            sleep 30
-          done
-          exit 1
-
-      # Only the nested module tags of this release, each checked to point
-      # at the release commit. Tags that a previous run pushed are already up
-      # to date on the remote.
-      - name: Push the nested module tags
-        run: |
-          tags=
-          if [ -n "$INSIGHT_VERSION" ]; then tags="$tags insight/$INSIGHT_VERSION"; fi
-          if [ -n "$ANALYSIS_VERSION" ]; then tags="$tags analysis/$ANALYSIS_VERSION"; fi
-          if [ -z "$tags" ]; then
-            echo "This release tags no nested module."
-            exit 0
-          fi
-          for tag in $tags; do
-            if [ "$(git rev-parse "refs/tags/$tag^{commit}")" != "$(git rev-parse HEAD)" ]; then
-              echo "::error::tag $tag is not at HEAD"
-              exit 1
-            fi
-          done
-          git push origin $tags
-
-      - name: Verify the published nested modules
-        if: inputs.insight_version != '' || inputs.analysis_version != ''
-        run: |
-          for attempt in 1 2 3 4 5 6; do
-            ok=yes
-            if [ -n "$INSIGHT_VERSION" ]; then
-              sh scripts/verify-consumable.sh --released "$INSIGHT_VERSION" insight || ok=no
-            fi
-            if [ -n "$ANALYSIS_VERSION" ]; then
-              sh scripts/verify-consumable.sh --released "$ANALYSIS_VERSION" analysis || ok=no
-            fi
-            if [ "$ok" = yes ]; then exit 0; fi
-            echo "attempt $attempt failed; retrying in 30s"
-            sleep 30
-          done
-          exit 1
+      - name: Verify the release
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: go run -C .github/scripts/release . verify "$TAG"

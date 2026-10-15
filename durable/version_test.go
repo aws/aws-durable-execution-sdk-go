@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-// releaseVersionPattern matches the versions scripts/release.sh accepts,
+// releaseVersionPattern matches the versions the release tool accepts,
 // without their leading v: X.Y.Z, optionally followed by -alpha, -beta,
 // or -rc and an optional .N.
 var releaseVersionPattern = regexp.MustCompile(`^\d+\.\d+\.\d+(-(alpha|beta|rc)(\.\d+)?)?$`)
@@ -27,8 +27,7 @@ func TestVersionFormat(t *testing.T) {
 // receives. The header must carry the token
 // aws-durable-execution-sdk-go/<Version>, the token format of the durable
 // execution SDKs for the other languages, and name no other durable
-// execution SDK. scripts/release.sh runs this test and TestVersionFormat
-// by name before it tags a release.
+// execution SDK.
 func TestDefaultClientUserAgent(t *testing.T) {
 	var (
 		mu  sync.Mutex

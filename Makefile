@@ -18,6 +18,7 @@ fmt:
 check: build vet lint test
 
 # Run the full CI battery across all modules (durable, insight,
-# conformance, examples, analysis) — same checks as .github/workflows/ci.yml.
+# conformance, examples, analysis, and the release tool) — same checks as
+# .github/workflows/ci.yml.
 check-all:
 	sh scripts/ci-local.sh

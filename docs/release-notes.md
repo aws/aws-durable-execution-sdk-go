@@ -895,14 +895,12 @@ returned.
 
 ### Added: release tags for the `insight` and `analysis` modules
 
-A release tags the root module `vX.Y.Z`. It can also tag the nested
-modules at the same commit, each at a version of its own below v1, as
-`insight/vA.B.C` and `analysis/vA.B.C`. So
-`go get github.com/aws/aws-durable-execution-sdk-go/insight@vA.B.C` and
-`go install github.com/aws/aws-durable-execution-sdk-go/analysis/cmd/durablelint@vA.B.C`
-resolve. Each `insight` release requires the root module version it was
-released with. Upgrade the two together. See "Releasing" in
-`CONTRIBUTING.md`.
+The SDK's releases are tagged `vX.Y.Z`. The nested modules have releases
+of their own, below v1, tagged `insight/vX.Y.Z` and `analysis/vX.Y.Z`. So
+`go get github.com/aws/aws-durable-execution-sdk-go/insight@vX.Y.Z` and
+`go install github.com/aws/aws-durable-execution-sdk-go/analysis/cmd/durablelint@vX.Y.Z`
+resolve. Each `insight` release requires the SDK version it was released
+with. Upgrade the two together. See `RELEASING.md`.
 
 ### Added: `ConfigureLogging` reconfigures the logger inside the handler
 
