@@ -404,6 +404,9 @@ type PluginInvocationStatus string
 // Succeeded and Failed are terminal: the execution has finished and no
 // further invocation follows. Pending and Retrying both mean the execution
 // continues in a later invocation; they differ in why this one ended.
+//
+// EXPERIMENTAL: these constants are experimental and may be changed or
+// removed in future releases.
 const (
 	// PluginInvocationSucceeded reports that the handler returned a result
 	// and the execution has succeeded. ExecutionResult carries the result.
@@ -498,6 +501,9 @@ type PluginOperationStatus string
 // Operation status constants for plugin hooks. A later release may add
 // constants; a plugin that switches on the status should tolerate values
 // it does not know.
+//
+// EXPERIMENTAL: these constants are experimental and may be changed or
+// removed in future releases.
 const (
 	PluginOperationStarted   PluginOperationStatus = "STARTED"
 	PluginOperationReady     PluginOperationStatus = "READY"
@@ -538,6 +544,9 @@ type AttemptEndHookInfo struct {
 type PluginAttemptOutcome string
 
 // Attempt outcome constants for plugin hooks.
+//
+// EXPERIMENTAL: these constants are experimental and may be changed or
+// removed in future releases.
 const (
 	PluginAttemptSucceeded PluginAttemptOutcome = "SUCCEEDED"
 	PluginAttemptFailed    PluginAttemptOutcome = "FAILED"
