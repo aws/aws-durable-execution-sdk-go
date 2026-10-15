@@ -651,19 +651,24 @@ func (a *app) readModFile(dir string) (modFile, error) {
 }
 
 // goEnv returns the environment of go commands that read the checkout.
+// GO111MODULE=on makes the go command use module mode in every directory.
+// Some CI runners set GO111MODULE=auto, and under auto the go command uses
+// module mode only inside a module.
 func (a *app) goEnv() []string {
-	return withEnv(a.env, "GOWORK=off", "GOFLAGS=-mod=mod")
+	return withEnv(a.env, "GO111MODULE=on", "GOWORK=off", "GOFLAGS=-mod=mod")
 }
 
 // proxyEnv returns the environment of go commands that must fetch modules
-// from proxy alone, into the empty module cache cache. The go command
-// fetches a module that GOPRIVATE or GONOPROXY matches from its origin
-// instead. GONOPROXY=none matches no module, and it overrides GOPRIVATE,
-// so every module comes from the proxy. GOPROXY names no fallback, so a
-// version that the proxy does not serve is an error. -modcacherw keeps the
-// module cache removable.
+// from proxy alone, into the empty module cache cache. GO111MODULE=on
+// forces module mode, as in goEnv. The go command fetches a module that
+// GOPRIVATE or GONOPROXY matches from its origin instead. GONOPROXY=none
+// matches no module, and it overrides GOPRIVATE, so every module comes
+// from the proxy. GOPROXY names no fallback, so a version that the proxy
+// does not serve is an error. -modcacherw keeps the module cache
+// removable.
 func proxyEnv(env []string, proxy, cache string) []string {
 	return withEnv(env,
+		"GO111MODULE=on",
 		"GOPROXY="+proxy,
 		"GONOPROXY=none",
 		"GOWORK=off",

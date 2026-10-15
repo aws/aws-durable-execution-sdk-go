@@ -40,9 +40,11 @@ func newRepo(t *testing.T) (*app, *bytes.Buffer) {
 	}
 	out := new(bytes.Buffer)
 	// The tests need no network. GOPROXY=off forbids downloads, except
-	// where a test sets a file proxy. Each test gets its own module cache,
-	// so no test sees a module that another test downloaded. Git ignores
-	// the user's configuration, which could require signed commits.
+	// where a test sets a file proxy. GO111MODULE=off makes every go
+	// command fail unless the tool forces module mode for it. Each test
+	// gets its own module cache, so no test sees a module that another
+	// test downloaded. Git ignores the user's configuration, which could
+	// require signed commits.
 	cache := t.TempDir()
 	t.Cleanup(func() {
 		// The go command makes the module cache read-only, so the
@@ -54,6 +56,7 @@ func newRepo(t *testing.T) (*app, *bytes.Buffer) {
 		}
 	})
 	env := withEnv(os.Environ(),
+		"GO111MODULE=off",
 		"GOPROXY=off",
 		"GOSUMDB=off",
 		"GOFLAGS=",
