@@ -1,6 +1,27 @@
 # Release Notes
 
-## Unreleased
+## v1.0.0
+
+The first release of the SDK.
+
+- The SDK follows semantic versioning from this release on. Code written
+  against v1.0.0 keeps compiling and working as documented with every
+  later v1 release.
+- The plugin instrumentation API stays experimental. Any part of it may
+  change or be removed in a minor release. Its declarations carry
+  `EXPERIMENTAL` markers, and these notes record each change to it.
+- The `insight` and `analysis` modules stay below v1, and each has a
+  version of its own.
+- `durable.Version` is `1.0.0`. The default client sends it in the
+  User-Agent header of its Lambda API calls, as
+  `aws-durable-execution-sdk-go/1.0.0`.
+
+See Versioning in the README for the full policy, including the supported
+Go versions.
+
+The entries below record the changes made before this release, between
+untagged commits. Code written against such a commit may need the changes
+they describe.
 
 ### Changed: a future the handler never awaits records its start, as in the JavaScript SDK
 
@@ -872,15 +893,14 @@ descends from the invocation's. That merged context is cancelled once `fn`
 returns, so user code must not keep using it after the wrapped function has
 returned.
 
-### Added: the `insight` and `analysis` modules are released with the SDK
+### Added: release tags for the `insight` and `analysis` modules
 
-Each release tags the root module `vX.Y.Z` and the nested modules
-`insight/vX.Y.Z` and `analysis/vX.Y.Z` at the same commit, so
+The SDK's releases are tagged `vX.Y.Z`. The nested modules have releases
+of their own, below v1, tagged `insight/vX.Y.Z` and `analysis/vX.Y.Z`. So
 `go get github.com/aws/aws-durable-execution-sdk-go/insight@vX.Y.Z` and
 `go install github.com/aws/aws-durable-execution-sdk-go/analysis/cmd/durablelint@vX.Y.Z`
-resolve. `insight/vX.Y.Z` declares a dependency on the root module
-`vX.Y.Z`; keep the two at the same version. See "Releasing" in
-`CONTRIBUTING.md`.
+resolve. Each `insight` release requires the SDK version it was released
+with. Upgrade the two together. See `RELEASING.md`.
 
 ### Added: `ConfigureLogging` reconfigures the logger inside the handler
 

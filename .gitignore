@@ -2,6 +2,9 @@
 /bin/
 /dist/
 *.test
+# go build ./... writes the release tool's binary, because the tool's
+# module holds a single main package.
+/.github/scripts/release/release
 
 # Coverage
 *.out

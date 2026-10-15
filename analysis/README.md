@@ -6,6 +6,10 @@ code is deployed. It is built on the standard Go analysis framework
 (`golang.org/x/tools/go/analysis`), so it runs as a standalone binary, under
 `go vet -vettool`, or inside golangci-lint.
 
+> This module's versions stay below v1, so any release may change its
+> rules, its diagnostics, and its API. See Versioning in the
+> [root README](../README.md#versioning).
+
 ## Installation
 
 ```console

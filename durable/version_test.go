@@ -2,15 +2,115 @@ package durable
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
 	"regexp"
+	"strings"
+	"sync"
 	"testing"
 )
 
-func TestVersionIsSemver(t *testing.T) {
-	// Verify the Version constant follows semantic versioning.
-	semverRe := regexp.MustCompile(`^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$`)
-	if !semverRe.MatchString(Version) {
-		t.Errorf("Version = %q, does not match semver pattern", Version)
+// releaseVersionPattern matches the versions the release tool accepts,
+// without their leading v: X.Y.Z, optionally followed by -alpha, -beta,
+// or -rc and an optional .N, with no leading zero in any number. The
+// release tool's versionPattern, in .github/scripts/release/main.go, is
+// the same pattern with the leading v. The tests of both patterns check
+// the same versions. Change the patterns and the versions together.
+var releaseVersionPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta|rc)(\.(0|[1-9][0-9]*))?)?$`)
+
+func TestVersionFormat(t *testing.T) {
+	if !releaseVersionPattern.MatchString(Version) {
+		t.Errorf("Version = %q, want X.Y.Z, optionally followed by -alpha, -beta, or -rc and an optional .N, with no leading zero in any number", Version)
+	}
+}
+
+// TestReleaseVersionPattern checks releaseVersionPattern against the
+// version forms that RELEASING.md accepts and refuses.
+func TestReleaseVersionPattern(t *testing.T) {
+	for _, v := range []string{"0.1.0", "1.0.0", "1.10.200", "1.1.0-alpha", "1.1.0-beta.2", "1.1.0-rc.1", "1.1.0-rc.0"} {
+		if !releaseVersionPattern.MatchString(v) {
+			t.Errorf("releaseVersionPattern does not match %q, a version the release tool accepts", v)
+		}
+	}
+	for _, v := range []string{"v1.0.0", "1.0", "01.0.0", "1.02.0", "1.0.00", "1.0.0-rc.01", "1.0.0-rc1", "1.0.0-preview", "1.0.0-RC.1", "1.0.0+build.1"} {
+		if releaseVersionPattern.MatchString(v) {
+			t.Errorf("releaseVersionPattern matches %q, a version the release tool refuses", v)
+		}
+	}
+}
+
+// TestDefaultClientUserAgent sends both API calls through the default
+// client to a local server and checks the User-Agent header the server
+// receives. The header must carry the token
+// aws-durable-execution-sdk-go/<Version>, the token format of the durable
+// execution SDKs for the other languages, and name no other durable
+// execution SDK.
+func TestDefaultClientUserAgent(t *testing.T) {
+	var (
+		mu  sync.Mutex
+		got = map[string][]string{}
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		got[r.Method+" "+r.URL.Path[strings.LastIndex(r.URL.Path, "/"):]] = r.Header.Values("User-Agent")
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost {
+			_, _ = w.Write([]byte(`{"CheckpointToken":"token-2"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"Operations":[]}`))
+	}))
+	defer srv.Close()
+
+	// Keep the test independent of the machine's AWS configuration, and
+	// send the calls to the local server. AWS_EXECUTION_ENV and
+	// AWS_SDK_UA_APP_ID add tokens of their own to the header.
+	dir := t.TempDir()
+	t.Setenv("AWS_CONFIG_FILE", filepath.Join(dir, "config"))
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(dir, "credentials"))
+	t.Setenv("AWS_PROFILE", "")
+	t.Setenv("AWS_REGION", "us-west-2")
+	t.Setenv("AWS_ACCESS_KEY_ID", "AKIDEXAMPLE")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "secret")
+	t.Setenv("AWS_SESSION_TOKEN", "")
+	t.Setenv("AWS_EXECUTION_ENV", "")
+	t.Setenv("AWS_SDK_UA_APP_ID", "")
+	t.Setenv("AWS_IGNORE_CONFIGURED_ENDPOINT_URLS", "")
+	t.Setenv("AWS_ENDPOINT_URL", "")
+	t.Setenv("AWS_ENDPOINT_URL_LAMBDA", srv.URL)
+
+	client, err := defaultExecutionClient(t.Context())
+	if err != nil {
+		t.Fatalf("defaultExecutionClient() error = %v", err)
+	}
+	const arn = "arn:aws:lambda:us-west-2:111122223333:function:f:$LATEST/durable-execution/e/1"
+	if _, err := client.GetExecutionState(t.Context(), GetExecutionStateInput{ExecutionArn: arn, CheckpointToken: "token-1"}); err != nil {
+		t.Fatalf("GetExecutionState() error = %v", err)
+	}
+	if _, err := client.Checkpoint(t.Context(), CheckpointInput{ExecutionArn: arn, CheckpointToken: "token-1"}); err != nil {
+		t.Fatalf("Checkpoint() error = %v", err)
+	}
+
+	wantToken := "aws-durable-execution-sdk-go/" + Version
+	for _, call := range []string{"GET /state", "POST /checkpoint"} {
+		values, ok := got[call]
+		if !ok {
+			t.Errorf("%s: the server received no request", call)
+			continue
+		}
+		if len(values) != 1 {
+			t.Errorf("%s: User-Agent has %d values %q, want 1", call, len(values), values)
+			continue
+		}
+		ua := values[0]
+		if !strings.Contains(" "+ua+" ", " "+wantToken+" ") {
+			t.Errorf("%s: User-Agent %q has no token %q", call, ua, wantToken)
+		}
+		if n := strings.Count(ua, "durable-execution-sdk-"); n != 1 {
+			t.Errorf("%s: User-Agent %q names a durable execution SDK %d times, want once", call, ua, n)
+		}
 	}
 }
 

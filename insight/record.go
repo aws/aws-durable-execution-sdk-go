@@ -2,8 +2,9 @@
 // Execution SDK. It defines the core schema for workflow insight records
 // that capture execution snapshots for diagnostics and monitoring.
 //
-// This package is EXPERIMENTAL and may be changed or removed in future
-// releases without a major-version bump.
+// This package is EXPERIMENTAL. It is built on the experimental plugin API
+// of the durable package, so the insight module stays at major version 0.
+// Any release may change this package's API and its record schema.
 package insight
 
 import (

@@ -79,15 +79,53 @@ jobs:
           (cd examples && "$RUNNER_TEMP/durablelint" ./...)
           (cd conformance && "$RUNNER_TEMP/durablelint" ./...)
 
-  # The published nested modules (insight, analysis) must be consumable
-  # from outside the repository, and the release script that pins and tags
-  # them must keep working. See CONTRIBUTING.md, "Releasing".
+  # The check job runs each module on the Go version its go.mod declares,
+  # which is the oldest Go release that builds the module. This job runs
+  # the published modules on the two newest Go releases, the setup-go
+  # aliases stable and oldstable. See "Go versions" in the README.
+  supported-go:
+    name: supported-go (${{ matrix.module.name }}, ${{ matrix.go }})
+    # Same routing as above.
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || format('codebuild-github-actions-runner-{0}-{1}', github.run_id, github.run_attempt) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        go: [stable, oldstable]
+        module:
+          - { name: durable, dir: "." }
+          - { name: insight, dir: "insight" }
+          - { name: analysis, dir: "analysis" }
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.0.0
+        with:
+          go-version: ${{ matrix.go }}
+          cache-dependency-path: ${{ matrix.module.dir }}/go.sum
+
+      - name: Build
+        working-directory: ${{ matrix.module.dir }}
+        run: go build ./...
+
+      - name: Vet
+        working-directory: ${{ matrix.module.dir }}
+        run: go vet ./...
+
+      - name: Test
+        working-directory: ${{ matrix.module.dir }}
+        run: go test -race ./...
+
+  # A user's module must be able to import every package of the published
+  # nested modules (insight, analysis). The release tool builds a new
+  # module that imports them by their published paths, with every module
+  # of this repository taken from the checkout. See RELEASING.md.
   #
   # One leg per nested module, with Go taken from that module's go.mod. The
   # modules declare different minimums (analysis needs Go 1.25 for
   # golang.org/x/tools; the SDK modules need Go 1.24), and setup-go pins
   # GOTOOLCHAIN=local, so the toolchain cannot upgrade itself. Each leg
-  # therefore checks a consumer on the oldest Go the module itself allows.
+  # therefore checks a user's module on the oldest Go the module allows.
   consumable:
     name: consumable (${{ matrix.module }})
     # Same routing as above.
@@ -105,13 +143,50 @@ jobs:
           go-version-file: ${{ matrix.module }}/go.mod
           cache-dependency-path: ${{ matrix.module }}/go.sum
 
-      # Toolchain-independent (the fixture declares go 1.24) and fast, so it
-      # simply runs in every leg.
-      - name: Test the release script
-        run: sh scripts/release_test.sh
+      - name: Build a new module that imports the nested module
+        run: go run -C .github/scripts/release . consumer ${{ matrix.module }}
 
-      # A throwaway module imports the nested module by its published path.
-      # Both the nested module and the root module come from this checkout,
-      # so the check does not depend on a published root version.
-      - name: Build a throwaway consumer of the nested module
-        run: sh scripts/verify-consumable.sh --root-from-checkout ${{ matrix.module }}
+  # The release tool in .github/scripts/release is a module of its own, so
+  # no published module contains it. This job tests the tool, and checks
+  # that durable.Version and the SDK version that each nested module
+  # requires agree. See RELEASING.md.
+  release-tool:
+    name: release tool
+    # Same routing as above.
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || format('codebuild-github-actions-runner-{0}-{1}', github.run_id, github.run_attempt) }}
+    defaults:
+      run:
+        working-directory: .github/scripts/release
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # The tool has no dependencies, so it has no go.sum to key a cache on.
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.0.0
+        with:
+          go-version-file: .github/scripts/release/go.mod
+          cache: false
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.0.0
+        with:
+          version: v2.12.2
+          working-directory: .github/scripts/release
+
+      - name: Check formatting
+        run: |
+          diff=$(golangci-lint fmt --diff ./...)
+          if [ -n "$diff" ]; then
+            echo "$diff"
+            echo "Files are not properly formatted. Run 'golangci-lint fmt ./...'."
+            exit 1
+          fi
+
+      - name: Test
+        run: go test -race ./...
+
+      - name: Check the versions
+        run: go run . check
