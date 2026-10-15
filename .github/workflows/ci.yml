@@ -79,6 +79,43 @@ jobs:
           (cd examples && "$RUNNER_TEMP/durablelint" ./...)
           (cd conformance && "$RUNNER_TEMP/durablelint" ./...)
 
+  # The check job runs each module on the Go version its go.mod declares,
+  # which is the oldest Go release that builds the module. This job runs
+  # the published modules on the two newest Go releases, the setup-go
+  # aliases stable and oldstable. See "Go versions" in the README.
+  supported-go:
+    name: supported-go (${{ matrix.module.name }}, ${{ matrix.go }})
+    # Same routing as above.
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || format('codebuild-github-actions-runner-{0}-{1}', github.run_id, github.run_attempt) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        go: [stable, oldstable]
+        module:
+          - { name: durable, dir: "." }
+          - { name: insight, dir: "insight" }
+          - { name: analysis, dir: "analysis" }
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.0.0
+        with:
+          go-version: ${{ matrix.go }}
+          cache-dependency-path: ${{ matrix.module.dir }}/go.sum
+
+      - name: Build
+        working-directory: ${{ matrix.module.dir }}
+        run: go build ./...
+
+      - name: Vet
+        working-directory: ${{ matrix.module.dir }}
+        run: go vet ./...
+
+      - name: Test
+        working-directory: ${{ matrix.module.dir }}
+        run: go test -race ./...
+
   # The published nested modules (insight, analysis) must be consumable
   # from outside the repository, and the release script that pins and tags
   # them must keep working. See CONTRIBUTING.md, "Releasing".

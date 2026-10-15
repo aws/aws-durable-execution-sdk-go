@@ -156,6 +156,12 @@ You can check a single module by passing its path:
 sh scripts/ci-local.sh examples
 ```
 
+The `supported-go` CI job also builds, vets, and tests the published
+modules (root, `insight`, `analysis`) with the two newest Go releases
+(`stable` and `oldstable` in `actions/setup-go`). The other jobs use the Go
+version each `go.mod` declares, which is the oldest Go release that builds
+the module.
+
 ### Tool Versions
 
 Tool versions are pinned in `.mise.toml` at the repository root. Run
