@@ -124,8 +124,31 @@ func gitCmd(t *testing.T, a *app, args ...string) string {
 	return out
 }
 
-func TestPrepare(t *testing.T) {
+// committedRepo returns a fixture repository whose files are one commit,
+// which is also origin/main. It also returns the commit's hash.
+func committedRepo(t *testing.T) (*app, *bytes.Buffer, string) {
+	t.Helper()
 	a, out := newRepo(t)
+	gitCmd(t, a, "init", "-q")
+	return a, out, merge(t, a, "first")
+}
+
+// merge commits every change in the checkout and moves origin/main to the
+// new commit, as merging a pull request would. It returns the commit's
+// hash.
+func merge(t *testing.T, a *app, message string) string {
+	t.Helper()
+	gitCmd(t, a, "add", "-A")
+	gitCmd(t, a, "commit", "-q", "-m", message)
+	gitCmd(t, a, "update-ref", "refs/remotes/origin/main", "HEAD")
+	return gitCmd(t, a, "rev-parse", "HEAD")
+}
+
+// TestPrepare follows the steps of an SDK release: prepare, merge, and
+// check. check refuses the release until the changes are a commit on
+// origin/main.
+func TestPrepare(t *testing.T) {
+	a, out, _ := committedRepo(t)
 	if err := a.run([]string{"prepare", "v1.0.0"}); err != nil {
 		t.Fatalf("prepare v1.0.0: %v\n%s", err, out)
 	}
@@ -140,8 +163,23 @@ func TestPrepare(t *testing.T) {
 	if got := readFile(t, filepath.Join(a.repo, "analysis/go.mod")); got != fixture["analysis/go.mod"] {
 		t.Errorf("prepare changed analysis/go.mod:\n%s", got)
 	}
-	if err := a.run([]string{"check", "v1.0.0"}); err != nil {
-		t.Errorf("check v1.0.0 after prepare: %v", err)
+
+	check := []string{"check", "v1.0.0"}
+	err := a.run(check)
+	if want := "the working tree has changes"; err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("check v1.0.0 before the commit: error %v, want one that contains %q", err, want)
+	}
+	gitCmd(t, a, "commit", "-q", "-a", "-m", "chore(release): v1.0.0")
+	err = a.run(check)
+	if want := "which is not on origin/main"; err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("check v1.0.0 before the merge: error %v, want one that contains %q", err, want)
+	}
+	gitCmd(t, a, "update-ref", "refs/remotes/origin/main", "HEAD")
+	if err := a.run(check); err != nil {
+		t.Fatalf("check v1.0.0 after the merge: %v\n%s", err, out)
+	}
+	if want := "Commit " + gitCmd(t, a, "rev-parse", "HEAD") + " is ready for the release v1.0.0."; !strings.Contains(out.String(), want) {
+		t.Errorf("check output has no line %q:\n%s", want, out)
 	}
 
 	before := snapshot(t, a)
@@ -221,11 +259,17 @@ func TestCheck(t *testing.T) {
 			edit: map[string]string{"insight/go.mod": strings.Replace(fixture["insight/go.mod"], "sdk/insight", "sdk/insights", 1)},
 			want: "declares module example.com/sdk/insights",
 		},
+		{
+			name: "untracked file",
+			edit: map[string]string{"durable/new.go": "package durable\n"},
+			args: []string{"v0.1.0"},
+			want: "the working tree has changes",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			a, _ := newRepo(t)
+			a, _, _ := committedRepo(t)
 			for name, content := range tt.edit {
 				writeFile(t, filepath.Join(a.repo, name), content)
 			}
@@ -243,7 +287,7 @@ func TestCheck(t *testing.T) {
 // TestCheckInsightRelease checks that check builds insight from the
 // checkout against the released SDK version that insight requires.
 func TestCheckInsightRelease(t *testing.T) {
-	a, out := newRepo(t)
+	a, out, _ := committedRepo(t)
 	proxy := t.TempDir()
 	a.env = withEnv(a.env, "GOPROXY="+fileURL(proxy))
 	args := []string{"check", "insight/v0.1.0"}
@@ -264,6 +308,7 @@ func TestCheckInsightRelease(t *testing.T) {
 	if _, err := a.command(a.goEnv(), filepath.Join(a.repo, "insight"), "go", "build", "./..."); err != nil {
 		t.Fatalf("insight does not build in the checkout: %v", err)
 	}
+	merge(t, a, "use durable.New in insight")
 	err = a.run(args)
 	if want := "undefined: durable.New"; err == nil || !strings.Contains(err.Error(), want) {
 		t.Fatalf("check with an unreleased SDK API: error %v, want one that contains %q", err, want)
@@ -311,18 +356,12 @@ func TestConsumerReplaceOnlyDependency(t *testing.T) {
 // tagged v1.0.0. It also returns an empty file proxy, and the commit hashes.
 func taggedRepo(t *testing.T) (a *app, out *bytes.Buffer, proxy, first, release string) {
 	t.Helper()
-	a, out = newRepo(t)
-	gitCmd(t, a, "init", "-q")
-	gitCmd(t, a, "add", "-A")
-	gitCmd(t, a, "commit", "-q", "-m", "first")
-	first = gitCmd(t, a, "rev-parse", "HEAD")
+	a, out, first = committedRepo(t)
 	if err := a.run([]string{"prepare", "v1.0.0"}); err != nil {
 		t.Fatal(err)
 	}
-	gitCmd(t, a, "commit", "-q", "-a", "-m", "chore(release): v1.0.0")
+	release = merge(t, a, "chore(release): v1.0.0")
 	gitCmd(t, a, "tag", "v1.0.0")
-	gitCmd(t, a, "update-ref", "refs/remotes/origin/main", "HEAD")
-	release = gitCmd(t, a, "rev-parse", "HEAD")
 	return a, out, t.TempDir(), first, release
 }
 
@@ -449,7 +488,7 @@ func TestVerifyRefuses(t *testing.T) {
 }
 
 func TestRun(t *testing.T) {
-	a, _ := newRepo(t)
+	a, _, _ := committedRepo(t)
 	tests := []struct {
 		args []string
 		code int

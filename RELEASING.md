@@ -94,24 +94,31 @@ insight at `main` requires an SDK version that does not exist.
 
 ### 2. Create the GitHub Release
 
-1. Check out the commit you will tag, and run:
+1. Fetch `main`, and check out the commit you will tag, with no changes
+   in the working tree. Then run `check`:
 
    ```console
+   git fetch origin main
    go run -C .github/scripts/release . check v1.1.0
    ```
 
+   `check` changes nothing. It refuses a working tree with changes, and a
+   commit that is not on `origin/main`. When the commit is ready, it
+   prints the commit's hash.
 2. On the [Releases page](https://github.com/aws/aws-durable-execution-sdk-go/releases),
    click **Draft a new release**.
 3. Under **Choose a tag**, type `v1.1.0`, and choose to create the tag on
-   publish. Set the target to `main`, or to the commit you checked if
-   other commits merged after it.
+   publish. Set the target to `main`. If `main` no longer ends at the
+   commit that `check` printed, create the release with the GitHub CLI
+   instead, with that commit as the target.
 4. Set the title to the tag.
 5. Write the release notes. See [Release notes](#release-notes).
 6. For an `-alpha`, `-beta`, or `-rc` version, check
    **Set as a pre-release**.
 7. Click **Publish release**.
 
-With the GitHub CLI, the same release is:
+With the GitHub CLI, the same release is the command below, where
+`<commit>` is the hash that `check` printed:
 
 ```console
 gh release create v1.1.0 --target <commit> --title v1.1.0 --notes-file notes.md
@@ -126,7 +133,7 @@ tagged `insight/vX.Y.Z` or `analysis/vX.Y.Z`, on a commit on `main`.
 insight requires the SDK version that `durable.Version` names at the
 tagged commit. A user's build fetches that SDK version from its release,
 so the SDK version must be released first. Before you create an insight
-release, check out the commit and run:
+release, run `check` on the commit, as for the SDK:
 
 ```console
 go run -C .github/scripts/release . check insight/v0.2.0
@@ -191,7 +198,7 @@ Before you publish a release:
 
 - [ ] For an SDK release, the `chore(release)` pull request is merged to `main`.
 - [ ] CI passes on `main`.
-- [ ] `check <tag>` passes on the commit you will tag.
+- [ ] After `git fetch origin main`, `check <tag>` passes on the commit you will tag.
 - [ ] The tag is `vX.Y.Z`, `insight/vX.Y.Z`, or `analysis/vX.Y.Z`, and targets that commit.
 - [ ] The release notes are written.
 - [ ] **Set as a pre-release** is checked for an `-alpha`, `-beta`, or `-rc` version.
@@ -210,7 +217,7 @@ standard library. Run it from the repository root as
 | Command | What it does |
 | --- | --- |
 | `prepare vX.Y.Z` | Sets `durable.Version`, and the SDK version that each nested module requires, for an SDK release. |
-| `check [tag]` | Checks that `durable.Version` and the SDK version that each nested module requires agree. With a tag, also checks that the checked-out commit is ready for that release. |
+| `check [tag]` | Checks that `durable.Version` and the SDK version that each nested module requires agree. With a tag, also checks that the working tree has no changes, that HEAD is on `origin/main`, and that HEAD is ready for that release. It changes nothing. |
 | `consumer [dir...]` | Builds a new module that imports every package of each published module, with every module taken from the checkout. |
 | `verify tag` | Checks a published release. The Release workflow runs it. |
 

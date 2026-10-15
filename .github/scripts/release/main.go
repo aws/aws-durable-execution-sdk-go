@@ -12,12 +12,15 @@
 //	    requires, for the SDK release vX.Y.Z. Commit the changes and merge
 //	    them to main before creating the release.
 //
-//	check [tag]
+//	check [-branch ref] [tag]
 //	    Check that each nested module requires the SDK version that
-//	    durable.Version names. With a tag, also check that the checkout is
-//	    ready for that release. For an insight tag, this builds insight
-//	    from this checkout against the released SDK version that insight
+//	    durable.Version names. With a tag, also check that HEAD is a
+//	    commit that the release can tag: the working tree has no changes,
+//	    HEAD is on the branch, origin/main by default, and the versions
+//	    match the tag. For an insight tag, this also builds insight from
+//	    this checkout against the released SDK version that insight
 //	    requires, which the go command fetches as it is configured to.
+//	    check changes nothing.
 //
 //	consumer [dir...]
 //	    Build a new module that imports every package of each published
@@ -58,6 +61,9 @@ const (
 
 	// defaultProxy is the module proxy that the go command uses by default.
 	defaultProxy = "https://proxy.golang.org"
+
+	// defaultBranch is the remote-tracking branch that releases come from.
+	defaultBranch = "origin/main"
 )
 
 // publishedModules are the modules that users add with go get, by
@@ -86,7 +92,7 @@ const usage = `usage: go run -C .github/scripts/release . [-repo dir] <command> 
 
 commands:
   prepare vX.Y.Z      set the SDK version for an SDK release
-  check [tag]         check the versions in the checkout
+  check [tag]         check the versions, and that HEAD is ready for the tag
   consumer [dir...]   build a new module against each published module
   verify tag          check a published release
 
@@ -353,12 +359,46 @@ func (a *app) prepare(args []string) error {
 	return nil
 }
 
-// check checks the versions in the checkout, and with a tag, that the
-// checkout is ready for that release.
+// check checks the versions in the checkout. With a tag, it also checks
+// that HEAD is a commit that the release can tag.
 func (a *app) check(args []string) error {
-	if len(args) > 1 || (len(args) == 1 && strings.HasPrefix(args[0], "-")) {
+	flags := flag.NewFlagSet("check", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	branch := flags.String("branch", defaultBranch, "")
+	if err := flags.Parse(args); err != nil {
+		return usageError("check: " + err.Error())
+	}
+	if flags.NArg() > 1 {
 		return usageError("check takes at most one tag, as in: check v1.2.0")
 	}
+	var (
+		r    release
+		head string
+	)
+	if flags.NArg() == 1 {
+		var err error
+		if r, err = parseTag(flags.Arg(0)); err != nil {
+			return err
+		}
+		// The release tags a commit on the branch, but the checks below
+		// read the files of the working tree. Those are the files of HEAD
+		// only when the tree has no changes.
+		if head, err = a.git("rev-parse", "HEAD"); err != nil {
+			return err
+		}
+		if err := a.requireCleanTree(); err != nil {
+			return err
+		}
+		onBranch, err := a.isAncestor(head, *branch)
+		if err != nil {
+			return err
+		}
+		if !onBranch {
+			return fmt.Errorf("HEAD is %s, which is not on %s. Check out the commit to release. If %s is out of date, fetch it first", head, *branch, *branch)
+		}
+		a.logf("HEAD is %s, which is on %s.", head, *branch)
+	}
+
 	v, err := a.readVersions()
 	if err != nil {
 		return err
@@ -372,14 +412,10 @@ func (a *app) check(args []string) error {
 	} else {
 		a.logf("durable.Version is %s, and %s require %s %s.", plain, strings.Join(v.pinned, ", "), v.sdk, v.version)
 	}
-	if len(args) == 0 {
+	if flags.NArg() == 0 {
 		return nil
 	}
 
-	r, err := parseTag(args[0])
-	if err != nil {
-		return err
-	}
 	if r.dir == "." && r.version != v.version {
 		return fmt.Errorf("durable.Version is %s, not %s. Run prepare %s, and merge the change to main before the release", plain, strings.TrimPrefix(r.version, "v"), r.version)
 	}
@@ -395,7 +431,7 @@ func (a *app) check(args []string) error {
 		}
 		a.logf("%s from this checkout builds with the released %s %s.", r.dir, v.sdk, pin)
 	}
-	a.logf("The checkout is ready for the release %s.", r.tag())
+	a.logf("Commit %s is ready for the release %s. Create the release with this commit as its target.", head, r.tag())
 	return nil
 }
 
@@ -437,7 +473,7 @@ func (a *app) verify(args []string) error {
 	flags := flag.NewFlagSet("verify", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	proxy := flags.String("proxy", defaultProxy, "")
-	branch := flags.String("branch", "origin/main", "")
+	branch := flags.String("branch", defaultBranch, "")
 	timeout := flags.Duration("timeout", 35*time.Minute, "")
 	interval := flags.Duration("interval", 30*time.Second, "")
 	if err := flags.Parse(args); err != nil {
@@ -464,12 +500,8 @@ func (a *app) verify(args []string) error {
 	if head != commit {
 		return fmt.Errorf("HEAD is %s, but %s points at %s. Check out the tag first", head, r.tag(), commit)
 	}
-	status, err := a.git("status", "--porcelain")
-	if err != nil {
+	if err := a.requireCleanTree(); err != nil {
 		return err
-	}
-	if status != "" {
-		return fmt.Errorf("the working tree has changes:\n%s", status)
 	}
 	onBranch, err := a.isAncestor(commit, *branch)
 	if err != nil {
@@ -688,6 +720,21 @@ func withEnv(env []string, set ...string) []string {
 func (a *app) git(args ...string) (string, error) {
 	out, err := a.command(a.env, a.repo, "git", args...)
 	return strings.TrimSpace(out), err
+}
+
+// requireCleanTree returns an error if the working tree has changes,
+// including files that Git neither tracks nor ignores. check and verify
+// read the files of the working tree, and those are the files of HEAD only
+// when the tree has no changes.
+func (a *app) requireCleanTree() error {
+	status, err := a.command(a.env, a.repo, "git", "status", "--porcelain")
+	if err != nil {
+		return err
+	}
+	if status = strings.TrimRight(status, "\n"); status != "" {
+		return fmt.Errorf("the working tree has changes. Commit them, or check out a commit without them:\n%s", status)
+	}
+	return nil
 }
 
 // isAncestor reports whether commit is reachable from ref.
