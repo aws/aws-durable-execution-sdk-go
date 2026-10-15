@@ -1,27 +1,41 @@
 name: Release
 
-# Releases the root module and the published nested modules (insight,
-# analysis) at one version. The job runs scripts/release.sh, which pins each
-# nested module to the root version being released, commits the pins, and
-# creates the tags the Go toolchain expects (vX.Y.Z and <dir>/vX.Y.Z). The
-# root module tag is pushed first; the nested module tags follow only after a
-# throwaway consumer has built the nested modules against the published root
-# module. See CONTRIBUTING.md, "Releasing".
+# Releases the root module, the SDK, and the published nested modules
+# whose versions are given. The SDK is the only module at v1. insight and
+# analysis each have a version of their own, below v1, and the workflow
+# releases one of them only when its version input is set. The job runs
+# scripts/release.sh, which sets the SDK's Version constant, pins each
+# nested module to the root version being released, commits those changes,
+# and creates the tags the Go toolchain expects (vX.Y.Z, and <dir>/vX.Y.Z
+# for each nested module released). The root module tag is pushed first;
+# the nested module tags follow only after a throwaway consumer has built
+# the nested modules against the published root module. See
+# CONTRIBUTING.md, "Releasing".
 #
 # Releases come from the default branch only. The workflow refuses any other
 # ref chosen at dispatch time.
 #
 # A rerun resumes a release that stopped part way. The release script keeps
-# tags of this version that already point at the release commit and creates
-# the missing ones, so rerunning the workflow on the release commit pushes
-# whatever was not pushed before.
+# tags of these versions that already point at the release commit and
+# creates the missing ones, so rerunning the workflow with the same versions
+# on the release commit pushes whatever was not pushed before.
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to release, for example v0.2.0 or v0.2.0-beta.1"
+        description: "Version of the root module, for example v1.0.0 or v1.1.0-rc.1"
         required: true
+        type: string
+      insight_version:
+        description: "Version of the insight module, below v1, for example v0.1.0. Leave empty to not release insight."
+        required: false
+        default: ""
+        type: string
+      analysis_version:
+        description: "Version of the analysis module, below v1, for example v0.1.0. Leave empty to not release analysis."
+        required: false
+        default: ""
         type: string
 
 permissions:
@@ -38,6 +52,8 @@ jobs:
       cancel-in-progress: false
     env:
       VERSION: ${{ inputs.version }}
+      INSIGHT_VERSION: ${{ inputs.insight_version }}
+      ANALYSIS_VERSION: ${{ inputs.analysis_version }}
       RELEASE_BRANCH: ${{ github.event.repository.default_branch }}
     steps:
       # Runs before checkout so that a wrong ref does nothing at all.
@@ -78,7 +94,10 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          sh scripts/release.sh "$VERSION"
+          set -- "$VERSION"
+          if [ -n "$INSIGHT_VERSION" ]; then set -- "$@" "insight/$INSIGHT_VERSION"; fi
+          if [ -n "$ANALYSIS_VERSION" ]; then set -- "$@" "analysis/$ANALYSIS_VERSION"; fi
+          sh scripts/release.sh "$@"
 
       - name: Push the release commit and the root module tag
         run: git push origin "HEAD:$RELEASE_BRANCH" "$VERSION"
@@ -95,18 +114,38 @@ jobs:
           done
           exit 1
 
-      # Only the tags of this version at the release commit. Tags that a
-      # previous run pushed are already up to date on the remote.
+      # Only the nested module tags of this release, each checked to point
+      # at the release commit. Tags that a previous run pushed are already up
+      # to date on the remote.
       - name: Push the nested module tags
         run: |
-          tags=$(git tag --points-at HEAD --list "*/$VERSION")
-          [ -n "$tags" ] || { echo "::error::no nested module tags for $VERSION at HEAD"; exit 1; }
+          tags=
+          if [ -n "$INSIGHT_VERSION" ]; then tags="$tags insight/$INSIGHT_VERSION"; fi
+          if [ -n "$ANALYSIS_VERSION" ]; then tags="$tags analysis/$ANALYSIS_VERSION"; fi
+          if [ -z "$tags" ]; then
+            echo "This release tags no nested module."
+            exit 0
+          fi
+          for tag in $tags; do
+            if [ "$(git rev-parse "refs/tags/$tag^{commit}")" != "$(git rev-parse HEAD)" ]; then
+              echo "::error::tag $tag is not at HEAD"
+              exit 1
+            fi
+          done
           git push origin $tags
 
       - name: Verify the published nested modules
+        if: inputs.insight_version != '' || inputs.analysis_version != ''
         run: |
           for attempt in 1 2 3 4 5 6; do
-            if sh scripts/verify-consumable.sh --released "$VERSION"; then exit 0; fi
+            ok=yes
+            if [ -n "$INSIGHT_VERSION" ]; then
+              sh scripts/verify-consumable.sh --released "$INSIGHT_VERSION" insight || ok=no
+            fi
+            if [ -n "$ANALYSIS_VERSION" ]; then
+              sh scripts/verify-consumable.sh --released "$ANALYSIS_VERSION" analysis || ok=no
+            fi
+            if [ "$ok" = yes ]; then exit 0; fi
             echo "attempt $attempt failed; retrying in 30s"
             sleep 30
           done

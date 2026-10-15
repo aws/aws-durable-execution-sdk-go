@@ -893,14 +893,15 @@ descends from the invocation's. That merged context is cancelled once `fn`
 returns, so user code must not keep using it after the wrapped function has
 returned.
 
-### Added: the `insight` and `analysis` modules are released with the SDK
+### Added: release tags for the `insight` and `analysis` modules
 
-Each release tags the root module `vX.Y.Z` and the nested modules
-`insight/vX.Y.Z` and `analysis/vX.Y.Z` at the same commit, so
-`go get github.com/aws/aws-durable-execution-sdk-go/insight@vX.Y.Z` and
-`go install github.com/aws/aws-durable-execution-sdk-go/analysis/cmd/durablelint@vX.Y.Z`
-resolve. `insight/vX.Y.Z` declares a dependency on the root module
-`vX.Y.Z`; keep the two at the same version. See "Releasing" in
+A release tags the root module `vX.Y.Z`. It can also tag the nested
+modules at the same commit, each at a version of its own below v1, as
+`insight/vA.B.C` and `analysis/vA.B.C`. So
+`go get github.com/aws/aws-durable-execution-sdk-go/insight@vA.B.C` and
+`go install github.com/aws/aws-durable-execution-sdk-go/analysis/cmd/durablelint@vA.B.C`
+resolve. Each `insight` release requires the root module version it was
+released with. Upgrade the two together. See "Releasing" in
 `CONTRIBUTING.md`.
 
 ### Added: `ConfigureLogging` reconfigures the logger inside the handler

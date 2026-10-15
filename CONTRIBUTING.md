@@ -64,7 +64,7 @@ exist only for this repository's tests and examples.
 `insight/go.mod` depends on the root module in two ways at once:
 
 ```
-require github.com/aws/aws-durable-execution-sdk-go v0.1.0
+require github.com/aws/aws-durable-execution-sdk-go v1.0.0
 
 replace github.com/aws/aws-durable-execution-sdk-go => ..
 ```
@@ -76,10 +76,10 @@ current source with no extra step.
 
 A user's build ignores that `replace` directive. It reads only the `require`
 line, so the version there must be a published root module tag. The release
-script (below) rewrites it to the version being released; do not edit it by
-hand. Between releases it names the most recent release, which is why a
-change to `insight` that needs an unreleased root module API builds locally
-but is not usable by external consumers until the next release.
+script (below) rewrites it to the root version being released; do not edit
+it by hand. Between releases it names the most recent release, which is why
+a change to `insight` that needs an unreleased root module API builds
+locally but is not usable by external consumers until the next release.
 
 `analysis` does not depend on the root module. The internal modules
 (`conformance`, `examples`) have the same `require` and `replace` pair, and
@@ -231,65 +231,104 @@ issues while working, open a separate PR for those.
 
 ## Releasing
 
-The root module and the published nested modules (`insight`, `analysis`)
-are released together at one version. A release is a set of Git tags; there
-is no registry upload.
+A release tags the root module. It can also tag the published nested
+modules, `insight` and `analysis`, at the same commit. A release is a set
+of Git tags; there is no registry upload.
 
 ### Versioning and compatibility
 
-- The root module is tagged `vX.Y.Z`.
-- Each published nested module is tagged `<dir>/vX.Y.Z`, the form the Go
-  toolchain expects for a module in a subdirectory: `insight/v0.2.0`,
-  `analysis/v0.2.0`.
-- All three tags of one release point at the same commit and carry the
-  same version number.
-- `insight/vX.Y.Z` declares a dependency on the root module `vX.Y.Z`, the
-  version it was built and tested with. Go treats a declared version as a
-  minimum: a consumer that also requires a newer root module gets the newer
-  one. The plugin API the two share is experimental and may change between
-  releases, so keep both at the same version. That is the pairing the
-  release tested.
-- `analysis/vX.Y.Z` has no dependency on the root module; its version
-  only records which release it belongs to.
+The README's [Versioning](README.md#versioning) section states what each
+release guarantees to users. The tags follow from it:
 
-Before the first release, `insight/go.mod` pins a root version that does
-not exist yet. Local builds are unaffected (they use the `replace`
-directive); the module becomes usable by external consumers with the first
-release.
+- The root module is tagged `vX.Y.Z`. It is the only module at v1.
+- `insight` and `analysis` each have a version of their own, below v1. A
+  release tags one of them only when it is given that module's version,
+  as `insight/vA.B.C` or `analysis/vA.B.C`. The release script refuses a
+  version of v1 or later for them.
+- A Go module in a subdirectory needs its directory as the tag prefix, as
+  in `insight/v0.1.0`. All tags of one release point at the same commit.
+- Every release pins the root module requirement of `insight` to the root
+  version being released, whether or not it tags `insight`. So an
+  `insight` tag requires the root version it was released with, the
+  version it was built and tested with. Go treats a required version as a
+  minimum: a consumer that also requires a newer root module gets the
+  newer one. So release a new `insight` version with every root release
+  that changes the plugin API.
+- The release script sets the `Version` constant in `durable/version.go`
+  to the root module version without the leading `v`. The default client
+  sends it in the User-Agent header of every Lambda API call, as
+  `aws-durable-execution-sdk-go/1.0.0`, the token format of the other
+  durable execution SDKs. The script accepts only versions of the form
+  `vX.Y.Z`, optionally followed by `-alpha`, `-beta`, or `-rc` and an
+  optional `.N`, such as `v1.2.0` and `v1.2.0-rc.1`. It refuses other
+  forms, such as `v1.2.0-rc1` and `v1.2.0-preview`.
+
+A tag cannot be changed once it is pushed. Go tools check every download
+against the first copy that anyone fetched, and module proxies may keep
+serving a deleted tag. Fix a mistake by releasing a new version.
+
+Before a minor or patch release of the root module, check for incompatible
+API changes. `gorelease` lists the API differences from a released version.
+It needs Go 1.26 or later.
+
+```bash
+go run golang.org/x/exp/cmd/gorelease@latest -base=v1.0.0
+```
+
+It reports a change to the experimental plugin API as incompatible. The
+compatibility promise allows such a change in a minor release. Any other
+incompatible change needs a new major version.
 
 ### Procedure
 
 1. Make sure `main` is green in CI and your checkout of it is clean and up
    to date.
 2. Run the Release workflow in GitHub Actions (`.github/workflows/release.yml`)
-   from `main` with the version to release, for example `v0.2.0` or
-   `v0.2.0-beta.1`. The workflow refuses any other branch or tag chosen at
-   dispatch time, and it pushes the release commit to `main` only.
-   The workflow runs `scripts/release.sh`, which:
-   1. rewrites the root module requirement in every nested module that has
-      one (`insight`, `conformance`, `examples`) to the release version;
-   2. commits that change as `chore(release): vX.Y.Z`, or commits nothing
-      when the pins already match;
-   3. creates the annotated tags `vX.Y.Z`, `insight/vX.Y.Z`, and
-      `analysis/vX.Y.Z` on that commit.
+   from `main`. It takes the root module version, for example `v1.0.0` or
+   `v1.1.0-rc.1`. It also takes an `insight` version and an `analysis`
+   version, for example `v0.1.0`. Leave a nested module's version empty to
+   release the root module without it. The workflow refuses any other
+   branch or tag chosen at dispatch time, and it pushes the release commit
+   to `main` only. The workflow runs `scripts/release.sh`, which:
+   1. sets the `Version` constant in `durable/version.go`, then builds the
+      root module and runs the tests that check the constant and the
+      User-Agent header of the default client;
+   2. rewrites the root module requirement in every nested module that has
+      one (`insight`, `conformance`, `examples`) to the root version;
+   3. commits those changes as `chore(release): vX.Y.Z`, or commits nothing
+      when the tree already holds them;
+   4. creates the annotated tag `vX.Y.Z` on that commit, and the tags
+      `insight/vA.B.C` and `analysis/vA.B.C` for the versions given.
 
    The workflow then pushes the commit and the root tag, builds a throwaway
    consumer of the nested modules against the now-published root module,
-   and only then pushes the nested module tags. A last step fetches every
-   published module from the module proxy with `go get` and builds it.
-3. Write the release notes for the tag from `docs/release-notes.md`.
+   and only then pushes the nested module tags, if the release has any. A
+   last step fetches each released nested module from the module proxy
+   with `go get` and builds it.
+3. Write the release notes for the tag from `docs/release-notes.md`. Name
+   the nested module versions the release tags, if any.
 
-The script also runs locally, for a release from a maintainer's machine:
+The script also runs locally, for a release from a maintainer's machine.
+To release the root module alone:
 
 ```bash
-sh scripts/release.sh v0.2.0
-git push origin main v0.2.0 insight/v0.2.0 analysis/v0.2.0
-sh scripts/verify-consumable.sh --released v0.2.0
+sh scripts/release.sh v1.0.0
+git push origin main v1.0.0
+```
+
+To release nested modules as well, add their versions, and check them
+from the module proxy after the push:
+
+```bash
+sh scripts/release.sh v1.1.0 insight/v0.1.0 analysis/v0.1.0
+git push origin main v1.1.0 insight/v0.1.0 analysis/v0.1.0
+sh scripts/verify-consumable.sh --released v0.1.0 insight analysis
 ```
 
 If `main` only accepts pull requests, open one with the `chore(release)`
 commit, merge it, and run `scripts/release.sh` again on the merged commit.
-The pins already match, so the second run creates only the tags.
+The tree already holds the release, so the second run creates only the
+tags.
 
 The script refuses a dirty working tree and a `v2` or later version,
 because a new major version changes every module path. It also refuses a
@@ -301,16 +340,16 @@ version is taken.
 The workflow pushes the root tag before it verifies the nested modules. If
 that verification fails, or the module proxy has not served the new tag
 within the retry window, the root tag is published and the nested tags are
-not. To finish the release, run the workflow again with the same version.
+not. To finish the release, run the workflow again with the same versions.
 `main` still ends at the release commit, so the script keeps the tags that
 already point there, creates the missing ones, and the workflow pushes only
 those. The same holds locally: rerun `scripts/release.sh` with the same
-version on the release commit and push the tags it lists.
+arguments on the release commit and push the tags it lists.
 
 The workflow can resume only while `main` ends at the release commit. Once
 more commits land on `main`, check out the release commit locally
-(`git checkout vX.Y.Z`), run `scripts/release.sh vX.Y.Z` there, and push
-the tags it lists; or release the next version instead.
+(`git checkout vX.Y.Z`), run `scripts/release.sh` there with the same
+arguments, and push the tags it lists; or release the next version instead.
 
 `scripts/release_test.sh` exercises the script against a fixture
 repository and runs in the `consumable` CI job.

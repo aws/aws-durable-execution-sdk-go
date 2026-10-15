@@ -20,9 +20,12 @@
 #                        without needing a published root version.
 #   --released vX.Y.Z    Nothing comes from the checkout. The throwaway module
 #                        runs `go get <module>@vX.Y.Z` against the module proxy.
-#                        Run after the tags are pushed.
+#                        Run after the tags are pushed. Each nested module has a
+#                        version of its own, so name the modules released at
+#                        vX.Y.Z, as in `--released v0.1.0 insight analysis`.
 #
-# Modules default to the published nested modules: insight analysis.
+# Modules default to the published nested modules: insight analysis. The
+# --released mode has no default.
 
 set -eu
 
@@ -47,6 +50,9 @@ done
 
 if [ $# -gt 0 ]; then
     MODULES=$*
+elif [ "$MODE" = released ]; then
+    echo "usage: --released $RELEASED needs the modules released at that version, as in: --released $RELEASED insight" >&2
+    exit 2
 else
     MODULES="insight analysis"
 fi

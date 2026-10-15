@@ -11,11 +11,14 @@ import (
 	"testing"
 )
 
-func TestVersionIsSemver(t *testing.T) {
-	// Verify the Version constant follows semantic versioning.
-	semverRe := regexp.MustCompile(`^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$`)
-	if !semverRe.MatchString(Version) {
-		t.Errorf("Version = %q, does not match semver pattern", Version)
+// releaseVersionPattern matches the versions scripts/release.sh accepts,
+// without their leading v: X.Y.Z, optionally followed by -alpha, -beta,
+// or -rc and an optional .N.
+var releaseVersionPattern = regexp.MustCompile(`^\d+\.\d+\.\d+(-(alpha|beta|rc)(\.\d+)?)?$`)
+
+func TestVersionFormat(t *testing.T) {
+	if !releaseVersionPattern.MatchString(Version) {
+		t.Errorf("Version = %q, want X.Y.Z, optionally followed by -alpha, -beta, or -rc and an optional .N", Version)
 	}
 }
 
@@ -24,7 +27,8 @@ func TestVersionIsSemver(t *testing.T) {
 // receives. The header must carry the token
 // aws-durable-execution-sdk-go/<Version>, the token format of the durable
 // execution SDKs for the other languages, and name no other durable
-// execution SDK.
+// execution SDK. scripts/release.sh runs this test and TestVersionFormat
+// by name before it tags a release.
 func TestDefaultClientUserAgent(t *testing.T) {
 	var (
 		mu  sync.Mutex

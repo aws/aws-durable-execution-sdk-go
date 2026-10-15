@@ -1,6 +1,9 @@
 package durable
 
-// Version is the semantic version of the aws-durable-execution-sdk-go module.
+// Version is the version of the github.com/aws/aws-durable-execution-sdk-go
+// module, without the leading v of its release tag. The release script
+// (scripts/release.sh) sets it in the release commit, so between releases
+// it names the most recent release.
 const Version = "0.1.0"
 
 // userAgentKey names the SDK in the User-Agent header of every Lambda API
