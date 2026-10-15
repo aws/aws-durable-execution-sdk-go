@@ -518,7 +518,11 @@ func TestRun(t *testing.T) {
 		{[]string{"-repo", a.repo}, 2},
 		{[]string{"-repo", a.repo, "release"}, 2},
 		{[]string{"-repo", a.repo, "check", "v1.0.0"}, 1},
+		// A relative path is relative to the current directory, as in
+		// go run -C .github/scripts/release . -repo ../../.. check.
+		{[]string{"-repo", "..", "check"}, 0},
 	}
+	t.Chdir(filepath.Join(a.repo, "insight"))
 	for _, tt := range tests {
 		var stdout, stderr bytes.Buffer
 		if code := run(tt.args, &stdout, &stderr); code != tt.code {

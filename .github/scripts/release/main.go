@@ -114,16 +114,26 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
-	a := &app{repo: *repo, env: os.Environ(), out: stdout}
-	if a.repo == "" {
+	a := &app{env: os.Environ(), out: stdout}
+	dir := *repo
+	if dir == "" {
 		root, err := a.command(a.env, ".", "git", "rev-parse", "--show-toplevel")
 		if err != nil {
 			_, _ = fmt.Fprintf(stderr, "release: cannot find the repository root. Run the tool inside the checkout, or pass -repo.\n%v\n", err)
 			return 1
 		}
-		a.repo = strings.TrimSpace(root)
+		dir = strings.TrimSpace(root)
 	}
-	err := a.run(flags.Args())
+	// The tool runs commands in the repository, and it passes them paths
+	// inside the repository. A relative path would resolve against a
+	// different directory in each of those two uses.
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "release: %v\n", err)
+		return 1
+	}
+	a.repo = dir
+	err = a.run(flags.Args())
 	var u usageError
 	switch {
 	case err == nil:
