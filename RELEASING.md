@@ -30,8 +30,10 @@ same commit, create two GitHub Releases.
 The README's [Versioning](README.md#versioning) section states what each
 release promises to users. These rules follow from it:
 
-- The SDK is at v1. A v2 would need a new module path, ending in `/v2`,
-  which the release tool does not set up.
+- The SDK is at v1. `prepare` refuses a major version below the one
+  that `durable.Version` names, such as v0.1.1 after v1.0.0. A v2 would
+  need a new module path, ending in `/v2`, which the release tool does
+  not set up.
 - insight and analysis stay below v1. The release tool refuses v1 or
   later for them.
 - A version has the form `vX.Y.Z`, optionally followed by `-alpha`,

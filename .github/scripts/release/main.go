@@ -10,7 +10,9 @@
 //	prepare vX.Y.Z
 //	    Set durable.Version, and the SDK version that each nested module
 //	    requires, for the SDK release vX.Y.Z. Commit the changes and merge
-//	    them to main before creating the release.
+//	    them to main before creating the release. prepare refuses a major
+//	    version below the one durable.Version names, such as v0.1.1 after
+//	    v1.0.0.
 //
 //	check [-branch ref] [tag]
 //	    Check that each nested module requires the SDK version that
@@ -172,6 +174,7 @@ func (a *app) logf(format string, args ...any) {
 type release struct {
 	dir     string // directory of the module; "." for the SDK
 	version string // the version with its leading v, as v1.2.0
+	major   int    // the major version number, as 1 for v1.2.0
 }
 
 // tag returns the Git tag of the release, as v1.2.0 or insight/v0.1.0.
@@ -199,6 +202,7 @@ func parseTag(tag string) (release, error) {
 	if err != nil {
 		return release{}, fmt.Errorf("tag %s: %w", tag, err)
 	}
+	r.major = major
 	return r, nil
 }
 
@@ -323,6 +327,15 @@ func (a *app) prepare(args []string) error {
 	v, err := a.readVersions()
 	if err != nil {
 		return err
+	}
+	// A release at a lower major version, such as v0.1.1 after v1.0.0,
+	// would set durable.Version and the requirements back to that major
+	// version, and its tag could never be withdrawn. majorRule allows the
+	// SDK v0 and v1, so that verify can still check a v0 tag. So prepare
+	// compares the version with durable.Version itself. A durable.Version
+	// that does not parse is replaced without the comparison.
+	if current, err := parseVersion(v.version); err == nil && r.major < current {
+		return fmt.Errorf("durable.Version is %s, so the SDK is at v%d. A release cannot return it to v%d, as %s would", strings.TrimPrefix(v.version, "v"), current, r.major, r.version)
 	}
 
 	plain := strings.TrimPrefix(r.version, "v")

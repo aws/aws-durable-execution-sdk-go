@@ -222,6 +222,27 @@ func TestPrepareRefuses(t *testing.T) {
 	}
 }
 
+// TestPrepareRefusesLowerMajor checks that prepare keeps the SDK at v1
+// once durable.Version names a v1 version.
+func TestPrepareRefusesLowerMajor(t *testing.T) {
+	a, _ := newRepo(t)
+	if err := a.run([]string{"prepare", "v1.0.0"}); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshot(t, a)
+	err := a.run([]string{"prepare", "v0.1.1"})
+	if want := "A release cannot return it to v0"; err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("prepare v0.1.1 after v1.0.0: error %v, want one that contains %q", err, want)
+	}
+	if !maps.Equal(before, snapshot(t, a)) {
+		t.Error("prepare v0.1.1 changed files")
+	}
+	// A pre-release of v1 is not a lower major version.
+	if err := a.run([]string{"prepare", "v1.0.0-rc.1"}); err != nil {
+		t.Errorf("prepare v1.0.0-rc.1 after v1.0.0: %v", err)
+	}
+}
+
 func TestCheck(t *testing.T) {
 	tests := []struct {
 		name string
