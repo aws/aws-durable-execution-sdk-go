@@ -12,9 +12,11 @@ name: Release
 #    the proxy for the version also makes pkg.go.dev list it.
 # 4. A new module that imports the released module from the proxy builds.
 #
-# A failed check cannot be undone by deleting the tag, because the module
-# proxy keeps serving a version it has fetched. Fix it with the next
-# version. See RELEASING.md.
+# The workflow asks the module proxy for the version only after checks 1
+# and 2 pass. So when one of those fails, the workflow has not fetched
+# the version. A user's go command may still have fetched it, and the
+# proxy keeps serving a version it has fetched even after its tag is
+# deleted. So fix a failed check with the next version. See RELEASING.md.
 
 on:
   release:

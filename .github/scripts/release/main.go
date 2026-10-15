@@ -10,9 +10,9 @@
 //	prepare vX.Y.Z
 //	    Set durable.Version, and the SDK version that each nested module
 //	    requires, for the SDK release vX.Y.Z. Commit the changes and merge
-//	    them to main before creating the release. prepare refuses a major
-//	    version below the one durable.Version names, such as v0.1.1 after
-//	    v1.0.0.
+//	    them to main before creating the release. prepare refuses a
+//	    version below durable.Version, such as v1.1.0 or v1.2.0-rc.1 after
+//	    1.2.0.
 //
 //	check [-branch ref] [tag]
 //	    Check that each nested module requires the SDK version that
@@ -41,6 +41,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -185,7 +186,6 @@ func (a *app) logf(format string, args ...any) {
 type release struct {
 	dir     string // directory of the module; "." for the SDK
 	version string // the version with its leading v, as v1.2.0
-	major   int    // the major version number, as 1 for v1.2.0
 }
 
 // tag returns the Git tag of the release, as v1.2.0 or insight/v0.1.0.
@@ -213,7 +213,6 @@ func parseTag(tag string) (release, error) {
 	if err != nil {
 		return release{}, fmt.Errorf("tag %s: %w", tag, err)
 	}
-	r.major = major
 	return r, nil
 }
 
@@ -225,6 +224,51 @@ func parseVersion(v string) (int, error) {
 		return 0, fmt.Errorf("version %q does not have the form %s", v, versionForm)
 	}
 	return strconv.Atoi(m[1])
+}
+
+// compareVersions returns -1, 0, or +1 as the version a is lower than,
+// equal to, or higher than the version b, by the precedence rules of
+// semantic versioning. Both versions must match versionPattern.
+func compareVersions(a, b string) int {
+	// The submatches are the major, minor, and patch numbers, then the
+	// whole pre-release, its name, a dot, and its number.
+	x, y := versionPattern.FindStringSubmatch(a), versionPattern.FindStringSubmatch(b)
+	for i := 1; i <= 3; i++ {
+		if c := compareNumbers(x[i], y[i]); c != 0 {
+			return c
+		}
+	}
+	// A version with a pre-release is lower than the same version without.
+	switch {
+	case x[4] == y[4]:
+		return 0
+	case x[4] == "":
+		return 1
+	case y[4] == "":
+		return -1
+	}
+	// The names alpha, beta, and rc compare in ASCII order. A pre-release
+	// with a number is higher than the same pre-release without one.
+	if c := strings.Compare(x[5], y[5]); c != 0 {
+		return c
+	}
+	switch {
+	case x[7] == "":
+		return -1
+	case y[7] == "":
+		return 1
+	}
+	return compareNumbers(x[7], y[7])
+}
+
+// compareNumbers compares two decimal numbers that have no leading zeros.
+// The longer number is the higher one, and numbers of the same length
+// compare digit by digit, so no number can overflow.
+func compareNumbers(a, b string) int {
+	if c := cmp.Compare(len(a), len(b)); c != 0 {
+		return c
+	}
+	return strings.Compare(a, b)
 }
 
 // majorRule returns an error unless the repository releases the module in
@@ -339,14 +383,13 @@ func (a *app) prepare(args []string) error {
 	if err != nil {
 		return err
 	}
-	// A release at a lower major version, such as v0.1.1 after v1.0.0,
-	// would set durable.Version and the requirements back to that major
-	// version, and its tag could never be withdrawn. majorRule allows the
-	// SDK v0 and v1, so that verify can still check a v0 tag. So prepare
-	// compares the version with durable.Version itself. A durable.Version
-	// that does not parse is replaced without the comparison.
-	if current, err := parseVersion(v.version); err == nil && r.major < current {
-		return fmt.Errorf("durable.Version is %s, so the SDK is at v%d. A release cannot return it to v%d, as %s would", strings.TrimPrefix(v.version, "v"), current, r.major, r.version)
+	// A release never lowers the version. A lower version, such as v1.1.0
+	// or v1.2.0-rc.1 after 1.2.0, would set durable.Version and the SDK
+	// requirements back, and its tag could never be withdrawn. So prepare
+	// refuses it. A durable.Version that does not parse is replaced without
+	// the comparison.
+	if _, err := parseVersion(v.version); err == nil && compareVersions(r.version, v.version) < 0 {
+		return fmt.Errorf("%s is lower than durable.Version, %s. A release cannot lower the version", r.version, strings.TrimPrefix(v.version, "v"))
 	}
 
 	plain := strings.TrimPrefix(r.version, "v")

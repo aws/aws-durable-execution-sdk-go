@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"io/fs"
 	"maps"
@@ -269,24 +270,59 @@ func TestPrepareAndCheck(t *testing.T) {
 	}
 }
 
-// TestPrepareRefusesLowerMajor checks that prepare keeps the SDK at v1
-// once durable.Version names a v1 version.
-func TestPrepareRefusesLowerMajor(t *testing.T) {
-	a, _ := newRepo(t)
-	if err := a.run([]string{"prepare", "v1.0.0"}); err != nil {
-		t.Fatal(err)
+// TestPrepareRefusesLowerVersion checks that prepare refuses a version
+// below durable.Version, and accepts the same or a higher one.
+func TestPrepareRefusesLowerVersion(t *testing.T) {
+	tests := []struct {
+		from, to string // durable.Version before prepare, and the version prepared
+		ok       bool
+	}{
+		{"v1.0.0", "v0.9.0", false},
+		{"v1.0.0", "v1.0.0-rc.1", false},
+		{"v1.2.0", "v1.1.0", false},
+		{"v1.2.0-rc.2", "v1.2.0-rc.1", false},
+		{"v1.0.0", "v1.0.0", true},
+		{"v1.0.0", "v1.0.1", true},
+		{"v1.0.0", "v1.1.0-rc.1", true},
+		{"v1.2.0-rc.1", "v1.2.0", true},
 	}
-	before := snapshot(t, a)
-	err := a.run([]string{"prepare", "v0.1.1"})
-	if want := "A release cannot return it to v0"; err == nil || !strings.Contains(err.Error(), want) {
-		t.Fatalf("prepare v0.1.1 after v1.0.0: error %v, want one that contains %q", err, want)
+	for _, tt := range tests {
+		t.Run(tt.from+" to "+tt.to, func(t *testing.T) {
+			t.Parallel()
+			a, _ := newRepo(t)
+			if err := a.run([]string{"prepare", tt.from}); err != nil {
+				t.Fatal(err)
+			}
+			before := snapshot(t, a)
+			err := a.run([]string{"prepare", tt.to})
+			switch {
+			case tt.ok && err != nil:
+				t.Fatalf("prepare %s at %s: %v", tt.to, tt.from, err)
+			case !tt.ok && (err == nil || !strings.Contains(err.Error(), "A release cannot lower the version")):
+				t.Fatalf("prepare %s at %s: error %v, want a refusal to lower the version", tt.to, tt.from, err)
+			case !tt.ok && !maps.Equal(before, snapshot(t, a)):
+				t.Errorf("prepare %s at %s changed files", tt.to, tt.from)
+			}
+		})
 	}
-	if !maps.Equal(before, snapshot(t, a)) {
-		t.Error("prepare v0.1.1 changed files")
+}
+
+// TestCompareVersions checks compareVersions on every pair of versions in
+// a list sorted by semantic versioning precedence.
+func TestCompareVersions(t *testing.T) {
+	sorted := []string{
+		"v0.9.0",
+		"v1.0.0-alpha", "v1.0.0-alpha.1", "v1.0.0-alpha.2", "v1.0.0-alpha.10",
+		"v1.0.0-beta", "v1.0.0-beta.2", "v1.0.0-beta.11",
+		"v1.0.0-rc", "v1.0.0-rc.0", "v1.0.0-rc.1",
+		"v1.0.0", "v1.0.1", "v1.2.0", "v1.10.0", "v2.0.0",
 	}
-	// A pre-release of v1 is not a lower major version.
-	if err := a.run([]string{"prepare", "v1.0.0-rc.1"}); err != nil {
-		t.Errorf("prepare v1.0.0-rc.1 after v1.0.0: %v", err)
+	for i, a := range sorted {
+		for j, b := range sorted {
+			if got, want := compareVersions(a, b), cmp.Compare(i, j); got != want {
+				t.Errorf("compareVersions(%q, %q) = %d, want %d", a, b, got, want)
+			}
+		}
 	}
 }
 

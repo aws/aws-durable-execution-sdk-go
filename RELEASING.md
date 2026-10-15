@@ -30,10 +30,10 @@ same commit, create two GitHub Releases.
 The README's [Versioning](README.md#versioning) section states what each
 release promises to users. These rules follow from it:
 
-- The SDK is at v1. `prepare` refuses a major version below the one
-  that `durable.Version` names, such as v0.1.1 after v1.0.0. A v2 would
-  need a new module path, ending in `/v2`, which the release tool does
-  not set up.
+- The SDK is at v1. A v2 would need a new module path, ending in `/v2`,
+  which the release tool does not set up.
+- A release never lowers the version. `prepare` refuses a version below
+  `durable.Version`, such as v1.1.0 or v1.2.0-rc.1 after 1.2.0.
 - insight and analysis stay below v1. The release tool refuses v1 or
   later for them.
 - A version has the form `vX.Y.Z`, optionally followed by `-alpha`,
@@ -181,10 +181,12 @@ command on the release's tag. The command checks, in this order:
    builds, with every module fetched from the module proxy into an empty
    module cache. This is the build that a new user runs.
 
-The workflow changes nothing. So when it fails, the release is already
-published with the problem that it reports. If the proxy did not serve
-the version in time, run the workflow again. Otherwise, fix the problem
-and release the next version.
+The workflow changes nothing. It asks the module proxy for the version
+only after checks 1 and 2 pass, so when one of those fails, the workflow
+has not fetched the version. A user's go command may still have fetched
+it, so treat the version as published either way. If the proxy did not
+serve the version in time, run the workflow again. Otherwise, fix the
+problem and release the next version.
 
 ## Release notes
 
@@ -192,7 +194,9 @@ and release the next version.
 release. Write the notes of a GitHub Release from those entries. Each
 GitHub Release covers one module, so its notes list only that module's
 changes. Name every change to the experimental plugin API, because a
-minor release may break it.
+minor release may break it. When an SDK release changes the plugin API,
+its notes also name the insight version that supports the change.
+Release that insight version right after the SDK.
 
 ## Checklist
 
