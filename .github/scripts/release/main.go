@@ -82,7 +82,8 @@ var internalModules = []string{"conformance", "examples"}
 
 // versionPattern matches the versions this repository releases. The
 // numbers have no leading zeros, because the go command ignores a tag such
-// as v1.02.0.
+// as v1.02.0. releaseVersionPattern, in durable/version_test.go, is the
+// same pattern without the leading v. Change the two patterns together.
 var versionPattern = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta|rc)(\.(0|[1-9][0-9]*))?)?$`)
 
 const versionForm = "vX.Y.Z, optionally followed by -alpha, -beta, or -rc and an optional .N"

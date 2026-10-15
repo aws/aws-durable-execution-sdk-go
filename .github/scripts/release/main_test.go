@@ -133,13 +133,13 @@ func committedRepo(t *testing.T) (*app, *bytes.Buffer, string) {
 	return a, out, merge(t, a, "first")
 }
 
-// merge commits every change in the checkout and moves origin/main to the
-// new commit, as merging a pull request would. It returns the commit's
-// hash.
+// merge commits every change in the checkout, or makes an empty commit
+// when there is none, and moves origin/main to the new commit, as merging
+// a pull request would. It returns the commit's hash.
 func merge(t *testing.T, a *app, message string) string {
 	t.Helper()
 	gitCmd(t, a, "add", "-A")
-	gitCmd(t, a, "commit", "-q", "-m", message)
+	gitCmd(t, a, "commit", "-q", "--allow-empty", "-m", message)
 	gitCmd(t, a, "update-ref", "refs/remotes/origin/main", "HEAD")
 	return gitCmd(t, a, "rev-parse", "HEAD")
 }
@@ -217,6 +217,53 @@ func TestPrepareRefuses(t *testing.T) {
 			}
 			if !maps.Equal(fixture, snapshot(t, a)) {
 				t.Errorf("prepare %s changed files", tt.arg)
+			}
+		})
+	}
+}
+
+// acceptedVersions and refusedVersions are the version forms that
+// RELEASING.md accepts and refuses. TestReleaseVersionPattern, in
+// durable/version_test.go, checks the same versions without the leading
+// v. Its first refused version is v1.0.0 instead of 1.0.0, because its
+// pattern has no leading v.
+var (
+	acceptedVersions = []string{"v0.1.0", "v1.0.0", "v1.10.200", "v1.1.0-alpha", "v1.1.0-beta.2", "v1.1.0-rc.1", "v1.1.0-rc.0"}
+	refusedVersions  = []string{"1.0.0", "v1.0", "v01.0.0", "v1.02.0", "v1.0.00", "v1.0.0-rc.01", "v1.0.0-rc1", "v1.0.0-preview", "v1.0.0-RC.1", "v1.0.0+build.1"}
+)
+
+// TestParseVersion checks versionPattern against the version forms that
+// RELEASING.md accepts and refuses.
+func TestParseVersion(t *testing.T) {
+	for _, v := range acceptedVersions {
+		if _, err := parseVersion(v); err != nil {
+			t.Errorf("parseVersion(%q): %v", v, err)
+		}
+	}
+	for _, v := range refusedVersions {
+		if _, err := parseVersion(v); err == nil {
+			t.Errorf("parseVersion(%q) accepts a version that RELEASING.md refuses", v)
+		}
+	}
+}
+
+// TestPrepareAndCheck prepares, merges, and checks an SDK release at each
+// accepted version.
+func TestPrepareAndCheck(t *testing.T) {
+	for _, version := range acceptedVersions {
+		t.Run(version, func(t *testing.T) {
+			t.Parallel()
+			a, out, _ := committedRepo(t)
+			if err := a.run([]string{"prepare", version}); err != nil {
+				t.Fatalf("prepare %s: %v\n%s", version, err, out)
+			}
+			merge(t, a, "chore(release): "+version)
+			if err := a.run([]string{"check", version}); err != nil {
+				t.Fatalf("check %s: %v\n%s", version, err, out)
+			}
+			want := `const Version = "` + strings.TrimPrefix(version, "v") + `"`
+			if got := readFile(t, filepath.Join(a.repo, versionFile)); !strings.Contains(got, want) {
+				t.Errorf("%s has no line %s:\n%s", versionFile, want, got)
 			}
 		})
 	}
