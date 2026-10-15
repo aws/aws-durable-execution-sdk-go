@@ -10,11 +10,6 @@ the first operation that has no recorded result. The overall orchestration
 can run for up to a year, because the durable execution spans multiple
 Lambda invocations and consumes no compute while it waits.
 
-> [!WARNING]
-> This is an experimental preview, not intended for production use. The API
-> may change without notice, and the final version may look different from
-> what you see today.
-
 The SDK requires Go 1.24 or later.
 
 ## Your first durable function
@@ -27,12 +22,8 @@ go mod init example.com/first-durable-function
 go get github.com/aws/aws-durable-execution-sdk-go
 ```
 
-The repository has no release tags, because this is an experimental
-pre-release. The first release will be tagged `v1.0.0`. Until then `go get`
-records a pseudo-version of the latest commit on `main`, such as
-`v0.0.0-20260920051622-7f3b62f70004`. Run
-`go get github.com/aws/aws-durable-execution-sdk-go@latest` to move to a
-newer commit.
+`go get` records the latest release. [Versioning](#versioning) states
+what each release guarantees.
 
 Put this in `main.go`. The handler runs a step, suspends on a two second
 timer, then runs a second step that reads the first result.
@@ -1152,8 +1143,8 @@ dropped.
 
 ## Plugin API
 
-The plugin instrumentation API is experimental. Its hooks, info types,
-constants, and dispatch behavior may change or be removed without notice.
+The plugin instrumentation API is experimental. Any part of it may change
+or be removed in a minor release, as [Versioning](#versioning) describes.
 [docs/release-notes.md](docs/release-notes.md) records each change.
 
 The plugin instrumentation API gives observability and tracing integrations
@@ -1249,6 +1240,52 @@ terminal status each one reaches. Each is a Lambda function on
 `provided.al2023`. `examples/build.sh` builds them and the SAM template in
 that directory deploys them.
 
+## Versioning
+
+The repository publishes three modules, each with its own version tags.
+
+- The SDK, `github.com/aws/aws-durable-execution-sdk-go`, holds the
+  `durable` and `durable/durabletest` packages. Its tags are `vX.Y.Z`.
+- The [insight](insight/README.md) plugin,
+  `github.com/aws/aws-durable-execution-sdk-go/insight`, has tags
+  `insight/vX.Y.Z`.
+- The [durablelint](analysis/README.md) analyzer,
+  `github.com/aws/aws-durable-execution-sdk-go/analysis`, has tags
+  `analysis/vX.Y.Z`.
+
+The SDK follows [semantic versioning](https://semver.org). Code written
+against a v1 release keeps compiling and working as documented with every
+later v1 release. A minor release may add fields to exported structs, so
+construct structs with keyed fields, as the
+[Go 1 compatibility promise](https://go.dev/doc/go1compat) advises.
+
+The [plugin API](#plugin-api) is the one exception. It is experimental,
+and any part of it may change or be removed in a minor release. It
+comprises `durable.Plugin`, `durable.WithPlugins`,
+`durable.WithPluginChildOperationsDepth`, the hook info types, and the
+plugin status and outcome types and constants. Each of these carries an
+`EXPERIMENTAL` marker in its documentation.
+
+The insight and analysis modules stay below v1. So any release of either
+module may make incompatible changes, and for insight that includes its
+record schema. Each insight release requires the SDK version it was
+released with. A later SDK release may change the plugin API in a way
+that an earlier insight release does not support, so upgrade insight
+together with the SDK.
+
+[docs/release-notes.md](docs/release-notes.md) records the changes in each
+release, including every change to the plugin API.
+
+### Go versions
+
+The SDK supports the Go releases that the Go project supports. The most
+recent Go release to leave that support stays supported for six more
+months. The AWS SDK for Go v2 follows the same policy. A minor release may
+raise the minimum Go version.
+
+The `go` line of each module's `go.mod` names the oldest Go release that
+builds the module. CI tests that release and the two newest Go releases.
+
 ## Feedback & Support
 
 - [Bug report](https://github.com/aws/aws-durable-execution-sdk-go/issues/new)
@@ -1266,6 +1303,11 @@ Big thanks to [@embano1](https://github.com/embano1), whose insightful
 advice on the early experimental versions caught the bugs before they became
 bugs, and whose eagle-eyed reviews caught the subtle (and not-so-subtle!)
 ones before they could bite anyone.
+
+## Security
+
+See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for
+information about reporting security issues.
 
 ## License
 

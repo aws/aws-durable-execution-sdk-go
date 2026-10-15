@@ -22,7 +22,8 @@ import (
 // [AttemptHookInfo], [AttemptEndHookInfo], [OperationChangeHookInfo]), and
 // the [PluginInvocationStatus], [PluginOperationStatus], and
 // [PluginAttemptOutcome] constants. Any of it may change or be removed in a
-// later release without notice. Construct Plugin and the hook info types
+// minor release. It is the one exception to the compatibility promise of
+// the module's v1 releases. Construct Plugin and the hook info types
 // with keyed fields, because fields may be added, and tolerate status and
 // outcome values you do not know. The release notes record each change to
 // the plugin API.

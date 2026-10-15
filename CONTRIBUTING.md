@@ -49,8 +49,8 @@ The repository holds several Go modules:
 | Path | Module | Description |
 |------|--------|-------------|
 | `durable/` | root (published) | Core SDK: handler, context, checkpoint, futures, operations |
-| `insight/` | `insight` (published) | Observability plugin |
-| `analysis/` | `analysis` (published) | `durablelint` static analyzer for determinism rules |
+| `insight/` | `insight` (published) | Observability plugin, built on the experimental plugin API; versions below v1 |
+| `analysis/` | `analysis` (published) | `durablelint` static analyzer for determinism rules; versions below v1 |
 | `conformance/` | `conformance` (internal) | Conformance test handlers for cross-SDK validation |
 | `examples/` | `examples` (internal) | Self-contained example Lambda functions |
 
@@ -314,6 +314,13 @@ the tags it lists; or release the next version instead.
 
 `scripts/release_test.sh` exercises the script against a fixture
 repository and runs in the `consumable` CI job.
+
+## Security issue notifications
+
+If you discover a potential security issue in this project, we ask that you
+notify AWS/Amazon Security via our
+[vulnerability reporting page](http://aws.amazon.com/security/vulnerability-reporting/).
+Please do **not** create a public GitHub issue.
 
 ## License
 

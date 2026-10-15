@@ -1,6 +1,27 @@
 # Release Notes
 
-## Unreleased
+## v1.0.0
+
+The first release of the SDK.
+
+- The SDK follows semantic versioning from this release on. Code written
+  against v1.0.0 keeps compiling and working as documented with every
+  later v1 release.
+- The plugin instrumentation API stays experimental. Any part of it may
+  change or be removed in a minor release. Its declarations carry
+  `EXPERIMENTAL` markers, and these notes record each change to it.
+- The `insight` and `analysis` modules stay below v1, and each has a
+  version of its own.
+- `durable.Version` is `1.0.0`. The default client sends it in the
+  User-Agent header of its Lambda API calls, as
+  `aws-durable-execution-sdk-go/1.0.0`.
+
+See Versioning in the README for the full policy, including the supported
+Go versions.
+
+The entries below record the changes made before this release, between
+untagged commits. Code written against such a commit may need the changes
+they describe.
 
 ### Changed: a future the handler never awaits records its start, as in the JavaScript SDK
 
