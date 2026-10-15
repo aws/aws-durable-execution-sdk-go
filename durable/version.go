@@ -4,7 +4,7 @@ package durable
 // module, without the leading v of its release tag. The release tool sets
 // it in the commit that prepares a release, so between releases it names
 // the most recent release. See RELEASING.md.
-const Version = "0.1.0"
+const Version = "1.0.0"
 
 // userAgentKey names the SDK in the User-Agent header of every Lambda API
 // call the default client makes. The header carries the token
