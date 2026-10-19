@@ -17,7 +17,7 @@ type EventBridgeAPI interface {
 }
 
 // DefaultEventBridgeSource is the default EventBridge event Source.
-const DefaultEventBridgeSource = "aws.durable-execution.telemetry"
+const DefaultEventBridgeSource = "software.amazon.lambda.durable.telemetry"
 
 // EventBridgeExporter publishes records to Amazon EventBridge for
 // event-driven reactions.

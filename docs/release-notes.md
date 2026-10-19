@@ -22,8 +22,9 @@ no release of it exists.
   index are `durable-execution-telemetry` instead of `workflow-insight`.
   The default Redshift and RDS table is `durable_execution_telemetry`
   instead of `workflow_insight`. The default EventBridge source is
-  `aws.durable-execution.telemetry` instead of
-  `aws.durable-execution.insight`.
+  `software.amazon.lambda.durable.telemetry` instead of
+  `aws.durable-execution.insight`, because EventBridge reserves the
+  `aws.` source prefix for AWS services.
 - The `insight-plugin` example is now `telemetry-exporter`.
 
 ## v1.0.0

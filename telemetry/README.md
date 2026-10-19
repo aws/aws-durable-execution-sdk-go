@@ -235,7 +235,7 @@ Publishes records as EventBridge events for event-driven reactions.
 exporter := &telemetry.EventBridgeExporter{
     API:          ebClient,
     EventBusName: "default", // default
-    Source:       "aws.durable-execution.telemetry", // default
+    Source:       "software.amazon.lambda.durable.telemetry", // default
 }
 ```
 

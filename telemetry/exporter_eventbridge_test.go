@@ -51,6 +51,10 @@ func TestEventBridgeExporter_DefaultsSourceAndEventBus(t *testing.T) {
 	if aws.ToString(entry.Source) != DefaultEventBridgeSource {
 		t.Errorf("expected default Source %q, got %q", DefaultEventBridgeSource, aws.ToString(entry.Source))
 	}
+	// EventBridge reserves the "aws." source prefix for AWS services.
+	if DefaultEventBridgeSource != "software.amazon.lambda.durable.telemetry" {
+		t.Errorf("expected default Source software.amazon.lambda.durable.telemetry, got %q", DefaultEventBridgeSource)
+	}
 	if aws.ToString(entry.EventBusName) != "default" {
 		t.Errorf("expected default EventBusName 'default', got %q", aws.ToString(entry.EventBusName))
 	}
