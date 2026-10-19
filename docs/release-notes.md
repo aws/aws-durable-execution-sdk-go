@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Changed: prepare telemetry for its first stable release
+
+The release tool now accepts `telemetry/v1.0.0` and later v1 tags. Telemetry's
+public API and record schema follow semantic versioning from v1.0.0.
+Incompatible changes require a new major version. This change prepares the
+release; it does not publish a tag.
+
+- Remove the telemetry package's experimental notice. Its record schema
+  version stays `1.0`. Runtime behavior, configuration, and exporters are
+  unchanged.
+- Telemetry still depends on the SDK's experimental plugin API. That API
+  remains experimental. Upgrade telemetry together with the SDK when its
+  plugin API changes; compatibility with every later SDK is not guaranteed.
+- The SDK version and telemetry's SDK requirement remain `v1.0.0`.
+  The analysis module stays below v1. The release tool still rejects v2
+  for the SDK and telemetry because they need new module paths.
+
 ### Changed: Workflow Insight is renamed to Durable Execution Telemetry
 
 The `insight` module is now the `telemetry` module, to match the other

@@ -192,6 +192,31 @@ func TestPrepare(t *testing.T) {
 	}
 }
 
+func TestParseTag(t *testing.T) {
+	tests := []struct {
+		tag  string
+		want release
+	}{
+		{"v0.1.0", release{".", "v0.1.0"}},
+		{"v1.0.0", release{".", "v1.0.0"}},
+		{"telemetry/v0.1.0", release{"telemetry", "v0.1.0"}},
+		{"telemetry/v1.0.0", release{"telemetry", "v1.0.0"}},
+		{"telemetry/v1.1.0", release{"telemetry", "v1.1.0"}},
+		{"analysis/v0.1.0", release{"analysis", "v0.1.0"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.tag, func(t *testing.T) {
+			got, err := parseTag(tt.tag)
+			if err != nil || got != tt.want {
+				t.Fatalf("parseTag(%q) = %v, %v; want %v, nil", tt.tag, got, err, tt.want)
+			}
+			if got.tag() != tt.tag {
+				t.Errorf("tag() = %q, want %q", got.tag(), tt.tag)
+			}
+		})
+	}
+}
+
 func TestPrepareRefuses(t *testing.T) {
 	tests := []struct {
 		arg  string
@@ -205,7 +230,10 @@ func TestPrepareRefuses(t *testing.T) {
 		{"v1.0.0+build.1", "does not have the form"},
 		{"v2.0.0", "needs a new module path"},
 		{"telemetry/v0.1.0", "only an SDK release needs preparing"},
-		{"telemetry/v1.0.0", "telemetry stays below v1"},
+		{"telemetry/v1.0.0", "only an SDK release needs preparing"},
+		{"telemetry/v1.1.0", "only an SDK release needs preparing"},
+		{"telemetry/v2.0.0", "needs a new module path"},
+		{"analysis/v1.0.0", "analysis stays below v1"},
 		{"examples/v0.1.0", `"examples" is not a published module`},
 	}
 	for _, tt := range tests {
@@ -337,6 +365,8 @@ func TestCheck(t *testing.T) {
 		{name: "SDK release", args: []string{"v0.1.0"}},
 		{name: "SDK release of another version", args: []string{"v0.2.0"}, want: "durable.Version is 0.1.0, not 0.2.0"},
 		{name: "analysis release", args: []string{"analysis/v0.1.0"}},
+		{name: "SDK v2", args: []string{"v2.0.0"}, want: "needs a new module path"},
+		{name: "telemetry v2", args: []string{"telemetry/v2.0.0"}, want: "needs a new module path"},
 		{name: "analysis v1", args: []string{"analysis/v1.0.0"}, want: "analysis stays below v1"},
 		{
 			name: "pin differs",
@@ -391,31 +421,41 @@ func TestCheck(t *testing.T) {
 // TestCheckTelemetryRelease checks that check builds telemetry from the
 // checkout against the released SDK version that telemetry requires.
 func TestCheckTelemetryRelease(t *testing.T) {
-	a, out, _ := committedRepo(t)
-	proxy := t.TempDir()
-	a.env = withEnv(a.env, "GOPROXY="+fileURL(proxy))
-	args := []string{"check", "telemetry/v0.1.0"}
-	err := a.run(args)
-	if want := "If v0.1.0 is not released yet, release it first"; err == nil || !strings.Contains(err.Error(), want) {
-		t.Fatalf("check before the SDK release: error %v, want one that contains %q", err, want)
-	}
-	publish(t, a, proxy, ".", "v0.1.0", "0123456789abcdef0123456789abcdef01234567")
-	if err := a.run(args); err != nil {
-		t.Fatalf("check after the SDK release: %v\n%s", err, out)
-	}
+	for _, version := range []string{"v0.1.0", "v1.0.0", "v1.1.0"} {
+		t.Run(version, func(t *testing.T) {
+			t.Parallel()
+			tag := "telemetry/" + version
+			a, out, commit := committedRepo(t)
+			proxy := t.TempDir()
+			a.env = withEnv(a.env, "GOPROXY="+fileURL(proxy))
+			args := []string{"check", tag}
+			err := a.run(args)
+			if want := "If v0.1.0 is not released yet, release it first"; err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("check before the SDK release: error %v, want one that contains %q", err, want)
+			}
+			publish(t, a, proxy, ".", "v0.1.0", "0123456789abcdef0123456789abcdef01234567")
+			if err := a.run(args); err != nil {
+				t.Fatalf("check after the SDK release: %v\n%s", err, out)
+			}
 
-	// telemetry now uses an SDK API that the released SDK v0.1.0 lacks. It
-	// builds in the checkout, where its replace directive applies, but not
-	// for a user.
-	writeFile(t, filepath.Join(a.repo, "durable/new.go"), "package durable\n\nconst New = 1\n")
-	writeFile(t, filepath.Join(a.repo, "telemetry/new.go"), "package telemetry\n\nimport \"example.com/sdk/durable\"\n\nconst _ = durable.New\n")
-	if _, err := a.command(a.goEnv(), filepath.Join(a.repo, "telemetry"), "go", "build", "./..."); err != nil {
-		t.Fatalf("telemetry does not build in the checkout: %v", err)
-	}
-	merge(t, a, "use durable.New in telemetry")
-	err = a.run(args)
-	if want := "undefined: durable.New"; err == nil || !strings.Contains(err.Error(), want) {
-		t.Fatalf("check with an unreleased SDK API: error %v, want one that contains %q", err, want)
+			if want := "Commit " + commit + " is ready for the release " + tag + "."; !strings.Contains(out.String(), want) {
+				t.Errorf("check output has no line %q:\n%s", want, out)
+			}
+
+			// telemetry now uses an SDK API that the released SDK v0.1.0 lacks. It
+			// builds in the checkout, where its replace directive applies, but not
+			// for a user.
+			writeFile(t, filepath.Join(a.repo, "durable/new.go"), "package durable\n\nconst New = 1\n")
+			writeFile(t, filepath.Join(a.repo, "telemetry/new.go"), "package telemetry\n\nimport \"example.com/sdk/durable\"\n\nconst _ = durable.New\n")
+			if _, err := a.command(a.goEnv(), filepath.Join(a.repo, "telemetry"), "go", "build", "./..."); err != nil {
+				t.Fatalf("telemetry does not build in the checkout: %v", err)
+			}
+			merge(t, a, "use durable.New in telemetry")
+			err = a.run(args)
+			if want := "undefined: durable.New"; err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("check with an unreleased SDK API: error %v, want one that contains %q", err, want)
+			}
+		})
 	}
 }
 
@@ -494,18 +534,33 @@ func TestVerify(t *testing.T) {
 }
 
 func TestVerifyTelemetry(t *testing.T) {
-	a, out, proxy, _, release := taggedRepo(t)
-	gitCmd(t, a, "tag", "telemetry/v0.1.0")
-	publish(t, a, proxy, "telemetry", "v0.1.0", release)
+	for _, version := range []string{"v0.1.0", "v1.0.0", "v1.1.0"} {
+		t.Run(version, func(t *testing.T) {
+			t.Parallel()
+			tag := "telemetry/" + version
+			a, out, proxy, _, release := taggedRepo(t)
+			gitCmd(t, a, "tag", tag)
+			publish(t, a, proxy, "telemetry", version, release)
 
-	// telemetry requires the SDK v1.0.0, so a user needs it from the proxy.
-	err := a.run(verifyArgs(proxy, "telemetry/v0.1.0"))
-	if want := "does not build"; err == nil || !strings.Contains(err.Error(), want) {
-		t.Fatalf("verify telemetry/v0.1.0 before the SDK release: error %v, want one that contains %q", err, want)
-	}
-	publish(t, a, proxy, ".", "v1.0.0", release)
-	if err := a.run(verifyArgs(proxy, "telemetry/v0.1.0")); err != nil {
-		t.Fatalf("verify telemetry/v0.1.0: %v\n%s", err, out)
+			// telemetry requires the SDK v1.0.0, so a user needs it from the proxy.
+			err := a.run(verifyArgs(proxy, tag))
+			if want := "does not build"; err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("verify before the SDK release: error %v, want one that contains %q", err, want)
+			}
+			publish(t, a, proxy, ".", "v1.0.0", release)
+			if err := a.run(verifyArgs(proxy, tag)); err != nil {
+				t.Fatalf("verify: %v\n%s", err, out)
+			}
+			for _, want := range []string{
+				tag + " points at " + release + ", which is on origin/main.",
+				"The module proxy serves example.com/sdk/telemetry@" + version + " from commit " + release + ".",
+				"A new module that imports the 1 package of example.com/sdk/telemetry@" + version + " builds.",
+			} {
+				if !strings.Contains(out.String(), want) {
+					t.Errorf("verify output has no line %q:\n%s", want, out)
+				}
+			}
+		})
 	}
 }
 

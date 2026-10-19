@@ -5,11 +5,22 @@ snapshot records to configurable destinations as durable workflows run, complete
 or fail. Records capture execution metadata, timing, operation details, and
 content fields (inputs, outputs, errors) for diagnostics and monitoring.
 
-> This module is built on the experimental plugin API (`durable.Plugin`,
-> `durable.WithPlugins`), so its versions stay below v1. Any release may
-> change the `telemetry` package API and the record schema. Upgrade this
-> module together with the SDK. See Versioning in the
-> [root README](../README.md#versioning).
+## Stability and versioning
+
+Starting with `telemetry/v1.0.0`, this module follows
+[semantic versioning](https://semver.org). Its public API and record schema
+are stable. Incompatible changes require a new major version. The record
+schema version remains `1.0`; it is independent of the module version.
+
+The module still depends on the SDK's experimental plugin API, including
+`durable.Plugin` and `durable.WithPlugins`. Those SDK APIs remain
+experimental. Each telemetry release requires a tested SDK version, but Go
+treats that requirement as a minimum. A later SDK release may change the
+plugin API in a way that an earlier telemetry release does not support.
+Upgrade telemetry together with the SDK when its plugin API changes. The
+telemetry stability policy does not make the SDK's plugin API stable or
+promise compatibility with every later SDK version. See
+[Versioning](../README.md#versioning) in the root README.
 
 ## Installation
 

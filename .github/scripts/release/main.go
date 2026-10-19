@@ -34,7 +34,7 @@
 //	    when a GitHub Release is published.
 //
 // Versions and tags carry the leading v that the go command requires, as
-// in v1.2.0, telemetry/v0.1.0, and analysis/v0.1.0. durable.Version holds the
+// in v1.2.0, telemetry/v1.0.0, and analysis/v0.1.0. durable.Version holds the
 // SDK version without it, as 1.2.0. That is the form the default client
 // sends in the User-Agent header.
 package main
@@ -72,7 +72,7 @@ const (
 // publishedModules are the modules that users add with go get, by
 // directory relative to the repository root. The directory "." holds the
 // SDK. A nested module's tags carry its directory as a prefix, as in
-// telemetry/v0.1.0.
+// telemetry/v1.0.0.
 var publishedModules = []string{".", "telemetry", "analysis"}
 
 // internalModules are used only inside the repository, so they are never
@@ -188,7 +188,7 @@ type release struct {
 	version string // the version with its leading v, as v1.2.0
 }
 
-// tag returns the Git tag of the release, as v1.2.0 or telemetry/v0.1.0.
+// tag returns the Git tag of the release, as v1.2.0 or telemetry/v1.0.0.
 func (r release) tag() string {
 	if r.dir == "." {
 		return r.version
@@ -272,14 +272,16 @@ func compareNumbers(a, b string) int {
 }
 
 // majorRule returns an error unless the repository releases the module in
-// dir at major version major. The SDK has v0 and v1 versions. A v2 SDK
-// would need a new module path, which this tool does not set up. The
-// nested modules stay below v1.
+// dir at major version major. The SDK and telemetry allow v0 and v1.
+// A v2 release needs a new module path, which this tool does not set up.
+// analysis stays below v1.
 func majorRule(dir string, major int) error {
 	switch {
 	case dir == "." && major > 1:
 		return errors.New("a v2 or later release of the SDK needs a new module path, which this tool does not set up")
-	case dir != "." && major > 0:
+	case dir == "telemetry" && major > 1:
+		return errors.New("a v2 or later release of telemetry needs a new module path, which this tool does not set up")
+	case dir == "analysis" && major > 0:
 		return fmt.Errorf("%s stays below v1", dir)
 	}
 	return nil
