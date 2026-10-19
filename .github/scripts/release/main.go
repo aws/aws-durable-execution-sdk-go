@@ -81,6 +81,11 @@ var publishedModules = []string{".", "telemetry", "analysis"}
 // version that telemetry requires.
 var internalModules = []string{"conformance", "examples"}
 
+// stableModules are the published modules that release at v1. Every other
+// nested module stays below v1 until it is added here. majorRule applies
+// the rule.
+var stableModules = []string{".", "telemetry"}
+
 // versionPattern matches the versions this repository releases. The
 // numbers have no leading zeros, because the go command ignores a tag such
 // as v1.02.0. releaseVersionPattern, in durable/version_test.go, is the
@@ -272,17 +277,19 @@ func compareNumbers(a, b string) int {
 }
 
 // majorRule returns an error unless the repository releases the module in
-// dir at major version major. The SDK and telemetry allow v0 and v1.
-// A v2 release needs a new module path, which this tool does not set up.
-// analysis stays below v1.
+// dir at major version major. A nested module that is not in stableModules
+// stays below v1. No module releases at v2 or later, because a v2 needs a
+// new module path, which this tool does not set up.
 func majorRule(dir string, major int) error {
 	switch {
-	case dir == "." && major > 1:
-		return errors.New("a v2 or later release of the SDK needs a new module path, which this tool does not set up")
-	case dir == "telemetry" && major > 1:
-		return errors.New("a v2 or later release of telemetry needs a new module path, which this tool does not set up")
-	case dir == "analysis" && major > 0:
+	case major > 0 && !slices.Contains(stableModules, dir):
 		return fmt.Errorf("%s stays below v1", dir)
+	case major > 1:
+		name := dir
+		if dir == "." {
+			name = "the SDK"
+		}
+		return fmt.Errorf("a v2 or later release of %s needs a new module path, which this tool does not set up", name)
 	}
 	return nil
 }

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"cmp"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"maps"
 	"os"
@@ -212,6 +213,41 @@ func TestParseTag(t *testing.T) {
 			}
 			if got.tag() != tt.tag {
 				t.Errorf("tag() = %q, want %q", got.tag(), tt.tag)
+			}
+		})
+	}
+}
+
+// TestMajorRule checks the version policy of each module, including a
+// nested module that stableModules does not list. Such a module stays
+// below v1 without a change to the tool.
+func TestMajorRule(t *testing.T) {
+	tests := []struct {
+		dir   string
+		major int
+		want  string // substring of the error; "" for no error
+	}{
+		{".", 0, ""},
+		{".", 1, ""},
+		{".", 2, "a v2 or later release of the SDK needs a new module path"},
+		{"telemetry", 0, ""},
+		{"telemetry", 1, ""},
+		{"telemetry", 2, "a v2 or later release of telemetry needs a new module path"},
+		{"analysis", 0, ""},
+		{"analysis", 1, "analysis stays below v1"},
+		{"analysis", 2, "analysis stays below v1"},
+		{"newmodule", 0, ""},
+		{"newmodule", 1, "newmodule stays below v1"},
+		{"newmodule", 2, "newmodule stays below v1"},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%s/v%d", tt.dir, tt.major), func(t *testing.T) {
+			err := majorRule(tt.dir, tt.major)
+			switch {
+			case tt.want == "" && err != nil:
+				t.Fatalf("majorRule(%q, %d) = %v, want nil", tt.dir, tt.major, err)
+			case tt.want != "" && (err == nil || !strings.Contains(err.Error(), tt.want)):
+				t.Fatalf("majorRule(%q, %d) = %v, want an error that contains %q", tt.dir, tt.major, err, tt.want)
 			}
 		})
 	}
