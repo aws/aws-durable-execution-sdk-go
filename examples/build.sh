@@ -136,7 +136,7 @@ EXAMPLES="
   logger-log-levels
   logger-slog-handler
   plugin-lifecycle
-  insight-plugin
+  telemetry-exporter
   serde-basic
   serde-callback-deserializer
   serde-custom-config

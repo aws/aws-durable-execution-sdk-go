@@ -19,22 +19,22 @@
 //	    durable.Version names. With a tag, also check that HEAD is a
 //	    commit that the release can tag: the working tree has no changes,
 //	    HEAD is on the branch, origin/main by default, and the versions
-//	    match the tag. For an insight tag, this also builds insight from
-//	    this checkout against the released SDK version that insight
+//	    match the tag. For a telemetry tag, this also builds telemetry from
+//	    this checkout against the released SDK version that telemetry
 //	    requires, which the go command fetches as it is configured to.
 //	    check changes nothing.
 //
 //	consumer [dir...]
 //	    Build a new module that imports every package of each published
 //	    module, taking the modules from this checkout. The directories
-//	    default to all published modules: . insight analysis.
+//	    default to all published modules: . telemetry analysis.
 //
 //	verify [-proxy url] [-branch ref] [-timeout d] [-interval d] tag
 //	    Check a published release. The Release workflow runs this command
 //	    when a GitHub Release is published.
 //
 // Versions and tags carry the leading v that the go command requires, as
-// in v1.2.0, insight/v0.1.0, and analysis/v0.1.0. durable.Version holds the
+// in v1.2.0, telemetry/v0.1.0, and analysis/v0.1.0. durable.Version holds the
 // SDK version without it, as 1.2.0. That is the form the default client
 // sends in the User-Agent header.
 package main
@@ -72,13 +72,13 @@ const (
 // publishedModules are the modules that users add with go get, by
 // directory relative to the repository root. The directory "." holds the
 // SDK. A nested module's tags carry its directory as a prefix, as in
-// insight/v0.1.0.
-var publishedModules = []string{".", "insight", "analysis"}
+// telemetry/v0.1.0.
+var publishedModules = []string{".", "telemetry", "analysis"}
 
 // internalModules are used only inside the repository, so they are never
 // released. prepare still sets the SDK version they require. examples
-// requires both the SDK and insight, so its go.mod must list the SDK
-// version that insight requires.
+// requires both the SDK and telemetry, so its go.mod must list the SDK
+// version that telemetry requires.
 var internalModules = []string{"conformance", "examples"}
 
 // versionPattern matches the versions this repository releases. The
@@ -188,7 +188,7 @@ type release struct {
 	version string // the version with its leading v, as v1.2.0
 }
 
-// tag returns the Git tag of the release, as v1.2.0 or insight/v0.1.0.
+// tag returns the Git tag of the release, as v1.2.0 or telemetry/v0.1.0.
 func (r release) tag() string {
 	if r.dir == "." {
 		return r.version
@@ -203,7 +203,7 @@ func parseTag(tag string) (release, error) {
 	if i := strings.LastIndex(tag, "/"); i >= 0 {
 		r.dir, r.version = tag[:i], tag[i+1:]
 		if r.dir == "." || !slices.Contains(publishedModules, r.dir) {
-			return release{}, fmt.Errorf("tag %s: %q is not a published module. The SDK's tags are vX.Y.Z, and the nested modules' tags are insight/vX.Y.Z and analysis/vX.Y.Z", tag, r.dir)
+			return release{}, fmt.Errorf("tag %s: %q is not a published module. The SDK's tags are vX.Y.Z, and the nested modules' tags are telemetry/vX.Y.Z and analysis/vX.Y.Z", tag, r.dir)
 		}
 	}
 	major, err := parseVersion(r.version)

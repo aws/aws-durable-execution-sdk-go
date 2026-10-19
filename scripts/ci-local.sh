@@ -5,7 +5,7 @@
 # Usage:
 #   scripts/ci-local.sh [module...]
 #
-# Modules default to the five modules of the SDK repository, . insight
+# Modules default to the five modules of the SDK repository, . telemetry
 # conformance examples analysis, and the release tool's module,
 # .github/scripts/release (e.g. `scripts/ci-local.sh examples` to check
 # only the examples module). With no module argument the repository-level
@@ -23,7 +23,7 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 if [ $# -gt 0 ]; then
     MODULES=$*
 else
-    MODULES=". insight conformance examples analysis .github/scripts/release"
+    MODULES=". telemetry conformance examples analysis .github/scripts/release"
 fi
 
 for mod in $MODULES; do

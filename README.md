@@ -1193,7 +1193,7 @@ the dispatch joins, so the plugins' hooks for one event run in parallel.
 Hooks of concurrent operations run in parallel too, so a plugin must be
 safe for concurrent use. Construct `Plugin` and the hook info types with
 keyed fields, because fields may be added, and tolerate status values you
-do not know. The [insight](insight/README.md) module is a complete plugin
+do not know. The [telemetry](telemetry/README.md) module is a complete plugin
 built on this API.
 
 ## Deliberate differences from the JavaScript SDK
@@ -1246,9 +1246,9 @@ The repository publishes three modules, each with its own version tags.
 
 - The SDK, `github.com/aws/aws-durable-execution-sdk-go`, holds the
   `durable` and `durable/durabletest` packages. Its tags are `vX.Y.Z`.
-- The [insight](insight/README.md) plugin,
-  `github.com/aws/aws-durable-execution-sdk-go/insight`, has tags
-  `insight/vX.Y.Z`.
+- The [telemetry](telemetry/README.md) plugin,
+  `github.com/aws/aws-durable-execution-sdk-go/telemetry`, has tags
+  `telemetry/vX.Y.Z`.
 - The [durablelint](analysis/README.md) analyzer,
   `github.com/aws/aws-durable-execution-sdk-go/analysis`, has tags
   `analysis/vX.Y.Z`.
@@ -1266,11 +1266,11 @@ comprises `durable.Plugin`, `durable.WithPlugins`,
 plugin status and outcome types and constants. Each of these carries an
 `EXPERIMENTAL` marker in its documentation.
 
-The insight and analysis modules stay below v1. So any release of either
-module may make incompatible changes, and for insight that includes its
-record schema. Each insight release requires the SDK version it was
+The telemetry and analysis modules stay below v1. So any release of either
+module may make incompatible changes, and for telemetry that includes its
+record schema. Each telemetry release requires the SDK version it was
 released with. A later SDK release may change the plugin API in a way
-that an earlier insight release does not support, so upgrade insight
+that an earlier telemetry release does not support, so upgrade telemetry
 together with the SDK.
 
 [docs/release-notes.md](docs/release-notes.md) records the changes in each
