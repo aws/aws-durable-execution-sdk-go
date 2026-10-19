@@ -13,12 +13,12 @@ creates its tag, and from then on every user can fetch that version.
 | Module | Path | Tag |
 | --- | --- | --- |
 | `github.com/aws/aws-durable-execution-sdk-go` (the SDK) | `.` | `vX.Y.Z` |
-| `github.com/aws/aws-durable-execution-sdk-go/insight` | `insight` | `insight/vX.Y.Z` |
+| `github.com/aws/aws-durable-execution-sdk-go/telemetry` | `telemetry` | `telemetry/vX.Y.Z` |
 | `github.com/aws/aws-durable-execution-sdk-go/analysis` | `analysis` | `analysis/vX.Y.Z` |
 
 The go command requires the leading `v` of each version. The tag of a
 module in a subdirectory starts with the directory, as in
-`insight/v0.1.0` ([Go modules reference](https://go.dev/ref/mod#vcs-version)).
+`telemetry/v0.1.0` ([Go modules reference](https://go.dev/ref/mod#vcs-version)).
 The `conformance` and `examples` modules exist only for this repository's
 tests, so they are never released.
 
@@ -34,7 +34,7 @@ release promises to users. These rules follow from it:
   which the release tool does not set up.
 - A release never lowers the version. `prepare` refuses a version below
   `durable.Version`, such as v1.1.0 or v1.2.0-rc.1 after 1.2.0.
-- insight and analysis stay below v1. The release tool refuses v1 or
+- telemetry and analysis stay below v1. The release tool refuses v1 or
   later for them.
 - A version has the form `vX.Y.Z`, optionally followed by `-alpha`,
   `-beta`, or `-rc` and an optional `.N`, as in `v1.2.0` and
@@ -45,11 +45,11 @@ release promises to users. These rules follow from it:
   User-Agent header of every Lambda API call, as
   `aws-durable-execution-sdk-go/1.2.0`. That is the token format of the
   durable execution SDKs for the other languages.
-- insight, conformance, and examples require the SDK. Each must require
+- telemetry, conformance, and examples require the SDK. Each must require
   the SDK version that `durable.Version` names. Their `replace` directives
   point at this checkout, so builds inside the repository use the current
   SDK source. A user's build ignores those directives and reads only the
-  `require` line. So an insight release requires the SDK version it was
+  `require` line. So a telemetry release requires the SDK version it was
   released with.
 
 A published version cannot change. The module proxy keeps the first copy
@@ -85,14 +85,14 @@ go run -C .github/scripts/release . prepare v1.1.0
 ```
 
 The command sets `durable.Version` to `1.1.0`. It also sets the SDK
-version that insight, conformance, and examples require to `v1.1.0`. In
+version that telemetry, conformance, and examples require to `v1.1.0`. In
 `docs/release-notes.md`, put the changes since the last release under a
 `## v1.1.0` heading. Commit the changes as `chore(release): v1.1.0`, open
 a pull request, and merge it to `main`. CI runs on the pull request, so
 it checks the User-Agent header with the new version.
 
 Create the release soon after the merge. Until the `v1.1.0` tag exists,
-insight at `main` requires an SDK version that does not exist.
+telemetry at `main` requires an SDK version that does not exist.
 
 ### 2. Create the GitHub Release
 
@@ -126,36 +126,36 @@ With the GitHub CLI, the same release is the command below, where
 gh release create v1.1.0 --target <commit> --title v1.1.0 --notes-file notes.md
 ```
 
-## Releasing insight or analysis
+## Releasing telemetry or analysis
 
-insight and analysis hold their versions only in their tags. So their
+telemetry and analysis hold their versions only in their tags. So their
 releases need no version commit. Each gets a GitHub Release of its own,
-tagged `insight/vX.Y.Z` or `analysis/vX.Y.Z`, on a commit on `main`.
+tagged `telemetry/vX.Y.Z` or `analysis/vX.Y.Z`, on a commit on `main`.
 
-insight requires the SDK version that `durable.Version` names at the
+telemetry requires the SDK version that `durable.Version` names at the
 tagged commit. A user's build fetches that SDK version from its release,
-so the SDK version must be released first. Before you create an insight
+so the SDK version must be released first. Before you create a telemetry
 release, run `check` on the commit, as for the SDK:
 
 ```console
-go run -C .github/scripts/release . check insight/v0.2.0
+go run -C .github/scripts/release . check telemetry/v0.2.0
 ```
 
-The command builds insight from the checkout against the released SDK
-version that insight requires. It fails when insight uses SDK code that
+The command builds telemetry from the checkout against the released SDK
+version that telemetry requires. It fails when telemetry uses SDK code that
 is not released yet. The go command fetches the SDK version as it is
 configured to, through `GOPROXY` or from the module cache.
 
 Then create the GitHub Release as for the SDK, with the tag
-`insight/v0.2.0`. Clear **Set as the latest release**, so that the
+`telemetry/v0.2.0`. Clear **Set as the latest release**, so that the
 repository's latest release stays an SDK release. With the GitHub CLI,
 add `--latest=false`.
 
-To release the SDK and insight together, release the SDK first. When its
-Release workflow passes, release insight at the same commit.
+To release the SDK and telemetry together, release the SDK first. When its
+Release workflow passes, release telemetry at the same commit.
 
 Go treats a required version as a minimum. So a user who upgrades the SDK
-keeps the insight version they had. Release a new insight version after
+keeps the telemetry version they had. Release a new telemetry version after
 each SDK release that changes the plugin API.
 
 ## How the Release workflow works
@@ -195,8 +195,8 @@ release. Write the notes of a GitHub Release from those entries. Each
 GitHub Release covers one module, so its notes list only that module's
 changes. Name every change to the experimental plugin API, because a
 minor release may break it. When an SDK release changes the plugin API,
-its notes also name the insight version that supports the change.
-Release that insight version right after the SDK.
+its notes also name the telemetry version that supports the change.
+Release that telemetry version right after the SDK.
 
 ## Checklist
 
@@ -205,10 +205,10 @@ Before you publish a release:
 - [ ] For an SDK release, the `chore(release)` pull request is merged to `main`.
 - [ ] CI passes on `main`.
 - [ ] After `git fetch origin main`, `check <tag>` passes on the commit you will tag.
-- [ ] The tag is `vX.Y.Z`, `insight/vX.Y.Z`, or `analysis/vX.Y.Z`, and targets that commit.
+- [ ] The tag is `vX.Y.Z`, `telemetry/vX.Y.Z`, or `analysis/vX.Y.Z`, and targets that commit.
 - [ ] The release notes are written.
 - [ ] **Set as a pre-release** is checked for an `-alpha`, `-beta`, or `-rc` version.
-- [ ] **Set as the latest release** is cleared for an insight or analysis release.
+- [ ] **Set as the latest release** is cleared for a telemetry or analysis release.
 
 After you publish the release, check that the Release workflow passes.
 
@@ -228,6 +228,6 @@ standard library. Run it from the repository root as
 | `verify tag` | Checks a published release. The Release workflow runs it. |
 
 The `release-tool` CI job runs the tool's tests and `check`. The
-`consumable` CI job runs `consumer` for insight and analysis. That
+`consumable` CI job runs `consumer` for telemetry and analysis. That
 catches a nested module that builds only through its own `replace`
 directives.

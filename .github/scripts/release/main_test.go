@@ -22,13 +22,13 @@ var fixture = map[string]string{
 	"durable/version.go":                  "package durable\n\n// Version is the SDK version.\nconst Version = \"0.1.0\"\n",
 	"durable/durabletest/durabletest.go":  "package durabletest\n\nimport _ \"example.com/sdk/durable\"\n",
 	"durable/internal/wire/wire.go":       "package wire\n",
-	"insight/go.mod":                      "module example.com/sdk/insight\n\ngo 1.24\n\nrequire example.com/sdk v0.1.0\n\nreplace example.com/sdk => ..\n",
-	"insight/insight.go":                  "package insight\n\nimport _ \"example.com/sdk/durable\"\n",
+	"telemetry/go.mod":                    "module example.com/sdk/telemetry\n\ngo 1.24\n\nrequire example.com/sdk v0.1.0\n\nreplace example.com/sdk => ..\n",
+	"telemetry/telemetry.go":              "package telemetry\n\nimport _ \"example.com/sdk/durable\"\n",
 	"analysis/go.mod":                     "module example.com/sdk/analysis\n\ngo 1.24\n",
 	"analysis/durablelint/durablelint.go": "package durablelint\n",
 	"analysis/cmd/durablelint/main.go":    "package main\n\nfunc main() {}\n",
 	"conformance/go.mod":                  "module example.com/sdk/conformance\n\ngo 1.24\n\nrequire example.com/sdk v0.1.0\n\nreplace example.com/sdk => ../\n",
-	"examples/go.mod":                     "module example.com/sdk/examples\n\ngo 1.24\n\nrequire (\n\texample.com/sdk v0.1.0\n\texample.com/sdk/insight v0.0.0\n)\n\nreplace example.com/sdk => ../\n\nreplace example.com/sdk/insight => ../insight\n",
+	"examples/go.mod":                     "module example.com/sdk/examples\n\ngo 1.24\n\nrequire (\n\texample.com/sdk v0.1.0\n\texample.com/sdk/telemetry v0.0.0\n)\n\nreplace example.com/sdk => ../\n\nreplace example.com/sdk/telemetry => ../telemetry\n",
 }
 
 // newRepo writes the fixture to a new directory and returns an app for it,
@@ -156,7 +156,7 @@ func TestPrepare(t *testing.T) {
 	if got := readFile(t, filepath.Join(a.repo, versionFile)); !strings.Contains(got, "\nconst Version = \"1.0.0\"\n") {
 		t.Errorf("%s after prepare:\n%s", versionFile, got)
 	}
-	for _, dir := range []string{"insight", "conformance", "examples"} {
+	for _, dir := range []string{"telemetry", "conformance", "examples"} {
 		if got := requiredSDK(t, a, dir); got != "v1.0.0" {
 			t.Errorf("%s requires example.com/sdk %s, want v1.0.0", dir, got)
 		}
@@ -204,8 +204,8 @@ func TestPrepareRefuses(t *testing.T) {
 		{"v1.0.0-preview.1", "does not have the form"},
 		{"v1.0.0+build.1", "does not have the form"},
 		{"v2.0.0", "needs a new module path"},
-		{"insight/v0.1.0", "only an SDK release needs preparing"},
-		{"insight/v1.0.0", "insight stays below v1"},
+		{"telemetry/v0.1.0", "only an SDK release needs preparing"},
+		{"telemetry/v1.0.0", "telemetry stays below v1"},
 		{"examples/v0.1.0", `"examples" is not a published module`},
 	}
 	for _, tt := range tests {
@@ -360,8 +360,8 @@ func TestCheck(t *testing.T) {
 		},
 		{
 			name: "module path",
-			edit: map[string]string{"insight/go.mod": strings.Replace(fixture["insight/go.mod"], "sdk/insight", "sdk/insights", 1)},
-			want: "declares module example.com/sdk/insights",
+			edit: map[string]string{"telemetry/go.mod": strings.Replace(fixture["telemetry/go.mod"], "sdk/telemetry", "sdk/telemetry2", 1)},
+			want: "declares module example.com/sdk/telemetry2",
 		},
 		{
 			name: "untracked file",
@@ -388,13 +388,13 @@ func TestCheck(t *testing.T) {
 	}
 }
 
-// TestCheckInsightRelease checks that check builds insight from the
-// checkout against the released SDK version that insight requires.
-func TestCheckInsightRelease(t *testing.T) {
+// TestCheckTelemetryRelease checks that check builds telemetry from the
+// checkout against the released SDK version that telemetry requires.
+func TestCheckTelemetryRelease(t *testing.T) {
 	a, out, _ := committedRepo(t)
 	proxy := t.TempDir()
 	a.env = withEnv(a.env, "GOPROXY="+fileURL(proxy))
-	args := []string{"check", "insight/v0.1.0"}
+	args := []string{"check", "telemetry/v0.1.0"}
 	err := a.run(args)
 	if want := "If v0.1.0 is not released yet, release it first"; err == nil || !strings.Contains(err.Error(), want) {
 		t.Fatalf("check before the SDK release: error %v, want one that contains %q", err, want)
@@ -404,15 +404,15 @@ func TestCheckInsightRelease(t *testing.T) {
 		t.Fatalf("check after the SDK release: %v\n%s", err, out)
 	}
 
-	// insight now uses an SDK API that the released SDK v0.1.0 lacks. It
+	// telemetry now uses an SDK API that the released SDK v0.1.0 lacks. It
 	// builds in the checkout, where its replace directive applies, but not
 	// for a user.
 	writeFile(t, filepath.Join(a.repo, "durable/new.go"), "package durable\n\nconst New = 1\n")
-	writeFile(t, filepath.Join(a.repo, "insight/new.go"), "package insight\n\nimport \"example.com/sdk/durable\"\n\nconst _ = durable.New\n")
-	if _, err := a.command(a.goEnv(), filepath.Join(a.repo, "insight"), "go", "build", "./..."); err != nil {
-		t.Fatalf("insight does not build in the checkout: %v", err)
+	writeFile(t, filepath.Join(a.repo, "telemetry/new.go"), "package telemetry\n\nimport \"example.com/sdk/durable\"\n\nconst _ = durable.New\n")
+	if _, err := a.command(a.goEnv(), filepath.Join(a.repo, "telemetry"), "go", "build", "./..."); err != nil {
+		t.Fatalf("telemetry does not build in the checkout: %v", err)
 	}
-	merge(t, a, "use durable.New in insight")
+	merge(t, a, "use durable.New in telemetry")
 	err = a.run(args)
 	if want := "undefined: durable.New"; err == nil || !strings.Contains(err.Error(), want) {
 		t.Fatalf("check with an unreleased SDK API: error %v, want one that contains %q", err, want)
@@ -427,7 +427,7 @@ func TestConsumer(t *testing.T) {
 	// The internal package and the command are not importable.
 	for _, want := range []string{
 		"example.com/sdk: a new module that imports its 2 packages",
-		"example.com/sdk/insight: a new module that imports its 1 package",
+		"example.com/sdk/telemetry: a new module that imports its 1 package",
 		"example.com/sdk/analysis: a new module that imports its 1 package",
 	} {
 		if !strings.Contains(out.String(), want) {
@@ -437,21 +437,21 @@ func TestConsumer(t *testing.T) {
 }
 
 // TestConsumerReplaceOnlyDependency checks the case the consumer command
-// exists for. insight requires a module that only its own replace
-// directive resolves. So insight builds in the checkout, but not for a
+// exists for. telemetry requires a module that only its own replace
+// directive resolves. So telemetry builds in the checkout, but not for a
 // user, whose build ignores that directive.
 func TestConsumerReplaceOnlyDependency(t *testing.T) {
 	a, _ := newRepo(t)
 	writeFile(t, filepath.Join(a.repo, "extra/go.mod"), "module example.com/extra\n\ngo 1.24\n")
 	writeFile(t, filepath.Join(a.repo, "extra/extra.go"), "package extra\n")
-	writeFile(t, filepath.Join(a.repo, "insight/go.mod"), fixture["insight/go.mod"]+"\nrequire example.com/extra v0.0.0\n\nreplace example.com/extra => ../extra\n")
-	writeFile(t, filepath.Join(a.repo, "insight/extra.go"), "package insight\n\nimport _ \"example.com/extra\"\n")
-	if _, err := a.command(a.goEnv(), filepath.Join(a.repo, "insight"), "go", "build", "./..."); err != nil {
-		t.Fatalf("insight does not build in the checkout: %v", err)
+	writeFile(t, filepath.Join(a.repo, "telemetry/go.mod"), fixture["telemetry/go.mod"]+"\nrequire example.com/extra v0.0.0\n\nreplace example.com/extra => ../extra\n")
+	writeFile(t, filepath.Join(a.repo, "telemetry/extra.go"), "package telemetry\n\nimport _ \"example.com/extra\"\n")
+	if _, err := a.command(a.goEnv(), filepath.Join(a.repo, "telemetry"), "go", "build", "./..."); err != nil {
+		t.Fatalf("telemetry does not build in the checkout: %v", err)
 	}
-	err := a.run([]string{"consumer", "insight"})
+	err := a.run([]string{"consumer", "telemetry"})
 	if want := "example.com/extra"; err == nil || !strings.Contains(err.Error(), want) {
-		t.Fatalf("consumer insight: error %v, want one that contains %q", err, want)
+		t.Fatalf("consumer telemetry: error %v, want one that contains %q", err, want)
 	}
 }
 
@@ -493,19 +493,19 @@ func TestVerify(t *testing.T) {
 	}
 }
 
-func TestVerifyInsight(t *testing.T) {
+func TestVerifyTelemetry(t *testing.T) {
 	a, out, proxy, _, release := taggedRepo(t)
-	gitCmd(t, a, "tag", "insight/v0.1.0")
-	publish(t, a, proxy, "insight", "v0.1.0", release)
+	gitCmd(t, a, "tag", "telemetry/v0.1.0")
+	publish(t, a, proxy, "telemetry", "v0.1.0", release)
 
-	// insight requires the SDK v1.0.0, so a user needs it from the proxy.
-	err := a.run(verifyArgs(proxy, "insight/v0.1.0"))
+	// telemetry requires the SDK v1.0.0, so a user needs it from the proxy.
+	err := a.run(verifyArgs(proxy, "telemetry/v0.1.0"))
 	if want := "does not build"; err == nil || !strings.Contains(err.Error(), want) {
-		t.Fatalf("verify insight/v0.1.0 before the SDK release: error %v, want one that contains %q", err, want)
+		t.Fatalf("verify telemetry/v0.1.0 before the SDK release: error %v, want one that contains %q", err, want)
 	}
 	publish(t, a, proxy, ".", "v1.0.0", release)
-	if err := a.run(verifyArgs(proxy, "insight/v0.1.0")); err != nil {
-		t.Fatalf("verify insight/v0.1.0: %v\n%s", err, out)
+	if err := a.run(verifyArgs(proxy, "telemetry/v0.1.0")); err != nil {
+		t.Fatalf("verify telemetry/v0.1.0: %v\n%s", err, out)
 	}
 }
 
@@ -605,7 +605,7 @@ func TestRun(t *testing.T) {
 		// go run -C .github/scripts/release . -repo ../../.. check.
 		{[]string{"-repo", "..", "check"}, 0},
 	}
-	t.Chdir(filepath.Join(a.repo, "insight"))
+	t.Chdir(filepath.Join(a.repo, "telemetry"))
 	for _, tt := range tests {
 		var stdout, stderr bytes.Buffer
 		if code := run(tt.args, &stdout, &stderr); code != tt.code {

@@ -49,7 +49,7 @@ The repository holds several Go modules:
 | Path | Module | Description |
 |------|--------|-------------|
 | `durable/` | root (published) | Core SDK: handler, context, checkpoint, futures, operations |
-| `insight/` | `insight` (published) | Observability plugin, built on the experimental plugin API; versions below v1 |
+| `telemetry/` | `telemetry` (published) | Observability plugin, built on the experimental plugin API; versions below v1 |
 | `analysis/` | `analysis` (published) | `durablelint` static analyzer for determinism rules; versions below v1 |
 | `conformance/` | `conformance` (internal) | Conformance test handlers for cross-SDK validation |
 | `examples/` | `examples` (internal) | Self-contained example Lambda functions |
@@ -62,7 +62,7 @@ exist only for this repository's tests and examples.
 
 ### Nested modules and the root module
 
-`insight/go.mod` depends on the root module in two ways at once:
+`telemetry/go.mod` depends on the root module in two ways at once:
 
 ```
 require github.com/aws/aws-durable-execution-sdk-go v1.0.0
@@ -70,8 +70,8 @@ require github.com/aws/aws-durable-execution-sdk-go v1.0.0
 replace github.com/aws/aws-durable-execution-sdk-go => ..
 ```
 
-The `replace` directive applies only when `insight` is the main module,
-that is, when you build or test inside `insight/`. It points at the root
+The `replace` directive applies only when `telemetry` is the main module,
+that is, when you build or test inside `telemetry/`. It points at the root
 module in this checkout, so local development always compiles against the
 current source with no extra step.
 
@@ -79,15 +79,15 @@ A user's build ignores that `replace` directive. It reads only the `require`
 line, so the version there must be a released root module version. The
 release tool's `prepare` command sets it when an SDK release is prepared;
 do not edit it by hand. Between releases it names the most recent release.
-So a change to `insight` that needs an unreleased root module API builds
+So a change to `telemetry` that needs an unreleased root module API builds
 in the repository, but users cannot build it until the next SDK release.
 See [RELEASING.md](RELEASING.md).
 
 `analysis` does not depend on the root module. The internal modules
 (`conformance`, `examples`) have the same `require` and `replace` pair, and
 `prepare` sets their requirement too: `examples` depends on both the root
-module and `insight`, and Go requires it to record the same root version
-as `insight`. Nobody consumes the internal modules from outside, so they
+module and `telemetry`, and Go requires it to record the same root version
+as `telemetry`. Nobody consumes the internal modules from outside, so they
 are never released.
 
 The `consumable` job in CI builds a new module that imports every package
@@ -95,7 +95,7 @@ of the published nested modules, with every module taken from the
 checkout. Run it locally with:
 
 ```bash
-go run -C .github/scripts/release . consumer insight analysis
+go run -C .github/scripts/release . consumer telemetry analysis
 ```
 
 ## Running Tests
@@ -112,10 +112,10 @@ Or use the Makefile target from the repository root (covers the root module):
 make test
 ```
 
-For the `insight/` module:
+For the `telemetry/` module:
 
 ```bash
-cd insight && go test -race ./...
+cd telemetry && go test -race ./...
 ```
 
 ## Running CI Checks Locally
@@ -133,7 +133,7 @@ make check-all
 ```
 
 Both run the following steps in each of the five modules (root/durable,
-insight, conformance, examples, analysis) and in the release tool's module
+telemetry, conformance, examples, analysis) and in the release tool's module
 (`.github/scripts/release`):
 
 1. `go build ./...`
@@ -159,7 +159,7 @@ sh scripts/ci-local.sh examples
 ```
 
 The `supported-go` CI job also builds, vets, and tests the published
-modules (root, `insight`, `analysis`) with the two newest Go releases
+modules (root, `telemetry`, `analysis`) with the two newest Go releases
 (`stable` and `oldstable` in `actions/setup-go`). The other jobs use the Go
 version each `go.mod` declares, which is the oldest Go release that builds
 the module.
@@ -233,7 +233,7 @@ issues while working, open a separate PR for those.
 
 ## Releasing
 
-[RELEASING.md](RELEASING.md) describes how to release the SDK, `insight`,
+[RELEASING.md](RELEASING.md) describes how to release the SDK, `telemetry`,
 and `analysis`.
 
 ## Security issue notifications

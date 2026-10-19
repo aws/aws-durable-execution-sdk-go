@@ -1,5 +1,32 @@
 # Release Notes
 
+## Unreleased
+
+### Changed: Workflow Insight is renamed to Durable Execution Telemetry
+
+The `insight` module is now the `telemetry` module, to match the other
+language SDKs. Its display name is Durable Execution Telemetry Exporter.
+The old names are not accepted. The `insight` module was never tagged, so
+no release of it exists.
+
+- The module path `github.com/aws/aws-durable-execution-sdk-go/insight`
+  is now `github.com/aws/aws-durable-execution-sdk-go/telemetry`, and the
+  package `insight` is now `telemetry`. Its tags are `telemetry/vX.Y.Z`.
+- `InsightPlugin` is now `TelemetryPlugin`. The other exported names keep
+  their names in the new package, as `telemetry.New` and
+  `telemetry.Config`.
+- The record discriminator `recordType` is `"DurableExecutionTelemetry"`
+  instead of `"WorkflowInsight"`. Readers do not find records written
+  before this change.
+- The default S3 prefix, CloudWatch Logs stream prefix, and OpenSearch
+  index are `durable-execution-telemetry` instead of `workflow-insight`.
+  The default Redshift and RDS table is `durable_execution_telemetry`
+  instead of `workflow_insight`. The default EventBridge source is
+  `software.amazon.lambda.durable.telemetry` instead of
+  `aws.durable-execution.insight`, because EventBridge reserves the
+  `aws.` source prefix for AWS services.
+- The `insight-plugin` example is now `telemetry-exporter`.
+
 ## v1.0.0
 
 The first release of the SDK.

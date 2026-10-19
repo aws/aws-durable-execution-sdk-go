@@ -22,7 +22,7 @@ jobs:
       matrix:
         module:
           - { name: durable, dir: "." }
-          - { name: insight, dir: "insight" }
+          - { name: telemetry, dir: "telemetry" }
           - { name: conformance, dir: "conformance" }
           - { name: examples, dir: "examples" }
           - { name: analysis, dir: "analysis" }
@@ -93,7 +93,7 @@ jobs:
         go: [stable, oldstable]
         module:
           - { name: durable, dir: "." }
-          - { name: insight, dir: "insight" }
+          - { name: telemetry, dir: "telemetry" }
           - { name: analysis, dir: "analysis" }
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -117,7 +117,7 @@ jobs:
         run: go test -race ./...
 
   # A user's module must be able to import every package of the published
-  # nested modules (insight, analysis). The release tool builds a new
+  # nested modules (telemetry, analysis). The release tool builds a new
   # module that imports them by their published paths, with every module
   # of this repository taken from the checkout. See RELEASING.md.
   #
@@ -133,7 +133,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [insight, analysis]
+        module: [telemetry, analysis]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 

@@ -37,8 +37,8 @@ require (
 	github.com/aws/smithy-go v1.27.3 // indirect
 )
 
-require github.com/aws/aws-durable-execution-sdk-go/insight v0.0.0
+require github.com/aws/aws-durable-execution-sdk-go/telemetry v0.0.0
 
 replace github.com/aws/aws-durable-execution-sdk-go => ../
 
-replace github.com/aws/aws-durable-execution-sdk-go/insight => ../insight
+replace github.com/aws/aws-durable-execution-sdk-go/telemetry => ../telemetry

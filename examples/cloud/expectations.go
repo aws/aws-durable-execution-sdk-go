@@ -326,7 +326,6 @@ var expectations = map[string]expectation{
 
 	"handler-error":        {failed: true, errorType: "Error"},
 	"hello-world":          {result: `"Hello World!"`},
-	"insight-plugin":       {result: `{"message":"processed order ORD-12345","orderId":"ORD-12345"}`},
 	"interrupted-no-retry": {result: `{"status":"failed","errorName":"StepError","message":"durable: step \"long-running-step\" failed after 1 attempts: StepInterruptedError: durable: step \"long-running-step\" interrupted before completing an attempt","causeName":"StepInterruptedError"}`},
 	"invoke-simple":        {result: `{"status":"completed","input":{}}`},
 	"invoke-tenant-id":     {result: `"wait finished"`},
@@ -528,6 +527,7 @@ var expectations = map[string]expectation{
 	"step-error-determinism": {result: `{"deterministic":true,"before":{"hasError":true,"isStepErr":true,"attempts":1},"after":{"hasError":true,"isStepErr":true,"attempts":1}}`},
 	"step-with-retry":        {result: `"step succeeded"`},
 	"steps-with-retry":       {result: `{"id":"rec-001","name":""}`},
+	"telemetry-exporter":     {result: `{"message":"processed order ORD-12345","orderId":"ORD-12345"}`},
 	"undefined-results":      {result: `"result"`},
 
 	"wait-basic":                             {result: `"Function Completed"`},

@@ -178,7 +178,7 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [logger-log-levels](logger-log-levels/main.go) | Context.Logger, all log levels | SUCCEEDED |
 | [logger-slog-handler](logger-slog-handler/main.go) | WithLogHandler, application slog.Handler | SUCCEEDED |
 | [plugin-lifecycle](plugin-lifecycle/main.go) | WithPlugins, hook lifecycle ordering | SUCCEEDED |
-| [insight-plugin](insight-plugin/main.go) | WithPlugins, insight.New (Workflow Insight plugin) | SUCCEEDED |
+| [telemetry-exporter](telemetry-exporter/main.go) | WithPlugins, telemetry.New (Durable Execution Telemetry plugin) | SUCCEEDED |
 
 A serdes written for one result type can use `durable.SerdesOf`, which
 adapts typed marshal and unmarshal functions to the untyped `Serdes`
