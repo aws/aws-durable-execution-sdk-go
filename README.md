@@ -1266,12 +1266,21 @@ comprises `durable.Plugin`, `durable.WithPlugins`,
 plugin status and outcome types and constants. Each of these carries an
 `EXPERIMENTAL` marker in its documentation.
 
-The telemetry and analysis modules stay below v1. So any release of either
-module may make incompatible changes, and for telemetry that includes its
-record schema. Each telemetry release requires the SDK version it was
-released with. A later SDK release may change the plugin API in a way
-that an earlier telemetry release does not support, so upgrade telemetry
-together with the SDK.
+Starting with `telemetry/v1.0.0`, telemetry follows semantic versioning.
+Its public API and record schema are stable. Incompatible changes require
+a new major version. The record schema version remains `1.0` and is
+independent of the module version.
+
+Telemetry still depends on the SDK's experimental plugin API. Each
+telemetry release requires a tested SDK version, but Go treats that
+requirement as a minimum. A later SDK release may change the plugin API
+in a way that an earlier telemetry release does not support. So upgrade
+telemetry together with the SDK when its plugin API changes. Telemetry's
+stability policy does not stabilize the SDK's plugin API or promise
+compatibility with every later SDK version.
+
+The analysis module stays below v1. Any release of analysis may make
+incompatible changes.
 
 [docs/release-notes.md](docs/release-notes.md) records the changes in each
 release, including every change to the plugin API.

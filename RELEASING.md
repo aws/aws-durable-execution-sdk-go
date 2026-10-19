@@ -18,7 +18,7 @@ creates its tag, and from then on every user can fetch that version.
 
 The go command requires the leading `v` of each version. The tag of a
 module in a subdirectory starts with the directory, as in
-`telemetry/v0.1.0` ([Go modules reference](https://go.dev/ref/mod#vcs-version)).
+`telemetry/v1.0.0` ([Go modules reference](https://go.dev/ref/mod#vcs-version)).
 The `conformance` and `examples` modules exist only for this repository's
 tests, so they are never released.
 
@@ -30,12 +30,15 @@ same commit, create two GitHub Releases.
 The README's [Versioning](README.md#versioning) section states what each
 release promises to users. These rules follow from it:
 
-- The SDK is at v1. A v2 would need a new module path, ending in `/v2`,
+- The SDK and telemetry support v1 releases. The release tool accepts v0
+  and v1 for both. A v2 would need a new module path, ending in `/v2`,
   which the release tool does not set up.
 - A release never lowers the version. `prepare` refuses a version below
   `durable.Version`, such as v1.1.0 or v1.2.0-rc.1 after 1.2.0.
-- telemetry and analysis stay below v1. The release tool refuses v1 or
-  later for them.
+- Telemetry's public API and record schema are stable from
+  `telemetry/v1.0.0`. Incompatible changes require a new major version.
+  The record schema version stays `1.0` independently of the module version.
+- analysis stays below v1. The release tool refuses v1 or later for it.
 - A version has the form `vX.Y.Z`, optionally followed by `-alpha`,
   `-beta`, or `-rc` and an optional `.N`, as in `v1.2.0` and
   `v1.2.0-rc.1`. The release tool refuses other forms, such as
@@ -131,6 +134,8 @@ gh release create v1.1.0 --target <commit> --title v1.1.0 --notes-file notes.md
 telemetry and analysis hold their versions only in their tags. So their
 releases need no version commit. Each gets a GitHub Release of its own,
 tagged `telemetry/vX.Y.Z` or `analysis/vX.Y.Z`, on a commit on `main`.
+Do not run `prepare` for these modules; it only prepares SDK releases.
+The first stable telemetry release uses `telemetry/v1.0.0`.
 
 telemetry requires the SDK version that `durable.Version` names at the
 tagged commit. A user's build fetches that SDK version from its release,
@@ -138,7 +143,7 @@ so the SDK version must be released first. Before you create a telemetry
 release, run `check` on the commit, as for the SDK:
 
 ```console
-go run -C .github/scripts/release . check telemetry/v0.2.0
+go run -C .github/scripts/release . check telemetry/v1.0.0
 ```
 
 The command builds telemetry from the checkout against the released SDK
@@ -147,7 +152,7 @@ is not released yet. The go command fetches the SDK version as it is
 configured to, through `GOPROXY` or from the module cache.
 
 Then create the GitHub Release as for the SDK, with the tag
-`telemetry/v0.2.0`. Clear **Set as the latest release**, so that the
+`telemetry/v1.0.0`. Clear **Set as the latest release**, so that the
 repository's latest release stays an SDK release. With the GitHub CLI,
 add `--latest=false`.
 
@@ -156,7 +161,9 @@ Release workflow passes, release telemetry at the same commit.
 
 Go treats a required version as a minimum. So a user who upgrades the SDK
 keeps the telemetry version they had. Release a new telemetry version after
-each SDK release that changes the plugin API.
+each SDK release that changes the plugin API. Telemetry's stable API and
+record schema do not make the SDK's experimental plugin API stable.
+They do not guarantee compatibility with every later SDK version.
 
 ## How the Release workflow works
 
