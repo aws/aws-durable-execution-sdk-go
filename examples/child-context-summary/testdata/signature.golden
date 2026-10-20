@@ -1,0 +1,38 @@
+[
+  {
+    "type": "CONTEXT",
+    "subType": "RunInChildContext",
+    "name": "import-rows",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "read-chunk-0",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "read-chunk-1",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "read-chunk-2",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "read-chunk-3",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "WAIT",
+    "subType": "Wait",
+    "name": "before-report",
+    "status": "SUCCEEDED"
+  }
+]

@@ -1,0 +1,20 @@
+[
+  {
+    "type": "CONTEXT",
+    "subType": "RunInChildContext",
+    "name": "payment",
+    "status": "FAILED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "charge-card",
+    "status": "FAILED"
+  },
+  {
+    "type": "WAIT",
+    "subType": "Wait",
+    "name": "before-notify",
+    "status": "SUCCEEDED"
+  }
+]

@@ -695,6 +695,57 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 60
 
+  ChildContextErrorMapperFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-child-context-error-mapper
+      CodeUri: .aws-sam/build-artifacts/child-context-error-mapper/
+      Handler: bootstrap
+      Description: Child context failure mapped to a handler-owned error type
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  ChildContextSummaryFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-child-context-summary
+      CodeUri: .aws-sam/build-artifacts/child-context-summary/
+      Handler: bootstrap
+      Description: Summary stored for a child context result over the checkpoint limit
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  ChildContextSubtypeFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-child-context-subtype
+      CodeUri: .aws-sam/build-artifacts/child-context-subtype/
+      Handler: bootstrap
+      Description: Child context recorded with a caller-defined subtype
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
   # --- Slice 4: Callback examples (batch 1) ---
 
   CallbackSenderFunction:
@@ -2640,6 +2691,15 @@ Outputs:
   ChildOpsInvalidDepthFunction:
     Description: Child Ops Invalid Depth Function ARN
     Value: !GetAtt ChildOpsInvalidDepthFunction.Arn
+  ChildContextErrorMapperFunction:
+    Description: Child Context Error Mapper Function ARN
+    Value: !GetAtt ChildContextErrorMapperFunction.Arn
+  ChildContextSummaryFunction:
+    Description: Child Context Summary Function ARN
+    Value: !GetAtt ChildContextSummaryFunction.Arn
+  ChildContextSubtypeFunction:
+    Description: Child Context Subtype Function ARN
+    Value: !GetAtt ChildContextSubtypeFunction.Arn
   CallbackSenderFunction:
     Description: Callback Sender Function ARN
     Value: !GetAtt CallbackSenderFunction.Arn
