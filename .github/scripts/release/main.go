@@ -76,10 +76,10 @@ const (
 var publishedModules = []string{".", "telemetry", "analysis"}
 
 // internalModules are used only inside the repository, so they are never
-// released. prepare still sets the SDK version they require. examples
-// requires both the SDK and telemetry, so its go.mod must list the SDK
-// version that telemetry requires.
-var internalModules = []string{"conformance", "examples"}
+// released. prepare still sets the SDK version they require. examples and
+// conformance-telemetry require both the SDK and telemetry, so their go.mod
+// files must list the SDK version that telemetry requires.
+var internalModules = []string{"conformance", "conformance-telemetry", "examples"}
 
 // versionPattern matches the versions this repository releases. The
 // numbers have no leading zeros, because the go command ignores a tag such
