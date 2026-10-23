@@ -28,6 +28,7 @@ var fixture = map[string]string{
 	"analysis/durablelint/durablelint.go": "package durablelint\n",
 	"analysis/cmd/durablelint/main.go":    "package main\n\nfunc main() {}\n",
 	"conformance/go.mod":                  "module example.com/sdk/conformance\n\ngo 1.24\n\nrequire example.com/sdk v0.1.0\n\nreplace example.com/sdk => ../\n",
+	"conformance-telemetry/go.mod":        "module example.com/sdk/conformance-telemetry\n\ngo 1.24\n\nrequire (\n\texample.com/sdk v0.1.0\n\texample.com/sdk/telemetry v0.0.0\n)\n\nreplace example.com/sdk => ../\n\nreplace example.com/sdk/telemetry => ../telemetry\n",
 	"examples/go.mod":                     "module example.com/sdk/examples\n\ngo 1.24\n\nrequire (\n\texample.com/sdk v0.1.0\n\texample.com/sdk/telemetry v0.0.0\n)\n\nreplace example.com/sdk => ../\n\nreplace example.com/sdk/telemetry => ../telemetry\n",
 }
 
@@ -156,7 +157,7 @@ func TestPrepare(t *testing.T) {
 	if got := readFile(t, filepath.Join(a.repo, versionFile)); !strings.Contains(got, "\nconst Version = \"1.0.0\"\n") {
 		t.Errorf("%s after prepare:\n%s", versionFile, got)
 	}
-	for _, dir := range []string{"telemetry", "conformance", "examples"} {
+	for _, dir := range []string{"telemetry", "conformance", "conformance-telemetry", "examples"} {
 		if got := requiredSDK(t, a, dir); got != "v1.0.0" {
 			t.Errorf("%s requires example.com/sdk %s, want v1.0.0", dir, got)
 		}
