@@ -5,8 +5,8 @@
 # Usage:
 #   scripts/ci-local.sh [module...]
 #
-# Modules default to the five modules of the SDK repository, . telemetry
-# conformance examples analysis, and the release tool's module,
+# Modules default to the six modules of the SDK repository, . telemetry
+# conformance conformance-telemetry examples analysis, and the release tool's module,
 # .github/scripts/release (e.g. `scripts/ci-local.sh examples` to check
 # only the examples module). With no module argument the repository-level
 # checks also run: the release tool checks that durable.Version and the SDK
@@ -23,7 +23,7 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 if [ $# -gt 0 ]; then
     MODULES=$*
 else
-    MODULES=". telemetry conformance examples analysis .github/scripts/release"
+    MODULES=". telemetry conformance conformance-telemetry examples analysis .github/scripts/release"
 fi
 
 for mod in $MODULES; do
@@ -61,7 +61,7 @@ for mod in $MODULES; do
         bin=$(mktemp -t durablelint.XXXXXX)
         echo " -> go build -o durablelint ./cmd/durablelint"
         go build -o "$bin" ./cmd/durablelint
-        for target in examples conformance; do
+        for target in examples conformance conformance-telemetry; do
             echo " -> durablelint ./... (in $target)"
             (cd "$ROOT/$target" && "$bin" ./...)
         done

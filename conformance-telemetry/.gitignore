@@ -1,0 +1,7 @@
+publish/
+.aws-sam/
+build/
+history-*/
+report-*.json
+report-*.xml
+output/

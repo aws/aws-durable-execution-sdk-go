@@ -24,6 +24,7 @@ jobs:
           - { name: durable, dir: "." }
           - { name: telemetry, dir: "telemetry" }
           - { name: conformance, dir: "conformance" }
+          - { name: conformance-telemetry, dir: "conformance-telemetry" }
           - { name: examples, dir: "examples" }
           - { name: analysis, dir: "analysis" }
     steps:
@@ -78,6 +79,7 @@ jobs:
           go build -C analysis -o "$RUNNER_TEMP/durablelint" ./cmd/durablelint
           (cd examples && "$RUNNER_TEMP/durablelint" ./...)
           (cd conformance && "$RUNNER_TEMP/durablelint" ./...)
+          (cd conformance-telemetry && "$RUNNER_TEMP/durablelint" ./...)
 
   # The check job runs each module on the Go version its go.mod declares,
   # which is the oldest Go release that builds the module. This job runs
