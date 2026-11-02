@@ -1,6 +1,9 @@
 package telemetry
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"sort"
+)
 
 // Renderer produces the exact byte shape a Truncate call should size
 // against. Exporters with custom rendering (OperationsFormat) provide
@@ -30,28 +33,74 @@ func Truncate(record Record, maxBytes int, render Renderer) Record {
 		return record
 	}
 
+	// Steps 1 and 2 drop content oldest-first. Both have the same monotonic
+	// property: dropping more only shrinks the rendered record. So instead of
+	// re-rendering the whole record once per dropped item (O(n) full renders of
+	// a multi-megabyte record for a large invocation, which can stall for
+	// minutes), binary-search for the smallest number to drop — O(log n)
+	// renders. Each candidate is sized with the final truncation metadata
+	// already set, so the returned record accounts for those extra bytes and
+	// cannot creep back over the cap after the metadata is written.
+
+	ops := record.Operations
+	n := len(ops)
+
 	// Step 1: drop each operation's Result field, oldest first.
-	for i := range record.Operations {
-		if record.Operations[i].Result == nil {
-			continue
+	// applyResultDrops returns a copy of ops with the oldest j operations'
+	// Result cleared, and whether any Result was actually cleared.
+	applyResultDrops := func(j int) (dropped []OperationRecord, any bool) {
+		dropped = make([]OperationRecord, n)
+		copy(dropped, ops)
+		for i := 0; i < j; i++ {
+			if dropped[i].Result != nil {
+				dropped[i].Result = nil
+				dropped[i].Truncated = true
+				any = true
+			}
 		}
-		record.Operations[i].Result = nil
-		record.Operations[i].Truncated = true
+		return dropped, any
+	}
+	j := sort.Search(n+1, func(j int) bool {
+		candidate := record
+		cops, any := applyResultDrops(j)
+		candidate.Operations = cops
+		if any {
+			candidate.Truncated = true
+		}
+		return fits(candidate, maxBytes, render)
+	})
+	if j > n {
+		j = n // clearing every Result still doesn't fit; apply all, then Step 2.
+	}
+	if cops, any := applyResultDrops(j); any {
+		record.Operations = cops
 		record.Truncated = true
-		if fits(record, maxBytes, render) {
-			return record
-		}
+	} else {
+		record.Operations = cops
+	}
+	if fits(record, maxBytes, render) {
+		return record
 	}
 
 	// Step 2: drop whole operations, oldest first.
-	dropped := 0
-	for len(record.Operations) > 0 && !fits(record, maxBytes, render) {
-		record.Operations = record.Operations[1:]
-		dropped++
+	ops = record.Operations
+	n = len(ops)
+	k := sort.Search(n+1, func(k int) bool {
+		candidate := record
+		candidate.Operations = ops[k:]
+		if k > 0 {
+			candidate.Truncated = true
+			candidate.DroppedOperations = k
+		}
+		return fits(candidate, maxBytes, render)
+	})
+	if k > n {
+		k = n // even dropping every operation does not fit; drop all, then Step 3.
 	}
-	if dropped > 0 {
+	record.Operations = ops[k:]
+	if k > 0 {
 		record.Truncated = true
-		record.DroppedOperations = dropped
+		record.DroppedOperations = k
 	}
 	if fits(record, maxBytes, render) {
 		return record
