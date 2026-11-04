@@ -128,6 +128,36 @@ func TestGroupOperationsByName_MultipleOccurrences(t *testing.T) {
 	}
 }
 
+func TestGroupOperationsByName_FirstOccurrenceNilDuration(t *testing.T) {
+	// The first occurrence of a name has no DurationMs (e.g. an in-progress
+	// operation captured in a mid-execution snapshot), a later occurrence
+	// does. MinDurationMs must reflect the only timed occurrence, not stay
+	// at the zero value.
+	dur := int64(300)
+	ops := []OperationRecord{
+		{ID: "1", Name: "fetch", Type: "STEP", Status: "STARTED"},
+		{ID: "2", Name: "fetch", Type: "STEP", Status: "SUCCEEDED", DurationMs: &dur},
+	}
+	result := GroupOperationsByName(ops)
+
+	agg, ok := result["fetch"]
+	if !ok {
+		t.Fatal("expected 'fetch' key")
+	}
+	if agg.Count != 2 {
+		t.Errorf("Count = %d, want 2", agg.Count)
+	}
+	if agg.MinDurationMs != 300 {
+		t.Errorf("MinDurationMs = %d, want 300", agg.MinDurationMs)
+	}
+	if agg.MaxDurationMs != 300 {
+		t.Errorf("MaxDurationMs = %d, want 300", agg.MaxDurationMs)
+	}
+	if agg.TotalDurationMs != 300 {
+		t.Errorf("TotalDurationMs = %d, want 300", agg.TotalDurationMs)
+	}
+}
+
 func TestGroupOperationsByName_MixedNames(t *testing.T) {
 	dur := int64(50)
 	ops := []OperationRecord{

@@ -39,6 +39,10 @@ type OperationSummary struct {
 func GroupOperationsByName(ops []OperationRecord) map[string]OperationSummary {
 	result := make(map[string]OperationSummary)
 	lastByName := make(map[string]OperationRecord)
+	// timed records which names have already contributed a DurationMs, so
+	// min/max are seeded from the first timed occurrence rather than the
+	// first occurrence overall.
+	timed := make(map[string]bool)
 
 	for _, op := range ops {
 		if op.Name == "" {
@@ -64,9 +68,14 @@ func GroupOperationsByName(ops []OperationRecord) map[string]OperationSummary {
 
 		if op.DurationMs != nil {
 			d := *op.DurationMs
-			if agg.Count == 1 {
+			// Seed min/max from the first timed occurrence, not the first
+			// occurrence overall: an earlier occurrence of the same name may
+			// have had no DurationMs (e.g. an in-progress operation), which
+			// would otherwise leave MinDurationMs at the zero value.
+			if !timed[op.Name] {
 				agg.MinDurationMs = d
 				agg.MaxDurationMs = d
+				timed[op.Name] = true
 			} else {
 				if d < agg.MinDurationMs {
 					agg.MinDurationMs = d
