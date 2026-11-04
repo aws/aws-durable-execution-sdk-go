@@ -24,44 +24,48 @@ var out = pluginlog.New(nil)
 // plugin reports the attempt hooks and the terminal end of step
 // operations. The end fires only once the step has an outcome: the first
 // attempt's retryable failure suspends the invocation without an end.
-var plugin = durable.Plugin{
-	OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
-		out.Capture(info.ExecutionArn)
-	},
-	OnOperationAttemptStart: func(_ context.Context, info durable.AttemptHookInfo) {
-		if info.SubType != durable.OperationSubTypeStep {
-			return
-		}
-		out.Emit(map[string]any{
-			"plugin": "CONFPLUGIN",
-			"hook":   "attempt-start",
-			"n":      info.Attempt,
-			"op":     info.ID,
-		})
-	},
-	OnOperationAttemptEnd: func(_ context.Context, info durable.AttemptEndHookInfo) {
-		if info.SubType != durable.OperationSubTypeStep {
-			return
-		}
-		out.Emit(map[string]any{
-			"plugin":  "CONFPLUGIN",
-			"hook":    "attempt-end",
-			"n":       info.Attempt,
-			"outcome": string(info.Outcome),
-			"op":      info.ID,
-		})
-	},
-	OnOperationEnd: func(_ context.Context, info durable.OperationHookInfo) {
-		if info.SubType != durable.OperationSubTypeStep {
-			return
-		}
-		out.Emit(map[string]any{
-			"plugin": "CONFPLUGIN",
-			"hook":   "operation-end",
-			"op":     info.ID,
-			"status": string(info.Status),
-		})
-	},
+// newPlugin is a durable.PluginFactory: the handler calls it once per
+// invocation and the returned Plugin serves that invocation alone.
+func newPlugin(durable.InvocationHookInfo) (*durable.Plugin, error) {
+	return &durable.Plugin{
+		OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
+			out.Capture(info.ExecutionArn)
+		},
+		OnOperationAttemptStart: func(_ context.Context, info durable.AttemptHookInfo) {
+			if info.SubType != durable.OperationSubTypeStep {
+				return
+			}
+			out.Emit(map[string]any{
+				"plugin": "CONFPLUGIN",
+				"hook":   "attempt-start",
+				"n":      info.Attempt,
+				"op":     info.ID,
+			})
+		},
+		OnOperationAttemptEnd: func(_ context.Context, info durable.AttemptEndHookInfo) {
+			if info.SubType != durable.OperationSubTypeStep {
+				return
+			}
+			out.Emit(map[string]any{
+				"plugin":  "CONFPLUGIN",
+				"hook":    "attempt-end",
+				"n":       info.Attempt,
+				"outcome": string(info.Outcome),
+				"op":      info.ID,
+			})
+		},
+		OnOperationEnd: func(_ context.Context, info durable.OperationHookInfo) {
+			if info.SubType != durable.OperationSubTypeStep {
+				return
+			}
+			out.Emit(map[string]any{
+				"plugin": "CONFPLUGIN",
+				"hook":   "operation-end",
+				"op":     info.ID,
+				"status": string(info.Status),
+			})
+		},
+	}, nil
 }
 
 func handler(ctx durable.Context, _ any) (string, error) {
@@ -79,5 +83,5 @@ func handler(ctx durable.Context, _ any) (string, error) {
 }
 
 func main() {
-	durable.Start(handler, durable.WithPlugins(plugin))
+	durable.Start(handler, durable.WithPlugins(durable.PluginFactoryFunc(newPlugin)))
 }

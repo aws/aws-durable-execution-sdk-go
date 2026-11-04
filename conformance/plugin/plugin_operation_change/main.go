@@ -48,8 +48,11 @@ func (p *operationChangePlugin) fullMap(updated map[string]durable.OperationHook
 	return full
 }
 
-func (p *operationChangePlugin) plugin() durable.Plugin {
-	return durable.Plugin{
+// newOperationChangePlugin is a durable.PluginFactory. Each invocation gets its own
+// operationChangePlugin, so the state it holds never leaks into another invocation.
+func newOperationChangePlugin(durable.InvocationHookInfo) (*durable.Plugin, error) {
+	p := &operationChangePlugin{}
+	return &durable.Plugin{
 		OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
 			out.Capture(info.ExecutionArn)
 			p.mu.Lock()
@@ -72,7 +75,7 @@ func (p *operationChangePlugin) plugin() durable.Plugin {
 				})
 			}
 		},
-	}
+	}, nil
 }
 
 func handler(ctx durable.Context, name string) (string, error) {
@@ -82,5 +85,5 @@ func handler(ctx durable.Context, name string) (string, error) {
 }
 
 func main() {
-	durable.Start(handler, durable.WithPlugins((&operationChangePlugin{}).plugin()))
+	durable.Start(handler, durable.WithPlugins(durable.PluginFactoryFunc(newOperationChangePlugin)))
 }

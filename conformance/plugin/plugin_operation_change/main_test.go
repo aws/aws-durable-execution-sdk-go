@@ -14,7 +14,7 @@ import (
 // report through OnOperationChange, so no record is expected.
 func TestHandler(t *testing.T) {
 	records := plugintest.RecordTo(t, out)
-	runner := durabletest.NewLocalRunner(handler, durable.WithPlugins((&operationChangePlugin{}).plugin()))
+	runner := durabletest.NewLocalRunner(handler, durable.WithPlugins(durable.PluginFactoryFunc(newOperationChangePlugin)))
 	result, err := runner.RunUntilComplete("world")
 	if err != nil {
 		t.Fatal(err)
@@ -31,7 +31,7 @@ func TestHandler(t *testing.T) {
 // the SDK delivers when a step changed between invocations.
 func TestPluginReportsUpdatedSteps(t *testing.T) {
 	records := plugintest.RecordTo(t, out)
-	p := (&operationChangePlugin{}).plugin()
+	p, _ := newOperationChangePlugin(durable.InvocationHookInfo{})
 	step := durable.OperationHookInfo{ID: "op-1", Type: string(durable.OperationTypeStep), Status: durable.PluginOperationSucceeded}
 	wait := durable.OperationHookInfo{ID: "op-2", Type: string(durable.OperationTypeWait), Status: durable.PluginOperationSucceeded}
 	ops := map[string]durable.OperationHookInfo{"op-1": step, "op-2": wait}
@@ -50,7 +50,7 @@ func TestPluginReportsUpdatedSteps(t *testing.T) {
 // present in the full map because the change itself carries it.
 func TestPluginCountsChangedStepAsInFullMap(t *testing.T) {
 	records := plugintest.RecordTo(t, out)
-	p := (&operationChangePlugin{}).plugin()
+	p, _ := newOperationChangePlugin(durable.InvocationHookInfo{})
 	exec := durable.OperationHookInfo{ID: "exec", Type: string(durable.OperationTypeExecution), Status: durable.PluginOperationStarted}
 	step := durable.OperationHookInfo{ID: "op-1", Type: string(durable.OperationTypeStep), Status: durable.PluginOperationSucceeded}
 	p.OnInvocationStart(context.Background(), durable.InvocationHookInfo{

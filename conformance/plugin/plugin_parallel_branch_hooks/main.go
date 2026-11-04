@@ -27,33 +27,37 @@ import (
 var out = pluginlog.New(nil)
 
 // plugin reports the branch function lifecycle of parallel branches.
-var plugin = durable.Plugin{
-	OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
-		out.Capture(info.ExecutionArn)
-	},
-	OnOperationStart: func(_ context.Context, info durable.OperationHookInfo) {
-		if info.SubType != durable.OperationSubTypeParallelBranch {
-			return
-		}
-		out.Emit(map[string]any{
-			"plugin": "CONFPLUGIN",
-			"hook":   "fn-start",
-			"op":     info.ID,
-			"parent": pluginlog.OrNone(info.ParentID),
-		})
-	},
-	OnOperationEnd: func(_ context.Context, info durable.OperationHookInfo) {
-		if info.SubType != durable.OperationSubTypeParallelBranch {
-			return
-		}
-		out.Emit(map[string]any{
-			"plugin":  "CONFPLUGIN",
-			"hook":    "fn-end",
-			"op":      info.ID,
-			"parent":  pluginlog.OrNone(info.ParentID),
-			"outcome": pluginlog.Outcome(info.Status),
-		})
-	},
+// newPlugin is a durable.PluginFactory: the handler calls it once per
+// invocation and the returned Plugin serves that invocation alone.
+func newPlugin(durable.InvocationHookInfo) (*durable.Plugin, error) {
+	return &durable.Plugin{
+		OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
+			out.Capture(info.ExecutionArn)
+		},
+		OnOperationStart: func(_ context.Context, info durable.OperationHookInfo) {
+			if info.SubType != durable.OperationSubTypeParallelBranch {
+				return
+			}
+			out.Emit(map[string]any{
+				"plugin": "CONFPLUGIN",
+				"hook":   "fn-start",
+				"op":     info.ID,
+				"parent": pluginlog.OrNone(info.ParentID),
+			})
+		},
+		OnOperationEnd: func(_ context.Context, info durable.OperationHookInfo) {
+			if info.SubType != durable.OperationSubTypeParallelBranch {
+				return
+			}
+			out.Emit(map[string]any{
+				"plugin":  "CONFPLUGIN",
+				"hook":    "fn-end",
+				"op":      info.ID,
+				"parent":  pluginlog.OrNone(info.ParentID),
+				"outcome": pluginlog.Outcome(info.Status),
+			})
+		},
+	}, nil
 }
 
 func handler(ctx durable.Context, _ any) ([]string, error) {
@@ -68,5 +72,5 @@ func handler(ctx durable.Context, _ any) ([]string, error) {
 }
 
 func main() {
-	durable.Start(handler, durable.WithPlugins(plugin))
+	durable.Start(handler, durable.WithPlugins(durable.PluginFactoryFunc(newPlugin)))
 }

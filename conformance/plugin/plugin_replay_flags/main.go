@@ -40,8 +40,11 @@ type replayFlagsPlugin struct {
 	replayedTerminal map[string]bool
 }
 
-func (p *replayFlagsPlugin) plugin() durable.Plugin {
-	return durable.Plugin{
+// newReplayFlagsPlugin is a durable.PluginFactory. Each invocation gets its own
+// replayFlagsPlugin, so the state it holds never leaks into another invocation.
+func newReplayFlagsPlugin(durable.InvocationHookInfo) (*durable.Plugin, error) {
+	p := &replayFlagsPlugin{}
+	return &durable.Plugin{
 		OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
 			out.Capture(info.ExecutionArn)
 			p.mu.Lock()
@@ -83,7 +86,7 @@ func (p *replayFlagsPlugin) plugin() durable.Plugin {
 				"status": string(info.Status),
 			})
 		},
-	}
+	}, nil
 }
 
 func handler(ctx durable.Context, _ any) (string, error) {
@@ -110,5 +113,5 @@ func handler(ctx durable.Context, _ any) (string, error) {
 }
 
 func main() {
-	durable.Start(handler, durable.WithPlugins((&replayFlagsPlugin{}).plugin()))
+	durable.Start(handler, durable.WithPlugins(durable.PluginFactoryFunc(newReplayFlagsPlugin)))
 }

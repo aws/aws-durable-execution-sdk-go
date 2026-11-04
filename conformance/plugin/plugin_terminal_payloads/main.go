@@ -22,23 +22,27 @@ var out = pluginlog.New(nil)
 
 // plugin reports the terminal payload of step operations: the raw
 // serialized result as checkpointed, and the recorded error message.
-var plugin = durable.Plugin{
-	OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
-		out.Capture(info.ExecutionArn)
-	},
-	OnOperationEnd: func(_ context.Context, info durable.OperationHookInfo) {
-		if info.SubType != durable.OperationSubTypeStep {
-			return
-		}
-		out.Emit(map[string]any{
-			"plugin": "CONFPLUGIN",
-			"hook":   "operation-end",
-			"op":     info.ID,
-			"status": string(info.Status),
-			"result": pluginlog.OrNone(info.Result),
-			"error":  pluginlog.ErrorMessage(info.Error),
-		})
-	},
+// newPlugin is a durable.PluginFactory: the handler calls it once per
+// invocation and the returned Plugin serves that invocation alone.
+func newPlugin(durable.InvocationHookInfo) (*durable.Plugin, error) {
+	return &durable.Plugin{
+		OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
+			out.Capture(info.ExecutionArn)
+		},
+		OnOperationEnd: func(_ context.Context, info durable.OperationHookInfo) {
+			if info.SubType != durable.OperationSubTypeStep {
+				return
+			}
+			out.Emit(map[string]any{
+				"plugin": "CONFPLUGIN",
+				"hook":   "operation-end",
+				"op":     info.ID,
+				"status": string(info.Status),
+				"result": pluginlog.OrNone(info.Result),
+				"error":  pluginlog.ErrorMessage(info.Error),
+			})
+		},
+	}, nil
 }
 
 func handler(ctx durable.Context, _ any) (string, error) {
@@ -59,5 +63,5 @@ func handler(ctx durable.Context, _ any) (string, error) {
 }
 
 func main() {
-	durable.Start(handler, durable.WithPlugins(plugin))
+	durable.Start(handler, durable.WithPlugins(durable.PluginFactoryFunc(newPlugin)))
 }

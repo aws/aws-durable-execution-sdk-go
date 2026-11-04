@@ -21,31 +21,35 @@ var out = pluginlog.New(nil)
 
 // plugin reports the lifecycle of step operations. The invocation-start
 // hook only captures the execution ARN.
-var plugin = durable.Plugin{
-	OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
-		out.Capture(info.ExecutionArn)
-	},
-	OnOperationStart: func(_ context.Context, info durable.OperationHookInfo) {
-		if info.SubType != durable.OperationSubTypeStep {
-			return
-		}
-		out.Emit(map[string]any{
-			"plugin": "CONFPLUGIN",
-			"hook":   "operation-start",
-			"op":     info.ID,
-		})
-	},
-	OnOperationEnd: func(_ context.Context, info durable.OperationHookInfo) {
-		if info.SubType != durable.OperationSubTypeStep {
-			return
-		}
-		out.Emit(map[string]any{
-			"plugin": "CONFPLUGIN",
-			"hook":   "operation-end",
-			"op":     info.ID,
-			"status": string(info.Status),
-		})
-	},
+// newPlugin is a durable.PluginFactory: the handler calls it once per
+// invocation and the returned Plugin serves that invocation alone.
+func newPlugin(durable.InvocationHookInfo) (*durable.Plugin, error) {
+	return &durable.Plugin{
+		OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
+			out.Capture(info.ExecutionArn)
+		},
+		OnOperationStart: func(_ context.Context, info durable.OperationHookInfo) {
+			if info.SubType != durable.OperationSubTypeStep {
+				return
+			}
+			out.Emit(map[string]any{
+				"plugin": "CONFPLUGIN",
+				"hook":   "operation-start",
+				"op":     info.ID,
+			})
+		},
+		OnOperationEnd: func(_ context.Context, info durable.OperationHookInfo) {
+			if info.SubType != durable.OperationSubTypeStep {
+				return
+			}
+			out.Emit(map[string]any{
+				"plugin": "CONFPLUGIN",
+				"hook":   "operation-end",
+				"op":     info.ID,
+				"status": string(info.Status),
+			})
+		},
+	}, nil
 }
 
 func handler(ctx durable.Context, name string) (string, error) {
@@ -55,5 +59,5 @@ func handler(ctx durable.Context, name string) (string, error) {
 }
 
 func main() {
-	durable.Start(handler, durable.WithPlugins(plugin))
+	durable.Start(handler, durable.WithPlugins(durable.PluginFactoryFunc(newPlugin)))
 }

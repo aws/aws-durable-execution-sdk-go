@@ -31,97 +31,105 @@ func isStep(info durable.OperationHookInfo) bool {
 // faulty is registered first. It logs from every hook this handler
 // exercises and then panics. The SDK recovers the panic and still
 // dispatches the hook to the other plugin.
-var faulty = durable.Plugin{
-	OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
-		out.Capture(info.ExecutionArn)
-		out.EmitWithArn(map[string]any{"plugin": faultyLabel, "hook": "invocation-start"}, info.ExecutionArn)
-		panic("faulty OnInvocationStart")
-	},
-	OnOperationStart: func(_ context.Context, info durable.OperationHookInfo) {
-		if !isStep(info) {
-			return
-		}
-		out.Emit(map[string]any{"plugin": faultyLabel, "hook": "operation-start"})
-		panic("faulty OnOperationStart")
-	},
-	OnOperationAttemptStart: func(_ context.Context, info durable.AttemptHookInfo) {
-		if !isStep(info.OperationHookInfo) {
-			return
-		}
-		out.Emit(map[string]any{"plugin": faultyLabel, "hook": "attempt-start"})
-		panic("faulty OnOperationAttemptStart")
-	},
-	OnOperationAttemptEnd: func(_ context.Context, info durable.AttemptEndHookInfo) {
-		if !isStep(info.OperationHookInfo) {
-			return
-		}
-		out.Emit(map[string]any{"plugin": faultyLabel, "hook": "attempt-end"})
-		panic("faulty OnOperationAttemptEnd")
-	},
-	OnOperationEnd: func(_ context.Context, info durable.OperationHookInfo) {
-		if !isStep(info) {
-			return
-		}
-		out.Emit(map[string]any{"plugin": faultyLabel, "hook": "operation-end"})
-		panic("faulty OnOperationEnd")
-	},
-	OnInvocationEnd: func(_ context.Context, info durable.InvocationEndHookInfo) {
-		out.EmitWithArn(map[string]any{"plugin": faultyLabel, "hook": "invocation-end"}, info.ExecutionArn)
-		panic("faulty OnInvocationEnd")
-	},
+// newFaulty is a durable.PluginFactory: the handler calls it once per
+// invocation and the returned Plugin serves that invocation alone.
+func newFaulty(durable.InvocationHookInfo) (*durable.Plugin, error) {
+	return &durable.Plugin{
+		OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
+			out.Capture(info.ExecutionArn)
+			out.EmitWithArn(map[string]any{"plugin": faultyLabel, "hook": "invocation-start"}, info.ExecutionArn)
+			panic("faulty OnInvocationStart")
+		},
+		OnOperationStart: func(_ context.Context, info durable.OperationHookInfo) {
+			if !isStep(info) {
+				return
+			}
+			out.Emit(map[string]any{"plugin": faultyLabel, "hook": "operation-start"})
+			panic("faulty OnOperationStart")
+		},
+		OnOperationAttemptStart: func(_ context.Context, info durable.AttemptHookInfo) {
+			if !isStep(info.OperationHookInfo) {
+				return
+			}
+			out.Emit(map[string]any{"plugin": faultyLabel, "hook": "attempt-start"})
+			panic("faulty OnOperationAttemptStart")
+		},
+		OnOperationAttemptEnd: func(_ context.Context, info durable.AttemptEndHookInfo) {
+			if !isStep(info.OperationHookInfo) {
+				return
+			}
+			out.Emit(map[string]any{"plugin": faultyLabel, "hook": "attempt-end"})
+			panic("faulty OnOperationAttemptEnd")
+		},
+		OnOperationEnd: func(_ context.Context, info durable.OperationHookInfo) {
+			if !isStep(info) {
+				return
+			}
+			out.Emit(map[string]any{"plugin": faultyLabel, "hook": "operation-end"})
+			panic("faulty OnOperationEnd")
+		},
+		OnInvocationEnd: func(_ context.Context, info durable.InvocationEndHookInfo) {
+			out.EmitWithArn(map[string]any{"plugin": faultyLabel, "hook": "invocation-end"}, info.ExecutionArn)
+			panic("faulty OnInvocationEnd")
+		},
+	}, nil
 }
 
 // healthy is registered second and reports every hook normally.
-var healthy = durable.Plugin{
-	OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
-		out.Capture(info.ExecutionArn)
-		out.EmitWithArn(map[string]any{
-			"plugin": healthyLabel,
-			"hook":   "invocation-start",
-			"first":  info.IsFirstInvocation,
-		}, info.ExecutionArn)
-	},
-	OnOperationStart: func(_ context.Context, info durable.OperationHookInfo) {
-		if !isStep(info) {
-			return
-		}
-		out.Emit(map[string]any{"plugin": healthyLabel, "hook": "operation-start", "op": info.ID})
-	},
-	OnOperationAttemptStart: func(_ context.Context, info durable.AttemptHookInfo) {
-		if !isStep(info.OperationHookInfo) {
-			return
-		}
-		out.Emit(map[string]any{"plugin": healthyLabel, "hook": "attempt-start", "op": info.ID})
-	},
-	OnOperationAttemptEnd: func(_ context.Context, info durable.AttemptEndHookInfo) {
-		if !isStep(info.OperationHookInfo) {
-			return
-		}
-		out.Emit(map[string]any{
-			"plugin":  healthyLabel,
-			"hook":    "attempt-end",
-			"op":      info.ID,
-			"outcome": string(info.Outcome),
-		})
-	},
-	OnOperationEnd: func(_ context.Context, info durable.OperationHookInfo) {
-		if !isStep(info) {
-			return
-		}
-		out.Emit(map[string]any{
-			"plugin": healthyLabel,
-			"hook":   "operation-end",
-			"op":     info.ID,
-			"status": string(info.Status),
-		})
-	},
-	OnInvocationEnd: func(_ context.Context, info durable.InvocationEndHookInfo) {
-		out.EmitWithArn(map[string]any{
-			"plugin": healthyLabel,
-			"hook":   "invocation-end",
-			"status": string(info.Status),
-		}, info.ExecutionArn)
-	},
+// newHealthy is a durable.PluginFactory: the handler calls it once per
+// invocation and the returned Plugin serves that invocation alone.
+func newHealthy(durable.InvocationHookInfo) (*durable.Plugin, error) {
+	return &durable.Plugin{
+		OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
+			out.Capture(info.ExecutionArn)
+			out.EmitWithArn(map[string]any{
+				"plugin": healthyLabel,
+				"hook":   "invocation-start",
+				"first":  info.IsFirstInvocation,
+			}, info.ExecutionArn)
+		},
+		OnOperationStart: func(_ context.Context, info durable.OperationHookInfo) {
+			if !isStep(info) {
+				return
+			}
+			out.Emit(map[string]any{"plugin": healthyLabel, "hook": "operation-start", "op": info.ID})
+		},
+		OnOperationAttemptStart: func(_ context.Context, info durable.AttemptHookInfo) {
+			if !isStep(info.OperationHookInfo) {
+				return
+			}
+			out.Emit(map[string]any{"plugin": healthyLabel, "hook": "attempt-start", "op": info.ID})
+		},
+		OnOperationAttemptEnd: func(_ context.Context, info durable.AttemptEndHookInfo) {
+			if !isStep(info.OperationHookInfo) {
+				return
+			}
+			out.Emit(map[string]any{
+				"plugin":  healthyLabel,
+				"hook":    "attempt-end",
+				"op":      info.ID,
+				"outcome": string(info.Outcome),
+			})
+		},
+		OnOperationEnd: func(_ context.Context, info durable.OperationHookInfo) {
+			if !isStep(info) {
+				return
+			}
+			out.Emit(map[string]any{
+				"plugin": healthyLabel,
+				"hook":   "operation-end",
+				"op":     info.ID,
+				"status": string(info.Status),
+			})
+		},
+		OnInvocationEnd: func(_ context.Context, info durable.InvocationEndHookInfo) {
+			out.EmitWithArn(map[string]any{
+				"plugin": healthyLabel,
+				"hook":   "invocation-end",
+				"status": string(info.Status),
+			}, info.ExecutionArn)
+		},
+	}, nil
 }
 
 func handler(ctx durable.Context, name string) (string, error) {
@@ -131,5 +139,5 @@ func handler(ctx durable.Context, name string) (string, error) {
 }
 
 func main() {
-	durable.Start(handler, durable.WithPlugins(faulty, healthy))
+	durable.Start(handler, durable.WithPlugins(durable.PluginFactoryFunc(newFaulty), durable.PluginFactoryFunc(newHealthy)))
 }

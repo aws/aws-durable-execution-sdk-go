@@ -14,7 +14,7 @@ import (
 // only the absence of records on the first invocation is asserted here.
 func TestHandler(t *testing.T) {
 	records := plugintest.RecordTo(t, out)
-	runner := durabletest.NewLocalRunner(handler, durable.WithPlugins(plugin))
+	runner := durabletest.NewLocalRunner(handler, durable.WithPlugins(durable.PluginFactoryFunc(newPlugin)))
 	result, err := runner.RunUntilComplete(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -31,6 +31,7 @@ func TestPluginReportsUpdatedWaits(t *testing.T) {
 	records := plugintest.RecordTo(t, out)
 	wait := durable.OperationHookInfo{ID: "op-1", Type: string(durable.OperationTypeWait), Status: durable.PluginOperationSucceeded}
 	step := durable.OperationHookInfo{ID: "op-2", Type: string(durable.OperationTypeStep), Status: durable.PluginOperationSucceeded}
+	plugin, _ := newPlugin(durable.InvocationHookInfo{})
 	plugin.OnInvocationStart(context.Background(), durable.InvocationHookInfo{
 		ExecutionArn:      "arn:test",
 		IsFirstInvocation: false,
