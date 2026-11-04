@@ -56,26 +56,30 @@ func (r *recorder) snapshot() []hookEvent {
 var rec = &recorder{}
 
 // plugin records every lifecycle hook invocation into rec.
-var plugin = durable.Plugin{
-	OnInvocationStart: func(_ context.Context, _ durable.InvocationHookInfo) {
-		rec.reset()
-		rec.record(hookEvent{Hook: "OnInvocationStart"})
-	},
-	OnInvocationEnd: func(_ context.Context, _ durable.InvocationEndHookInfo) {
-		rec.record(hookEvent{Hook: "OnInvocationEnd"})
-	},
-	OnOperationStart: func(_ context.Context, info durable.OperationHookInfo) {
-		rec.record(hookEvent{Hook: "OnOperationStart", OperationName: info.Name})
-	},
-	OnOperationEnd: func(_ context.Context, info durable.OperationHookInfo) {
-		rec.record(hookEvent{Hook: "OnOperationEnd", OperationName: info.Name})
-	},
-	OnOperationAttemptStart: func(_ context.Context, info durable.AttemptHookInfo) {
-		rec.record(hookEvent{Hook: "OnOperationAttemptStart", OperationName: info.Name, Attempt: info.Attempt})
-	},
-	OnOperationAttemptEnd: func(_ context.Context, info durable.AttemptEndHookInfo) {
-		rec.record(hookEvent{Hook: "OnOperationAttemptEnd", OperationName: info.Name, Attempt: info.Attempt})
-	},
+// newPlugin is a durable.PluginFactory: the handler calls it once per
+// invocation and the returned Plugin serves that invocation alone.
+func newPlugin(durable.InvocationHookInfo) (*durable.Plugin, error) {
+	return &durable.Plugin{
+		OnInvocationStart: func(_ context.Context, _ durable.InvocationHookInfo) {
+			rec.reset()
+			rec.record(hookEvent{Hook: "OnInvocationStart"})
+		},
+		OnInvocationEnd: func(_ context.Context, _ durable.InvocationEndHookInfo) {
+			rec.record(hookEvent{Hook: "OnInvocationEnd"})
+		},
+		OnOperationStart: func(_ context.Context, info durable.OperationHookInfo) {
+			rec.record(hookEvent{Hook: "OnOperationStart", OperationName: info.Name})
+		},
+		OnOperationEnd: func(_ context.Context, info durable.OperationHookInfo) {
+			rec.record(hookEvent{Hook: "OnOperationEnd", OperationName: info.Name})
+		},
+		OnOperationAttemptStart: func(_ context.Context, info durable.AttemptHookInfo) {
+			rec.record(hookEvent{Hook: "OnOperationAttemptStart", OperationName: info.Name, Attempt: info.Attempt})
+		},
+		OnOperationAttemptEnd: func(_ context.Context, info durable.AttemptEndHookInfo) {
+			rec.record(hookEvent{Hook: "OnOperationAttemptEnd", OperationName: info.Name, Attempt: info.Attempt})
+		},
+	}, nil
 }
 
 // Output is the handler result containing the hooks observed before the
@@ -96,4 +100,4 @@ func handler(ctx durable.Context, _ any) (Output, error) {
 	return Output{Message: msg, Hooks: rec.snapshot()}, nil
 }
 
-func main() { durable.Start(handler, durable.WithPlugins(plugin)) }
+func main() { durable.Start(handler, durable.WithPlugins(durable.PluginFactoryFunc(newPlugin))) }

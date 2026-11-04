@@ -16,7 +16,7 @@ func TestHandler(t *testing.T) {
 	// start with a clean slate.
 	rec = &recorder{}
 
-	runner := durabletest.NewLocalRunner(handler, durable.WithPlugins(plugin))
+	runner := durabletest.NewLocalRunner(handler, durable.WithPlugins(durable.PluginFactoryFunc(newPlugin)))
 	result, err := runner.RunUntilComplete(nil)
 	if err != nil {
 		t.Fatal(err)
