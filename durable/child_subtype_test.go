@@ -77,7 +77,7 @@ func TestChildSubTypeRecordedInCheckpointAndPlugin(t *testing.T) {
 			t.Run(tc.name+"/"+variant, func(t *testing.T) {
 				rec := &opRecorder{}
 				fake := &fakeLambda{}
-				h := Wrap(handler, WithPlugins(rec.plugin()), withLambdaAPI(fake))
+				h := Wrap(handler, withTestPlugins(rec.plugin()), withLambdaAPI(fake))
 
 				resp, err := h(context.Background(), childPayload(`"x"`))
 				if err != nil {
@@ -128,7 +128,7 @@ func TestChildSubTypeRecordedOnFailure(t *testing.T) {
 			return "", fmt.Errorf("err = %v, want a ChildContextError", err)
 		}
 		return "handled", nil
-	}, WithPlugins(rec.plugin()), withLambdaAPI(fake))
+	}, withTestPlugins(rec.plugin()), withLambdaAPI(fake))
 
 	resp, err := h(context.Background(), childPayload(`"x"`))
 	if err != nil {

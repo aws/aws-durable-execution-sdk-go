@@ -3,20 +3,25 @@ package durable
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"reflect"
 	"sync"
 	"time"
 )
 
-// Plugin configures an EXPERIMENTAL instrumentation plugin that observes
-// durable execution lifecycle events. Plugins implement only the hooks they need by
-// setting non-nil function fields; nil fields are skipped with zero
-// overhead. Register plugins with [WithPlugins]. Construct a Plugin with
-// keyed fields: a minor release may add hook fields.
+// Plugin is an EXPERIMENTAL instrumentation plugin that observes the
+// lifecycle events of one durable execution invocation. Plugins implement
+// only the hooks they need by setting non-nil function fields; nil fields
+// are skipped with zero overhead. A Plugin is not registered directly: a
+// [PluginFactory] registered with [WithPlugins] returns one Plugin per
+// invocation, and that Plugin serves that invocation alone. Construct a
+// Plugin with keyed fields: a minor release may add hook fields.
 //
 // # Experimental
 //
-// The plugin API is experimental. It comprises this type, [WithPlugins],
+// The plugin API is experimental. It comprises this type, [PluginFactory],
+// [PluginFactoryFunc], [WithPlugins],
 // [WithPluginChildOperationsDepth], the hook info types
 // ([InvocationHookInfo], [InvocationEndHookInfo], [OperationHookInfo],
 // [AttemptHookInfo], [AttemptEndHookInfo], [OperationChangeHookInfo]), and
@@ -344,6 +349,12 @@ type InvocationHookInfo struct {
 	ExecutionArn      string
 	IsFirstInvocation bool
 
+	// RequestID is the Lambda request ID of this invocation, as the
+	// runtime reports it. It identifies one invocation, where
+	// ExecutionArn identifies the execution that spans many. Empty
+	// outside a Lambda invocation, such as in local tests.
+	RequestID string
+
 	// ExecutionInput is the deserialized customer event for the execution.
 	// It is the raw unmarshaled value (typically a map or struct).
 	ExecutionInput any
@@ -368,10 +379,11 @@ type InvocationHookInfo struct {
 	// carries the checkpointed status, timestamps, result, and error, with
 	// IsReplay set, as an OnOperationEnd hook would report the operation.
 	//
-	// The map is built before the invocation hooks run and is not
-	// modified afterwards, so a plugin may read it at any time. It is nil
-	// when no registered plugin implements OnInvocationStart or
-	// WrapInvocation, the hooks that receive it.
+	// The map is built before the plugin factories are called and is not
+	// modified afterwards, so a factory or a plugin may read it at any
+	// time. It is built whenever at least one factory is registered, so
+	// its cost is proportional to the number of checkpointed operations
+	// and is paid once per invocation.
 	Operations map[string]OperationHookInfo
 }
 
@@ -562,17 +574,106 @@ type OperationChangeHookInfo struct {
 	UpdatedOperations map[string]OperationHookInfo
 }
 
-// WithPlugins registers instrumentation plugins with the handler. Plugins
-// are appended in call order, and the order decides how the wrap hooks
-// compose: the first registered plugin is outermost. See [Plugin] for the
-// dispatch and concurrency contract.
+// WithPlugins registers instrumentation plugin factories with the handler.
+// Factories are appended in call order. On every invocation the handler
+// calls each factory in that order, and the order decides how the wrap
+// hooks of the returned plugins compose: the first registered factory's
+// Plugin is outermost. See [PluginFactory] for the lifetime contract and
+// [Plugin] for the dispatch and concurrency contract.
+//
+// A nil factory panics in [Wrap] and [Start], because handler options are
+// read once at program start.
 //
 // EXPERIMENTAL: this function is experimental and may be changed or removed
 // in future releases.
-func WithPlugins(plugins ...Plugin) HandlerOption {
+func WithPlugins(factories ...PluginFactory) HandlerOption {
 	return handlerOptionFunc(func(o *handlerOptions) {
-		o.plugins = append(o.plugins, plugins...)
+		o.pluginFactories = append(o.pluginFactories, factories...)
 	})
+}
+
+// PluginFactory creates the [Plugin] that serves one invocation.
+//
+// # Lifetime
+//
+// The handler calls CreatePlugin once per invocation, before any hook
+// fires, with the same [InvocationHookInfo] it then passes to the returned
+// Plugin's OnInvocationStart and WrapInvocation hooks. So a factory can
+// read the invocation's identity and its checkpointed operations when it
+// constructs the Plugin. The returned Plugin serves that invocation and no
+// other; the handler drops it when the invocation returns. So a Plugin may
+// hold the state of its invocation in the variables its hook closures
+// capture, without keying that state by execution ARN.
+//
+// State that outlives an invocation (an exporter, a tracer provider, a
+// connection pool) belongs on the factory. State that belongs to one
+// invocation (spans, operation buffers, counters) belongs to the Plugin
+// the factory returns. Do not return a prepared Plugin value from more
+// than one CreatePlugin call: a Plugin that looks stateless may hold
+// closures over mutable state, and two invocations would then share it.
+//
+// # Concurrency
+//
+// Within one invocation the factories are called in registration order,
+// one after another, on the goroutine that received the invocation.
+// Across invocations the calls may overlap: when the Lambda runtime
+// delivers several invocations to one process at once, each invocation
+// calls every factory. So a factory's own state and the resources it
+// shares with the Plugins it returns must be safe for concurrent use.
+//
+// # Results
+//
+// CreatePlugin is expected to be infallible. Its results are handled as
+// follows, and none of them affects the outcome of the execution:
+//
+//   - A non-nil Plugin with at least one hook set is registered for the
+//     invocation.
+//   - A nil Plugin and a nil error skip instrumentation for the invocation.
+//     Nothing is logged: this is the intended way to opt one invocation
+//     out, for example for sampling.
+//   - A non-nil error skips instrumentation for the invocation and is
+//     logged through the handler's log handler.
+//   - A non-nil Plugin with no hook set is a programming mistake. It is
+//     logged and skipped.
+//   - A panic is a programming defect. It is recovered, logged, and
+//     skipped. Recovery contains the defect; it is not a way to signal
+//     failure.
+//
+// # Example
+//
+//	type auditFactory struct{ exporter *Exporter } // environment lifetime
+//
+//	func (f auditFactory) CreatePlugin(info durable.InvocationHookInfo) (*durable.Plugin, error) {
+//		a := &audit{exporter: f.exporter, executionArn: info.ExecutionArn} // invocation lifetime
+//		return &durable.Plugin{
+//			OnOperationEnd:  a.onOperationEnd,
+//			OnInvocationEnd: a.onInvocationEnd,
+//		}, nil
+//	}
+//
+//	func main() { durable.Start(handler, durable.WithPlugins(auditFactory{exporter: newExporter()})) }
+//
+// EXPERIMENTAL: this type is experimental and may be changed or removed in
+// future releases.
+type PluginFactory interface {
+	CreatePlugin(info InvocationHookInfo) (*Plugin, error)
+}
+
+// PluginFactoryFunc adapts a function to [PluginFactory], as
+// http.HandlerFunc adapts a function to http.Handler. It suits a factory
+// that holds no environment-lifetime state:
+//
+//	durable.WithPlugins(durable.PluginFactoryFunc(func(info durable.InvocationHookInfo) (*durable.Plugin, error) {
+//		return &durable.Plugin{OnInvocationEnd: logOutcome}, nil
+//	}))
+//
+// EXPERIMENTAL: this type is experimental and may be changed or removed in
+// future releases.
+type PluginFactoryFunc func(info InvocationHookInfo) (*Plugin, error)
+
+// CreatePlugin calls f(info).
+func (f PluginFactoryFunc) CreatePlugin(info InvocationHookInfo) (*Plugin, error) {
+	return f(info)
 }
 
 // WithPluginChildOperationsDepth bounds the depth in the operation tree of
@@ -614,8 +715,9 @@ func WithPluginChildOperationsDepth(depth int) HandlerOption {
 	})
 }
 
-// pluginDispatcher dispatches lifecycle hooks to registered plugins
-// concurrently. It implements the 7-point dispatch contract from the spec.
+// pluginDispatcher dispatches lifecycle hooks to the plugins of one
+// invocation concurrently. It implements the 7-point dispatch contract
+// from the spec.
 //
 // When no plugins are registered, all methods are no-ops with zero
 // allocation.
@@ -623,14 +725,72 @@ type pluginDispatcher struct {
 	plugins []Plugin
 }
 
-// newPluginDispatcher creates a dispatcher from the handler's registered
-// plugins. Returns nil when no plugins are registered; callers should use
+// newPluginDispatcher creates a dispatcher from the plugins created for
+// one invocation. Returns nil when the slice is empty; callers should use
 // the package-level dispatch functions which handle nil.
 func newPluginDispatcher(plugins []Plugin) *pluginDispatcher {
 	if len(plugins) == 0 {
 		return nil
 	}
 	return &pluginDispatcher{plugins: plugins}
+}
+
+// newInvocationPlugins calls every registered factory for one invocation,
+// in registration order, and returns the plugins that will serve it. This
+// call is what bounds a plugin's lifetime: the slice lives in a local of
+// the invocation, so the plugins become garbage when the invocation
+// returns. Each factory receives the same info the plugins'
+// OnInvocationStart hooks then receive.
+//
+// A factory result is handled per the [PluginFactory] contract. A nil
+// Plugin with a nil error skips silently. An error, a Plugin with no
+// hooks, and a recovered panic each skip and log one error record
+// through logger. The remaining factories keep their relative order, so a
+// skipped factory does not change how the other plugins' wrap hooks
+// compose. Returns nil when no factory is registered, so the handler pays
+// nothing for the plugin path.
+func newInvocationPlugins(ctx context.Context, logger *slog.Logger, factories []PluginFactory, info InvocationHookInfo) []Plugin {
+	if len(factories) == 0 {
+		return nil
+	}
+	plugins := make([]Plugin, 0, len(factories))
+	for i, f := range factories {
+		p, err := createPluginSafely(f, info)
+		switch {
+		case err != nil:
+			logger.ErrorContext(ctx, "Plugin factory failed; plugin ignored for this invocation",
+				slog.Int("factoryIndex", i), slog.String("factory", pluginFactoryName(f)), slog.Any("error", err))
+		case p == nil:
+			// Intentional skip.
+		case !pluginHasHooks(*p):
+			logger.ErrorContext(ctx, "Plugin factory returned a Plugin with no hook functions set; plugin ignored for this invocation",
+				slog.Int("factoryIndex", i), slog.String("factory", pluginFactoryName(f)))
+		default:
+			plugins = append(plugins, *p)
+		}
+	}
+	return plugins
+}
+
+// createPluginSafely calls f.CreatePlugin(info) and converts a panic into
+// an error, so a factory defect is contained the way a hook panic is.
+func createPluginSafely(f PluginFactory, info InvocationHookInfo) (p *Plugin, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			p = nil
+			err = fmt.Errorf("panic: %v", r)
+		}
+	}()
+	return f.CreatePlugin(info)
+}
+
+// pluginFactoryName names a factory in diagnostics: its Stringer output
+// when it has one, otherwise its dynamic type.
+func pluginFactoryName(f PluginFactory) string {
+	if s, ok := f.(fmt.Stringer); ok {
+		return s.String()
+	}
+	return fmt.Sprintf("%T", f)
 }
 
 // dispatchNotification calls call for every registered plugin and returns
@@ -1045,22 +1205,6 @@ func (d *pluginDispatcher) hasLogEnricher() bool {
 	}
 	for i := range d.plugins {
 		if d.plugins[i].EnrichLogContext != nil {
-			return true
-		}
-	}
-	return false
-}
-
-// hasInvocationInfoConsumer reports whether at least one registered plugin
-// implements a hook that receives an InvocationHookInfo: OnInvocationStart
-// or WrapInvocation. False for a nil dispatcher. The handler builds
-// InvocationHookInfo.Operations only when this is true.
-func (d *pluginDispatcher) hasInvocationInfoConsumer() bool {
-	if d == nil {
-		return false
-	}
-	for i := range d.plugins {
-		if d.plugins[i].OnInvocationStart != nil || d.plugins[i].WrapInvocation != nil {
 			return true
 		}
 	}

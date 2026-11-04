@@ -11,12 +11,14 @@ import (
 // invocation.
 //
 // nil log handler, serdes, and execution client are valid (they select built-in
-// defaults). Invalid configurations are a Plugin with no hook functions set,
-// which is always a programming mistake, and a negative plugin depth bound.
+// defaults). Invalid configurations are a nil plugin factory, which is
+// always a programming mistake, and a negative plugin depth bound. The
+// plugins themselves exist only per invocation, so a Plugin with no hook
+// functions set is detected there and logged; see newInvocationPlugins.
 func validateHandlerOptions(opts *handlerOptions) error {
-	for i, p := range opts.plugins {
-		if !pluginHasHooks(p) {
-			return fmt.Errorf("durable: WithPlugins: plugin at index %d has no hook functions set", i)
+	for i, f := range opts.pluginFactories {
+		if f == nil {
+			return fmt.Errorf("durable: WithPlugins: factory at index %d is nil", i)
 		}
 	}
 	if opts.pluginChildDepthSet && opts.pluginChildDepth < 0 {
@@ -38,6 +40,8 @@ func (o *handlerOptions) pluginDepthBound() int {
 }
 
 // pluginHasHooks reports whether at least one hook function is set on p.
+// A factory that returns a Plugin without any is logged and skipped for
+// the invocation.
 func pluginHasHooks(p Plugin) bool {
 	return p.OnInvocationStart != nil ||
 		p.OnInvocationEnd != nil ||

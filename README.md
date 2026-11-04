@@ -1149,8 +1149,12 @@ or be removed in a minor release, as [Versioning](#versioning) describes.
 
 The plugin instrumentation API gives observability and tracing integrations
 hooks into the lifecycle of an execution. A `durable.Plugin` is a struct of
-optional hook functions. Set the ones you need and register the plugin with
-`durable.WithPlugins`.
+optional hook functions. You register a `durable.PluginFactory`, not a
+`Plugin`: the handler calls the factory's `CreatePlugin` once per
+invocation, and the `Plugin` it returns serves that invocation alone. So
+state for one invocation lives in the variables the hooks close over, and
+state that outlives an invocation, such as an exporter, lives on the
+factory. `durable.PluginFactoryFunc` adapts a function to the interface.
 
 ```go
 func handler(ctx durable.Context, _ any) (string, error) {
@@ -1159,20 +1163,28 @@ func handler(ctx durable.Context, _ any) (string, error) {
 	})
 }
 
-func main() {
-	tracer := durable.Plugin{
+func newTracer(info durable.InvocationHookInfo) (*durable.Plugin, error) {
+	prefix := info.ExecutionArn // this invocation's identity
+	return &durable.Plugin{
 		OnOperationStart: func(_ context.Context, info durable.OperationHookInfo) {
-			log.Printf("start %s %s replay=%v", info.Type, info.Name, info.IsReplay)
+			log.Printf("%s start %s %s replay=%v", prefix, info.Type, info.Name, info.IsReplay)
 		},
 		WrapOperationAttemptFn: func(ctx context.Context, info durable.AttemptHookInfo, fn func(context.Context) (any, error)) (any, error) {
 			start := time.Now()
-			defer func() { log.Printf("%s took %s", info.Name, time.Since(start)) }()
+			defer func() { log.Printf("%s %s took %s", prefix, info.Name, time.Since(start)) }()
 			return fn(ctx)
 		},
-	}
-	durable.Start(handler, durable.WithPlugins(tracer))
+	}, nil
+}
+
+func main() {
+	durable.Start(handler, durable.WithPlugins(durable.PluginFactoryFunc(newTracer)))
 }
 ```
+
+A factory that returns `nil, nil` skips instrumentation for that
+invocation. A factory that returns an error, or panics, is logged and
+skipped, and the execution is unaffected.
 
 The hooks cover the invocation (`OnInvocationStart`, `OnInvocationEnd`,
 `OnOperationChange`, `WrapInvocation`), each operation (`OnOperationStart`,
@@ -1261,7 +1273,8 @@ construct structs with keyed fields, as the
 
 The [plugin API](#plugin-api) is the one exception. It is experimental,
 and any part of it may change or be removed in a minor release. It
-comprises `durable.Plugin`, `durable.WithPlugins`,
+comprises `durable.Plugin`, `durable.PluginFactory`,
+`durable.PluginFactoryFunc`, `durable.WithPlugins`,
 `durable.WithPluginChildOperationsDepth`, the hook info types, and the
 plugin status and outcome types and constants. Each of these carries an
 `EXPERIMENTAL` marker in its documentation.

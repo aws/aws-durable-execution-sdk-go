@@ -85,7 +85,7 @@ func pollingHandler(p Plugin) func(context.Context, []byte) ([]byte, error) {
 				return WaitDecision{Continue: true, Delay: time.Second}
 			},
 		})
-	}, WithPlugins(p), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(p), withLambdaAPI(&fakePluginClient{}))
 }
 
 // wfcOp builds the checkpoint of the polling operation "poll" at the root.
@@ -239,7 +239,7 @@ func TestOperationLifecycleWaitForConditionFailed(t *testing.T) {
 			rec := &wfcRecorder{}
 			handler := Wrap(func(ctx Context, _ string) (int, error) {
 				return WaitForCondition(ctx, "poll", tc.check, ConditionConfig[int]{WaitStrategy: tc.stop})
-			}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
+			}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
 
 			resp, err := handler(makePluginContext(), makePluginPayload(t, "arn:test:lifecycle", "tok1", nil))
 			if err != nil {
@@ -340,7 +340,7 @@ func TestOperationLifecycleWaitForConditionCheckpointTerminatedNoEnd(t *testing.
 			rec := &wfcRecorder{}
 			handler := Wrap(func(ctx Context, _ string) (int, error) {
 				return WaitForCondition(ctx, "poll", tc.check, ConditionConfig[int]{WaitStrategy: tc.stop})
-			}, WithPlugins(rec.plugin()), withLambdaAPI(fake))
+			}, withTestPlugins(rec.plugin()), withLambdaAPI(fake))
 
 			resp, err := handler(makePluginContext(), makePluginPayload(t, "arn:test:lifecycle", "tok1", nil))
 			if err != nil {

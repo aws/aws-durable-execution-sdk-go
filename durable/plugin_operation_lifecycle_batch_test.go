@@ -38,7 +38,7 @@ func mapLifecycleHandler(rec *opRecorder, opts ...BatchOption) func(context.Cont
 			sum += r
 		}
 		return sum, nil
-	}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
 }
 
 // TestOperationLifecycleMapLive asserts the events of a live Map in NORMAL
@@ -145,7 +145,7 @@ func TestOperationLifecycleParallelBranchNames(t *testing.T) {
 			return "", err
 		}
 		return fmt.Sprintf("%d/%d", br.SuccessCount(), br.FailureCount()), nil
-	}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
 
 	resp, err := handler(makePluginContext(), makePluginPayload(t, "arn:test:lifecycle", "tok1", nil))
 	if err != nil {
@@ -203,7 +203,7 @@ func TestOperationLifecycleBatchAbandonedItems(t *testing.T) {
 			return 0, err
 		}
 		return br.StartedCount(), nil
-	}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
 
 	resp, err := handler(makePluginContext(), makePluginPayload(t, "arn:test:lifecycle", "tok1", nil))
 	if err != nil {
@@ -304,7 +304,7 @@ func TestOperationLifecycleBatchReplayed(t *testing.T) {
 			return 0, err
 		}
 		return br.SuccessCount(), nil
-	}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
 
 	resumeOps := []wireOperation{
 		contextOp("1", "", OperationSubTypeMap, "batch", "STARTED", nil),
@@ -381,7 +381,7 @@ func TestOperationLifecycleBatchReplayedAbandonedFromRecord(t *testing.T) {
 			return 0, err
 		}
 		return br.StartedCount(), nil
-	}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
 
 	record := `{"type":"MapResult","totalCount":3,"successCount":1,"failureCount":0,"completionReason":"MIN_SUCCESSFUL_REACHED","status":"SUCCEEDED","itemStatuses":"S--"}`
 	ops := []wireOperation{
@@ -431,7 +431,7 @@ func TestOperationLifecycleBatchConcurrentDispatchRace(t *testing.T) {
 			return 0, err
 		}
 		return br.SuccessCount(), nil
-	}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
 
 	resp, err := handler(makePluginContext(), makePluginPayload(t, "arn:test:lifecycle", "tok1", nil))
 	if err != nil {

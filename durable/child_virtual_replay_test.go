@@ -313,8 +313,10 @@ func (r *virtualHookRecorder) record(hook string, info durable.OperationHookInfo
 	r.events = append(r.events, virtualHookEvent{hook: hook, invocation: r.invocation, info: info})
 }
 
-func (r *virtualHookRecorder) plugin() durable.Plugin {
-	return durable.Plugin{
+// CreatePlugin makes the recorder a durable.PluginFactory. The recorder
+// holds the state, so every invocation's plugin reports into it.
+func (r *virtualHookRecorder) CreatePlugin(durable.InvocationHookInfo) (*durable.Plugin, error) {
+	return &durable.Plugin{
 		OnInvocationStart: func(context.Context, durable.InvocationHookInfo) {
 			r.mu.Lock()
 			r.invocation++
@@ -326,7 +328,7 @@ func (r *virtualHookRecorder) plugin() durable.Plugin {
 			r.record("wrap", info)
 			return fn(ctx)
 		},
-	}
+	}, nil
 }
 
 // summary renders the recorded events as "invocation:hook:status:replay".
@@ -353,7 +355,7 @@ func TestVirtualChildHookReplayFlags(t *testing.T) {
 	for variant, handler := range virtualWaitHandlers(&bodyRuns, &stepRuns) {
 		t.Run(variant, func(t *testing.T) {
 			rec := &virtualHookRecorder{}
-			runner := durabletest.NewLocalRunner(handler, durable.WithPlugins(rec.plugin()))
+			runner := durabletest.NewLocalRunner(handler, durable.WithPlugins(rec))
 			result, err := runner.RunUntilComplete(nil)
 			if err != nil {
 				t.Fatal(err)

@@ -24,41 +24,43 @@ func TestWrapPanicsOnNilHandler(t *testing.T) {
 	Wrap[any, any](nil)
 }
 
-func TestWrapPanicsOnEmptyPlugin(t *testing.T) {
+func TestWrapPanicsOnNilPluginFactory(t *testing.T) {
 	defer func() {
 		r := recover()
 		if r == nil {
-			t.Fatal("Wrap with empty Plugin should panic")
+			t.Fatal("Wrap with nil PluginFactory should panic")
 		}
 		msg, ok := r.(string)
 		if !ok {
 			t.Fatalf("expected string panic, got %T: %v", r, r)
 		}
-		if !strings.Contains(msg, "plugin at index 0") {
-			t.Errorf("panic message should identify the offending plugin: %q", msg)
+		if !strings.Contains(msg, "factory at index 0") {
+			t.Errorf("panic message should identify the offending factory: %q", msg)
 		}
 	}()
 	handler := func(_ Context, _ string) (string, error) { return "", nil }
-	Wrap(handler, WithPlugins(Plugin{}))
+	Wrap(handler, WithPlugins(nil))
 }
 
-func TestWrapPanicsOnSecondEmptyPlugin(t *testing.T) {
+func TestWrapPanicsOnSecondNilPluginFactory(t *testing.T) {
 	defer func() {
 		r := recover()
 		if r == nil {
-			t.Fatal("Wrap with second empty Plugin should panic")
+			t.Fatal("Wrap with second nil PluginFactory should panic")
 		}
 		msg, ok := r.(string)
 		if !ok {
 			t.Fatalf("expected string panic, got %T: %v", r, r)
 		}
-		if !strings.Contains(msg, "plugin at index 1") {
+		if !strings.Contains(msg, "factory at index 1") {
 			t.Errorf("panic message should identify index 1: %q", msg)
 		}
 	}()
 	handler := func(_ Context, _ string) (string, error) { return "", nil }
-	valid := Plugin{OnInvocationStart: func(context.Context, InvocationHookInfo) {}}
-	Wrap(handler, WithPlugins(valid, Plugin{}))
+	valid := PluginFactoryFunc(func(InvocationHookInfo) (*Plugin, error) {
+		return &Plugin{OnInvocationStart: func(context.Context, InvocationHookInfo) {}}, nil
+	})
+	Wrap(handler, WithPlugins(valid, nil))
 }
 
 func TestWrapAcceptsValidConfig(t *testing.T) {
@@ -75,7 +77,7 @@ func TestWrapAcceptsValidConfigWithAllOptions(t *testing.T) {
 	plugin := Plugin{OnInvocationStart: func(context.Context, InvocationHookInfo) {}}
 	h := Wrap(handler,
 		WithLogHandler(slog.DiscardHandler),
-		WithPlugins(plugin),
+		withTestPlugins(plugin),
 	)
 	if h == nil {
 		t.Fatal("Wrap returned nil")
@@ -122,32 +124,32 @@ func TestValidateHandlerOptions(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "valid plugin",
+			name: "valid factory",
 			opts: &handlerOptions{
-				plugins: []Plugin{
-					{OnInvocationStart: func(context.Context, InvocationHookInfo) {}},
+				pluginFactories: []PluginFactory{
+					PluginFactoryFunc(func(InvocationHookInfo) (*Plugin, error) { return nil, nil }),
 				},
 			},
 			wantErr: false,
 		},
 		{
-			name: "empty plugin (no hooks)",
+			name: "nil factory",
 			opts: &handlerOptions{
-				plugins: []Plugin{{}},
+				pluginFactories: []PluginFactory{nil},
 			},
 			wantErr: true,
-			errMsg:  "plugin at index 0",
+			errMsg:  "factory at index 0",
 		},
 		{
-			name: "multiple plugins, second empty",
+			name: "multiple factories, second nil",
 			opts: &handlerOptions{
-				plugins: []Plugin{
-					{OnInvocationEnd: func(context.Context, InvocationEndHookInfo) {}},
-					{},
+				pluginFactories: []PluginFactory{
+					PluginFactoryFunc(func(InvocationHookInfo) (*Plugin, error) { return nil, nil }),
+					nil,
 				},
 			},
 			wantErr: true,
-			errMsg:  "plugin at index 1",
+			errMsg:  "factory at index 1",
 		},
 	}
 

@@ -35,7 +35,7 @@ func TestWrapPanicAfterCallDoubleExecutesStepBody(t *testing.T) {
 		}
 		return atomic.LoadInt32(&stepRuns), nil
 	}
-	res, err := durabletest.NewLocalRunner(h, durable.WithPlugins(p)).RunUntilComplete(nil)
+	res, err := durabletest.NewLocalRunner(h, durable.WithPlugins(fixedPlugin(p))).RunUntilComplete(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestWrapPanicBeforeCallRunsStepBodyOnce(t *testing.T) {
 			return "step-result", nil
 		})
 	}
-	res, err := durabletest.NewLocalRunner(h, durable.WithPlugins(p)).RunUntilComplete(nil)
+	res, err := durabletest.NewLocalRunner(h, durable.WithPlugins(fixedPlugin(p))).RunUntilComplete(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestWrapChildContextPanicAfterCallRunsBodyOnce(t *testing.T) {
 			return "child-result", nil
 		})
 	}
-	res, err := durabletest.NewLocalRunner(h, durable.WithPlugins(p)).RunUntilComplete(nil)
+	res, err := durabletest.NewLocalRunner(h, durable.WithPlugins(fixedPlugin(p))).RunUntilComplete(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestWrapInvocationPanicAfterCallRunsHandlerOnce(t *testing.T) {
 			return "handler-result", nil
 		})
 	}
-	res, err := durabletest.NewLocalRunner(h, durable.WithPlugins(p)).RunUntilComplete(nil)
+	res, err := durabletest.NewLocalRunner(h, durable.WithPlugins(fixedPlugin(p))).RunUntilComplete(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,4 +149,10 @@ func TestWrapInvocationPanicAfterCallRunsHandlerOnce(t *testing.T) {
 	if out != "handler-result" {
 		t.Errorf("result = %q, want %q", out, "handler-result")
 	}
+}
+
+// fixedPlugin returns a factory that serves the same Plugin value to every
+// invocation. The tests above own the state their hooks close over.
+func fixedPlugin(p durable.Plugin) durable.PluginFactory {
+	return durable.PluginFactoryFunc(func(durable.InvocationHookInfo) (*durable.Plugin, error) { return &p, nil })
 }

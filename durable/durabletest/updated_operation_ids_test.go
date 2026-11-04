@@ -21,8 +21,10 @@ type updatedNames struct {
 	invs [][]string
 }
 
-func (u *updatedNames) plugin() durable.Plugin {
-	return durable.Plugin{
+// CreatePlugin makes updatedNames a durable.PluginFactory; the recorder
+// holds the state, so every invocation's plugin reports into it.
+func (u *updatedNames) CreatePlugin(durable.InvocationHookInfo) (*durable.Plugin, error) {
+	return &durable.Plugin{
 		OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
 			names := []string{}
 			for _, op := range info.UpdatedOperations {
@@ -33,7 +35,7 @@ func (u *updatedNames) plugin() durable.Plugin {
 			u.invs = append(u.invs, names)
 			u.mu.Unlock()
 		},
-	}
+	}, nil
 }
 
 func (u *updatedNames) get() [][]string {
@@ -78,7 +80,7 @@ func TestLocalRunnerSetsUpdatedOperationIds(t *testing.T) {
 			}
 			return cb.Result(ctx)
 		}
-		runner := durabletest.NewLocalRunner(handler, durable.WithPlugins(u.plugin()))
+		runner := durabletest.NewLocalRunner(handler, durable.WithPlugins(&u))
 		result := driveToCompletion(t, runner, nil)
 		if result.Status != durabletest.Succeeded {
 			t.Fatalf("status = %s, want SUCCEEDED", result.Status)
@@ -110,7 +112,7 @@ func TestLocalRunnerSetsUpdatedOperationIds(t *testing.T) {
 			}
 			return "ok", nil
 		}
-		runner := durabletest.NewLocalRunner(handler, durable.WithPlugins(u.plugin()))
+		runner := durabletest.NewLocalRunner(handler, durable.WithPlugins(&u))
 		result := driveToCompletion(t, runner, nil)
 		if result.Status != durabletest.Succeeded {
 			t.Fatalf("status = %s, want SUCCEEDED", result.Status)
