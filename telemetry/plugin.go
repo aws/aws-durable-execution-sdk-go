@@ -137,17 +137,24 @@ func defaultContent(c ContentConfig) ContentConfig {
 	return c
 }
 
-// Plugin returns a durable.Plugin struct wired to this TelemetryPlugin's
-// lifecycle hooks. Pass the result to durable.WithPlugins().
-func (p *TelemetryPlugin) Plugin() durable.Plugin {
-	return durable.Plugin{
+// TelemetryPlugin implements durable.PluginFactory, so pass it to
+// durable.WithPlugins directly.
+var _ durable.PluginFactory = (*TelemetryPlugin)(nil)
+
+// CreatePlugin returns the durable.Plugin that serves one invocation,
+// wired to this TelemetryPlugin's lifecycle hooks. The handler calls it
+// once per invocation. The record state the hooks write still lives on
+// the TelemetryPlugin, so the hooks of every invocation share it; moving
+// that state onto the per-invocation Plugin is a separate change.
+func (p *TelemetryPlugin) CreatePlugin(durable.InvocationHookInfo) (*durable.Plugin, error) {
+	return &durable.Plugin{
 		OnInvocationStart: p.onInvocationStart,
 		OnInvocationEnd:   p.onInvocationEnd,
 		OnOperationStart:  p.onOperationStart,
 		OnOperationEnd:    p.onOperationEnd,
 		OnOperationChange: p.onOperationChange,
 		EnrichLogContext:  p.enrichLogContext,
-	}
+	}, nil
 }
 
 // arnPattern extracts region, account ID, function name, and qualifier

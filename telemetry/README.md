@@ -6,10 +6,10 @@ or fail. Records capture execution metadata, timing, operation details, and
 content fields (inputs, outputs, errors) for diagnostics and monitoring.
 
 > This module is built on the experimental plugin API (`durable.Plugin`,
-> `durable.WithPlugins`), so its versions stay below v1. Any release may
-> change the `telemetry` package API and the record schema. Upgrade this
-> module together with the SDK. See Versioning in the
-> [root README](../README.md#versioning).
+> `durable.PluginFactory`, `durable.WithPlugins`), so its versions stay
+> below v1. Any release may change the `telemetry` package API and the
+> record schema. Upgrade this module together with the SDK. See Versioning
+> in the [root README](../README.md#versioning).
 
 ## Installation
 
@@ -33,8 +33,9 @@ func handler(ctx durable.Context, event any) (any, error) {
 }
 
 func main() {
-    plugin := telemetry.New(telemetry.Config{})
-    durable.Start(handler, durable.WithPlugins(plugin.Plugin()))
+    // TelemetryPlugin is a durable.PluginFactory: the handler calls its
+    // CreatePlugin once per invocation.
+    durable.Start(handler, durable.WithPlugins(telemetry.New(telemetry.Config{})))
 }
 ```
 

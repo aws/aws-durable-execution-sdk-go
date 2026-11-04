@@ -487,7 +487,10 @@ func TestPlugin_OnOperationChange_BackfillsOps(t *testing.T) {
 
 func TestPlugin_DurablePlugin_WiresHooksCorrectly(t *testing.T) {
 	ip := New(Config{})
-	dp := ip.Plugin()
+	dp, err := ip.CreatePlugin(durable.InvocationHookInfo{})
+	if err != nil {
+		t.Fatalf("CreatePlugin returned error: %v", err)
+	}
 
 	if dp.OnInvocationStart == nil {
 		t.Error("expected OnInvocationStart to be set")
