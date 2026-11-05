@@ -3,6 +3,7 @@ package durable
 import (
 	"fmt"
 	"math"
+	"reflect"
 )
 
 // validateHandlerOptions performs early rejection of invalid handler
@@ -17,7 +18,7 @@ import (
 // functions set is detected there and logged; see newInvocationPlugins.
 func validateHandlerOptions(opts *handlerOptions) error {
 	for i, f := range opts.pluginFactories {
-		if f == nil {
+		if isNilPluginFactory(f) {
 			return fmt.Errorf("durable: WithPlugins: factory at index %d is nil", i)
 		}
 	}
@@ -25,6 +26,24 @@ func validateHandlerOptions(opts *handlerOptions) error {
 		return fmt.Errorf("durable: WithPluginChildOperationsDepth: depth must not be negative, got %d", opts.pluginChildDepth)
 	}
 	return nil
+}
+
+// isNilPluginFactory reports whether f is nil or holds a nil value. The
+// comparison f == nil is true only for a nil interface. PluginFactoryFunc(nil)
+// and a typed nil pointer are non-nil interfaces, so they pass it. Both are
+// the same programming mistake and neither can produce a working plugin.
+// IsNil panics on kinds that cannot hold nil, so the kind switch guards it.
+func isNilPluginFactory(f PluginFactory) bool {
+	if f == nil {
+		return true
+	}
+	v := reflect.ValueOf(f)
+	switch v.Kind() {
+	case reflect.Func, reflect.Pointer, reflect.Map, reflect.Chan, reflect.Slice, reflect.Interface, reflect.UnsafePointer:
+		return v.IsNil()
+	default:
+		return false
+	}
 }
 
 // pluginDepthBound returns the hookDepthBound the root context takes from
