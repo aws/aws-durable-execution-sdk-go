@@ -1,6 +1,7 @@
 package durable
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -182,8 +183,11 @@ func TestPluginFactoryErrorSkipsAndLogs(t *testing.T) {
 	if logs[0].attrs["factoryIndex"] != int64(0) {
 		t.Errorf("factoryIndex = %v, want 0", logs[0].attrs["factoryIndex"])
 	}
-	if err, _ := logs[0].attrs["error"].(error); err == nil || err.Error() != "exporter unavailable" {
-		t.Errorf("error attr = %v, want the factory's error", logs[0].attrs["error"])
+	if logs[0].attrs["errorType"] != "Error" {
+		t.Errorf("errorType = %v, want Error", logs[0].attrs["errorType"])
+	}
+	if logs[0].attrs["errorMessage"] != "exporter unavailable" {
+		t.Errorf("errorMessage = %v, want the factory's error text", logs[0].attrs["errorMessage"])
 	}
 }
 
@@ -204,8 +208,11 @@ func TestPluginFactoryPanicSkipsAndLogs(t *testing.T) {
 	if len(logs) != 1 {
 		t.Fatalf("factory error logs = %v, want exactly one", logs)
 	}
-	if err, _ := logs[0].attrs["error"].(error); err == nil || !strings.Contains(err.Error(), "factory defect") {
-		t.Errorf("error attr = %v, want the recovered panic value", logs[0].attrs["error"])
+	if logs[0].attrs["errorType"] != "Error" {
+		t.Errorf("errorType = %v, want Error", logs[0].attrs["errorType"])
+	}
+	if text, _ := logs[0].attrs["errorMessage"].(string); !strings.Contains(text, "factory defect") {
+		t.Errorf("errorMessage = %v, want the recovered panic value", logs[0].attrs["errorMessage"])
 	}
 }
 
@@ -236,6 +243,104 @@ func TestPluginFactoryNameInDiagnostics(t *testing.T) {
 	}
 	if got := pluginFactoryName(PluginFactoryFunc(nil)); got != "durable.PluginFactoryFunc" {
 		t.Errorf("pluginFactoryName(PluginFactoryFunc) = %q", got)
+	}
+}
+
+// panickingNameFactory has a String() that panics. pluginFactoryName must
+// fall back to the dynamic type instead of letting the panic leave Invoke.
+type panickingNameFactory struct{ result *Plugin }
+
+func (f panickingNameFactory) CreatePlugin(InvocationHookInfo) (*Plugin, error) {
+	if f.result != nil {
+		return f.result, nil
+	}
+	return nil, errors.New("boom")
+}
+func (panickingNameFactory) String() string { panic("String defect") }
+
+func TestPluginFactoryPanickingStringFallsBackToType(t *testing.T) {
+	t.Run("error result", func(t *testing.T) {
+		rec := newRecordingHandler()
+		runFactoryHandler(t, context.Background(), "arn:test:factory", WithPlugins(panickingNameFactory{}), WithLogHandler(rec))
+		logs := factoryErrors(rec)
+		if len(logs) != 1 {
+			t.Fatalf("factory error logs = %v, want exactly one", logs)
+		}
+		if logs[0].attrs["factory"] != "durable.panickingNameFactory" {
+			t.Errorf("factory attr = %v, want the dynamic type", logs[0].attrs["factory"])
+		}
+	})
+	t.Run("hookless result", func(t *testing.T) {
+		rec := newRecordingHandler()
+		runFactoryHandler(t, context.Background(), "arn:test:factory", WithPlugins(panickingNameFactory{result: &Plugin{}}), WithLogHandler(rec))
+		logs := factoryErrors(rec)
+		if len(logs) != 1 || !strings.Contains(logs[0].message, "no hook functions set") {
+			t.Fatalf("factory error logs = %v, want one record about the hookless plugin", logs)
+		}
+		if logs[0].attrs["factory"] != "durable.panickingNameFactory" {
+			t.Errorf("factory attr = %v, want the dynamic type", logs[0].attrs["factory"])
+		}
+	})
+}
+
+// typedNilErr has a pointer receiver that dereferences itself, so a nil
+// *typedNilErr stored in an error interface is non-nil and its Error()
+// panics. The SDK's default handler expands error attributes through
+// ReplaceAttr (replaceDefaultAttr), which calls Error() before slog's own
+// recover in appendValue. So the default handler is the one that reaches
+// the panic; a plain slog.NewJSONHandler would render "<nil>" instead.
+type typedNilErr struct{ reason string }
+
+func (e *typedNilErr) Error() string { return e.reason }
+
+func TestPluginFactoryTypedNilErrorUnderDefaultLogger(t *testing.T) {
+	var buf bytes.Buffer
+	jsonLogger := newDefaultLogHandler(&buf, slog.LevelInfo)
+	var hooked atomic.Int32
+	failing := PluginFactoryFunc(func(InvocationHookInfo) (*Plugin, error) {
+		var e *typedNilErr
+		return nil, e
+	})
+	healthy := PluginFactoryFunc(func(InvocationHookInfo) (*Plugin, error) {
+		return &Plugin{OnOperationEnd: func(context.Context, OperationHookInfo) { hooked.Add(1) }}, nil
+	})
+	runFactoryHandler(t, context.Background(), "arn:test:factory", WithPlugins(failing, healthy), WithLogHandler(jsonLogger))
+	if hooked.Load() == 0 {
+		t.Error("the healthy factory's plugin received no hooks")
+	}
+	out := buf.String()
+	if !strings.Contains(out, "Plugin factory failed") {
+		t.Fatalf("default handler output lacks the factory failure record:\n%s", out)
+	}
+	if !strings.Contains(out, `"errorType":"typedNilErr"`) {
+		t.Errorf("default handler output lacks errorType:\n%s", out)
+	}
+	if !strings.Contains(out, `"errorMessage":"Error() panicked`) {
+		t.Errorf("default handler output lacks the recovered Error() text:\n%s", out)
+	}
+}
+
+// panickingErr panics in Error() for a reason other than a nil receiver,
+// so the recover in factoryErrorMessage is shown to be general.
+type panickingErr struct{}
+
+func (panickingErr) Error() string { panic("Error defect") }
+
+func TestPluginFactoryPanickingErrorMethodIsContained(t *testing.T) {
+	rec := newRecordingHandler()
+	failing := PluginFactoryFunc(func(InvocationHookInfo) (*Plugin, error) {
+		return nil, panickingErr{}
+	})
+	runFactoryHandler(t, context.Background(), "arn:test:factory", WithPlugins(failing), WithLogHandler(rec))
+	logs := factoryErrors(rec)
+	if len(logs) != 1 {
+		t.Fatalf("factory error logs = %v, want exactly one", logs)
+	}
+	if logs[0].attrs["errorType"] != "panickingErr" {
+		t.Errorf("errorType = %v, want panickingErr", logs[0].attrs["errorType"])
+	}
+	if text, _ := logs[0].attrs["errorMessage"].(string); !strings.Contains(text, "Error() panicked: Error defect") {
+		t.Errorf("errorMessage = %v, want the recovered Error() panic", logs[0].attrs["errorMessage"])
 	}
 }
 

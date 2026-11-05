@@ -759,7 +759,9 @@ func newInvocationPlugins(ctx context.Context, logger *slog.Logger, factories []
 		switch {
 		case err != nil:
 			logger.ErrorContext(ctx, "Plugin factory failed; plugin ignored for this invocation",
-				slog.Int("factoryIndex", i), slog.String("factory", pluginFactoryName(f)), slog.Any("error", err))
+				slog.Int("factoryIndex", i), slog.String("factory", pluginFactoryName(f)),
+				slog.String(logKeyErrorType, errorTypeName(err)),
+				slog.String(logKeyErrorMessage, factoryErrorMessage(err)))
 		case p == nil:
 			// Intentional skip.
 		case !pluginHasHooks(*p):
@@ -785,12 +787,36 @@ func createPluginSafely(f PluginFactory, info InvocationHookInfo) (p *Plugin, er
 }
 
 // pluginFactoryName names a factory in diagnostics: its Stringer output
-// when it has one, otherwise its dynamic type.
-func pluginFactoryName(f PluginFactory) string {
+// when it has one, otherwise its dynamic type. String() is plugin-author
+// code and runs outside createPluginSafely's recover, so a panic in it
+// would leave Invoke. It therefore runs under its own recover, and the
+// dynamic type is the fallback.
+func pluginFactoryName(f PluginFactory) (name string) {
+	defer func() {
+		if recover() != nil {
+			name = fmt.Sprintf("%T", f)
+		}
+	}()
 	if s, ok := f.(fmt.Stringer); ok {
 		return s.String()
 	}
 	return fmt.Sprintf("%T", f)
+}
+
+// factoryErrorMessage renders err.Error() for the errorMessage attribute.
+// Passed as an error value, the default handler would call err.Error()
+// itself inside its ReplaceAttr expansion, outside any recover. Error() is
+// plugin-author code: a typed nil pointer returned as an error is the
+// common way it panics. So the text is produced here under recover. The
+// errorType attribute beside it comes from errorTypeName, which reads
+// only the dynamic type and so cannot run author code.
+func factoryErrorMessage(err error) (text string) {
+	defer func() {
+		if r := recover(); r != nil {
+			text = fmt.Sprintf("Error() panicked: %v", r)
+		}
+	}()
+	return err.Error()
 }
 
 // dispatchNotification calls call for every registered plugin and returns
