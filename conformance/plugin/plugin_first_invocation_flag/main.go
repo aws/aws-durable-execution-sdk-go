@@ -18,10 +18,9 @@ var out = pluginlog.New(nil)
 // on the replay carries SUCCEEDED.
 // newPlugin is a durable.PluginFactory: the handler calls it once per
 // invocation and the returned Plugin serves that invocation alone.
-func newPlugin(context.Context, durable.InvocationHookInfo) (*durable.Plugin, error) {
+func newPlugin(_ context.Context, inv durable.InvocationHookInfo) (*durable.Plugin, error) {
 	return &durable.Plugin{
 		OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
-			out.Capture(info.ExecutionArn)
 			out.EmitWithArn(map[string]any{
 				"plugin": "CONFPLUGIN",
 				"hook":   "invocation-start",

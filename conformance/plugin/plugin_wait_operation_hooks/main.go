@@ -26,33 +26,30 @@ var out = pluginlog.New(nil)
 // dispatches its end.
 // newPlugin is a durable.PluginFactory: the handler calls it once per
 // invocation and the returned Plugin serves that invocation alone.
-func newPlugin(context.Context, durable.InvocationHookInfo) (*durable.Plugin, error) {
+func newPlugin(_ context.Context, inv durable.InvocationHookInfo) (*durable.Plugin, error) {
 	return &durable.Plugin{
-		OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
-			out.Capture(info.ExecutionArn)
-		},
 		OnOperationStart: func(_ context.Context, info durable.OperationHookInfo) {
 			if pluginlog.Upper(info.Type) != string(durable.OperationTypeWait) {
 				return
 			}
-			out.Emit(map[string]any{
+			out.EmitWithArn(map[string]any{
 				"plugin": "CONFPLUGIN",
 				"hook":   "operation-start",
 				"op":     info.ID,
 				"type":   pluginlog.Upper(info.Type),
-			})
+			}, inv.ExecutionArn)
 		},
 		OnOperationEnd: func(_ context.Context, info durable.OperationHookInfo) {
 			if pluginlog.Upper(info.Type) != string(durable.OperationTypeWait) {
 				return
 			}
-			out.Emit(map[string]any{
+			out.EmitWithArn(map[string]any{
 				"plugin": "CONFPLUGIN",
 				"hook":   "operation-end",
 				"op":     info.ID,
 				"type":   pluginlog.Upper(info.Type),
 				"status": string(info.Status),
-			})
+			}, inv.ExecutionArn)
 		},
 	}, nil
 }

@@ -13,14 +13,13 @@ import (
 var out = pluginlog.New(nil)
 
 // plugin reports the invocation lifecycle. The start hook fires before the
-// handler runs and captures the execution ARN; the end hook fires after
-// the outcome is recorded and carries the terminal status.
+// handler runs; the end hook fires after the outcome is recorded and
+// carries the terminal status.
 // newPlugin is a durable.PluginFactory: the handler calls it once per
 // invocation and the returned Plugin serves that invocation alone.
-func newPlugin(context.Context, durable.InvocationHookInfo) (*durable.Plugin, error) {
+func newPlugin(_ context.Context, inv durable.InvocationHookInfo) (*durable.Plugin, error) {
 	return &durable.Plugin{
 		OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
-			out.Capture(info.ExecutionArn)
 			out.EmitWithArn(map[string]any{
 				"plugin": "CONFPLUGIN",
 				"hook":   "invocation-start",

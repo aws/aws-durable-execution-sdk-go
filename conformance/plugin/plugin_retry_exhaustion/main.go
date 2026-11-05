@@ -26,44 +26,41 @@ var out = pluginlog.New(nil)
 // attempt's retryable failure suspends the invocation without an end.
 // newPlugin is a durable.PluginFactory: the handler calls it once per
 // invocation and the returned Plugin serves that invocation alone.
-func newPlugin(context.Context, durable.InvocationHookInfo) (*durable.Plugin, error) {
+func newPlugin(_ context.Context, inv durable.InvocationHookInfo) (*durable.Plugin, error) {
 	return &durable.Plugin{
-		OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
-			out.Capture(info.ExecutionArn)
-		},
 		OnOperationAttemptStart: func(_ context.Context, info durable.AttemptHookInfo) {
 			if info.SubType != durable.OperationSubTypeStep {
 				return
 			}
-			out.Emit(map[string]any{
+			out.EmitWithArn(map[string]any{
 				"plugin": "CONFPLUGIN",
 				"hook":   "attempt-start",
 				"n":      info.Attempt,
 				"op":     info.ID,
-			})
+			}, inv.ExecutionArn)
 		},
 		OnOperationAttemptEnd: func(_ context.Context, info durable.AttemptEndHookInfo) {
 			if info.SubType != durable.OperationSubTypeStep {
 				return
 			}
-			out.Emit(map[string]any{
+			out.EmitWithArn(map[string]any{
 				"plugin":  "CONFPLUGIN",
 				"hook":    "attempt-end",
 				"n":       info.Attempt,
 				"outcome": string(info.Outcome),
 				"op":      info.ID,
-			})
+			}, inv.ExecutionArn)
 		},
 		OnOperationEnd: func(_ context.Context, info durable.OperationHookInfo) {
 			if info.SubType != durable.OperationSubTypeStep {
 				return
 			}
-			out.Emit(map[string]any{
+			out.EmitWithArn(map[string]any{
 				"plugin": "CONFPLUGIN",
 				"hook":   "operation-end",
 				"op":     info.ID,
 				"status": string(info.Status),
-			})
+			}, inv.ExecutionArn)
 		},
 	}, nil
 }

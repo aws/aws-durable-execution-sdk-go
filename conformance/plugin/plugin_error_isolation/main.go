@@ -18,10 +18,9 @@ var out = pluginlog.New(nil)
 // attempt hooks report step operations only.
 // newFaulty is a durable.PluginFactory: the handler calls it once per
 // invocation and the returned Plugin serves that invocation alone.
-func newFaulty(context.Context, durable.InvocationHookInfo) (*durable.Plugin, error) {
+func newFaulty(_ context.Context, inv durable.InvocationHookInfo) (*durable.Plugin, error) {
 	return &durable.Plugin{
 		OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
-			out.Capture(info.ExecutionArn)
 			out.EmitWithArn(map[string]any{"plugin": "CONFPLUGIN-FAULTY", "hook": "invocation-start"}, info.ExecutionArn)
 			panic("faulty invocation-start")
 		},
@@ -33,28 +32,28 @@ func newFaulty(context.Context, durable.InvocationHookInfo) (*durable.Plugin, er
 			if info.SubType != durable.OperationSubTypeStep {
 				return
 			}
-			out.Emit(map[string]any{"plugin": "CONFPLUGIN-FAULTY", "hook": "operation-start"})
+			out.EmitWithArn(map[string]any{"plugin": "CONFPLUGIN-FAULTY", "hook": "operation-start"}, inv.ExecutionArn)
 			panic("faulty operation-start")
 		},
 		OnOperationEnd: func(_ context.Context, info durable.OperationHookInfo) {
 			if info.SubType != durable.OperationSubTypeStep {
 				return
 			}
-			out.Emit(map[string]any{"plugin": "CONFPLUGIN-FAULTY", "hook": "operation-end"})
+			out.EmitWithArn(map[string]any{"plugin": "CONFPLUGIN-FAULTY", "hook": "operation-end"}, inv.ExecutionArn)
 			panic("faulty operation-end")
 		},
 		OnOperationAttemptStart: func(_ context.Context, info durable.AttemptHookInfo) {
 			if info.SubType != durable.OperationSubTypeStep {
 				return
 			}
-			out.Emit(map[string]any{"plugin": "CONFPLUGIN-FAULTY", "hook": "attempt-start"})
+			out.EmitWithArn(map[string]any{"plugin": "CONFPLUGIN-FAULTY", "hook": "attempt-start"}, inv.ExecutionArn)
 			panic("faulty attempt-start")
 		},
 		OnOperationAttemptEnd: func(_ context.Context, info durable.AttemptEndHookInfo) {
 			if info.SubType != durable.OperationSubTypeStep {
 				return
 			}
-			out.Emit(map[string]any{"plugin": "CONFPLUGIN-FAULTY", "hook": "attempt-end"})
+			out.EmitWithArn(map[string]any{"plugin": "CONFPLUGIN-FAULTY", "hook": "attempt-end"}, inv.ExecutionArn)
 			panic("faulty attempt-end")
 		},
 	}, nil

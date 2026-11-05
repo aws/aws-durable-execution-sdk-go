@@ -16,10 +16,9 @@ var out = pluginlog.New(nil)
 // the hooks of different plugins for one notification may run in parallel,
 // so the records of A and B may interleave in any order.
 func lifecyclePlugin(label string) durable.PluginFactory {
-	return durable.PluginFactoryFunc(func(context.Context, durable.InvocationHookInfo) (*durable.Plugin, error) {
+	return durable.PluginFactoryFunc(func(_ context.Context, inv durable.InvocationHookInfo) (*durable.Plugin, error) {
 		return &durable.Plugin{
 			OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
-				out.Capture(info.ExecutionArn)
 				out.EmitWithArn(map[string]any{"plugin": label, "hook": "invocation-start"}, info.ExecutionArn)
 			},
 			OnInvocationEnd: func(_ context.Context, info durable.InvocationEndHookInfo) {

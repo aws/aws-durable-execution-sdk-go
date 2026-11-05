@@ -6,8 +6,8 @@
 // executionArn) field names the execution under test. It then matches each
 // expectation against the top-level fields of those records. So a plugin
 // writes each record as one raw JSON object per line, and stamps every
-// record with the execution ARN it captured from the invocation-start
-// hook. The Lambda runtime forwards a line that is already a JSON object
+// record with the execution ARN its factory received in the invocation
+// info. The Lambda runtime forwards a line that is already a JSON object
 // unchanged, so the fields stay top-level. Records go to standard error,
 // the stream the SDK logger writes to, so a plugin record and an SDK log
 // record keep their relative order in the log group.

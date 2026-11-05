@@ -42,11 +42,10 @@ type replayFlagsPlugin struct {
 
 // newReplayFlagsPlugin is a durable.PluginFactory. Each invocation gets its own
 // replayFlagsPlugin, so the state it holds never leaks into another invocation.
-func newReplayFlagsPlugin(context.Context, durable.InvocationHookInfo) (*durable.Plugin, error) {
+func newReplayFlagsPlugin(_ context.Context, inv durable.InvocationHookInfo) (*durable.Plugin, error) {
 	p := &replayFlagsPlugin{}
 	return &durable.Plugin{
 		OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
-			out.Capture(info.ExecutionArn)
 			p.mu.Lock()
 			p.replayedTerminal = map[string]bool{}
 			p.mu.Unlock()
@@ -61,12 +60,12 @@ func newReplayFlagsPlugin(context.Context, durable.InvocationHookInfo) (*durable
 				p.mu.Unlock()
 				return
 			}
-			out.Emit(map[string]any{
+			out.EmitWithArn(map[string]any{
 				"plugin": "CONFPLUGIN",
 				"hook":   "operation-start",
 				"op":     info.ID,
 				"replay": info.IsReplay,
-			})
+			}, inv.ExecutionArn)
 		},
 		OnOperationEnd: func(_ context.Context, info durable.OperationHookInfo) {
 			if info.SubType != durable.OperationSubTypeStep {
@@ -79,12 +78,12 @@ func newReplayFlagsPlugin(context.Context, durable.InvocationHookInfo) (*durable
 			if skip {
 				return
 			}
-			out.Emit(map[string]any{
+			out.EmitWithArn(map[string]any{
 				"plugin": "CONFPLUGIN",
 				"hook":   "operation-end",
 				"op":     info.ID,
 				"status": string(info.Status),
-			})
+			}, inv.ExecutionArn)
 		},
 	}, nil
 }

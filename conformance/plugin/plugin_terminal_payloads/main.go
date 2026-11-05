@@ -24,23 +24,20 @@ var out = pluginlog.New(nil)
 // serialized result as checkpointed, and the recorded error message.
 // newPlugin is a durable.PluginFactory: the handler calls it once per
 // invocation and the returned Plugin serves that invocation alone.
-func newPlugin(context.Context, durable.InvocationHookInfo) (*durable.Plugin, error) {
+func newPlugin(_ context.Context, inv durable.InvocationHookInfo) (*durable.Plugin, error) {
 	return &durable.Plugin{
-		OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
-			out.Capture(info.ExecutionArn)
-		},
 		OnOperationEnd: func(_ context.Context, info durable.OperationHookInfo) {
 			if info.SubType != durable.OperationSubTypeStep {
 				return
 			}
-			out.Emit(map[string]any{
+			out.EmitWithArn(map[string]any{
 				"plugin": "CONFPLUGIN",
 				"hook":   "operation-end",
 				"op":     info.ID,
 				"status": string(info.Status),
 				"result": pluginlog.OrNone(info.Result),
 				"error":  pluginlog.ErrorMessage(info.Error),
-			})
+			}, inv.ExecutionArn)
 		},
 	}, nil
 }
