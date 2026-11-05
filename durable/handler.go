@@ -388,7 +388,13 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	// is created before its first hook fires and receives the same info
 	// its OnInvocationStart then receives. The dispatcher is nil when no
 	// factory is registered or every factory skipped.
-	pd := newPluginDispatcher(newInvocationPlugins(ctx, slog.New(h.options.logHandler), h.options.pluginFactories, invInfo))
+	//
+	// The execution context, which carries the enriched log handler, does
+	// not exist yet. So the factory logger attaches the execution
+	// attributes itself; otherwise a factory failure record would lack the
+	// requestId, executionArn, and tenantId every other record carries.
+	factoryLogger := slog.New(h.options.logHandler.WithAttrs(executionLogAttrs(in.DurableExecutionArn, invMeta)))
+	pd := newPluginDispatcher(newInvocationPlugins(ctx, factoryLogger, h.options.pluginFactories, invInfo))
 
 	// Item 12: OnInvocationStart fires BEFORE OnOperationChange.
 	dispatchNotification(pd, func(p *Plugin) {

@@ -191,6 +191,55 @@ func TestPluginFactoryErrorSkipsAndLogs(t *testing.T) {
 	}
 }
 
+// A factory error record must carry the same execution attributes every
+// other record of the invocation carries, so an operator can join it to the
+// Lambda request, the execution, and the tenant. The factories run before
+// the execution context exists, so the handler must attach the attributes
+// to the factory logger itself.
+func TestPluginFactoryErrorLogCarriesExecutionAttrs(t *testing.T) {
+	failing := PluginFactoryFunc(func(InvocationHookInfo) (*Plugin, error) {
+		return nil, errors.New("exporter unavailable")
+	})
+
+	t.Run("with tenant", func(t *testing.T) {
+		rec := newRecordingHandler()
+		runFactoryHandler(t, lambdaCtx(t, "req-f", "tenant-f"), "arn:test:factory", WithPlugins(failing), WithLogHandler(rec))
+		logs := factoryErrors(rec)
+		if len(logs) != 1 {
+			t.Fatalf("factory error logs = %v, want exactly one", logs)
+		}
+		attrs := logs[0].attrs
+		if attrs[logKeyRequestID] != "req-f" {
+			t.Errorf("%s = %v, want req-f", logKeyRequestID, attrs[logKeyRequestID])
+		}
+		if attrs[logKeyExecutionArn] != "arn:test:factory" {
+			t.Errorf("%s = %v, want arn:test:factory", logKeyExecutionArn, attrs[logKeyExecutionArn])
+		}
+		if attrs[logKeyTenantID] != "tenant-f" {
+			t.Errorf("%s = %v, want tenant-f", logKeyTenantID, attrs[logKeyTenantID])
+		}
+	})
+
+	t.Run("without tenant", func(t *testing.T) {
+		rec := newRecordingHandler()
+		runFactoryHandler(t, lambdaCtx(t, "req-g", ""), "arn:test:factory", WithPlugins(failing), WithLogHandler(rec))
+		logs := factoryErrors(rec)
+		if len(logs) != 1 {
+			t.Fatalf("factory error logs = %v, want exactly one", logs)
+		}
+		attrs := logs[0].attrs
+		if attrs[logKeyRequestID] != "req-g" {
+			t.Errorf("%s = %v, want req-g", logKeyRequestID, attrs[logKeyRequestID])
+		}
+		if attrs[logKeyExecutionArn] != "arn:test:factory" {
+			t.Errorf("%s = %v, want arn:test:factory", logKeyExecutionArn, attrs[logKeyExecutionArn])
+		}
+		if _, present := attrs[logKeyTenantID]; present {
+			t.Errorf("%s = %v, want absent when the invocation has no tenant", logKeyTenantID, attrs[logKeyTenantID])
+		}
+	})
+}
+
 func TestPluginFactoryPanicSkipsAndLogs(t *testing.T) {
 	rec := newRecordingHandler()
 	var hooked atomic.Int32
