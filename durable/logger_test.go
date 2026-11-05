@@ -936,7 +936,7 @@ func runScopedLoggingWithPlugins(t *testing.T, handler slog.Handler, plugins []P
 				return "s", nil
 			})
 		})
-	}, withLambdaAPI(fake), WithLogHandler(handler), WithPlugins(plugins...))
+	}, withLambdaAPI(fake), WithLogHandler(handler), withTestPlugins(plugins...))
 	resp, err := h(lambdaCtx(t, "req-p", "tenant-p"), childPayload(`"x"`))
 	if err != nil {
 		t.Fatalf("Invoke() error: %v", err)
@@ -1035,7 +1035,7 @@ func TestPluginLogContextCannotOverwriteSDKOrUserFields(t *testing.T) {
 			sc.Logger().With("attached", "user-attached").Info("step", "custom", "user-custom")
 			return "s", nil
 		})
-	}, withLambdaAPI(fake), WithLogHandler(newDefaultLogHandler(&out, slog.LevelInfo)), WithPlugins(plugin))
+	}, withLambdaAPI(fake), WithLogHandler(newDefaultLogHandler(&out, slog.LevelInfo)), withTestPlugins(plugin))
 	if _, err := h(lambdaCtx(t, "req-p", "tenant-p"), childPayload(`"x"`)); err != nil {
 		t.Fatalf("Invoke() error: %v", err)
 	}
@@ -1168,7 +1168,7 @@ func TestPluginLogContextHookCalledOncePerEmittedRecord(t *testing.T) {
 		ctx.Logger().Info("live-1")
 		ctx.Logger().Debug("live-2")
 		return "ok", nil
-	}, withLambdaAPI(fake), WithLogHandler(rec), WithPlugins(plugin))
+	}, withLambdaAPI(fake), WithLogHandler(rec), withTestPlugins(plugin))
 	if _, err := h(t.Context(), payload); err != nil {
 		t.Fatalf("Invoke() error: %v", err)
 	}
@@ -1198,7 +1198,7 @@ func TestPluginLogContextReceivesRecordContext(t *testing.T) {
 		ctx.Logger().InfoContext(context.WithValue(ctx, ctxKey{}, "tagged"), "with-ctx")
 		ctx.Logger().Info("without-ctx")
 		return "ok", nil
-	}, withLambdaAPI(fake), WithLogHandler(rec), WithPlugins(plugin))
+	}, withLambdaAPI(fake), WithLogHandler(rec), withTestPlugins(plugin))
 	if _, err := h(t.Context(), childPayload(`"x"`)); err != nil {
 		t.Fatalf("Invoke() error: %v", err)
 	}
@@ -1227,7 +1227,7 @@ func runStepLoggingWithPlugin(t *testing.T, plugin Plugin, logFn func(*slog.Logg
 			logFn(sc.Logger())
 			return "s", nil
 		})
-	}, withLambdaAPI(fake), WithLogHandler(newDefaultLogHandler(&out, slog.LevelInfo)), WithPlugins(plugin))
+	}, withLambdaAPI(fake), WithLogHandler(newDefaultLogHandler(&out, slog.LevelInfo)), withTestPlugins(plugin))
 	if _, err := h(lambdaCtx(t, "req-p", "tenant-p"), childPayload(`"x"`)); err != nil {
 		t.Fatalf("Invoke() error: %v", err)
 	}

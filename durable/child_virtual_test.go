@@ -41,7 +41,7 @@ func TestVirtualChildCheckpointsOnlyItsOperations(t *testing.T) {
 		t.Run(variant, func(t *testing.T) {
 			rec := &opRecorder{}
 			fake := &fakeLambda{}
-			h := Wrap(handler, WithPlugins(rec.plugin()), withLambdaAPI(fake))
+			h := Wrap(handler, withTestPlugins(rec.plugin()), withLambdaAPI(fake))
 
 			resp, err := h(context.Background(), childPayload(`"x"`))
 			if err != nil {
@@ -95,7 +95,7 @@ func TestVirtualChildInsideCheckpointedChild(t *testing.T) {
 				return Step(vc, "inner", func(StepContext) (string, error) { return "v", nil })
 			}, WithChildVirtual())
 		})
-	}, WithPlugins(rec.plugin()), withLambdaAPI(fake))
+	}, withTestPlugins(rec.plugin()), withLambdaAPI(fake))
 
 	resp, err := h(context.Background(), childPayload(`"x"`))
 	if err != nil {
@@ -462,7 +462,7 @@ func TestVirtualChildLifecycleHooks(t *testing.T) {
 						}
 						return out, nil
 					})
-				}, WithPlugins(rec.plugin()), withLambdaAPI(fake))
+				}, withTestPlugins(rec.plugin()), withLambdaAPI(fake))
 
 				if _, err := h(context.Background(), childPayload(`"x"`)); err != nil {
 					t.Fatal(err)
@@ -550,7 +550,7 @@ func TestVirtualChildStartBeforeWrap(t *testing.T) {
 					mu.Unlock()
 					return Step(c, "s", func(StepContext) (string, error) { return "v", nil })
 				})
-			}, WithPlugins(plugin), withLambdaAPI(fake))
+			}, withTestPlugins(plugin), withLambdaAPI(fake))
 
 			if _, err := h(context.Background(), childPayload(`"x"`)); err != nil {
 				t.Fatal(err)
@@ -605,7 +605,7 @@ func TestVirtualChildSerdesFailureEndsWithError(t *testing.T) {
 						_, got = run(c, body)
 						return "handled", nil
 					})
-				}, WithPlugins(rec.plugin()), withLambdaAPI(fake))
+				}, withTestPlugins(rec.plugin()), withLambdaAPI(fake))
 
 				if _, err := h(context.Background(), childPayload(`"x"`)); err != nil {
 					t.Fatal(err)

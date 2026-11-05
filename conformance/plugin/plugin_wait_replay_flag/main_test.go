@@ -15,7 +15,7 @@ import (
 // replayed starts for terminal waits are asserted.
 func TestHandler(t *testing.T) {
 	records := plugintest.RecordTo(t, out)
-	runner := durabletest.NewLocalRunner(handler, durable.WithPlugins(plugin))
+	runner := durabletest.NewLocalRunner(handler, durable.WithPlugins(durable.PluginFactoryFunc(newPlugin)))
 	result, err := runner.RunUntilComplete(nil)
 	if err != nil {
 		t.Fatal(err)

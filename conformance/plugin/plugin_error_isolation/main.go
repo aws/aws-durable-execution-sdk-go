@@ -16,44 +16,47 @@ var out = pluginlog.New(nil)
 // a panicking notification hook and discards the panic, so the execution
 // result and history match a run without the plugin. The operation and
 // attempt hooks report step operations only.
-var faulty = durable.Plugin{
-	OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
-		out.Capture(info.ExecutionArn)
-		out.EmitWithArn(map[string]any{"plugin": "CONFPLUGIN-FAULTY", "hook": "invocation-start"}, info.ExecutionArn)
-		panic("faulty invocation-start")
-	},
-	OnInvocationEnd: func(_ context.Context, info durable.InvocationEndHookInfo) {
-		out.EmitWithArn(map[string]any{"plugin": "CONFPLUGIN-FAULTY", "hook": "invocation-end"}, info.ExecutionArn)
-		panic("faulty invocation-end")
-	},
-	OnOperationStart: func(_ context.Context, info durable.OperationHookInfo) {
-		if info.SubType != durable.OperationSubTypeStep {
-			return
-		}
-		out.Emit(map[string]any{"plugin": "CONFPLUGIN-FAULTY", "hook": "operation-start"})
-		panic("faulty operation-start")
-	},
-	OnOperationEnd: func(_ context.Context, info durable.OperationHookInfo) {
-		if info.SubType != durable.OperationSubTypeStep {
-			return
-		}
-		out.Emit(map[string]any{"plugin": "CONFPLUGIN-FAULTY", "hook": "operation-end"})
-		panic("faulty operation-end")
-	},
-	OnOperationAttemptStart: func(_ context.Context, info durable.AttemptHookInfo) {
-		if info.SubType != durable.OperationSubTypeStep {
-			return
-		}
-		out.Emit(map[string]any{"plugin": "CONFPLUGIN-FAULTY", "hook": "attempt-start"})
-		panic("faulty attempt-start")
-	},
-	OnOperationAttemptEnd: func(_ context.Context, info durable.AttemptEndHookInfo) {
-		if info.SubType != durable.OperationSubTypeStep {
-			return
-		}
-		out.Emit(map[string]any{"plugin": "CONFPLUGIN-FAULTY", "hook": "attempt-end"})
-		panic("faulty attempt-end")
-	},
+// newFaulty is a durable.PluginFactory: the handler calls it once per
+// invocation and the returned Plugin serves that invocation alone.
+func newFaulty(_ context.Context, inv durable.InvocationHookInfo) (*durable.Plugin, error) {
+	return &durable.Plugin{
+		OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
+			out.EmitWithArn(map[string]any{"plugin": "CONFPLUGIN-FAULTY", "hook": "invocation-start"}, info.ExecutionArn)
+			panic("faulty invocation-start")
+		},
+		OnInvocationEnd: func(_ context.Context, info durable.InvocationEndHookInfo) {
+			out.EmitWithArn(map[string]any{"plugin": "CONFPLUGIN-FAULTY", "hook": "invocation-end"}, info.ExecutionArn)
+			panic("faulty invocation-end")
+		},
+		OnOperationStart: func(_ context.Context, info durable.OperationHookInfo) {
+			if info.SubType != durable.OperationSubTypeStep {
+				return
+			}
+			out.EmitWithArn(map[string]any{"plugin": "CONFPLUGIN-FAULTY", "hook": "operation-start"}, inv.ExecutionArn)
+			panic("faulty operation-start")
+		},
+		OnOperationEnd: func(_ context.Context, info durable.OperationHookInfo) {
+			if info.SubType != durable.OperationSubTypeStep {
+				return
+			}
+			out.EmitWithArn(map[string]any{"plugin": "CONFPLUGIN-FAULTY", "hook": "operation-end"}, inv.ExecutionArn)
+			panic("faulty operation-end")
+		},
+		OnOperationAttemptStart: func(_ context.Context, info durable.AttemptHookInfo) {
+			if info.SubType != durable.OperationSubTypeStep {
+				return
+			}
+			out.EmitWithArn(map[string]any{"plugin": "CONFPLUGIN-FAULTY", "hook": "attempt-start"}, inv.ExecutionArn)
+			panic("faulty attempt-start")
+		},
+		OnOperationAttemptEnd: func(_ context.Context, info durable.AttemptEndHookInfo) {
+			if info.SubType != durable.OperationSubTypeStep {
+				return
+			}
+			out.EmitWithArn(map[string]any{"plugin": "CONFPLUGIN-FAULTY", "hook": "attempt-end"}, inv.ExecutionArn)
+			panic("faulty attempt-end")
+		},
+	}, nil
 }
 
 func handler(ctx durable.Context, name string) (string, error) {
@@ -63,5 +66,5 @@ func handler(ctx durable.Context, name string) (string, error) {
 }
 
 func main() {
-	durable.Start(handler, durable.WithPlugins(faulty))
+	durable.Start(handler, durable.WithPlugins(durable.PluginFactoryFunc(newFaulty)))
 }

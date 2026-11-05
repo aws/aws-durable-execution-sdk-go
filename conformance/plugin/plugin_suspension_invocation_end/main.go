@@ -24,10 +24,12 @@ type suspensionPlugin struct {
 	first bool
 }
 
-func (p *suspensionPlugin) plugin() durable.Plugin {
-	return durable.Plugin{
+// newSuspensionPlugin is a durable.PluginFactory. Each invocation gets its own
+// suspensionPlugin, so the state it holds never leaks into another invocation.
+func newSuspensionPlugin(_ context.Context, inv durable.InvocationHookInfo) (*durable.Plugin, error) {
+	p := &suspensionPlugin{}
+	return &durable.Plugin{
 		OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
-			out.Capture(info.ExecutionArn)
 			p.mu.Lock()
 			p.first = info.IsFirstInvocation
 			p.mu.Unlock()
@@ -49,7 +51,7 @@ func (p *suspensionPlugin) plugin() durable.Plugin {
 				"status":   string(info.Status),
 			}, info.ExecutionArn)
 		},
-	}
+	}, nil
 }
 
 func handler(ctx durable.Context, _ any) (string, error) {
@@ -60,5 +62,5 @@ func handler(ctx durable.Context, _ any) (string, error) {
 }
 
 func main() {
-	durable.Start(handler, durable.WithPlugins((&suspensionPlugin{}).plugin()))
+	durable.Start(handler, durable.WithPlugins(durable.PluginFactoryFunc(newSuspensionPlugin)))
 }

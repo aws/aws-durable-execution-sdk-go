@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
@@ -12,11 +13,15 @@ import (
 )
 
 func TestHandler(t *testing.T) {
-	// Reset the package-level recorder so repeated test runs (-count=5)
-	// start with a clean slate.
-	rec = &recorder{}
+	// The test owns the recorder so it can read the full sequence after
+	// the run, including OnInvocationEnd. The factory in main creates one
+	// per invocation; here one invocation runs, so one recorder suffices.
+	rec := &recorder{}
+	factory := durable.PluginFactoryFunc(func(context.Context, durable.InvocationHookInfo) (*durable.Plugin, error) {
+		return pluginFor(rec), nil
+	})
 
-	runner := durabletest.NewLocalRunner(handler, durable.WithPlugins(plugin))
+	runner := durabletest.NewLocalRunner(handler, durable.WithPlugins(factory))
 	result, err := runner.RunUntilComplete(nil)
 	if err != nil {
 		t.Fatal(err)

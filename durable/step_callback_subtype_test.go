@@ -103,7 +103,7 @@ func TestStepSubTypeRecordedInCheckpointAndPlugin(t *testing.T) {
 				rec := &opRecorder{}
 				attempts := &attemptRecorder{}
 				fake := &fakeLambda{}
-				h := Wrap(handler, WithPlugins(rec.plugin(), attempts.plugin()), withLambdaAPI(fake))
+				h := Wrap(handler, withTestPlugins(rec.plugin(), attempts.plugin()), withLambdaAPI(fake))
 
 				resp, err := h(context.Background(), stepPayload(`"x"`))
 				if err != nil {
@@ -129,7 +129,7 @@ func TestStepSubTypeRecordedInCheckpointAndPlugin(t *testing.T) {
 				op := checkpointedStep("1", "SUCCEEDED", &wireStepDetails{Attempt: 1, Result: `"v"`})
 				op.Type, op.SubType, op.Name = "STEP", tc.subType, "s"
 				replayFake := &fakeLambda{}
-				h = Wrap(handler, WithPlugins(rec.plugin()), withLambdaAPI(replayFake))
+				h = Wrap(handler, withTestPlugins(rec.plugin()), withLambdaAPI(replayFake))
 				resp, err = h(context.Background(), stepPayload(`"x"`, op))
 				if err != nil {
 					t.Fatal(err)
@@ -290,7 +290,7 @@ func TestCallbackSubTypeRecordedInCheckpointAndPlugin(t *testing.T) {
 			}
 			rec := &opRecorder{}
 			fake := &fakeLambda{}
-			h := Wrap(handler, WithPlugins(rec.plugin()), withLambdaAPI(fake))
+			h := Wrap(handler, withTestPlugins(rec.plugin()), withLambdaAPI(fake))
 			resp, err := h(context.Background(), callbackPayload(`"x"`))
 			if err != nil {
 				t.Fatal(err)
@@ -377,7 +377,7 @@ func TestWaitForCallbackSubTypeAppliesToItsCallback(t *testing.T) {
 	h := Wrap(func(ctx Context, _ string) (string, error) {
 		return WaitForCallback[string](ctx, "approval", func(StepContext, string) error { return nil },
 			WithCallbackSubType("ManagerApproval"))
-	}, WithPlugins(rec.plugin()), withLambdaAPI(fake))
+	}, withTestPlugins(rec.plugin()), withLambdaAPI(fake))
 	resp, err := h(context.Background(), callbackPayload(`"x"`))
 	if err != nil {
 		t.Fatal(err)

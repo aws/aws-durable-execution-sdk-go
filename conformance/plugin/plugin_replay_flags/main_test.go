@@ -10,7 +10,7 @@ import (
 
 func TestHandler(t *testing.T) {
 	records := plugintest.RecordTo(t, out)
-	runner := durabletest.NewLocalRunner(handler, durable.WithPlugins((&replayFlagsPlugin{}).plugin()))
+	runner := durabletest.NewLocalRunner(handler, durable.WithPlugins(durable.PluginFactoryFunc(newReplayFlagsPlugin)))
 	result, err := runner.RunUntilComplete(nil)
 	if err != nil {
 		t.Fatal(err)

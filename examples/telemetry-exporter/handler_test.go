@@ -39,7 +39,7 @@ func TestHandler(t *testing.T) {
 	exp := &capturingExporter{}
 	plugin := newTelemetryPlugin(exp)
 
-	runner := durabletest.NewLocalRunner(handler, durable.WithPlugins(plugin.Plugin()))
+	runner := durabletest.NewLocalRunner(handler, durable.WithPlugins(plugin))
 	result, err := runner.RunUntilComplete(map[string]any{"orderId": "ord-42"})
 	if err != nil {
 		t.Fatal(err)
