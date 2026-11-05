@@ -42,7 +42,7 @@ type replayFlagsPlugin struct {
 
 // newReplayFlagsPlugin is a durable.PluginFactory. Each invocation gets its own
 // replayFlagsPlugin, so the state it holds never leaks into another invocation.
-func newReplayFlagsPlugin(durable.InvocationHookInfo) (*durable.Plugin, error) {
+func newReplayFlagsPlugin(context.Context, durable.InvocationHookInfo) (*durable.Plugin, error) {
 	p := &replayFlagsPlugin{}
 	return &durable.Plugin{
 		OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {

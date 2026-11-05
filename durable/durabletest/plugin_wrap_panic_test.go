@@ -154,5 +154,5 @@ func TestWrapInvocationPanicAfterCallRunsHandlerOnce(t *testing.T) {
 // fixedPlugin returns a factory that serves the same Plugin value to every
 // invocation. The tests above own the state their hooks close over.
 func fixedPlugin(p durable.Plugin) durable.PluginFactory {
-	return durable.PluginFactoryFunc(func(durable.InvocationHookInfo) (*durable.Plugin, error) { return &p, nil })
+	return durable.PluginFactoryFunc(func(context.Context, durable.InvocationHookInfo) (*durable.Plugin, error) { return &p, nil })
 }

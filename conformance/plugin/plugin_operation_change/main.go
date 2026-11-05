@@ -50,7 +50,7 @@ func (p *operationChangePlugin) fullMap(updated map[string]durable.OperationHook
 
 // newOperationChangePlugin is a durable.PluginFactory. Each invocation gets its own
 // operationChangePlugin, so the state it holds never leaks into another invocation.
-func newOperationChangePlugin(durable.InvocationHookInfo) (*durable.Plugin, error) {
+func newOperationChangePlugin(context.Context, durable.InvocationHookInfo) (*durable.Plugin, error) {
 	p := &operationChangePlugin{}
 	return &durable.Plugin{
 		OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {

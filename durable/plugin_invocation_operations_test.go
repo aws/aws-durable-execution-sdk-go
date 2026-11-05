@@ -156,7 +156,7 @@ func TestInvocationHookInfoOperationsBuiltForFactory(t *testing.T) {
 	var seen InvocationHookInfo
 	var changed OperationChangeHookInfo
 	var mu sync.Mutex
-	factory := PluginFactoryFunc(func(info InvocationHookInfo) (*Plugin, error) {
+	factory := PluginFactoryFunc(func(_ context.Context, info InvocationHookInfo) (*Plugin, error) {
 		mu.Lock()
 		seen = info
 		mu.Unlock()

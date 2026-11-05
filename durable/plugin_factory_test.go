@@ -48,7 +48,7 @@ func TestPluginFactoryCalledOncePerInvocationBeforeHooks(t *testing.T) {
 	var calls, hooks atomic.Int32
 	var order []string
 	var mu sync.Mutex
-	factory := PluginFactoryFunc(func(InvocationHookInfo) (*Plugin, error) {
+	factory := PluginFactoryFunc(func(context.Context, InvocationHookInfo) (*Plugin, error) {
 		calls.Add(1)
 		mu.Lock()
 		order = append(order, "factory")
@@ -93,7 +93,7 @@ func TestPluginFactoryCalledOncePerInvocationBeforeHooks(t *testing.T) {
 func TestPluginFactoryReceivesSameInfoAsOnInvocationStart(t *testing.T) {
 	var fromFactory, fromHook InvocationHookInfo
 	var mu sync.Mutex
-	factory := PluginFactoryFunc(func(info InvocationHookInfo) (*Plugin, error) {
+	factory := PluginFactoryFunc(func(_ context.Context, info InvocationHookInfo) (*Plugin, error) {
 		mu.Lock()
 		fromFactory = info
 		mu.Unlock()
@@ -124,10 +124,42 @@ func TestPluginFactoryReceivesSameInfoAsOnInvocationStart(t *testing.T) {
 	}
 }
 
+// The factory receives the invocation context: the one the Lambda runtime
+// passed to the handler, carrying the lambdacontext value, and the same one
+// OnInvocationStart then receives.
+func TestPluginFactoryReceivesInvocationContext(t *testing.T) {
+	var fromFactory, fromHook context.Context
+	var mu sync.Mutex
+	factory := PluginFactoryFunc(func(ctx context.Context, _ InvocationHookInfo) (*Plugin, error) {
+		mu.Lock()
+		fromFactory = ctx
+		mu.Unlock()
+		return &Plugin{OnInvocationStart: func(ctx context.Context, _ InvocationHookInfo) {
+			mu.Lock()
+			fromHook = ctx
+			mu.Unlock()
+		}}, nil
+	})
+	lc := &lambdacontext.LambdaContext{AwsRequestID: "req-ctx"}
+	runFactoryHandler(t, lambdacontext.NewContext(context.Background(), lc), "arn:test:factory-ctx", WithPlugins(factory))
+	mu.Lock()
+	defer mu.Unlock()
+	if fromFactory == nil {
+		t.Fatal("factory received a nil context")
+	}
+	got, ok := lambdacontext.FromContext(fromFactory)
+	if !ok || got.AwsRequestID != "req-ctx" {
+		t.Errorf("factory ctx lambdacontext = %+v, %v; want the invocation's (req-ctx)", got, ok)
+	}
+	if fromFactory != fromHook {
+		t.Errorf("factory ctx and OnInvocationStart ctx differ:\nfactory: %v\nhook:    %v", fromFactory, fromHook)
+	}
+}
+
 func TestPluginFactoryRequestIDEmptyOutsideLambda(t *testing.T) {
 	var got InvocationHookInfo
 	var mu sync.Mutex
-	factory := PluginFactoryFunc(func(info InvocationHookInfo) (*Plugin, error) {
+	factory := PluginFactoryFunc(func(_ context.Context, info InvocationHookInfo) (*Plugin, error) {
 		mu.Lock()
 		got = info
 		mu.Unlock()
@@ -144,11 +176,11 @@ func TestPluginFactoryRequestIDEmptyOutsideLambda(t *testing.T) {
 func TestPluginFactoryNilSkipsSilently(t *testing.T) {
 	rec := newRecordingHandler()
 	var skipped, hooked atomic.Int32
-	skipping := PluginFactoryFunc(func(InvocationHookInfo) (*Plugin, error) {
+	skipping := PluginFactoryFunc(func(context.Context, InvocationHookInfo) (*Plugin, error) {
 		skipped.Add(1)
 		return nil, nil
 	})
-	healthy := PluginFactoryFunc(func(InvocationHookInfo) (*Plugin, error) {
+	healthy := PluginFactoryFunc(func(context.Context, InvocationHookInfo) (*Plugin, error) {
 		return &Plugin{OnOperationEnd: func(context.Context, OperationHookInfo) { hooked.Add(1) }}, nil
 	})
 	runFactoryHandler(t, context.Background(), "arn:test:factory", WithPlugins(skipping, healthy), WithLogHandler(rec))
@@ -166,10 +198,10 @@ func TestPluginFactoryNilSkipsSilently(t *testing.T) {
 func TestPluginFactoryErrorSkipsAndLogs(t *testing.T) {
 	rec := newRecordingHandler()
 	var hooked atomic.Int32
-	failing := PluginFactoryFunc(func(InvocationHookInfo) (*Plugin, error) {
+	failing := PluginFactoryFunc(func(context.Context, InvocationHookInfo) (*Plugin, error) {
 		return nil, errors.New("exporter unavailable")
 	})
-	healthy := PluginFactoryFunc(func(InvocationHookInfo) (*Plugin, error) {
+	healthy := PluginFactoryFunc(func(context.Context, InvocationHookInfo) (*Plugin, error) {
 		return &Plugin{OnOperationEnd: func(context.Context, OperationHookInfo) { hooked.Add(1) }}, nil
 	})
 	runFactoryHandler(t, context.Background(), "arn:test:factory", WithPlugins(failing, healthy), WithLogHandler(rec))
@@ -197,7 +229,7 @@ func TestPluginFactoryErrorSkipsAndLogs(t *testing.T) {
 // the execution context exists, so the handler must attach the attributes
 // to the factory logger itself.
 func TestPluginFactoryErrorLogCarriesExecutionAttrs(t *testing.T) {
-	failing := PluginFactoryFunc(func(InvocationHookInfo) (*Plugin, error) {
+	failing := PluginFactoryFunc(func(context.Context, InvocationHookInfo) (*Plugin, error) {
 		return nil, errors.New("exporter unavailable")
 	})
 
@@ -243,10 +275,10 @@ func TestPluginFactoryErrorLogCarriesExecutionAttrs(t *testing.T) {
 func TestPluginFactoryPanicSkipsAndLogs(t *testing.T) {
 	rec := newRecordingHandler()
 	var hooked atomic.Int32
-	panicking := PluginFactoryFunc(func(InvocationHookInfo) (*Plugin, error) {
+	panicking := PluginFactoryFunc(func(context.Context, InvocationHookInfo) (*Plugin, error) {
 		panic("factory defect")
 	})
-	healthy := PluginFactoryFunc(func(InvocationHookInfo) (*Plugin, error) {
+	healthy := PluginFactoryFunc(func(context.Context, InvocationHookInfo) (*Plugin, error) {
 		return &Plugin{OnOperationEnd: func(context.Context, OperationHookInfo) { hooked.Add(1) }}, nil
 	})
 	runFactoryHandler(t, context.Background(), "arn:test:factory", WithPlugins(panicking, healthy), WithLogHandler(rec))
@@ -267,7 +299,7 @@ func TestPluginFactoryPanicSkipsAndLogs(t *testing.T) {
 
 func TestPluginFactoryHooklessPluginSkipsAndLogs(t *testing.T) {
 	rec := newRecordingHandler()
-	empty := PluginFactoryFunc(func(InvocationHookInfo) (*Plugin, error) {
+	empty := PluginFactoryFunc(func(context.Context, InvocationHookInfo) (*Plugin, error) {
 		return &Plugin{}, nil
 	})
 	runFactoryHandler(t, context.Background(), "arn:test:factory", WithPlugins(empty), WithLogHandler(rec))
@@ -280,8 +312,10 @@ func TestPluginFactoryHooklessPluginSkipsAndLogs(t *testing.T) {
 // namedFactory exercises the Stringer path of pluginFactoryName.
 type namedFactory struct{}
 
-func (namedFactory) CreatePlugin(InvocationHookInfo) (*Plugin, error) { return nil, errors.New("boom") }
-func (namedFactory) String() string                                   { return "audit-factory" }
+func (namedFactory) CreatePlugin(context.Context, InvocationHookInfo) (*Plugin, error) {
+	return nil, errors.New("boom")
+}
+func (namedFactory) String() string { return "audit-factory" }
 
 func TestPluginFactoryNameInDiagnostics(t *testing.T) {
 	rec := newRecordingHandler()
@@ -299,7 +333,7 @@ func TestPluginFactoryNameInDiagnostics(t *testing.T) {
 // fall back to the dynamic type instead of letting the panic leave Invoke.
 type panickingNameFactory struct{ result *Plugin }
 
-func (f panickingNameFactory) CreatePlugin(InvocationHookInfo) (*Plugin, error) {
+func (f panickingNameFactory) CreatePlugin(context.Context, InvocationHookInfo) (*Plugin, error) {
 	if f.result != nil {
 		return f.result, nil
 	}
@@ -346,11 +380,11 @@ func TestPluginFactoryTypedNilErrorUnderDefaultLogger(t *testing.T) {
 	var buf bytes.Buffer
 	jsonLogger := newDefaultLogHandler(&buf, slog.LevelInfo)
 	var hooked atomic.Int32
-	failing := PluginFactoryFunc(func(InvocationHookInfo) (*Plugin, error) {
+	failing := PluginFactoryFunc(func(context.Context, InvocationHookInfo) (*Plugin, error) {
 		var e *typedNilErr
 		return nil, e
 	})
-	healthy := PluginFactoryFunc(func(InvocationHookInfo) (*Plugin, error) {
+	healthy := PluginFactoryFunc(func(context.Context, InvocationHookInfo) (*Plugin, error) {
 		return &Plugin{OnOperationEnd: func(context.Context, OperationHookInfo) { hooked.Add(1) }}, nil
 	})
 	runFactoryHandler(t, context.Background(), "arn:test:factory", WithPlugins(failing, healthy), WithLogHandler(jsonLogger))
@@ -377,7 +411,7 @@ func (panickingErr) Error() string { panic("Error defect") }
 
 func TestPluginFactoryPanickingErrorMethodIsContained(t *testing.T) {
 	rec := newRecordingHandler()
-	failing := PluginFactoryFunc(func(InvocationHookInfo) (*Plugin, error) {
+	failing := PluginFactoryFunc(func(context.Context, InvocationHookInfo) (*Plugin, error) {
 		return nil, panickingErr{}
 	})
 	runFactoryHandler(t, context.Background(), "arn:test:factory", WithPlugins(failing), WithLogHandler(rec))
@@ -397,7 +431,7 @@ func TestPluginFactoryWrapOrderIsRegistrationOrder(t *testing.T) {
 	var order []string
 	var mu sync.Mutex
 	wrapper := func(name string) PluginFactory {
-		return PluginFactoryFunc(func(InvocationHookInfo) (*Plugin, error) {
+		return PluginFactoryFunc(func(context.Context, InvocationHookInfo) (*Plugin, error) {
 			return &Plugin{WrapInvocation: func(ctx context.Context, _ InvocationHookInfo, fn func(context.Context) (any, error)) (any, error) {
 				mu.Lock()
 				order = append(order, name+":before")
@@ -410,7 +444,7 @@ func TestPluginFactoryWrapOrderIsRegistrationOrder(t *testing.T) {
 			}}, nil
 		})
 	}
-	skipping := PluginFactoryFunc(func(InvocationHookInfo) (*Plugin, error) { return nil, nil })
+	skipping := PluginFactoryFunc(func(context.Context, InvocationHookInfo) (*Plugin, error) { return nil, nil })
 	runFactoryHandler(t, context.Background(), "arn:test:factory", WithPlugins(wrapper("A"), skipping, wrapper("B")))
 	mu.Lock()
 	defer mu.Unlock()
@@ -430,7 +464,7 @@ func TestPluginFactoryConcurrentInvocationsGetIsolatedPlugins(t *testing.T) {
 	}
 	var all []*observed
 	var mu sync.Mutex
-	factory := PluginFactoryFunc(func(info InvocationHookInfo) (*Plugin, error) {
+	factory := PluginFactoryFunc(func(_ context.Context, info InvocationHookInfo) (*Plugin, error) {
 		o := &observed{created: info.ExecutionArn}
 		mu.Lock()
 		all = append(all, o)

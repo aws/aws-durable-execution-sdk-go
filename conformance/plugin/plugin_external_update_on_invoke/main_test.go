@@ -31,7 +31,7 @@ func TestPluginReportsUpdatedWaits(t *testing.T) {
 	records := plugintest.RecordTo(t, out)
 	wait := durable.OperationHookInfo{ID: "op-1", Type: string(durable.OperationTypeWait), Status: durable.PluginOperationSucceeded}
 	step := durable.OperationHookInfo{ID: "op-2", Type: string(durable.OperationTypeStep), Status: durable.PluginOperationSucceeded}
-	plugin, _ := newPlugin(durable.InvocationHookInfo{})
+	plugin, _ := newPlugin(context.Background(), durable.InvocationHookInfo{})
 	plugin.OnInvocationStart(context.Background(), durable.InvocationHookInfo{
 		ExecutionArn:      "arn:test",
 		IsFirstInvocation: false,

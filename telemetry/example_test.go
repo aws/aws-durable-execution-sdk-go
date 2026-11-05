@@ -1,6 +1,7 @@
 package telemetry_test
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
@@ -15,7 +16,7 @@ func ExampleNew() {
 
 	// Register with durable.Start via durable.WithPlugins(plugin). The
 	// handler calls CreatePlugin once per invocation.
-	p, err := plugin.CreatePlugin(durable.InvocationHookInfo{})
+	p, err := plugin.CreatePlugin(context.Background(), durable.InvocationHookInfo{})
 	fmt.Println(err == nil && p.OnInvocationStart != nil)
 	// Output:
 	// true
@@ -38,7 +39,7 @@ func ExampleNew_withS3Exporter() {
 		Exporters: []telemetry.Exporter{exporter},
 	})
 
-	p, _ := plugin.CreatePlugin(durable.InvocationHookInfo{})
+	p, _ := plugin.CreatePlugin(context.Background(), durable.InvocationHookInfo{})
 	fmt.Println(p.OnInvocationEnd != nil)
 	// Output:
 	// true
@@ -60,7 +61,7 @@ func ExampleNew_withMultipleExporters() {
 		Exporters: []telemetry.Exporter{fileExp, s3Exp},
 	})
 
-	p, _ := plugin.CreatePlugin(durable.InvocationHookInfo{})
+	p, _ := plugin.CreatePlugin(context.Background(), durable.InvocationHookInfo{})
 	fmt.Println(p.OnOperationStart != nil)
 	// Output:
 	// true
@@ -75,7 +76,7 @@ func ExampleNew_withSampling() {
 		EmitMode:     telemetry.EmitOnComplete,
 	})
 
-	p, _ := plugin.CreatePlugin(durable.InvocationHookInfo{})
+	p, _ := plugin.CreatePlugin(context.Background(), durable.InvocationHookInfo{})
 	fmt.Println(p.OnInvocationStart != nil)
 	// Output:
 	// true
@@ -99,7 +100,7 @@ func ExampleNew_withContentConfig() {
 		},
 	})
 
-	p, _ := plugin.CreatePlugin(durable.InvocationHookInfo{})
+	p, _ := plugin.CreatePlugin(context.Background(), durable.InvocationHookInfo{})
 	fmt.Println(p.OnOperationEnd != nil)
 	// Output:
 	// true

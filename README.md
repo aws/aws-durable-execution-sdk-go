@@ -1151,7 +1151,9 @@ The plugin instrumentation API gives observability and tracing integrations
 hooks into the lifecycle of an execution. A `durable.Plugin` is a struct of
 optional hook functions. You register a `durable.PluginFactory`, not a
 `Plugin`: the handler calls the factory's `CreatePlugin` once per
-invocation, and the `Plugin` it returns serves that invocation alone. So
+invocation, with the invocation context and the same info that
+`OnInvocationStart` then receives, and the `Plugin` it returns serves that
+invocation alone. So
 state for one invocation lives in the variables the hooks close over, and
 state that outlives an invocation, such as an exporter, lives on the
 factory. `durable.PluginFactoryFunc` adapts a function to the interface.
@@ -1163,7 +1165,7 @@ func handler(ctx durable.Context, _ any) (string, error) {
 	})
 }
 
-func newTracer(info durable.InvocationHookInfo) (*durable.Plugin, error) {
+func newTracer(_ context.Context, info durable.InvocationHookInfo) (*durable.Plugin, error) {
 	prefix := info.ExecutionArn // this invocation's identity
 	return &durable.Plugin{
 		OnOperationStart: func(_ context.Context, info durable.OperationHookInfo) {

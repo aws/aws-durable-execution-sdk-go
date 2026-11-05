@@ -18,7 +18,7 @@ var out = pluginlog.New(nil)
 // attempt hooks report step operations only.
 // newFaulty is a durable.PluginFactory: the handler calls it once per
 // invocation and the returned Plugin serves that invocation alone.
-func newFaulty(durable.InvocationHookInfo) (*durable.Plugin, error) {
+func newFaulty(context.Context, durable.InvocationHookInfo) (*durable.Plugin, error) {
 	return &durable.Plugin{
 		OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
 			out.Capture(info.ExecutionArn)

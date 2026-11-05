@@ -57,7 +57,7 @@ func TestWrapPanicsOnSecondNilPluginFactory(t *testing.T) {
 		}
 	}()
 	handler := func(_ Context, _ string) (string, error) { return "", nil }
-	valid := PluginFactoryFunc(func(InvocationHookInfo) (*Plugin, error) {
+	valid := PluginFactoryFunc(func(context.Context, InvocationHookInfo) (*Plugin, error) {
 		return &Plugin{OnInvocationStart: func(context.Context, InvocationHookInfo) {}}, nil
 	})
 	Wrap(handler, WithPlugins(valid, nil))
@@ -68,7 +68,7 @@ func TestWrapPanicsOnSecondNilPluginFactory(t *testing.T) {
 // non-nil PluginFactory interface, so f == nil does not catch it.
 type ptrFactory struct{}
 
-func (*ptrFactory) CreatePlugin(InvocationHookInfo) (*Plugin, error) {
+func (*ptrFactory) CreatePlugin(context.Context, InvocationHookInfo) (*Plugin, error) {
 	return &Plugin{OnInvocationStart: func(context.Context, InvocationHookInfo) {}}, nil
 }
 
@@ -76,7 +76,7 @@ func (*ptrFactory) CreatePlugin(InvocationHookInfo) (*Plugin, error) {
 // nil, so it exercises the kind guard around reflect.Value.IsNil.
 type valueFactory struct{}
 
-func (valueFactory) CreatePlugin(InvocationHookInfo) (*Plugin, error) {
+func (valueFactory) CreatePlugin(context.Context, InvocationHookInfo) (*Plugin, error) {
 	return &Plugin{OnInvocationStart: func(context.Context, InvocationHookInfo) {}}, nil
 }
 
@@ -114,7 +114,7 @@ func TestWrapAcceptsNonNilFactoryKinds(t *testing.T) {
 		name    string
 		factory PluginFactory
 	}{
-		{name: "PluginFactoryFunc", factory: PluginFactoryFunc(func(InvocationHookInfo) (*Plugin, error) {
+		{name: "PluginFactoryFunc", factory: PluginFactoryFunc(func(context.Context, InvocationHookInfo) (*Plugin, error) {
 			return &Plugin{OnInvocationStart: func(context.Context, InvocationHookInfo) {}}, nil
 		})},
 		{name: "non-nil pointer", factory: &ptrFactory{}},
@@ -195,7 +195,7 @@ func TestValidateHandlerOptions(t *testing.T) {
 			name: "valid factory",
 			opts: &handlerOptions{
 				pluginFactories: []PluginFactory{
-					PluginFactoryFunc(func(InvocationHookInfo) (*Plugin, error) { return nil, nil }),
+					PluginFactoryFunc(func(context.Context, InvocationHookInfo) (*Plugin, error) { return nil, nil }),
 				},
 			},
 			wantErr: false,
@@ -212,7 +212,7 @@ func TestValidateHandlerOptions(t *testing.T) {
 			name: "multiple factories, second nil",
 			opts: &handlerOptions{
 				pluginFactories: []PluginFactory{
-					PluginFactoryFunc(func(InvocationHookInfo) (*Plugin, error) { return nil, nil }),
+					PluginFactoryFunc(func(context.Context, InvocationHookInfo) (*Plugin, error) { return nil, nil }),
 					nil,
 				},
 			},

@@ -26,7 +26,7 @@ var out = pluginlog.New(nil)
 // attempt's retryable failure suspends the invocation without an end.
 // newPlugin is a durable.PluginFactory: the handler calls it once per
 // invocation and the returned Plugin serves that invocation alone.
-func newPlugin(durable.InvocationHookInfo) (*durable.Plugin, error) {
+func newPlugin(context.Context, durable.InvocationHookInfo) (*durable.Plugin, error) {
 	return &durable.Plugin{
 		OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
 			out.Capture(info.ExecutionArn)

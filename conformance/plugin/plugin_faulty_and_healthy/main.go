@@ -33,7 +33,7 @@ func isStep(info durable.OperationHookInfo) bool {
 // dispatches the hook to the other plugin.
 // newFaulty is a durable.PluginFactory: the handler calls it once per
 // invocation and the returned Plugin serves that invocation alone.
-func newFaulty(durable.InvocationHookInfo) (*durable.Plugin, error) {
+func newFaulty(context.Context, durable.InvocationHookInfo) (*durable.Plugin, error) {
 	return &durable.Plugin{
 		OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
 			out.Capture(info.ExecutionArn)
@@ -78,7 +78,7 @@ func newFaulty(durable.InvocationHookInfo) (*durable.Plugin, error) {
 // healthy is registered second and reports every hook normally.
 // newHealthy is a durable.PluginFactory: the handler calls it once per
 // invocation and the returned Plugin serves that invocation alone.
-func newHealthy(durable.InvocationHookInfo) (*durable.Plugin, error) {
+func newHealthy(context.Context, durable.InvocationHookInfo) (*durable.Plugin, error) {
 	return &durable.Plugin{
 		OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
 			out.Capture(info.ExecutionArn)

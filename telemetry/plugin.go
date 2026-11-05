@@ -146,7 +146,7 @@ var _ durable.PluginFactory = (*TelemetryPlugin)(nil)
 // once per invocation. The record state the hooks write still lives on
 // the TelemetryPlugin, so the hooks of every invocation share it; moving
 // that state onto the per-invocation Plugin is a separate change.
-func (p *TelemetryPlugin) CreatePlugin(durable.InvocationHookInfo) (*durable.Plugin, error) {
+func (p *TelemetryPlugin) CreatePlugin(context.Context, durable.InvocationHookInfo) (*durable.Plugin, error) {
 	return &durable.Plugin{
 		OnInvocationStart: p.onInvocationStart,
 		OnInvocationEnd:   p.onInvocationEnd,

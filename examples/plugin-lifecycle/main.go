@@ -57,7 +57,7 @@ type recorderKey struct{}
 // invocation and the returned Plugin serves that invocation alone. Each
 // call creates a new recorder, so the hooks of one invocation never write
 // into the events of another.
-func newPlugin(durable.InvocationHookInfo) (*durable.Plugin, error) {
+func newPlugin(context.Context, durable.InvocationHookInfo) (*durable.Plugin, error) {
 	return pluginFor(&recorder{}), nil
 }
 

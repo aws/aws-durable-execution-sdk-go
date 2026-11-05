@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
@@ -16,7 +17,7 @@ func TestHandler(t *testing.T) {
 	// the run, including OnInvocationEnd. The factory in main creates one
 	// per invocation; here one invocation runs, so one recorder suffices.
 	rec := &recorder{}
-	factory := durable.PluginFactoryFunc(func(durable.InvocationHookInfo) (*durable.Plugin, error) {
+	factory := durable.PluginFactoryFunc(func(context.Context, durable.InvocationHookInfo) (*durable.Plugin, error) {
 		return pluginFor(rec), nil
 	})
 

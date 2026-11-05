@@ -315,7 +315,7 @@ func (r *virtualHookRecorder) record(hook string, info durable.OperationHookInfo
 
 // CreatePlugin makes the recorder a durable.PluginFactory. The recorder
 // holds the state, so every invocation's plugin reports into it.
-func (r *virtualHookRecorder) CreatePlugin(durable.InvocationHookInfo) (*durable.Plugin, error) {
+func (r *virtualHookRecorder) CreatePlugin(context.Context, durable.InvocationHookInfo) (*durable.Plugin, error) {
 	return &durable.Plugin{
 		OnInvocationStart: func(context.Context, durable.InvocationHookInfo) {
 			r.mu.Lock()

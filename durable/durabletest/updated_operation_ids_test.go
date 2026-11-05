@@ -23,7 +23,7 @@ type updatedNames struct {
 
 // CreatePlugin makes updatedNames a durable.PluginFactory; the recorder
 // holds the state, so every invocation's plugin reports into it.
-func (u *updatedNames) CreatePlugin(durable.InvocationHookInfo) (*durable.Plugin, error) {
+func (u *updatedNames) CreatePlugin(context.Context, durable.InvocationHookInfo) (*durable.Plugin, error) {
 	return &durable.Plugin{
 		OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
 			names := []string{}

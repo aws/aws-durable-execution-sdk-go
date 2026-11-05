@@ -25,7 +25,7 @@ func isWait(info durable.OperationHookInfo) bool {
 // checkpoint dispatches only its end.
 // newPlugin is a durable.PluginFactory: the handler calls it once per
 // invocation and the returned Plugin serves that invocation alone.
-func newPlugin(durable.InvocationHookInfo) (*durable.Plugin, error) {
+func newPlugin(context.Context, durable.InvocationHookInfo) (*durable.Plugin, error) {
 	return &durable.Plugin{
 		OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
 			out.Capture(info.ExecutionArn)

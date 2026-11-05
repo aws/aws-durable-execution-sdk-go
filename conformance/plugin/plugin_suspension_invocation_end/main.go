@@ -26,7 +26,7 @@ type suspensionPlugin struct {
 
 // newSuspensionPlugin is a durable.PluginFactory. Each invocation gets its own
 // suspensionPlugin, so the state it holds never leaks into another invocation.
-func newSuspensionPlugin(durable.InvocationHookInfo) (*durable.Plugin, error) {
+func newSuspensionPlugin(context.Context, durable.InvocationHookInfo) (*durable.Plugin, error) {
 	p := &suspensionPlugin{}
 	return &durable.Plugin{
 		OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {

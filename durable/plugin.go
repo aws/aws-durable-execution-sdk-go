@@ -605,6 +605,14 @@ func WithPlugins(factories ...PluginFactory) HandlerOption {
 // hold the state of its invocation in the variables its hook closures
 // capture, without keying that state by execution ARN.
 //
+// ctx is the invocation context, the one the Lambda runtime passed to the
+// handler and the one OnInvocationStart then receives. Its deadline is the
+// invocation deadline, and it carries the values the runtime sets, such as
+// the lambdacontext value. A factory may use it to bound its own setup or
+// to parent a span. The factory must not retain ctx after returning: every
+// hook receives its own ctx, and the Lambda runtime cancels the invocation
+// context when the invocation returns.
+//
 // State that outlives an invocation (an exporter, a tracer provider, a
 // connection pool) belongs on the factory. State that belongs to one
 // invocation (spans, operation buffers, counters) belongs to the Plugin
@@ -643,7 +651,7 @@ func WithPlugins(factories ...PluginFactory) HandlerOption {
 //
 //	type auditFactory struct{ exporter *Exporter } // environment lifetime
 //
-//	func (f auditFactory) CreatePlugin(info durable.InvocationHookInfo) (*durable.Plugin, error) {
+//	func (f auditFactory) CreatePlugin(_ context.Context, info durable.InvocationHookInfo) (*durable.Plugin, error) {
 //		a := &audit{exporter: f.exporter, executionArn: info.ExecutionArn} // invocation lifetime
 //		return &durable.Plugin{
 //			OnOperationEnd:  a.onOperationEnd,
@@ -656,24 +664,24 @@ func WithPlugins(factories ...PluginFactory) HandlerOption {
 // EXPERIMENTAL: this type is experimental and may be changed or removed in
 // future releases.
 type PluginFactory interface {
-	CreatePlugin(info InvocationHookInfo) (*Plugin, error)
+	CreatePlugin(ctx context.Context, info InvocationHookInfo) (*Plugin, error)
 }
 
 // PluginFactoryFunc adapts a function to [PluginFactory], as
 // http.HandlerFunc adapts a function to http.Handler. It suits a factory
 // that holds no environment-lifetime state:
 //
-//	durable.WithPlugins(durable.PluginFactoryFunc(func(info durable.InvocationHookInfo) (*durable.Plugin, error) {
+//	durable.WithPlugins(durable.PluginFactoryFunc(func(_ context.Context, info durable.InvocationHookInfo) (*durable.Plugin, error) {
 //		return &durable.Plugin{OnInvocationEnd: logOutcome}, nil
 //	}))
 //
 // EXPERIMENTAL: this type is experimental and may be changed or removed in
 // future releases.
-type PluginFactoryFunc func(info InvocationHookInfo) (*Plugin, error)
+type PluginFactoryFunc func(ctx context.Context, info InvocationHookInfo) (*Plugin, error)
 
-// CreatePlugin calls f(info).
-func (f PluginFactoryFunc) CreatePlugin(info InvocationHookInfo) (*Plugin, error) {
-	return f(info)
+// CreatePlugin calls f(ctx, info).
+func (f PluginFactoryFunc) CreatePlugin(ctx context.Context, info InvocationHookInfo) (*Plugin, error) {
+	return f(ctx, info)
 }
 
 // WithPluginChildOperationsDepth bounds the depth in the operation tree of
@@ -755,7 +763,7 @@ func newInvocationPlugins(ctx context.Context, logger *slog.Logger, factories []
 	}
 	plugins := make([]Plugin, 0, len(factories))
 	for i, f := range factories {
-		p, err := createPluginSafely(f, info)
+		p, err := createPluginSafely(ctx, f, info)
 		switch {
 		case err != nil:
 			logger.ErrorContext(ctx, "Plugin factory failed; plugin ignored for this invocation",
@@ -774,16 +782,16 @@ func newInvocationPlugins(ctx context.Context, logger *slog.Logger, factories []
 	return plugins
 }
 
-// createPluginSafely calls f.CreatePlugin(info) and converts a panic into
-// an error, so a factory defect is contained the way a hook panic is.
-func createPluginSafely(f PluginFactory, info InvocationHookInfo) (p *Plugin, err error) {
+// createPluginSafely calls f.CreatePlugin(ctx, info) and converts a panic
+// into an error, so a factory defect is contained the way a hook panic is.
+func createPluginSafely(ctx context.Context, f PluginFactory, info InvocationHookInfo) (p *Plugin, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			p = nil
 			err = fmt.Errorf("panic: %v", r)
 		}
 	}()
-	return f.CreatePlugin(info)
+	return f.CreatePlugin(ctx, info)
 }
 
 // pluginFactoryName names a factory in diagnostics: its Stringer output
