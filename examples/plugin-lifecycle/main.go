@@ -3,10 +3,17 @@
 // single-step execution: OnInvocationStart → OnOperationStart →
 // OnOperationAttemptStart → OnOperationAttemptEnd → OnOperationEnd →
 // OnInvocationEnd.
+//
+// It also shows how a plugin hands per-invocation state to the handler.
+// The factory creates one recorder per invocation. The WrapInvocation hook
+// attaches that recorder to the context it passes to the handler, and the
+// handler reads it back from its [durable.Context]. So two invocations
+// running at the same time in one process never share a recorder.
 package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -34,16 +41,6 @@ func (r *recorder) record(e hookEvent) {
 	r.mu.Unlock()
 }
 
-// reset discards the events of earlier invocations. A warm Lambda
-// container keeps package-level state between invocations, so without it
-// the output would carry the hooks of every invocation the container has
-// served.
-func (r *recorder) reset() {
-	r.mu.Lock()
-	r.events = nil
-	r.mu.Unlock()
-}
-
 func (r *recorder) snapshot() []hookEvent {
 	r.mu.Lock()
 	cp := make([]hookEvent, len(r.events))
@@ -52,17 +49,28 @@ func (r *recorder) snapshot() []hookEvent {
 	return cp
 }
 
-// rec is the package-level recorder shared between the plugin and handler.
-var rec = &recorder{}
+// recorderKey is the context key under which WrapInvocation passes the
+// invocation's recorder to the handler.
+type recorderKey struct{}
 
-// plugin records every lifecycle hook invocation into rec.
 // newPlugin is a durable.PluginFactory: the handler calls it once per
-// invocation and the returned Plugin serves that invocation alone.
+// invocation and the returned Plugin serves that invocation alone. Each
+// call creates a new recorder, so the hooks of one invocation never write
+// into the events of another.
 func newPlugin(durable.InvocationHookInfo) (*durable.Plugin, error) {
+	return pluginFor(&recorder{}), nil
+}
+
+// pluginFor returns the Plugin whose hooks record into rec. WrapInvocation
+// runs the handler with rec attached to the context, so the handler can
+// read the same recorder its plugin writes to.
+func pluginFor(rec *recorder) *durable.Plugin {
 	return &durable.Plugin{
 		OnInvocationStart: func(_ context.Context, _ durable.InvocationHookInfo) {
-			rec.reset()
 			rec.record(hookEvent{Hook: "OnInvocationStart"})
+		},
+		WrapInvocation: func(ctx context.Context, _ durable.InvocationHookInfo, fn func(context.Context) (any, error)) (any, error) {
+			return fn(context.WithValue(ctx, recorderKey{}, rec))
 		},
 		OnInvocationEnd: func(_ context.Context, _ durable.InvocationEndHookInfo) {
 			rec.record(hookEvent{Hook: "OnInvocationEnd"})
@@ -79,7 +87,7 @@ func newPlugin(durable.InvocationHookInfo) (*durable.Plugin, error) {
 		OnOperationAttemptEnd: func(_ context.Context, info durable.AttemptEndHookInfo) {
 			rec.record(hookEvent{Hook: "OnOperationAttemptEnd", OperationName: info.Name, Attempt: info.Attempt})
 		},
-	}, nil
+	}
 }
 
 // Output is the handler result containing the hooks observed before the
@@ -91,6 +99,10 @@ type Output struct {
 }
 
 func handler(ctx durable.Context, _ any) (Output, error) {
+	rec, ok := ctx.Value(recorderKey{}).(*recorder)
+	if !ok {
+		return Output{}, errors.New("no recorder in context: register the plugin with durable.WithPlugins")
+	}
 	msg, err := durable.Step(ctx, "compute", func(_ durable.StepContext) (string, error) {
 		return "plugin lifecycle complete", nil
 	})
