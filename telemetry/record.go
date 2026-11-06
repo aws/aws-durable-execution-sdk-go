@@ -2,10 +2,6 @@
 // Execution SDK. It defines the core schema for durable execution
 // telemetry records that capture execution snapshots for diagnostics and
 // monitoring.
-//
-// This package is EXPERIMENTAL. It is built on the experimental plugin API
-// of the durable package, so the telemetry module stays at major version 0.
-// Any release may change this package's API and its record schema.
 package telemetry
 
 import (

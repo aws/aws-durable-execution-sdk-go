@@ -49,7 +49,7 @@ The repository holds several Go modules:
 | Path | Module | Description |
 |------|--------|-------------|
 | `durable/` | root (published) | Core SDK: handler, context, checkpoint, futures, operations |
-| `telemetry/` | `telemetry` (published) | Observability plugin, built on the experimental plugin API; versions below v1 |
+| `telemetry/` | `telemetry` (published) | Observability plugin, stable from v1.0.0; depends on the SDK's experimental plugin API |
 | `analysis/` | `analysis` (published) | `durablelint` static analyzer for determinism rules; versions below v1 |
 | `conformance/` | `conformance` (internal) | Conformance test handlers for cross-SDK validation |
 | `examples/` | `examples` (internal) | Self-contained example Lambda functions |

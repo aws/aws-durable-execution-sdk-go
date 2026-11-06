@@ -34,7 +34,7 @@
 //	    when a GitHub Release is published.
 //
 // Versions and tags carry the leading v that the go command requires, as
-// in v1.2.0, telemetry/v0.1.0, and analysis/v0.1.0. durable.Version holds the
+// in v1.2.0, telemetry/v1.0.0, and analysis/v0.1.0. durable.Version holds the
 // SDK version without it, as 1.2.0. That is the form the default client
 // sends in the User-Agent header.
 package main
@@ -72,7 +72,7 @@ const (
 // publishedModules are the modules that users add with go get, by
 // directory relative to the repository root. The directory "." holds the
 // SDK. A nested module's tags carry its directory as a prefix, as in
-// telemetry/v0.1.0.
+// telemetry/v1.0.0.
 var publishedModules = []string{".", "telemetry", "analysis"}
 
 // internalModules are used only inside the repository, so they are never
@@ -80,6 +80,11 @@ var publishedModules = []string{".", "telemetry", "analysis"}
 // requires both the SDK and telemetry, so its go.mod must list the SDK
 // version that telemetry requires.
 var internalModules = []string{"conformance", "examples"}
+
+// stableModules are the published modules that release at v1. Every other
+// nested module stays below v1 until it is added here. majorRule applies
+// the rule.
+var stableModules = []string{".", "telemetry"}
 
 // versionPattern matches the versions this repository releases. The
 // numbers have no leading zeros, because the go command ignores a tag such
@@ -188,7 +193,7 @@ type release struct {
 	version string // the version with its leading v, as v1.2.0
 }
 
-// tag returns the Git tag of the release, as v1.2.0 or telemetry/v0.1.0.
+// tag returns the Git tag of the release, as v1.2.0 or telemetry/v1.0.0.
 func (r release) tag() string {
 	if r.dir == "." {
 		return r.version
@@ -272,15 +277,19 @@ func compareNumbers(a, b string) int {
 }
 
 // majorRule returns an error unless the repository releases the module in
-// dir at major version major. The SDK has v0 and v1 versions. A v2 SDK
-// would need a new module path, which this tool does not set up. The
-// nested modules stay below v1.
+// dir at major version major. A nested module that is not in stableModules
+// stays below v1. No module releases at v2 or later, because a v2 needs a
+// new module path, which this tool does not set up.
 func majorRule(dir string, major int) error {
 	switch {
-	case dir == "." && major > 1:
-		return errors.New("a v2 or later release of the SDK needs a new module path, which this tool does not set up")
-	case dir != "." && major > 0:
+	case major > 0 && !slices.Contains(stableModules, dir):
 		return fmt.Errorf("%s stays below v1", dir)
+	case major > 1:
+		name := dir
+		if dir == "." {
+			name = "the SDK"
+		}
+		return fmt.Errorf("a v2 or later release of %s needs a new module path, which this tool does not set up", name)
 	}
 	return nil
 }
