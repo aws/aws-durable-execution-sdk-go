@@ -386,7 +386,7 @@ Resources:
           - go-invoke-simple-target
       CodeUri: .aws-sam/build-artifacts/invoke-simple-target/
       Handler: bootstrap
-      Description: Target function for invoke-simple and chained-invoke
+      Description: Target function for invoke-simple, chained-invoke, invoke-async, invoke-serdes, and invoke-error-sentinels
       Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
@@ -450,6 +450,66 @@ Resources:
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
+
+  InvokeAsyncFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-invoke-async
+      CodeUri: .aws-sam/build-artifacts/invoke-async/
+      Handler: bootstrap
+      Description: Concurrent durable invokes started with InvokeAsync
+      Role: !Ref ExecutionRoleArn
+      Environment:
+        Variables:
+          FUNCTION_NAME_PREFIX: !Ref FunctionNamePrefix
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  InvokeSerdesFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-invoke-serdes
+      CodeUri: .aws-sam/build-artifacts/invoke-serdes/
+      Handler: bootstrap
+      Description: Durable invoke with per-invoke payload and result serdes
+      Role: !Ref ExecutionRoleArn
+      Environment:
+        Variables:
+          FUNCTION_NAME_PREFIX: !Ref FunctionNamePrefix
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  InvokeErrorSentinelsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-invoke-error-sentinels
+      CodeUri: .aws-sam/build-artifacts/invoke-error-sentinels/
+      Handler: bootstrap
+      Description: Durable invoke outcomes told apart with the invoke error sentinels
+      Role: !Ref ExecutionRoleArn
+      Environment:
+        Variables:
+          FUNCTION_NAME_PREFIX: !Ref FunctionNamePrefix
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
 
   ChildContextBasicFunction:
     Type: AWS::Serverless::Function
@@ -2598,6 +2658,15 @@ Outputs:
   ChainedInvokeFunction:
     Description: Chained Invoke Function ARN
     Value: !GetAtt ChainedInvokeFunction.Arn
+  InvokeAsyncFunction:
+    Description: Invoke Async Function ARN
+    Value: !GetAtt InvokeAsyncFunction.Arn
+  InvokeSerdesFunction:
+    Description: Invoke Serdes Function ARN
+    Value: !GetAtt InvokeSerdesFunction.Arn
+  InvokeErrorSentinelsFunction:
+    Description: Invoke Error Sentinels Function ARN
+    Value: !GetAtt InvokeErrorSentinelsFunction.Arn
   ChildContextBasicFunction:
     Description: Child Context Basic Function ARN
     Value: !GetAtt ChildContextBasicFunction.Arn
