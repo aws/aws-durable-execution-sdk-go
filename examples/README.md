@@ -112,6 +112,8 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [map-virtual-context](map-virtual-context/main.go) | Map, WithNesting (NestingFlat) | SUCCEEDED |
 | [map-custom-summary-generator-replay](map-custom-summary-generator-replay/main.go) | Map, WithBatchSummary (>256KB, replay across suspension) | SUCCEEDED |
 | [map-flat-summarized-replay](map-flat-summarized-replay/main.go) | Map, WithNesting (NestingFlat), >256KB replay across suspension | SUCCEEDED |
+| [map-serdes](map-serdes/main.go) | Map, WithBatchSerdes (per item), WithBatchResultSerdes (whole BatchResult, replay across suspension), SerdesOf | SUCCEEDED |
+| [map-completion-policy](map-completion-policy/main.go) | Map, WithCompletion (ShouldComplete composed from rules), CompletionDecision.Complete, CompletionDecision.Outcome | SUCCEEDED |
 | [parallel-basic](parallel-basic/main.go) | Parallel, WithMaxConcurrency | SUCCEEDED |
 | [parallel-empty](parallel-empty/main.go) | Parallel (no branches) | SUCCEEDED |
 | [parallel-invoke](parallel-invoke/main.go) | Parallel, Invoke | SUCCEEDED |
