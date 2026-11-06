@@ -1,0 +1,14 @@
+[
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "record-deadline",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "WAIT",
+    "subType": "Wait",
+    "name": "cool-off",
+    "status": "SUCCEEDED"
+  }
+]
