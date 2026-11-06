@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -12,7 +13,8 @@ import (
 )
 
 // summarizeByID renders events as "hook:id:status:replay" strings, for
-// sequences that include unnamed operations.
+// sequences that include unnamed operations. id is the wire ID the hook
+// reported.
 func summarizeByID(evs []opEvent) []string {
 	out := make([]string, 0, len(evs))
 	for _, ev := range evs {
@@ -21,9 +23,23 @@ func summarizeByID(evs []opEvent) []string {
 	return out
 }
 
+// wireKey returns key, a "hook:id" or "hook:id:..." string whose id is a
+// positional ID, with the id replaced by its wire ID, as the hooks report
+// it. Expectations are written with positional IDs for readability.
+func wireKey(key string) string {
+	parts := strings.Split(key, ":")
+	parts[1] = hashID(parts[1])
+	return strings.Join(parts, ":")
+}
+
+// assertSequenceByID asserts that got, summarized by summarizeByID, equals
+// want. The want strings name operations by positional ID; see wireKey.
 func assertSequenceByID(t *testing.T, got []opEvent, want ...string) {
 	t.Helper()
 	g := summarizeByID(got)
+	for i := range want {
+		want[i] = wireKey(want[i])
+	}
 	if len(g) != len(want) {
 		t.Fatalf("event sequence = %v, want %v", g, want)
 	}
@@ -174,13 +190,13 @@ func TestOperationLifecycleChildContextThreeLevelTree(t *testing.T) {
 				assertLiveTimestamps(t, ev)
 				switch ev.info.Name {
 				case "outer":
-					assertIdentity(t, ev, "1", "outer", ctxType, ctxSub, "")
+					assertIdentity(t, ev, hashID("1"), "outer", ctxType, ctxSub, "")
 				case "mid":
-					assertIdentity(t, ev, "1-1", "mid", ctxType, ctxSub, hashID("1"))
+					assertIdentity(t, ev, hashID("1-1"), "mid", ctxType, ctxSub, hashID("1"))
 				case "inner":
-					assertIdentity(t, ev, "1-1-1", "inner", ctxType, ctxSub, hashID("1-1"))
+					assertIdentity(t, ev, hashID("1-1-1"), "inner", ctxType, ctxSub, hashID("1-1"))
 				case "leaf":
-					assertIdentity(t, ev, "1-1-1-1", "leaf", string(OperationTypeStep), OperationSubTypeStep, hashID("1-1-1"))
+					assertIdentity(t, ev, hashID("1-1-1-1"), "leaf", string(OperationTypeStep), OperationSubTypeStep, hashID("1-1-1"))
 				}
 				if ev.hook == "end" && ev.info.Type == ctxType {
 					if ev.info.Result != `"v"` {
@@ -206,7 +222,7 @@ func TestOperationLifecycleChildContextThreeLevelTree(t *testing.T) {
 			assertPluginResponseStatus(t, resp, invocationSucceeded)
 			settled := rec.take()
 			assertSequence(t, settled, "end:outer:SUCCEEDED:true")
-			assertIdentity(t, settled[0], "1", "outer", ctxType, ctxSub, "")
+			assertIdentity(t, settled[0], hashID("1"), "outer", ctxType, ctxSub, "")
 			assertReplayedTimestamps(t, settled[0], true)
 			if settled[0].info.Result != `"v"` {
 				t.Errorf("replayed end Result = %q, want %q", settled[0].info.Result, `"v"`)
@@ -232,11 +248,11 @@ func TestOperationLifecycleChildContextThreeLevelTree(t *testing.T) {
 				"end:mid:SUCCEEDED:false",
 				"end:outer:SUCCEEDED:false",
 			)
-			assertIdentity(t, partial[0], "1", "outer", ctxType, ctxSub, "")
-			assertIdentity(t, partial[1], "1-1", "mid", ctxType, ctxSub, hashID("1"))
-			assertIdentity(t, partial[2], "1-1-1", "inner", ctxType, ctxSub, hashID("1-1"))
-			assertIdentity(t, partial[3], "1-1", "mid", ctxType, ctxSub, hashID("1"))
-			assertIdentity(t, partial[4], "1", "outer", ctxType, ctxSub, "")
+			assertIdentity(t, partial[0], hashID("1"), "outer", ctxType, ctxSub, "")
+			assertIdentity(t, partial[1], hashID("1-1"), "mid", ctxType, ctxSub, hashID("1"))
+			assertIdentity(t, partial[2], hashID("1-1-1"), "inner", ctxType, ctxSub, hashID("1-1"))
+			assertIdentity(t, partial[3], hashID("1-1"), "mid", ctxType, ctxSub, hashID("1"))
+			assertIdentity(t, partial[4], hashID("1"), "outer", ctxType, ctxSub, "")
 			assertReplayedTimestamps(t, partial[0], false)
 			assertReplayedTimestamps(t, partial[1], false)
 			assertReplayedTimestamps(t, partial[2], true)
@@ -289,7 +305,7 @@ func TestOperationLifecycleChildContextFailure(t *testing.T) {
 
 			assertFailedEnd := func(t *testing.T, ev opEvent) {
 				t.Helper()
-				assertIdentity(t, ev, "1", "child", ctxType, ctxSub, "")
+				assertIdentity(t, ev, hashID("1"), "child", ctxType, ctxSub, "")
 				if ev.info.Error == nil {
 					t.Fatal("failed end Error is nil")
 				}
@@ -312,7 +328,7 @@ func TestOperationLifecycleChildContextFailure(t *testing.T) {
 			assertPluginResponseStatus(t, resp, invocationFailed)
 			live := rec.take()
 			assertSequence(t, live, "start:child:STARTED:false", "end:child:FAILED:false")
-			assertIdentity(t, live[0], "1", "child", ctxType, ctxSub, "")
+			assertIdentity(t, live[0], hashID("1"), "child", ctxType, ctxSub, "")
 			assertLiveTimestamps(t, live[0])
 			assertLiveTimestamps(t, live[1])
 			assertFailedEnd(t, live[1])
@@ -381,7 +397,7 @@ func TestOperationLifecycleChildContextStartBeforeWrap(t *testing.T) {
 	if wrapInfo != startInfo {
 		t.Errorf("wrap info = %+v, want the start info %+v", wrapInfo, startInfo)
 	}
-	if startInfo.ID != "1" || startInfo.Status != PluginOperationStarted || startInfo.IsReplay || startInfo.StartTimestamp.IsZero() {
+	if startInfo.ID != hashID("1") || startInfo.Status != PluginOperationStarted || startInfo.IsReplay || startInfo.StartTimestamp.IsZero() {
 		t.Errorf("start info = %+v", startInfo)
 	}
 }
@@ -469,12 +485,12 @@ func TestOperationLifecycleCreateCallbackSuspendResume(t *testing.T) {
 				first, second := runSuspendResumeUpdated(t, handler, rec, []wireOperation{op}, s.updatedIDs, tc.wantFinal)
 
 				assertSequence(t, first, "start:cb:STARTED:false")
-				assertIdentity(t, first[0], "1", "cb", string(OperationTypeCallback), OperationSubTypeCallback, "")
+				assertIdentity(t, first[0], hashID("1"), "cb", string(OperationTypeCallback), OperationSubTypeCallback, "")
 				assertLiveTimestamps(t, first[0])
 
 				assertSequence(t, second, fmt.Sprintf("end:cb:%s:%v", tc.wantStatus, s.wantReplay))
 				ev := second[0]
-				assertIdentity(t, ev, "1", "cb", string(OperationTypeCallback), OperationSubTypeCallback, "")
+				assertIdentity(t, ev, hashID("1"), "cb", string(OperationTypeCallback), OperationSubTypeCallback, "")
 				assertReplayedTimestamps(t, ev, true)
 				if tc.wantErr == nil {
 					if ev.info.Result != `"ok"` || ev.info.Error != nil {
@@ -542,12 +558,12 @@ func assertWaitForCallbackHierarchy(t *testing.T, evs []opEvent) {
 	t.Helper()
 	for _, ev := range evs {
 		switch ev.info.ID {
-		case "1":
-			assertIdentity(t, ev, "1", "wfcb", string(OperationTypeContext), OperationSubTypeWaitForCallback, "")
-		case "1-1":
-			assertIdentity(t, ev, "1-1", "", string(OperationTypeCallback), OperationSubTypeCallback, hashID("1"))
-		case "1-2":
-			assertIdentity(t, ev, "1-2", "", string(OperationTypeStep), OperationSubTypeStep, hashID("1"))
+		case hashID("1"):
+			assertIdentity(t, ev, hashID("1"), "wfcb", string(OperationTypeContext), OperationSubTypeWaitForCallback, "")
+		case hashID("1-1"):
+			assertIdentity(t, ev, hashID("1-1"), "", string(OperationTypeCallback), OperationSubTypeCallback, hashID("1"))
+		case hashID("1-2"):
+			assertIdentity(t, ev, hashID("1-2"), "", string(OperationTypeStep), OperationSubTypeStep, hashID("1"))
 		default:
 			t.Errorf("unexpected event %s for operation %q", ev.hook, ev.info.ID)
 		}
@@ -820,11 +836,13 @@ func TestOperationLifecycleContextAtMostOnePerInvocation(t *testing.T) {
 		}
 	}
 	for _, k := range []string{"start:1", "start:1-1", "end:1-1", "end:1", "start:2", "start:2-1", "start:2-2", "end:2-2"} {
+		k = wireKey(k)
 		if count[k] != 1 {
 			t.Errorf("%s dispatched %d times, want 1; counts %v", k, count[k], count)
 		}
 	}
 	for _, k := range []string{"end:2", "end:2-1"} {
+		k = wireKey(k)
 		if count[k] != 0 {
 			t.Errorf("%s dispatched %d times, want 0: the operation has not settled", k, count[k])
 		}

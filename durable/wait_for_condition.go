@@ -283,7 +283,7 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 	attemptInfo := AttemptHookInfo{
 		OperationHookInfo: OperationHookInfo{
 			ExecutionArn:    ec.executionArn,
-			ID:              id,
+			ID:              hashID(id),
 			Name:            name,
 			Type:            string(OperationTypeStep),
 			SubType:         OperationSubTypeWaitForCondition,

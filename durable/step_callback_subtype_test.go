@@ -117,7 +117,7 @@ func TestStepSubTypeRecordedInCheckpointAndPlugin(t *testing.T) {
 				live := eventsForName(rec.take(), "s")
 				assertSequence(t, live, "start:s:STARTED:false", "end:s:SUCCEEDED:false")
 				for _, ev := range live {
-					assertIdentity(t, ev, "1", "s", string(OperationTypeStep), tc.subType, "")
+					assertIdentity(t, ev, hashID("1"), "s", string(OperationTypeStep), tc.subType, "")
 				}
 				if got, want := strings.Join(attempts.take(), ","), "start:"+tc.subType+",end:"+tc.subType; got != want {
 					t.Errorf("attempt hooks = %s, want %s", got, want)
@@ -143,7 +143,7 @@ func TestStepSubTypeRecordedInCheckpointAndPlugin(t *testing.T) {
 				replayed := eventsForName(rec.take(), "s")
 				assertSequence(t, replayed, "start:s:SUCCEEDED:true", "end:s:SUCCEEDED:true")
 				for _, ev := range replayed {
-					assertIdentity(t, ev, "1", "s", string(OperationTypeStep), tc.subType, "")
+					assertIdentity(t, ev, hashID("1"), "s", string(OperationTypeStep), tc.subType, "")
 				}
 			})
 		}
@@ -301,7 +301,7 @@ func TestCallbackSubTypeRecordedInCheckpointAndPlugin(t *testing.T) {
 			assertUpdates(t, updatesOfType(t, fake, OperationTypeCallback), tc.subType, OperationActionStart)
 			live := eventsForName(rec.take(), "cb")
 			assertSequence(t, live, "start:cb:STARTED:false")
-			assertIdentity(t, live[0], "1", "cb", string(OperationTypeCallback), tc.subType, "")
+			assertIdentity(t, live[0], hashID("1"), "cb", string(OperationTypeCallback), tc.subType, "")
 
 			op := checkpointedCallback("1", "SUCCEEDED", &wireCallbackDetails{CallbackId: "cb-1", Result: "approved"})
 			op.Type, op.SubType, op.Name = "CALLBACK", tc.subType, "cb"
@@ -314,7 +314,7 @@ func TestCallbackSubTypeRecordedInCheckpointAndPlugin(t *testing.T) {
 			}
 			ends := eventsForName(rec.take(), "cb")
 			assertSequence(t, ends, "end:cb:SUCCEEDED:true")
-			assertIdentity(t, ends[0], "1", "cb", string(OperationTypeCallback), tc.subType, "")
+			assertIdentity(t, ends[0], hashID("1"), "cb", string(OperationTypeCallback), tc.subType, "")
 		})
 	}
 }

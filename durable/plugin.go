@@ -458,13 +458,20 @@ const (
 // future releases.
 type OperationHookInfo struct {
 	ExecutionArn string
-	ID           string
-	Name         string
-	Type         string
-	SubType      string
-	Status       PluginOperationStatus
-	Attempt      int
-	IsReplay     bool
+
+	// ID is the operation's wire ID: the ID the checkpoint carries, the key
+	// of [InvocationHookInfo.Operations] and UpdatedOperations, and the
+	// ParentID that the operations nested inside this one report. Every
+	// hook for one operation reports the same ID, so a consumer can key its
+	// own state on it.
+	ID string
+
+	Name     string
+	Type     string
+	SubType  string
+	Status   PluginOperationStatus
+	Attempt  int
+	IsReplay bool
 
 	// ParentID is the ID of the parent context operation, if any. Empty
 	// for top-level (root context) operations. A consumer that builds the
@@ -913,10 +920,16 @@ func invokePluginSafely(p *Plugin, call func(*Plugin)) {
 // sets the timestamps and, where they apply, Attempt, Result, and Error
 // before passing the info to dispatchOperationStart or
 // dispatchOperationEnd.
+//
+// id is the positional ID the operation was claimed under. The info
+// reports its wire ID, as the checkpoint, ParentID, and the Operations
+// map of the invocation hooks do, so a plugin can key every report of one
+// operation on a single ID. Internal code that needs the positional ID
+// back keeps it alongside the info; see dispatchContextEnd.
 func (c *execContext) operationHookInfo(id, name, opType, subType string, isReplay bool) OperationHookInfo {
 	return OperationHookInfo{
 		ExecutionArn:    c.executionArn,
-		ID:              id,
+		ID:              hashID(id),
 		Name:            name,
 		Type:            opType,
 		SubType:         subType,
