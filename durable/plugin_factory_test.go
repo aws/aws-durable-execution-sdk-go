@@ -330,7 +330,7 @@ func TestPluginFactoryNameInDiagnostics(t *testing.T) {
 }
 
 // panickingNameFactory has a String() that panics. pluginFactoryName must
-// fall back to the dynamic type instead of letting the panic leave Invoke.
+// fall back to the dynamic type so construction and invocation both succeed.
 type panickingNameFactory struct{ result *Plugin }
 
 func (f panickingNameFactory) CreatePlugin(context.Context, InvocationHookInfo) (*Plugin, error) {
@@ -511,5 +511,154 @@ func TestPluginFactoryConcurrentInvocationsGetIsolatedPlugins(t *testing.T) {
 				t.Errorf("plugin created for %s observed an operation of %s", o.created, arn)
 			}
 		}
+	}
+}
+
+type stringerFactory struct {
+	PluginFactory
+	stringValue func() string
+}
+
+func (f *stringerFactory) String() string { return f.stringValue() }
+
+type registrationStringerFactory struct {
+	RegisteredPluginFactory
+	stringValue func() string
+}
+
+func (f *registrationStringerFactory) String() string { return f.stringValue() }
+
+func TestPluginRegistrationDiagnosticsCachedAtWrap(t *testing.T) {
+	cases := []struct {
+		name             string
+		registered       bool
+		registrationName string
+		stringer         bool
+		stringPanics     bool
+		wantName         string
+		wantStringCalls  int32
+	}{
+		{name: "registration overrides Stringer", registered: true, registrationName: "validated-name", stringer: true, wantName: "validated-name"},
+		{name: "registration overrides panicking Stringer", registered: true, registrationName: "validated-name", stringer: true, stringPanics: true, wantName: "validated-name"},
+		{name: "registration overrides type", registered: true, registrationName: "validated-name", wantName: "validated-name"},
+		{name: "nonempty name is not trimmed", registered: true, registrationName: " ", stringer: true, wantName: " "},
+		{name: "empty registration uses Stringer", registered: true, stringer: true, wantName: "string-name", wantStringCalls: 1},
+		{name: "empty registration uses type", registered: true, wantName: "*durable.registrationFactory"},
+		{name: "registered Stringer panic uses type", registered: true, stringer: true, stringPanics: true, wantName: "*durable.registrationStringerFactory", wantStringCalls: 1},
+		{name: "plain Stringer", stringer: true, wantName: "string-name", wantStringCalls: 1},
+		{name: "plain type", wantName: "durable.PluginFactoryFunc"},
+		{name: "plain Stringer panic uses type", stringer: true, stringPanics: true, wantName: "*durable.stringerFactory", wantStringCalls: 1},
+	}
+	results := []struct {
+		name   string
+		create PluginFactoryFunc
+	}{
+		{"error", func(context.Context, InvocationHookInfo) (*Plugin, error) { return nil, errors.New("factory failure") }},
+		{"panic", func(context.Context, InvocationHookInfo) (*Plugin, error) { panic("factory failure") }},
+		{"hookless", func(context.Context, InvocationHookInfo) (*Plugin, error) { return &Plugin{}, nil }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, result := range results {
+				t.Run(result.name, func(t *testing.T) {
+					var registrations, stringsCalled, creations, healthyHooks atomic.Int32
+					metadata := PluginRegistration{Name: tc.registrationName, ExclusiveGroups: []string{"views"}}
+					var factory PluginFactory = PluginFactoryFunc(func(ctx context.Context, info InvocationHookInfo) (*Plugin, error) {
+						creations.Add(1)
+						return result.create(ctx, info)
+					})
+					stringValue := func() string {
+						if stringsCalled.Add(1) > 1 || tc.stringPanics {
+							panic("String must not run during an invocation")
+						}
+						return "string-name"
+					}
+					if tc.registered {
+						registered := &registrationFactory{PluginFactory: factory, registration: func() PluginRegistration {
+							if registrations.Add(1) > 1 {
+								panic("Registration must run only once")
+							}
+							return metadata
+						}}
+						factory = registered
+						if tc.stringer {
+							factory = &registrationStringerFactory{RegisteredPluginFactory: registered, stringValue: stringValue}
+						}
+					} else if tc.stringer {
+						factory = &stringerFactory{PluginFactory: factory, stringValue: stringValue}
+					}
+					healthy := PluginFactoryFunc(func(context.Context, InvocationHookInfo) (*Plugin, error) {
+						return &Plugin{OnInvocationStart: func(context.Context, InvocationHookInfo) { healthyHooks.Add(1) }}, nil
+					})
+					rec := newRecordingHandler()
+					handler := Wrap(func(Context, string) (string, error) { return "ok", nil },
+						WithPlugins(healthy, factory), WithLogHandler(rec), withLambdaAPI(&fakePluginClient{}))
+					wantRegistrations := int32(0)
+					if tc.registered {
+						wantRegistrations = 1
+					}
+					if registrations.Load() != wantRegistrations || stringsCalled.Load() != tc.wantStringCalls || creations.Load() != 0 {
+						t.Fatalf("at Wrap: Registration=%d, String=%d, CreatePlugin=%d; want %d, %d, 0",
+							registrations.Load(), stringsCalled.Load(), creations.Load(), wantRegistrations, tc.wantStringCalls)
+					}
+					// Names and groups may change on the factory after construction.
+					// Invocation diagnostics must use the validated snapshot.
+					metadata.Name = "changed-name"
+					metadata.ExclusiveGroups[0] = ""
+					const invocations = 4
+					var wg sync.WaitGroup
+					for i := range invocations {
+						payload := makePluginPayload(t, fmt.Sprintf("arn:test:cached:%d", i), "tok", nil)
+						wg.Add(1)
+						go func() {
+							defer wg.Done()
+							response, err := handler(context.Background(), payload)
+							if err != nil {
+								t.Errorf("invocation error = %v", err)
+								return
+							}
+							assertPluginResponseStatus(t, response, "SUCCEEDED")
+						}()
+					}
+					wg.Wait()
+					logs := factoryErrors(rec)
+					if len(logs) != invocations {
+						t.Fatalf("factory logs = %d, want %d", len(logs), invocations)
+					}
+					for _, log := range logs {
+						if log.attrs["factory"] != tc.wantName || log.attrs["factoryIndex"] != int64(1) {
+							t.Errorf("factory log = %v, want factory=%q and factoryIndex=1", log.attrs, tc.wantName)
+						}
+					}
+					if registrations.Load() != wantRegistrations || stringsCalled.Load() != tc.wantStringCalls {
+						t.Errorf("after invocations: Registration=%d, String=%d; want %d, %d",
+							registrations.Load(), stringsCalled.Load(), wantRegistrations, tc.wantStringCalls)
+					}
+					if creations.Load() != invocations || healthyHooks.Load() != invocations {
+						t.Errorf("CreatePlugin=%d, healthy hooks=%d; want %d each", creations.Load(), healthyHooks.Load(), invocations)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestPluginRegistrationEvaluatedPerEntry(t *testing.T) {
+	var registrations, hooked atomic.Int32
+	factory := &registrationFactory{
+		PluginFactory: PluginFactoryFunc(func(context.Context, InvocationHookInfo) (*Plugin, error) {
+			return &Plugin{OnInvocationStart: func(context.Context, InvocationHookInfo) { hooked.Add(1) }}, nil
+		}),
+		registration: func() PluginRegistration {
+			registrations.Add(1)
+			return PluginRegistration{Name: "repeated-factory"}
+		},
+	}
+	opts := WithPlugins(factory, factory)
+	for range 2 {
+		runFactoryHandler(t, context.Background(), "arn:test:repeated-registration", opts)
+	}
+	if registrations.Load() != 4 || hooked.Load() != 4 {
+		t.Errorf("Registration=%d, invocation hooks=%d; want two entries in each of two handlers (4 each)", registrations.Load(), hooked.Load())
 	}
 }

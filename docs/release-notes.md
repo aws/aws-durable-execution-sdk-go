@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Added: registration metadata for experimental plugin factories
+
+`durable.RegisteredPluginFactory` extends `PluginFactory` with
+`Registration() PluginRegistration`. The metadata has an optional `Name`
+and `ExclusiveGroups`. Construct `PluginRegistration` with keyed fields.
+Both types are part of the experimental plugin API.
+
+`Wrap` reads the metadata once per registration entry, after rejecting all
+nil factories. `Start` goes through `Wrap`. A metadata panic, a blank group,
+or a group shared by two entries fails handler construction. Repeated groups
+within one entry count once. A nil or empty group slice adds no constraint.
+Nonblank group identifiers are compared exactly and case-sensitively, without
+trimming or normalization.
+
+Factory diagnostic names are resolved at construction: a nonempty metadata
+name takes precedence over `fmt.Stringer`, then the dynamic type. A panicking
+`String()` falls back to the dynamic type. Invocation diagnostics use the
+cached name without calling `Registration()` or `String()` again. Conflict
+errors identify the group and both entries by index and resolved name.
+
+Existing factories need no changes. Telemetry declares no exclusive group,
+so multiple telemetry exporters remain valid. No telemetry release is needed
+for this addition.
+
 ### Changed: one plugin per invocation, registered through a factory
 
 The plugin instrumentation API is experimental, and this is a change to
