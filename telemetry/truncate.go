@@ -51,41 +51,64 @@ func Truncate(record Record, maxBytes int, render Renderer) Record {
 	n := len(ops)
 
 	// Step 1: drop each operation's Result field, oldest first.
-	// applyResultDrops returns a copy of ops with the oldest j operations'
-	// Result cleared, and whether any Result was actually cleared.
-	applyResultDrops := func(j int) (dropped []OperationRecord, any bool) {
-		dropped = make([]OperationRecord, n)
+	if ordered {
+		// A supplied renderer is not assumed monotonic, so this walks
+		// oldest-first. Copy once, skip ops with no Result, and render
+		// only after a result is actually removed. Otherwise
+		// IncludeOperationResults:false re-encodes the same record once
+		// per operation before any whole-operation drop.
+		dropped := make([]OperationRecord, n)
 		copy(dropped, ops)
-		for i := 0; i < j; i++ {
-			if dropped[i].Result != nil {
-				dropped[i].Result = nil
-				dropped[i].Truncated = true
-				any = true
+		record.Operations = dropped
+		for i := 0; i < n; i++ {
+			if dropped[i].Result == nil {
+				continue
+			}
+			dropped[i].Result = nil
+			dropped[i].Truncated = true
+			record.Truncated = true
+			if fits(record, maxBytes, render) {
+				return record
 			}
 		}
-		return dropped, any
-	}
-	resultFits := func(j int) bool {
-		candidate := record
-		cops, any := applyResultDrops(j)
-		candidate.Operations = cops
-		if any {
-			candidate.Truncated = true
-		}
-		return fits(candidate, maxBytes, render)
-	}
-	j := dropCount(n+1, ordered, resultFits)
-	if j > n {
-		j = n // clearing every Result still doesn't fit; apply all, then Step 2.
-	}
-	if cops, any := applyResultDrops(j); any {
-		record.Operations = cops
-		record.Truncated = true
 	} else {
-		record.Operations = cops
-	}
-	if fits(record, maxBytes, render) {
-		return record
+		// applyResultDrops returns a copy of ops with the oldest j
+		// operations' Result cleared, and whether any Result was
+		// actually cleared.
+		applyResultDrops := func(j int) (dropped []OperationRecord, any bool) {
+			dropped = make([]OperationRecord, n)
+			copy(dropped, ops)
+			for i := 0; i < j; i++ {
+				if dropped[i].Result != nil {
+					dropped[i].Result = nil
+					dropped[i].Truncated = true
+					any = true
+				}
+			}
+			return dropped, any
+		}
+		resultFits := func(j int) bool {
+			candidate := record
+			cops, any := applyResultDrops(j)
+			candidate.Operations = cops
+			if any {
+				candidate.Truncated = true
+			}
+			return fits(candidate, maxBytes, render)
+		}
+		j := dropCount(n+1, false, resultFits)
+		if j > n {
+			j = n // clearing every Result still doesn't fit; apply all, then Step 2.
+		}
+		if cops, any := applyResultDrops(j); any {
+			record.Operations = cops
+			record.Truncated = true
+		} else {
+			record.Operations = cops
+		}
+		if fits(record, maxBytes, render) {
+			return record
+		}
 	}
 
 	// Step 2: drop whole operations, oldest first.
