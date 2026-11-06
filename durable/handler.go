@@ -166,6 +166,11 @@ type handlerOptions struct {
 	// factory once; see newInvocationPlugins.
 	pluginFactories []PluginFactory
 
+	// pluginFactoryNames caches one diagnostic name per factory, in the
+	// same order. Validation resolves the names before any invocation so
+	// diagnostics never call plugin-author Registration or String methods.
+	pluginFactoryNames []string
+
 	// pluginChildDepth is the deepest operation depth reported to plugins,
 	// meaningful when pluginChildDepthSet is true. Set via
 	// [WithPluginChildOperationsDepth]; unset reports every depth.
@@ -398,7 +403,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	var pd *pluginDispatcher
 	if hasPlugins {
 		factoryLogger := slog.New(h.options.logHandler.WithAttrs(executionLogAttrs(in.DurableExecutionArn, invMeta)))
-		pd = newPluginDispatcher(newInvocationPlugins(ctx, factoryLogger, h.options.pluginFactories, invInfo))
+		pd = newPluginDispatcher(newInvocationPlugins(ctx, factoryLogger, h.options.pluginFactories, h.options.pluginFactoryNames, invInfo))
 	}
 
 	// Item 12: OnInvocationStart fires BEFORE OnOperationChange.

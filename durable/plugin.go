@@ -21,7 +21,8 @@ import (
 // # Experimental
 //
 // The plugin API is experimental. It comprises this type, [PluginFactory],
-// [PluginFactoryFunc], [WithPlugins],
+// [PluginFactoryFunc], [PluginRegistration], [RegisteredPluginFactory],
+// [WithPlugins],
 // [WithPluginChildOperationsDepth], the hook info types
 // ([InvocationHookInfo], [InvocationEndHookInfo], [OperationHookInfo],
 // [AttemptHookInfo], [AttemptEndHookInfo], [OperationChangeHookInfo]), and
@@ -582,7 +583,9 @@ type OperationChangeHookInfo struct {
 // [Plugin] for the dispatch and concurrency contract.
 //
 // A nil factory panics in [Wrap] and [Start], because handler options are
-// read once at program start.
+// read once at program start. Factories may implement
+// [RegisteredPluginFactory] to declare diagnostic names and exclusive groups.
+// Invalid registration metadata also panics at construction.
 //
 // EXPERIMENTAL: this function is experimental and may be changed or removed
 // in future releases.
@@ -665,6 +668,46 @@ func WithPlugins(factories ...PluginFactory) HandlerOption {
 // future releases.
 type PluginFactory interface {
 	CreatePlugin(ctx context.Context, info InvocationHookInfo) (*Plugin, error)
+}
+
+// PluginRegistration is optional metadata a factory declares through
+// [RegisteredPluginFactory]. Construct it with keyed fields: a minor release
+// may add fields.
+//
+// EXPERIMENTAL: this type is experimental and may be changed or removed in
+// future releases.
+type PluginRegistration struct {
+	_ [0]func()
+
+	// Name identifies the factory in diagnostics. When empty, diagnostics
+	// use the factory's fmt.Stringer output, or its dynamic type. A panic
+	// in String falls back to the dynamic type. The SDK resolves and caches
+	// the name at handler construction.
+	Name string
+
+	// ExclusiveGroups names groups of which at most one registration entry
+	// may be a member. Wrap and Start panic when two entries share a group.
+	// Repeated groups within one entry count once. A nil or empty slice
+	// declares no constraint. An element that is empty after strings.TrimSpace
+	// is a configuration error; Wrap and Start panic on it. Other identifiers
+	// are compared exactly and case-sensitively, without trimming or normalization.
+	ExclusiveGroups []string
+}
+
+// RegisteredPluginFactory is implemented by a factory that declares
+// registration metadata. The SDK discovers it by type assertion, so a
+// factory that does not implement it needs no metadata.
+//
+// EXPERIMENTAL: this type is experimental and may be changed or removed in
+// future releases.
+type RegisteredPluginFactory interface {
+	PluginFactory
+
+	// Registration returns the metadata for this registration entry. Wrap
+	// calls it once per entry, after rejecting all nil factories. Start goes
+	// through Wrap. A panic fails handler construction as a configuration
+	// error. The SDK never calls Registration during an invocation.
+	Registration() PluginRegistration
 }
 
 // PluginFactoryFunc adapts a function to [PluginFactory], as
@@ -756,8 +799,9 @@ func newPluginDispatcher(plugins []Plugin) *pluginDispatcher {
 // through logger. The remaining factories keep their relative order, so a
 // skipped factory does not change how the other plugins' wrap hooks
 // compose. Returns nil when no factory is registered, so the handler pays
-// nothing for the plugin path.
-func newInvocationPlugins(ctx context.Context, logger *slog.Logger, factories []PluginFactory, info InvocationHookInfo) []Plugin {
+// nothing for the plugin path. names holds the diagnostic strings resolved
+// for factories at handler construction, in the same order.
+func newInvocationPlugins(ctx context.Context, logger *slog.Logger, factories []PluginFactory, names []string, info InvocationHookInfo) []Plugin {
 	if len(factories) == 0 {
 		return nil
 	}
@@ -767,14 +811,14 @@ func newInvocationPlugins(ctx context.Context, logger *slog.Logger, factories []
 		switch {
 		case err != nil:
 			logger.ErrorContext(ctx, "Plugin factory failed; plugin ignored for this invocation",
-				slog.Int("factoryIndex", i), slog.String("factory", pluginFactoryName(f)),
+				slog.Int("factoryIndex", i), slog.String("factory", names[i]),
 				slog.String(logKeyErrorType, errorTypeName(err)),
 				slog.String(logKeyErrorMessage, factoryErrorMessage(err)))
 		case p == nil:
 			// Intentional skip.
 		case !pluginHasHooks(*p):
 			logger.ErrorContext(ctx, "Plugin factory returned a Plugin with no hook functions set; plugin ignored for this invocation",
-				slog.Int("factoryIndex", i), slog.String("factory", pluginFactoryName(f)))
+				slog.Int("factoryIndex", i), slog.String("factory", names[i]))
 		default:
 			plugins = append(plugins, *p)
 		}
@@ -794,11 +838,9 @@ func createPluginSafely(ctx context.Context, f PluginFactory, info InvocationHoo
 	return f.CreatePlugin(ctx, info)
 }
 
-// pluginFactoryName names a factory in diagnostics: its Stringer output
-// when it has one, otherwise its dynamic type. String() is plugin-author
-// code and runs outside createPluginSafely's recover, so a panic in it
-// would leave Invoke. It therefore runs under its own recover, and the
-// dynamic type is the fallback.
+// pluginFactoryName resolves the fallback diagnostic name at handler
+// construction. String is plugin-author code, so a panic falls back to the
+// dynamic type. Invocation diagnostics use the cached name instead.
 func pluginFactoryName(f PluginFactory) (name string) {
 	defer func() {
 		if recover() != nil {
