@@ -128,8 +128,11 @@ func (c *serviceClient) logFailure(ctx context.Context, u durable.OperationUpdat
 }
 
 // updatesToService converts operation updates to the AWS SDK's type,
-// field for field.
+// field for field. A nil slice stays nil, as in the SDK's default client.
 func updatesToService(updates []durable.OperationUpdate) []types.OperationUpdate {
+	if updates == nil {
+		return nil
+	}
 	out := make([]types.OperationUpdate, 0, len(updates))
 	for _, u := range updates {
 		s := types.OperationUpdate{
@@ -166,8 +169,12 @@ func updatesToService(updates []durable.OperationUpdate) []types.OperationUpdate
 }
 
 // operationsFromService converts the AWS SDK's operations to the SDK's
-// type, field for field.
+// type, field for field. A nil slice stays nil, as in the SDK's default
+// client.
 func operationsFromService(ops []types.Operation) []durable.Operation {
+	if ops == nil {
+		return nil
+	}
 	out := make([]durable.Operation, 0, len(ops))
 	for _, op := range ops {
 		o := durable.Operation{
