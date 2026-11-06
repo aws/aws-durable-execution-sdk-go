@@ -177,6 +177,8 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [logger-exactly-once](logger-exactly-once/main.go) | Context.Logger after every kind of awaited outcome, Result(ctx) in a Go branch, a crashed invocation | SUCCEEDED |
 | [logger-log-levels](logger-log-levels/main.go) | Context.Logger, all log levels | SUCCEEDED |
 | [logger-slog-handler](logger-slog-handler/main.go) | WithLogHandler, application slog.Handler | SUCCEEDED |
+| [logger-replay-mode](logger-replay-mode/main.go) | WithReplayLogMode, ConfigureLogging, ReplayLogModeEmit / ReplayLogModeSuppress | SUCCEEDED |
+| [error-stack-traces](error-stack-traces/main.go) | Step, WithStackTraces(false), StepError.StackTrace, MaxStackTraceFrames | SUCCEEDED |
 | [plugin-lifecycle](plugin-lifecycle/main.go) | WithPlugins, hook lifecycle ordering | SUCCEEDED |
 | [telemetry-exporter](telemetry-exporter/main.go) | WithPlugins, telemetry.New (Durable Execution Telemetry plugin) | SUCCEEDED |
 
