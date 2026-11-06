@@ -134,8 +134,9 @@ func TestFirstOfFailedOutcomeWins(t *testing.T) {
 			t.Errorf("%s: decision = complete %v, outcome %v; want complete with FAILED", name, d.Complete(), d.Outcome())
 		}
 
-		// Without the failed primary the same quorum succeeds.
-		p.Items[0].Status = durable.BatchItemSucceeded
+		// Without the failed primary the quorum succeeds.
+		p = progress(durable.BatchItemSucceeded, durable.BatchItemSucceeded, durable.BatchItemSucceeded,
+			durable.BatchItemSucceeded, durable.BatchItemNotStarted)
 		if d := policy(p); !d.Complete() || d.Outcome() != durable.CompletionOutcomeSucceeded {
 			t.Errorf("%s: decision = complete %v, outcome %v; want complete with SUCCEEDED", name, d.Complete(), d.Outcome())
 		}
