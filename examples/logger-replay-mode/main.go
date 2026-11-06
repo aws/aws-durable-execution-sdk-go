@@ -62,8 +62,8 @@ func handler(ctx durable.Context, in Input) (string, error) {
 		return "", err
 	}
 
-	// Claiming this step, which has no checkpoint yet, ends the replay, so
-	// the records from here on are live on the second invocation.
+	// The wait's outcome is new to the second invocation, so the context
+	// is live from here on and these records are written once.
 	_, err := durable.Step(ctx, "after-wait", func(sc durable.StepContext) (string, error) {
 		sc.Logger().Info("inside step")
 		return "ok", nil

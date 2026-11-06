@@ -1,17 +1,17 @@
 // Command error-stack-traces demonstrates [durable.WithStackTraces]. When
 // user code fails, the SDK records a stack trace by default: one
-// "function file:line" string per frame, innermost first, at most
+// "function base.go:line" string per frame, innermost first, at most
 // [durable.MaxStackTraceFrames] frames, beginning with the user function
 // that returned the error. The trace is written to the failed operation's
 // checkpoint and exposed as StackTrace on the typed operation errors.
 //
 // This function turns capture off with WithStackTraces(false), as a
-// function does when its checkpoints must stay as small as possible or when
-// the file paths of its build must not leave the function. A step that
-// fails without retrying then records its error type and message but no
-// frames, and the *durable.StepError the handler receives carries an empty
-// StackTrace. The handler reports what the error carries rather than
-// failing the execution, so the result shows the effect of the option.
+// function does when its checkpoints must stay as small as possible. A
+// step that fails without retrying then records its error type and
+// message but no frames, and the *durable.StepError the handler receives
+// carries an empty StackTrace. The handler reports what the error carries
+// rather than failing the execution, so the result shows the effect of
+// the option.
 package main
 
 import (

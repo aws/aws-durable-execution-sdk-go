@@ -88,9 +88,15 @@ func TestHandlerDefaultCapture(t *testing.T) {
 	// with the file and line where it is declared. The package part of the
 	// name depends on the build (main in the deployed binary), so only the
 	// rest is checked.
-	if len(trace) == 0 || !strings.Contains(trace[0], ".handler.func1 ") ||
-		!strings.Contains(trace[0], "error-stack-traces/main.go:") {
+	if len(trace) == 0 || !strings.Contains(trace[0], ".handler.func1 main.go:") {
 		t.Errorf("first frame = %q, want the step body in handler", trace)
+	}
+	// Each frame names the file by its base name, so no directory of the
+	// machine that built the binary reaches the checkpoint.
+	for _, frame := range trace {
+		if file := frame[strings.LastIndex(frame, " ")+1:]; strings.Contains(file, "/") {
+			t.Errorf("frame %q names a file with a directory", frame)
+		}
 	}
 
 	extest.AssertSignature(t, result, extest.Ordered)
