@@ -5,10 +5,25 @@ package main
 
 import (
 	"testing"
+	"time"
+
+	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
 	"github.com/aws/aws-durable-execution-sdk-go/examples/internal/extest"
 )
+
+// executionStartedAt returns the time of the ExecutionStarted event.
+func executionStartedAt(t *testing.T, result *durabletest.TestResult) time.Time {
+	t.Helper()
+	for _, ev := range result.Events {
+		if ev.EventType == types.EventTypeExecutionStarted && ev.EventTimestamp != nil {
+			return *ev.EventTimestamp
+		}
+	}
+	t.Fatal("no ExecutionStarted event")
+	return time.Time{}
+}
 
 func TestHandler(t *testing.T) {
 	runner := extest.New(t, handler)
@@ -33,8 +48,18 @@ func TestHandler(t *testing.T) {
 	if !out.MatchesFirstInvocation {
 		t.Errorf("deadline derived in the second invocation (%s) differs from the one recorded in the first", out.Deadline)
 	}
+	if out.StartedAt.IsZero() {
+		t.Error("ExecutionStartTime returned the zero time")
+	}
 	if got := out.Deadline.Sub(out.StartedAt); got != replyWindow {
 		t.Errorf("deadline is %s after the start, want %s", got, replyWindow)
+	}
+	// The local runner takes the start time from the clock reading it
+	// records in the ExecutionStarted event, so the two are equal.
+	if runner.Local() {
+		if want := executionStartedAt(t, result); !out.StartedAt.Equal(want) {
+			t.Errorf("startedAt = %s, want the ExecutionStarted time %s", out.StartedAt, want)
+		}
 	}
 
 	extest.AssertSignature(t, result, extest.Ordered)
