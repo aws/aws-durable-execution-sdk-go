@@ -30,10 +30,14 @@ type ContentConfig struct {
 
 	// OperationFilter, if non-nil, is called for each operation. Only
 	// operations for which it returns true are included in the record.
+	// Different invocations may call it concurrently. The function and
+	// its captured state must be safe for concurrent use.
 	OperationFilter func(OperationRecord) bool
 
 	// Redactor, if non-nil, is applied to content field values before
 	// they are stored. Use this to mask sensitive data.
+	// Different invocations may call it concurrently. The function and
+	// its captured state must be safe for concurrent use.
 	Redactor func(string) string
 }
 

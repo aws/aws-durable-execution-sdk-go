@@ -44,6 +44,39 @@ the execution completes (succeeded or failed). Lambda captures stdout to the
 function's CloudWatch log group automatically, so this requires zero additional
 IAM permissions.
 
+## Invocation lifetime and concurrency
+
+`TelemetryPlugin` is a factory shared by the execution environment. Each
+`CreatePlugin` call creates a separate record, operation index, sampling decision,
+mutex, and on-change dispatch state. Hooks and log enrichment for one invocation
+use only that invocation's state. Concurrent operation hooks within an invocation
+remain synchronized.
+
+The factory initializes execution metadata, input, and sampling before returning
+the hooks. A resumed invocation retains the execution ARN and original execution
+start timestamp. Its request ID identifies the new invocation. Sampling uses the
+execution ARN, so the decision stays the same across resumes.
+
+At invocation start, the plugin initializes its operation buffer from the full
+checkpointed snapshot. This includes unchanged nested operations in completed
+child contexts whose bodies do not run again. The root execution operation is
+excluded from the operations array. `OperationDetail` and the SDK's
+`durable.WithPluginChildOperationsDepth` still limit the operations reported.
+Subsequent hooks update the buffer by operation ID.
+
+Exporters and content callbacks remain shared. `Redactor` and `OperationFilter`
+may be called concurrently by different invocations. Callers must make these
+functions and their captured state safe for concurrent use. Within one invocation,
+content callbacks remain serialized.
+
+Each invocation waits for its own in-flight on-change dispatches before its final
+emission. It does not wait for another invocation's dispatches. Shared exporters
+can receive overlapping `Export` and `Flush` calls from different invocations.
+This change does not add a shared scheduler or establish a complete exporter
+concurrency contract. Invocation-local records alone do not make an exporter or
+its dependencies concurrency-safe. Exporter concurrency and scheduling remain
+separate follow-up work.
+
 ## Configuration
 
 `telemetry.Config` controls all plugin behavior:
@@ -111,6 +144,10 @@ value. `MaxContentLength` defaults to 10 KB. Content exceeding that length is
 truncated and the resulting `ContentField` has `Truncated: true`.
 
 `DefaultContentConfig()` returns the default configuration explicitly.
+
+`Redactor` and `OperationFilter` may run concurrently across invocations. Their
+functions and captured state must support concurrent use. See
+[Invocation lifetime and concurrency](#invocation-lifetime-and-concurrency).
 
 ### OperationsFormat
 
@@ -368,13 +405,12 @@ Each emitted `Record` contains:
 | `RecordType` | string | Always `"DurableExecutionTelemetry"`. |
 | `SchemaVersion` | string | Always `"1.0"`. |
 | `ExecutionArn` | string | The durable execution's full ARN. |
-| `ExecutionName` | string | Extracted from the ARN (the execution ID segment). |
+| `ExecutionName` | string | Extracted from the execution-name segment of the ARN. |
 | `FunctionName` | string | Extracted from the function ARN. |
 | `Status` | Status | `RUNNING`, `SUCCEEDED`, or `FAILED`. |
 | `StartTimestamp` | *time.Time | When the execution started. |
 | `EndTimestamp` | *time.Time | When the execution ended (terminal records only). |
 | `DurationMs` | *int64 | End minus start in milliseconds. |
-| `InvocationCount` | int | Number of invocations of this execution observed by this function instance. |
 | `EmittedAt` | time.Time | When this record was emitted. |
 | `Operations` | []OperationRecord | Operation snapshots (filtered by OperationDetail). |
 | `Error` | *ErrorRecord | Execution-level error (failed executions only). |

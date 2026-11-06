@@ -12,15 +12,19 @@ import (
 // capturingExporter records every record it receives, guarded by a mutex
 // since dispatch calls Export concurrently.
 type capturingExporter struct {
-	mu      sync.Mutex
-	records []Record
-	flushed int
+	mu       sync.Mutex
+	records  []Record
+	flushed  int
+	exported chan struct{}
 }
 
 func (e *capturingExporter) Export(_ context.Context, record Record) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.records = append(e.records, record)
+	if e.exported != nil {
+		e.exported <- struct{}{}
+	}
 	return nil
 }
 
@@ -51,14 +55,14 @@ func TestPlugin_HappyPath_EmitsSucceededRecord(t *testing.T) {
 	arn := "arn:aws:lambda:us-east-1:123456789012:function:order-processor:qual/durable-execution/exec-1/inv-1"
 
 	// Simulate invocation lifecycle.
-	ip.onInvocationStart(ctx, durable.InvocationHookInfo{
+	plugin := startTestPlugin(t, ctx, ip, durable.InvocationHookInfo{
 		ExecutionArn:            arn,
 		IsFirstInvocation:       true,
 		ExecutionStartTimestamp: now,
 		ExecutionInput:          map[string]string{"orderId": "abc"},
 	})
 
-	ip.onOperationStart(ctx, durable.OperationHookInfo{
+	plugin.OnOperationStart(ctx, durable.OperationHookInfo{
 		ExecutionArn:   arn,
 		ID:             "op-1",
 		Name:           "validate",
@@ -69,7 +73,7 @@ func TestPlugin_HappyPath_EmitsSucceededRecord(t *testing.T) {
 		ParentID:       "",
 	})
 
-	ip.onOperationEnd(ctx, durable.OperationHookInfo{
+	plugin.OnOperationEnd(ctx, durable.OperationHookInfo{
 		ExecutionArn:   arn,
 		ID:             "op-1",
 		Name:           "validate",
@@ -81,7 +85,7 @@ func TestPlugin_HappyPath_EmitsSucceededRecord(t *testing.T) {
 		Result:         `"validated:abc"`,
 	})
 
-	ip.onInvocationEnd(ctx, durable.InvocationEndHookInfo{
+	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
 		ExecutionArn:    arn,
 		Status:          durable.PluginInvocationSucceeded,
 		ExecutionResult: map[string]string{"status": "done"},
@@ -134,13 +138,13 @@ func TestPlugin_FailedExecution_EmitsFailedRecordWithError(t *testing.T) {
 	now := time.Now()
 	arn := "arn:aws:lambda:us-east-1:123456789012:function:fn:1"
 
-	ip.onInvocationStart(ctx, durable.InvocationHookInfo{
+	plugin := startTestPlugin(t, ctx, ip, durable.InvocationHookInfo{
 		ExecutionArn:            arn,
 		IsFirstInvocation:       true,
 		ExecutionStartTimestamp: now,
 	})
 
-	ip.onOperationStart(ctx, durable.OperationHookInfo{
+	plugin.OnOperationStart(ctx, durable.OperationHookInfo{
 		ExecutionArn:   arn,
 		ID:             "op-1",
 		Name:           "failing-step",
@@ -149,7 +153,7 @@ func TestPlugin_FailedExecution_EmitsFailedRecordWithError(t *testing.T) {
 		StartTimestamp: now,
 	})
 
-	ip.onOperationEnd(ctx, durable.OperationHookInfo{
+	plugin.OnOperationEnd(ctx, durable.OperationHookInfo{
 		ExecutionArn:   arn,
 		ID:             "op-1",
 		Name:           "failing-step",
@@ -160,7 +164,7 @@ func TestPlugin_FailedExecution_EmitsFailedRecordWithError(t *testing.T) {
 		Error:          &testError{msg: "boom"},
 	})
 
-	ip.onInvocationEnd(ctx, durable.InvocationEndHookInfo{
+	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
 		ExecutionArn:   arn,
 		Status:         durable.PluginInvocationFailed,
 		ExecutionError: &testError{msg: "boom"},
@@ -192,12 +196,12 @@ func TestPlugin_PendingInvocation_DoesNotEmit(t *testing.T) {
 	ctx := context.Background()
 	arn := "arn:aws:lambda:us-east-1:123456789012:function:fn:1"
 
-	ip.onInvocationStart(ctx, durable.InvocationHookInfo{
+	plugin := startTestPlugin(t, ctx, ip, durable.InvocationHookInfo{
 		ExecutionArn:            arn,
 		ExecutionStartTimestamp: time.Now(),
 	})
 
-	ip.onInvocationEnd(ctx, durable.InvocationEndHookInfo{
+	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
 		ExecutionArn: arn,
 		Status:       durable.PluginInvocationPending,
 	})
@@ -215,11 +219,11 @@ func TestPlugin_MultipleExporters_AllReceiveRecord(t *testing.T) {
 	ctx := context.Background()
 	arn := "arn:aws:lambda:us-east-1:123456789012:function:fn:1"
 
-	ip.onInvocationStart(ctx, durable.InvocationHookInfo{
+	plugin := startTestPlugin(t, ctx, ip, durable.InvocationHookInfo{
 		ExecutionArn:            arn,
 		ExecutionStartTimestamp: time.Now(),
 	})
-	ip.onInvocationEnd(ctx, durable.InvocationEndHookInfo{
+	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
 		ExecutionArn:    arn,
 		Status:          durable.PluginInvocationSucceeded,
 		ExecutionResult: "ok",
@@ -240,11 +244,11 @@ func TestPlugin_ExporterPanic_DoesNotAffectOtherExporters(t *testing.T) {
 	ctx := context.Background()
 	arn := "arn:aws:lambda:us-east-1:123456789012:function:fn:1"
 
-	ip.onInvocationStart(ctx, durable.InvocationHookInfo{
+	plugin := startTestPlugin(t, ctx, ip, durable.InvocationHookInfo{
 		ExecutionArn:            arn,
 		ExecutionStartTimestamp: time.Now(),
 	})
-	ip.onInvocationEnd(ctx, durable.InvocationEndHookInfo{
+	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
 		ExecutionArn:    arn,
 		Status:          durable.PluginInvocationSucceeded,
 		ExecutionResult: "ok",
@@ -276,13 +280,13 @@ func TestPlugin_OperationDetailTopLevel_FiltersChildOps(t *testing.T) {
 	arn := "arn:aws:lambda:us-east-1:123456789012:function:fn:1"
 	now := time.Now()
 
-	ip.onInvocationStart(ctx, durable.InvocationHookInfo{
+	plugin := startTestPlugin(t, ctx, ip, durable.InvocationHookInfo{
 		ExecutionArn:            arn,
 		ExecutionStartTimestamp: now,
 	})
 
 	// Top-level op.
-	ip.onOperationEnd(ctx, durable.OperationHookInfo{
+	plugin.OnOperationEnd(ctx, durable.OperationHookInfo{
 		ExecutionArn:   arn,
 		ID:             "parent-op",
 		Name:           "parent",
@@ -293,7 +297,7 @@ func TestPlugin_OperationDetailTopLevel_FiltersChildOps(t *testing.T) {
 	})
 
 	// Child op (should be filtered out).
-	ip.onOperationEnd(ctx, durable.OperationHookInfo{
+	plugin.OnOperationEnd(ctx, durable.OperationHookInfo{
 		ExecutionArn:   arn,
 		ID:             "child-op",
 		Name:           "child",
@@ -304,7 +308,7 @@ func TestPlugin_OperationDetailTopLevel_FiltersChildOps(t *testing.T) {
 		EndTimestamp:   now.Add(5 * time.Millisecond),
 	})
 
-	ip.onInvocationEnd(ctx, durable.InvocationEndHookInfo{
+	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
 		ExecutionArn:    arn,
 		Status:          durable.PluginInvocationSucceeded,
 		ExecutionResult: "ok",
@@ -334,12 +338,12 @@ func TestPlugin_OperationDetailFullTree_IncludesChildOps(t *testing.T) {
 	arn := "arn:aws:lambda:us-east-1:123456789012:function:fn:1"
 	now := time.Now()
 
-	ip.onInvocationStart(ctx, durable.InvocationHookInfo{
+	plugin := startTestPlugin(t, ctx, ip, durable.InvocationHookInfo{
 		ExecutionArn:            arn,
 		ExecutionStartTimestamp: now,
 	})
 
-	ip.onOperationEnd(ctx, durable.OperationHookInfo{
+	plugin.OnOperationEnd(ctx, durable.OperationHookInfo{
 		ExecutionArn:   arn,
 		ID:             "parent-op",
 		Name:           "parent",
@@ -349,7 +353,7 @@ func TestPlugin_OperationDetailFullTree_IncludesChildOps(t *testing.T) {
 		EndTimestamp:   now.Add(10 * time.Millisecond),
 	})
 
-	ip.onOperationEnd(ctx, durable.OperationHookInfo{
+	plugin.OnOperationEnd(ctx, durable.OperationHookInfo{
 		ExecutionArn:   arn,
 		ID:             "child-op",
 		Name:           "child",
@@ -360,7 +364,7 @@ func TestPlugin_OperationDetailFullTree_IncludesChildOps(t *testing.T) {
 		EndTimestamp:   now.Add(5 * time.Millisecond),
 	})
 
-	ip.onInvocationEnd(ctx, durable.InvocationEndHookInfo{
+	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
 		ExecutionArn:    arn,
 		Status:          durable.PluginInvocationSucceeded,
 		ExecutionResult: "ok",
@@ -382,20 +386,20 @@ func TestPlugin_SkipsExecutionOperation(t *testing.T) {
 	ctx := context.Background()
 	arn := "arn:aws:lambda:us-east-1:123456789012:function:fn:1"
 
-	ip.onInvocationStart(ctx, durable.InvocationHookInfo{
+	plugin := startTestPlugin(t, ctx, ip, durable.InvocationHookInfo{
 		ExecutionArn:            arn,
 		ExecutionStartTimestamp: time.Now(),
 	})
 
 	// The EXECUTION operation should be skipped.
-	ip.onOperationStart(ctx, durable.OperationHookInfo{
+	plugin.OnOperationStart(ctx, durable.OperationHookInfo{
 		ExecutionArn: arn,
 		ID:           "exec-root",
 		Type:         "EXECUTION",
 		Status:       durable.PluginOperationStarted,
 	})
 
-	ip.onInvocationEnd(ctx, durable.InvocationEndHookInfo{
+	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
 		ExecutionArn:    arn,
 		Status:          durable.PluginInvocationSucceeded,
 		ExecutionResult: "ok",
@@ -410,31 +414,35 @@ func TestPlugin_SkipsExecutionOperation(t *testing.T) {
 	}
 }
 
-func TestPlugin_EnrichLogContext(t *testing.T) {
-	ip := New(Config{})
-
-	ctx := context.Background()
-	arn := "arn:aws:lambda:us-east-1:123456789012:function:fn:1"
-
-	// Before invocation starts, should return nil.
-	if m := ip.enrichLogContext(ctx); m != nil {
-		t.Errorf("expected nil before invocation, got %v", m)
+func TestPlugin_CreatePlugin_InitializesMetadataAndInput(t *testing.T) {
+	ctx := t.Context()
+	arn := "arn:aws:lambda:us-east-1:123456789012:function:fn:1/durable-execution/name/id"
+	var redacted []string
+	content := DefaultContentConfig()
+	content.Redactor = func(value string) string {
+		redacted = append(redacted, value)
+		return "redacted:" + value
 	}
-
-	ip.onInvocationStart(ctx, durable.InvocationHookInfo{
-		ExecutionArn:            arn,
-		ExecutionStartTimestamp: time.Now(),
-	})
-
-	m := ip.enrichLogContext(ctx)
-	if m == nil {
-		t.Fatal("expected non-nil log context after invocation start")
+	exp := &capturingExporter{}
+	factory := New(Config{EmitMode: EmitAlways, Content: content, Exporters: []Exporter{exp}})
+	info := durable.InvocationHookInfo{ExecutionArn: arn, ExecutionInput: "input", ExecutionStartTimestamp: time.Now().Add(-time.Hour)}
+	plugin := createTestPlugin(t, ctx, factory, info)
+	if len(redacted) != 1 || redacted[0] != "input" {
+		t.Fatalf("input was not prepared by CreatePlugin: %v", redacted)
 	}
-	if m["execution_arn"] != arn {
-		t.Errorf("expected execution_arn=%q, got %v", arn, m["execution_arn"])
+	fields := plugin.EnrichLogContext(ctx)
+	if fields["execution_arn"] != arn || fields["function_name"] != "fn" {
+		t.Errorf("log metadata before OnInvocationStart = %v", fields)
 	}
-	if m["function_name"] != "fn" {
-		t.Errorf("expected function_name=%q, got %v", "fn", m["function_name"])
+	plugin.OnInvocationStart(ctx, info)
+	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{Status: durable.PluginInvocationPending})
+	records := exp.snapshot()
+	if len(records) != 1 {
+		t.Fatalf("got %d records, want one", len(records))
+	}
+	rec := records[0]
+	if rec.Input == nil || rec.Input.Value != "redacted:input" || len(redacted) != 1 || rec.StartTimestamp == nil || !rec.StartTimestamp.Equal(info.ExecutionStartTimestamp) || rec.Status != StatusRunning {
+		t.Errorf("initialized record = %+v, redactor calls = %v", rec, redacted)
 	}
 }
 
@@ -446,13 +454,13 @@ func TestPlugin_OnOperationChange_BackfillsOps(t *testing.T) {
 	arn := "arn:aws:lambda:us-east-1:123456789012:function:fn:1"
 	now := time.Now()
 
-	ip.onInvocationStart(ctx, durable.InvocationHookInfo{
+	plugin := startTestPlugin(t, ctx, ip, durable.InvocationHookInfo{
 		ExecutionArn:            arn,
 		ExecutionStartTimestamp: now,
 	})
 
 	// Simulate operations that changed externally between invocations.
-	ip.onOperationChange(ctx, durable.OperationChangeHookInfo{
+	plugin.OnOperationChange(ctx, durable.OperationChangeHookInfo{
 		ExecutionArn: arn,
 		UpdatedOperations: map[string]durable.OperationHookInfo{
 			"op-prev": {
@@ -467,7 +475,7 @@ func TestPlugin_OnOperationChange_BackfillsOps(t *testing.T) {
 		},
 	})
 
-	ip.onInvocationEnd(ctx, durable.InvocationEndHookInfo{
+	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
 		ExecutionArn:    arn,
 		Status:          durable.PluginInvocationSucceeded,
 		ExecutionResult: "done",

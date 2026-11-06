@@ -101,8 +101,6 @@ type Record struct {
 	EndTimestamp   *time.Time `json:"endTimestamp,omitempty"`
 	DurationMs     *int64     `json:"durationMs,omitempty"`
 
-	InvocationCount int `json:"invocationCount,omitempty"`
-
 	// EmittedAt is the time this record was created, refreshed to the
 	// emission time when a snapshot is sent.
 	EmittedAt time.Time `json:"emittedAt"`
@@ -139,8 +137,8 @@ func NewRecord(executionArn string) *Record {
 
 // extractExecutionName extracts the execution name from an ARN. For a
 // durable-execution ARN like
-// "arn:aws:lambda:us-east-1:123456789012:function:my-fn:5/durable-execution/exec-id/inv-id",
-// it returns "exec-id". For simpler ARNs it returns the last segment
+// "arn:aws:lambda:us-east-1:123456789012:function:my-fn:5/durable-execution/execution-name/execution-id",
+// it returns "execution-name". For simpler ARNs it returns the last segment
 // after '/'.
 func extractExecutionName(arn string) string {
 	// Look for /durable-execution/{name}/ pattern first.
