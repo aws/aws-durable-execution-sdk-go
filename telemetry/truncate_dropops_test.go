@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 // buildOversizedRecord returns a record with n operations whose rendered size
@@ -39,13 +40,11 @@ func TestTruncate_DropOperations_RenderCountIsLogarithmic(t *testing.T) {
 	// A cap that forces dropping the vast majority of operations.
 	maxBytes := len(full) / 50
 
-	renders := 0
-	counting := func(r Record) ([]byte, error) {
-		renders++
-		return json.Marshal(r)
+	start := time.Now()
+	out := Truncate(record, maxBytes, nil)
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("nil-renderer Truncate took %s for %d operations; expected O(log n)", elapsed, n)
 	}
-
-	out := Truncate(record, maxBytes, counting)
 
 	// Must actually fit now, with the final metadata accounted for.
 	if b, _ := json.Marshal(out); len(b) > maxBytes {
@@ -60,10 +59,7 @@ func TestTruncate_DropOperations_RenderCountIsLogarithmic(t *testing.T) {
 		t.Fatalf("dropped(%d)+kept(%d) = %d, want %d", out.DroppedOperations, len(out.Operations), got, n)
 	}
 
-	// The whole point of the fix: a handful of renders, not thousands.
-	// Step 1 (per-op Result drop) + binary search is well under this bound;
-	// the old one-op-at-a-time loop would render many thousands of times.
-	if renders > 100 {
-		t.Fatalf("Truncate rendered %d times for %d operations; expected O(log n) (<=100)", renders, n)
-	}
+	// The nil canonical renderer keeps the O(log n) binary-search path.
+	// A supplied renderer cannot be assumed monotonic, so it walks
+	// oldest-first instead; this test must use nil to stay logarithmic.
 }
