@@ -452,7 +452,7 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 	attemptInfo := AttemptHookInfo{
 		OperationHookInfo: OperationHookInfo{
 			ExecutionArn:    ec.executionArn,
-			ID:              id,
+			ID:              hashID(id),
 			Name:            name,
 			Type:            string(OperationTypeStep),
 			SubType:         options.subType,

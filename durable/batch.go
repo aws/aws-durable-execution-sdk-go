@@ -155,11 +155,11 @@ func runClaimedMap[I, O any](ec *execContext, id, name string, items []I, fn fun
 			Items:  nil,
 			Reason: CompletionAllCompleted,
 		}
-		return checkpointBatchSuccess(ec, start, result, options)
+		return checkpointBatchSuccess(ec, id, start, result, options)
 	}
 
 	// Execute items with bounded concurrency and completion checking.
-	result, err := executeBatchItems[I, O](ec, start, totalItems, options, OperationSubTypeMapIteration, func(childCtx Context, index int) (O, []string, error) {
+	result, err := executeBatchItems[I, O](ec, id, start, totalItems, options, OperationSubTypeMapIteration, func(childCtx Context, index int) (O, []string, error) {
 		return runBatchItemFunc(childCtx, index, fn, func() (O, error) {
 			return fn(childCtx, items[index], index)
 		})
@@ -273,10 +273,10 @@ func runClaimedParallel[O any](ec *execContext, id, name string, branches []Bran
 			Items:  nil,
 			Reason: CompletionAllCompleted,
 		}
-		return checkpointBatchSuccess(ec, start, result, options)
+		return checkpointBatchSuccess(ec, id, start, result, options)
 	}
 
-	result, err := executeBatchItems[struct{}, O](ec, start, totalItems, options, OperationSubTypeParallelBranch, func(childCtx Context, index int) (O, []string, error) {
+	result, err := executeBatchItems[struct{}, O](ec, id, start, totalItems, options, OperationSubTypeParallelBranch, func(childCtx Context, index int) (O, []string, error) {
 		var userFn any = branches[index].Func
 		if options.itemUserFn != nil {
 			userFn = options.itemUserFn(index)
@@ -1121,21 +1121,23 @@ func runBatchItemFunc[O any](childCtx Context, index int, userFn any, call func(
 }
 
 // executeBatchItems runs the core batch loop: schedule items up to max
-// concurrency, collect results, check completion conditions. start is the
-// batch's own start event, as dispatchContextStart returned it; its ID and
-// Name identify the batch and its SubType is the batch's wire subtype.
+// concurrency, collect results, check completion conditions. id is the
+// batch's positional ID. start is the batch's own start event, as
+// dispatchContextStart returned it; its Name names the batch and its
+// SubType is the batch's wire subtype.
 //
 // The runItem function receives the child context and the item index and
 // must return the item result or error.
 func executeBatchItems[I, O any](
 	ec *execContext,
+	id string,
 	start OperationHookInfo,
 	totalItems int,
 	options batchOptions,
 	childSubType string,
 	runItem batchItemFunc[O],
 ) (BatchResult[O], error) {
-	parentID, parentName := start.ID, start.Name
+	parentID, parentName := id, start.Name
 	// Items collects results in input order. We allocate for all items
 	// but only fill the ones that actually start.
 	results := make([]BatchItem[O], 0, totalItems)
@@ -1151,7 +1153,7 @@ func executeBatchItems[I, O any](
 	if decided, stop, derr := decider.initial(); derr != nil {
 		return BatchResult[O]{}, derr
 	} else if stop {
-		return checkpointBatchSuccess(ec, start, BatchResult[O]{Items: results, Reason: decided}, options)
+		return checkpointBatchSuccess(ec, id, start, BatchResult[O]{Items: results, Reason: decided}, options)
 	}
 
 	// Sequential execution path (max-concurrency = 1 or all items sequential).
@@ -1450,7 +1452,7 @@ func executeBatchItems[I, O any](
 		Reason: reason,
 	}
 
-	return checkpointBatchSuccess(ec, start, batchResult, options)
+	return checkpointBatchSuccess(ec, id, start, batchResult, options)
 }
 
 // runPreClaimedBatchItem runs a batch item whose operation ID was already
@@ -2049,17 +2051,19 @@ func replayBatchChildren[I, O any](
 }
 
 // checkpointBatchSuccess checkpoints the parent batch context as SUCCEEDED,
-// dispatches the batch's end, and returns the final BatchResult. start is
-// the batch's own start event, as dispatchContextStart returned it. The
-// end reports SUCCEEDED, the batch's checkpointed status even when items
-// failed, and carries the checkpointed payload as Result.
+// dispatches the batch's end, and returns the final BatchResult. id is the
+// batch's positional ID. start is the batch's own start event, as
+// dispatchContextStart returned it. The end reports SUCCEEDED, the batch's
+// checkpointed status even when items failed, and carries the checkpointed
+// payload as Result.
 func checkpointBatchSuccess[O any](
 	ec *execContext,
+	id string,
 	start OperationHookInfo,
 	result BatchResult[O],
 	options batchOptions,
 ) (BatchResult[O], error) {
-	id, name, subType := start.ID, start.Name, start.SubType
+	name, subType := start.Name, start.SubType
 	// Every item has reported. From here to the checkpoint of the parent's
 	// completion the batch is an executing span: its outcome belongs to
 	// this invocation, so a handler blocked on a pending operation waits
@@ -2634,7 +2638,7 @@ func dispatchBatchItemStart(ec *execContext, parentID, childID, itemName, childS
 func dispatchBatchItemEnd(ec *execContext, parentID string, start OperationHookInfo, result string, err error) {
 	info := start
 	info.IsReplay = false
-	info.EndTimestamp = checkpointedEndTime(ec.state.get(start.ID))
+	info.EndTimestamp = checkpointedEndTime(ec.state.getByWireID(start.ID))
 	hooks := batchItemHooks(ec, parentID)
 	if err != nil {
 		info.Error = err

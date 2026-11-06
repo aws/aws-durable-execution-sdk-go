@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Changed: operation hooks report the wire ID
+
+The plugin instrumentation API is experimental, and this is a change to it.
+`durable.OperationHookInfo.ID` now carries the operation's wire ID: the ID
+the checkpoint records, the key of `InvocationHookInfo.Operations` and
+`UpdatedOperations`, and the value that nested operations report as
+`ParentID`. The operation lifecycle hooks (`OnOperationStart`,
+`OnOperationEnd`, the attempt hooks, and the wrap hooks) previously reported
+the positional ID (`"1"`, `"1-2"`), while the invocation hooks reported the
+wire ID for the same operation. A plugin could not join the two.
+
+Every hook now reports one ID per operation. A plugin that keyed its own
+state on the lifecycle hook ID sees different values after upgrading; the
+positional ID is no longer available through the plugin API. The telemetry
+module relies on this change to recognize checkpointed operations across
+invocations.
+
 ### Added: registration metadata for experimental plugin factories
 
 `durable.RegisteredPluginFactory` extends `PluginFactory` with
