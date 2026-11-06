@@ -11,7 +11,7 @@
 //   - [durable.ErrExecutionCancelled]: the invoked execution was
 //     cancelled.
 //
-// The handler matches them with errors.Is, which holds on the first
+// outcomeOf matches them with errors.Is, which holds on the first
 // invocation and on replay because the error is rebuilt from the recorded
 // status. In those three cases the invoked function produced no answer,
 // so the handler returns an outcome naming the status instead of failing.
@@ -71,20 +71,30 @@ func handler(ctx durable.Context, event Input) (Output, error) {
 
 	result, err := durable.Invoke[StageResult](ctx, "quote", targetFunction,
 		StageRequest{OrderID: orderID, Stage: "quote"})
-	switch {
-	case err == nil:
+	if err == nil {
 		return Output{Outcome: "completed", Result: &result}, nil
+	}
+	if outcome, ok := outcomeOf(err); ok {
+		return Output{Outcome: outcome}, nil
+	}
+	// The invoked function failed with its own error, or the invocation
+	// is suspending while the invoke runs. Return it unchanged.
+	return Output{}, err
+}
+
+// outcomeOf names the way an invoke ended without a result when err
+// unwraps to one of the sentinels for a status the service assigns from
+// outside the invoked function. It reports false for any other error.
+func outcomeOf(err error) (string, bool) {
+	switch {
 	case errors.Is(err, durable.ErrInvokeTimedOut):
-		return Output{Outcome: "timed-out"}, nil
+		return "timed-out", true
 	case errors.Is(err, durable.ErrExecutionStopped):
-		return Output{Outcome: "stopped"}, nil
+		return "stopped", true
 	case errors.Is(err, durable.ErrExecutionCancelled):
-		return Output{Outcome: "cancelled"}, nil
+		return "cancelled", true
 	default:
-		// The invoked function failed with its own error, or the
-		// invocation is suspending while the invoke runs. Return it
-		// unchanged.
-		return Output{}, err
+		return "", false
 	}
 }
 
