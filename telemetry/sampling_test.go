@@ -92,11 +92,11 @@ func TestPlugin_SampledOutExecution_EmitsNoRecords(t *testing.T) {
 	ip := New(Config{SamplingRate: rate, Exporters: []Exporter{exp}})
 	ctx := context.Background()
 
-	ip.onInvocationStart(ctx, durable.InvocationHookInfo{
+	plugin := startTestPlugin(t, ctx, ip, durable.InvocationHookInfo{
 		ExecutionArn:            arn,
 		ExecutionStartTimestamp: time.Now(),
 	})
-	ip.onInvocationEnd(ctx, durable.InvocationEndHookInfo{
+	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
 		ExecutionArn:    arn,
 		Status:          durable.PluginInvocationSucceeded,
 		ExecutionResult: "ok",
@@ -114,11 +114,11 @@ func TestPlugin_DefaultSamplingRate_EmitsEveryExecution(t *testing.T) {
 	ctx := context.Background()
 	arn := "arn:aws:lambda:us-east-1:123456789012:function:f:1"
 
-	ip.onInvocationStart(ctx, durable.InvocationHookInfo{
+	plugin := startTestPlugin(t, ctx, ip, durable.InvocationHookInfo{
 		ExecutionArn:            arn,
 		ExecutionStartTimestamp: time.Now(),
 	})
-	ip.onInvocationEnd(ctx, durable.InvocationEndHookInfo{
+	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
 		ExecutionArn:    arn,
 		Status:          durable.PluginInvocationSucceeded,
 		ExecutionResult: "ok",
@@ -126,5 +126,68 @@ func TestPlugin_DefaultSamplingRate_EmitsEveryExecution(t *testing.T) {
 
 	if records := exp.snapshot(); len(records) != 1 {
 		t.Fatalf("expected 1 record with default SamplingRate, got %d", len(records))
+	}
+}
+
+func TestPlugin_ConcurrentInvocations_IsolateSampling(t *testing.T) {
+	const rate = 0.5
+	arns := make(map[bool]string)
+	for i := 0; i < 1000 && len(arns) < 2; i++ {
+		arn := "arn:aws:lambda:us-east-1:123456789012:function:fn:1/durable-execution/name/id-" + strconv.Itoa(i)
+		arns[sampledIn(arn, rate)] = arn
+	}
+	if len(arns) != 2 {
+		t.Fatal("could not find sampled-in and sampled-out fixtures")
+	}
+	for _, mode := range []EmitMode{EmitOnComplete, EmitAlways, EmitOnChange} {
+		for _, firstSampled := range []bool{true, false} {
+			t.Run(string(mode)+"/first-sampled="+strconv.FormatBool(firstSampled), func(t *testing.T) {
+				ctx := t.Context()
+				exp := &capturingExporter{}
+				factory := New(Config{EmitMode: mode, SamplingRate: rate, Exporters: []Exporter{exp}})
+				first := startTestPlugin(t, ctx, factory, durable.InvocationHookInfo{ExecutionArn: arns[firstSampled], ExecutionInput: "first"})
+				firstReady := make(chan struct{})
+				secondReady := make(chan struct{})
+				release := make(chan struct{})
+				t.Cleanup(func() { close(release) })
+				done := make(chan struct{})
+				go func() {
+					defer close(done)
+					first.OnOperationStart(ctx, durable.OperationHookInfo{ID: "shared-id", Type: "STEP", Status: durable.PluginOperationStarted})
+					close(firstReady)
+					select {
+					case <-secondReady:
+					case <-release:
+						return
+					}
+					first.OnOperationEnd(ctx, durable.OperationHookInfo{ID: "shared-id", Type: "STEP", Status: durable.PluginOperationSucceeded, Result: "first"})
+					first.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{Status: durable.PluginInvocationSucceeded, ExecutionResult: "first"})
+				}()
+				awaitSignal(t, firstReady)
+				second := startTestPlugin(t, ctx, factory, durable.InvocationHookInfo{ExecutionArn: arns[!firstSampled], ExecutionInput: "second"})
+				second.OnOperationStart(ctx, durable.OperationHookInfo{ID: "shared-id", Type: "STEP", Status: durable.PluginOperationStarted})
+				close(secondReady)
+				second.OnOperationEnd(ctx, durable.OperationHookInfo{ID: "shared-id", Type: "STEP", Status: durable.PluginOperationSucceeded, Result: "second"})
+				second.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{Status: durable.PluginInvocationSucceeded, ExecutionResult: "second"})
+				awaitSignal(t, done)
+				records := exp.snapshot()
+				if len(records) == 0 {
+					t.Fatal("sampled-in execution emitted no records")
+				}
+				wantValue := "second"
+				if firstSampled {
+					wantValue = "first"
+				}
+				for _, rec := range records {
+					if rec.ExecutionArn != arns[true] || rec.Input == nil || rec.Input.Value != wantValue {
+						t.Errorf("record contains sampled-out execution data: %+v", rec)
+					}
+				}
+				last := records[len(records)-1]
+				if last.Status != StatusSucceeded || last.Output == nil || last.Output.Value != wantValue || len(last.Operations) != 1 || last.Operations[0].Result == nil || last.Operations[0].Result.Value != wantValue {
+					t.Errorf("sampled-in final record = %+v", last)
+				}
+			})
+		}
 	}
 }

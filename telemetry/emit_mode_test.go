@@ -10,20 +10,20 @@ import (
 )
 
 func TestPlugin_EmitOnChange_EmitsRunningSnapshotsPlusFinal(t *testing.T) {
-	exp := &capturingExporter{}
+	exp := &capturingExporter{exported: make(chan struct{}, 16)}
 	ip := New(Config{EmitMode: EmitOnChange, Exporters: []Exporter{exp}})
 
 	ctx := context.Background()
 	now := time.Now()
 	arn := "arn:aws:lambda:us-east-1:123456789012:function:fn:1"
 
-	ip.onInvocationStart(ctx, durable.InvocationHookInfo{
+	plugin := startTestPlugin(t, ctx, ip, durable.InvocationHookInfo{
 		ExecutionArn:            arn,
 		ExecutionStartTimestamp: now,
 	})
 
 	// Step 1 start+end.
-	ip.onOperationStart(ctx, durable.OperationHookInfo{
+	plugin.OnOperationStart(ctx, durable.OperationHookInfo{
 		ExecutionArn:   arn,
 		ID:             "op-1",
 		Name:           "step-1",
@@ -31,7 +31,7 @@ func TestPlugin_EmitOnChange_EmitsRunningSnapshotsPlusFinal(t *testing.T) {
 		Status:         durable.PluginOperationStarted,
 		StartTimestamp: now.Add(5 * time.Millisecond),
 	})
-	ip.onOperationEnd(ctx, durable.OperationHookInfo{
+	plugin.OnOperationEnd(ctx, durable.OperationHookInfo{
 		ExecutionArn:   arn,
 		ID:             "op-1",
 		Name:           "step-1",
@@ -42,7 +42,7 @@ func TestPlugin_EmitOnChange_EmitsRunningSnapshotsPlusFinal(t *testing.T) {
 	})
 
 	// Step 2 start+end.
-	ip.onOperationStart(ctx, durable.OperationHookInfo{
+	plugin.OnOperationStart(ctx, durable.OperationHookInfo{
 		ExecutionArn:   arn,
 		ID:             "op-2",
 		Name:           "step-2",
@@ -50,7 +50,7 @@ func TestPlugin_EmitOnChange_EmitsRunningSnapshotsPlusFinal(t *testing.T) {
 		Status:         durable.PluginOperationStarted,
 		StartTimestamp: now.Add(20 * time.Millisecond),
 	})
-	ip.onOperationEnd(ctx, durable.OperationHookInfo{
+	plugin.OnOperationEnd(ctx, durable.OperationHookInfo{
 		ExecutionArn:   arn,
 		ID:             "op-2",
 		Name:           "step-2",
@@ -60,10 +60,10 @@ func TestPlugin_EmitOnChange_EmitsRunningSnapshotsPlusFinal(t *testing.T) {
 		EndTimestamp:   now.Add(30 * time.Millisecond),
 	})
 
-	// Wait for on-change dispatches to complete before final emit.
-	ip.onChangeWG.Wait()
+	// Observe a running emission before ending the invocation.
+	awaitSignal(t, exp.exported)
 
-	ip.onInvocationEnd(ctx, durable.InvocationEndHookInfo{
+	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
 		ExecutionArn:    arn,
 		Status:          durable.PluginInvocationSucceeded,
 		ExecutionResult: "done",
@@ -98,12 +98,12 @@ func TestPlugin_EmitOnComplete_NeverEmitsRunningSnapshots(t *testing.T) {
 	arn := "arn:aws:lambda:us-east-1:123456789012:function:fn:1"
 	now := time.Now()
 
-	ip.onInvocationStart(ctx, durable.InvocationHookInfo{
+	plugin := startTestPlugin(t, ctx, ip, durable.InvocationHookInfo{
 		ExecutionArn:            arn,
 		ExecutionStartTimestamp: now,
 	})
 
-	ip.onOperationStart(ctx, durable.OperationHookInfo{
+	plugin.OnOperationStart(ctx, durable.OperationHookInfo{
 		ExecutionArn:   arn,
 		ID:             "op-1",
 		Name:           "step-1",
@@ -111,7 +111,7 @@ func TestPlugin_EmitOnComplete_NeverEmitsRunningSnapshots(t *testing.T) {
 		Status:         durable.PluginOperationStarted,
 		StartTimestamp: now,
 	})
-	ip.onOperationEnd(ctx, durable.OperationHookInfo{
+	plugin.OnOperationEnd(ctx, durable.OperationHookInfo{
 		ExecutionArn:   arn,
 		ID:             "op-1",
 		Name:           "step-1",
@@ -121,7 +121,7 @@ func TestPlugin_EmitOnComplete_NeverEmitsRunningSnapshots(t *testing.T) {
 		EndTimestamp:   now.Add(10 * time.Millisecond),
 	})
 
-	ip.onInvocationEnd(ctx, durable.InvocationEndHookInfo{
+	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
 		ExecutionArn:    arn,
 		Status:          durable.PluginInvocationSucceeded,
 		ExecutionResult: "ok",
@@ -148,12 +148,12 @@ func TestPlugin_EmitOnChange_SampledOut_EmitsNothing(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	ip.onInvocationStart(ctx, durable.InvocationHookInfo{
+	plugin := startTestPlugin(t, ctx, ip, durable.InvocationHookInfo{
 		ExecutionArn:            arn,
 		ExecutionStartTimestamp: now,
 	})
 
-	ip.onOperationStart(ctx, durable.OperationHookInfo{
+	plugin.OnOperationStart(ctx, durable.OperationHookInfo{
 		ExecutionArn:   arn,
 		ID:             "op-1",
 		Name:           "step-1",
@@ -161,7 +161,7 @@ func TestPlugin_EmitOnChange_SampledOut_EmitsNothing(t *testing.T) {
 		Status:         durable.PluginOperationStarted,
 		StartTimestamp: now,
 	})
-	ip.onOperationEnd(ctx, durable.OperationHookInfo{
+	plugin.OnOperationEnd(ctx, durable.OperationHookInfo{
 		ExecutionArn:   arn,
 		ID:             "op-1",
 		Name:           "step-1",
@@ -171,7 +171,7 @@ func TestPlugin_EmitOnChange_SampledOut_EmitsNothing(t *testing.T) {
 		EndTimestamp:   now.Add(10 * time.Millisecond),
 	})
 
-	ip.onInvocationEnd(ctx, durable.InvocationEndHookInfo{
+	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
 		ExecutionArn:    arn,
 		Status:          durable.PluginInvocationSucceeded,
 		ExecutionResult: "ok",
@@ -189,11 +189,11 @@ func TestPlugin_EmitAlways_EmitsForSucceededExecution(t *testing.T) {
 	ctx := context.Background()
 	arn := "arn:aws:lambda:us-east-1:123456789012:function:fn:1"
 
-	ip.onInvocationStart(ctx, durable.InvocationHookInfo{
+	plugin := startTestPlugin(t, ctx, ip, durable.InvocationHookInfo{
 		ExecutionArn:            arn,
 		ExecutionStartTimestamp: time.Now(),
 	})
-	ip.onInvocationEnd(ctx, durable.InvocationEndHookInfo{
+	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
 		ExecutionArn:    arn,
 		Status:          durable.PluginInvocationSucceeded,
 		ExecutionResult: "ok",
@@ -214,11 +214,11 @@ func TestPlugin_EmitAlways_EmitsForPendingInvocation(t *testing.T) {
 	ctx := context.Background()
 	arn := "arn:aws:lambda:us-east-1:123456789012:function:fn:1"
 
-	ip.onInvocationStart(ctx, durable.InvocationHookInfo{
+	plugin := startTestPlugin(t, ctx, ip, durable.InvocationHookInfo{
 		ExecutionArn:            arn,
 		ExecutionStartTimestamp: time.Now(),
 	})
-	ip.onInvocationEnd(ctx, durable.InvocationEndHookInfo{
+	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
 		ExecutionArn: arn,
 		Status:       durable.PluginInvocationPending,
 	})
@@ -235,74 +235,38 @@ func TestPlugin_EmitAlways_EmitsForPendingInvocation(t *testing.T) {
 	}
 }
 
-// TestPlugin_RetryingInvocation_LeavesRecordRunning verifies that a
-// retrying outcome is handled like a pending one in every emit mode: the
-// execution continues in a later invocation, so no record is marked
-// terminal, no end timestamp is set, and the invocation's error is not
-// recorded as the execution's error. EmitOnComplete emits nothing;
-// EmitAlways and EmitOnChange emit one running snapshot.
-func TestPlugin_RetryingInvocation_LeavesRecordRunning(t *testing.T) {
-	cases := []struct {
-		name        string
-		mode        EmitMode
-		wantRecords int
-	}{
-		{name: "default EmitOnComplete", mode: EmitOnComplete, wantRecords: 0},
-		{name: "EmitAlways", mode: EmitAlways, wantRecords: 1},
-		{name: "EmitOnChange", mode: EmitOnChange, wantRecords: 1},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			exp := &capturingExporter{}
-			ip := New(Config{EmitMode: tc.mode, Exporters: []Exporter{exp}})
-
-			ctx := context.Background()
-			arn := "arn:aws:lambda:us-east-1:123:function:fn:1"
-
-			ip.onInvocationStart(ctx, durable.InvocationHookInfo{
-				ExecutionArn:            arn,
-				ExecutionStartTimestamp: time.Now(),
+// Pending and retrying invocations continue the execution. Their emissions
+// must remain RUNNING and must not expose a transient error as a terminal one.
+func TestPlugin_ContinuingInvocation_LeavesRecordRunning(t *testing.T) {
+	for _, status := range []durable.PluginInvocationStatus{durable.PluginInvocationPending, durable.PluginInvocationRetrying} {
+		for _, mode := range []EmitMode{EmitOnComplete, EmitAlways, EmitOnChange} {
+			t.Run(string(status)+"/"+string(mode), func(t *testing.T) {
+				exp := &capturingExporter{}
+				ctx := t.Context()
+				factory := New(Config{EmitMode: mode, Exporters: []Exporter{exp}})
+				plugin := startTestPlugin(t, ctx, factory, durable.InvocationHookInfo{
+					ExecutionArn:            "arn:aws:lambda:us-east-1:123456789012:function:fn:1/durable-execution/name/id",
+					ExecutionStartTimestamp: time.Now(),
+				})
+				plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
+					Status:         status,
+					ExecutionError: errors.New("transient"),
+				})
+				wantRecords := 1
+				if mode == EmitOnComplete {
+					wantRecords = 0
+				}
+				records := exp.snapshot()
+				if len(records) != wantRecords {
+					t.Fatalf("got %d records, want %d", len(records), wantRecords)
+				}
+				for _, rec := range records {
+					if rec.Status != StatusRunning || rec.EndTimestamp != nil || rec.DurationMs != nil || rec.Error != nil || rec.Output != nil {
+						t.Errorf("continuing invocation record = %+v", rec)
+					}
+				}
 			})
-			ip.onInvocationEnd(ctx, durable.InvocationEndHookInfo{
-				ExecutionArn:   arn,
-				Status:         durable.PluginInvocationRetrying,
-				ExecutionError: errors.New("transient"),
-			})
-
-			records := exp.snapshot()
-			if len(records) != tc.wantRecords {
-				t.Fatalf("got %d records for a retrying invocation, want %d", len(records), tc.wantRecords)
-			}
-			for _, rec := range records {
-				if rec.Status != StatusRunning {
-					t.Errorf("record status = %q, want %q", rec.Status, StatusRunning)
-				}
-				if rec.EndTimestamp != nil {
-					t.Errorf("record end timestamp = %v, want nil for a still-running execution", rec.EndTimestamp)
-				}
-				if rec.DurationMs != nil {
-					t.Errorf("record duration = %v, want nil for a still-running execution", *rec.DurationMs)
-				}
-				if rec.Error != nil {
-					t.Errorf("record error = %+v, want nil: the execution has not failed", rec.Error)
-				}
-			}
-
-			// The cumulative record must also stay running, so the next
-			// invocation continues it rather than starting from a
-			// finalized one.
-			ip.mu.Lock()
-			defer ip.mu.Unlock()
-			if ip.record == nil {
-				t.Fatal("cumulative record is nil after a retrying invocation")
-			}
-			if ip.record.Status != StatusRunning {
-				t.Errorf("cumulative record status = %q, want %q", ip.record.Status, StatusRunning)
-			}
-			if ip.record.EndTimestamp != nil {
-				t.Errorf("cumulative record end timestamp = %v, want nil", ip.record.EndTimestamp)
-			}
-		})
+		}
 	}
 }
 
@@ -324,7 +288,7 @@ func TestPlugin_EmitOnChange_FullTree_ContentFilter_NoBackingArrayCorruption(t *
 	// Regression test: under OperationDetailFullTree + OperationFilter,
 	// ApplyToRecord's filter-in-place must not corrupt p.record's backing
 	// array (which would cause subsequent on-change snapshots to lose data).
-	exp := &capturingExporter{}
+	exp := &capturingExporter{exported: make(chan struct{}, 16)}
 	ip := New(Config{
 		EmitMode:        EmitOnChange,
 		OperationDetail: OperationDetailFullTree,
@@ -346,13 +310,13 @@ func TestPlugin_EmitOnChange_FullTree_ContentFilter_NoBackingArrayCorruption(t *
 	now := time.Now()
 	arn := "arn:aws:lambda:us-east-1:123456789012:function:fn:1"
 
-	ip.onInvocationStart(ctx, durable.InvocationHookInfo{
+	plugin := startTestPlugin(t, ctx, ip, durable.InvocationHookInfo{
 		ExecutionArn:            arn,
 		ExecutionStartTimestamp: now,
 	})
 
 	// Add a "keep" op.
-	ip.onOperationEnd(ctx, durable.OperationHookInfo{
+	plugin.OnOperationEnd(ctx, durable.OperationHookInfo{
 		ExecutionArn:   arn,
 		ID:             "op-keep",
 		Name:           "keep-me",
@@ -362,11 +326,11 @@ func TestPlugin_EmitOnChange_FullTree_ContentFilter_NoBackingArrayCorruption(t *
 		EndTimestamp:   now.Add(10 * time.Millisecond),
 	})
 
-	// Wait for first on-change dispatch.
-	ip.onChangeWG.Wait()
+	// Observe the first on-change emission.
+	awaitSignal(t, exp.exported)
 
 	// Add the filtered-out op.
-	ip.onOperationEnd(ctx, durable.OperationHookInfo{
+	plugin.OnOperationEnd(ctx, durable.OperationHookInfo{
 		ExecutionArn:   arn,
 		ID:             "op-filter",
 		Name:           "filtered-out",
@@ -376,11 +340,11 @@ func TestPlugin_EmitOnChange_FullTree_ContentFilter_NoBackingArrayCorruption(t *
 		EndTimestamp:   now.Add(20 * time.Millisecond),
 	})
 
-	// Wait for second on-change dispatch.
-	ip.onChangeWG.Wait()
+	// Observe the next on-change emission.
+	awaitSignal(t, exp.exported)
 
 	// Add another "keep" op.
-	ip.onOperationEnd(ctx, durable.OperationHookInfo{
+	plugin.OnOperationEnd(ctx, durable.OperationHookInfo{
 		ExecutionArn:   arn,
 		ID:             "op-keep-2",
 		Name:           "keep-me-2",
@@ -390,10 +354,10 @@ func TestPlugin_EmitOnChange_FullTree_ContentFilter_NoBackingArrayCorruption(t *
 		EndTimestamp:   now.Add(30 * time.Millisecond),
 	})
 
-	// Wait for third on-change dispatch.
-	ip.onChangeWG.Wait()
+	// Observe the next on-change emission.
+	awaitSignal(t, exp.exported)
 
-	ip.onInvocationEnd(ctx, durable.InvocationEndHookInfo{
+	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
 		ExecutionArn:    arn,
 		Status:          durable.PluginInvocationSucceeded,
 		ExecutionResult: "done",

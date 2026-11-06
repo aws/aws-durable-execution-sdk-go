@@ -69,7 +69,7 @@ func TestOperationLifecycleMapLive(t *testing.T) {
 			batch := eventsForName(evs, "batch")
 			assertSequence(t, batch, "start:batch:STARTED:false", "end:batch:SUCCEEDED:false")
 			for _, ev := range batch {
-				assertIdentity(t, ev, "1", "batch", string(OperationTypeContext), OperationSubTypeMap, "")
+				assertIdentity(t, ev, hashID("1"), "batch", string(OperationTypeContext), OperationSubTypeMap, "")
 				assertLiveTimestamps(t, ev)
 			}
 			if batch[1].info.Result == "" {
@@ -93,7 +93,7 @@ func TestOperationLifecycleMapLive(t *testing.T) {
 				id := fmt.Sprint(i + 2)
 				assertSequence(t, items[name], "start:"+name+":STARTED:false", "end:"+name+":SUCCEEDED:false")
 				for _, ev := range items[name] {
-					assertIdentity(t, ev, id, name, string(OperationTypeContext), OperationSubTypeMapIteration, hashID("1"))
+					assertIdentity(t, ev, hashID(id), name, string(OperationTypeContext), OperationSubTypeMapIteration, hashID("1"))
 					assertLiveTimestamps(t, ev)
 				}
 				if want := fmt.Sprint((i + 1) * 2); items[name][1].info.Result != want {
@@ -103,7 +103,7 @@ func TestOperationLifecycleMapLive(t *testing.T) {
 				// runs between the item's start and end.
 				step := eventsForName(evs, fmt.Sprintf("step-%d", i))
 				assertSequence(t, step, fmt.Sprintf("start:step-%d:STARTED:false", i), fmt.Sprintf("end:step-%d:SUCCEEDED:false", i))
-				assertIdentity(t, step[0], id+"-1", fmt.Sprintf("step-%d", i), string(OperationTypeStep), OperationSubTypeStep, hashID(id))
+				assertIdentity(t, step[0], hashID(id+"-1"), fmt.Sprintf("step-%d", i), string(OperationTypeStep), OperationSubTypeStep, hashID(id))
 				assertEventsOrdered(t, evs, items[name][0], step[0], step[1], items[name][1])
 			}
 		})
@@ -162,8 +162,8 @@ func TestOperationLifecycleParallelBranchNames(t *testing.T) {
 		"end:beta:FAILED:false",
 		"end:par:SUCCEEDED:false",
 	)
-	assertIdentity(t, evs[1], "2", "alpha", string(OperationTypeContext), OperationSubTypeParallelBranch, hashID("1"))
-	assertIdentity(t, evs[3], "3", "beta", string(OperationTypeContext), OperationSubTypeParallelBranch, hashID("1"))
+	assertIdentity(t, evs[1], hashID("2"), "alpha", string(OperationTypeContext), OperationSubTypeParallelBranch, hashID("1"))
+	assertIdentity(t, evs[3], hashID("3"), "beta", string(OperationTypeContext), OperationSubTypeParallelBranch, hashID("1"))
 	if evs[2].info.Result != `"a"` {
 		t.Errorf("alpha end Result = %q, want %q", evs[2].info.Result, `"a"`)
 	}
@@ -273,7 +273,7 @@ func TestOperationLifecycleBatchFlatNesting(t *testing.T) {
 		"end:batch:SUCCEEDED:false",
 	)
 	for i := range 3 {
-		assertIdentity(t, evs[1+2*i], fmt.Sprintf("1-%d-1", i+1), fmt.Sprintf("step-%d", i), string(OperationTypeStep), OperationSubTypeStep, hashID("1"))
+		assertIdentity(t, evs[1+2*i], hashID(fmt.Sprintf("1-%d-1", i+1)), fmt.Sprintf("step-%d", i), string(OperationTypeStep), OperationSubTypeStep, hashID("1"))
 	}
 	for _, ev := range evs {
 		if ev.info.SubType == OperationSubTypeMapIteration {
@@ -331,12 +331,12 @@ func TestOperationLifecycleBatchReplayed(t *testing.T) {
 		"end:batch:SUCCEEDED:false",
 	)
 	assertReplayedTimestamps(t, second[1], true)
-	assertIdentity(t, second[1], "2", "item-0", string(OperationTypeContext), OperationSubTypeMapIteration, hashID("1"))
+	assertIdentity(t, second[1], hashID("2"), "item-0", string(OperationTypeContext), OperationSubTypeMapIteration, hashID("1"))
 	if second[1].info.Result != "1" {
 		t.Errorf("replayed item-0 end Result = %q, want %q", second[1].info.Result, "1")
 	}
 	assertReplayedTimestamps(t, second[2], false)
-	assertIdentity(t, second[2], "3", "item-1", string(OperationTypeContext), OperationSubTypeMapIteration, hashID("1"))
+	assertIdentity(t, second[2], hashID("3"), "item-1", string(OperationTypeContext), OperationSubTypeMapIteration, hashID("1"))
 	assertReplayedTimestamps(t, second[0], false)
 }
 
@@ -359,7 +359,7 @@ func TestOperationLifecycleBatchReplayedTerminal(t *testing.T) {
 	evs := rec.take()
 
 	assertSequence(t, evs, "end:batch:SUCCEEDED:true")
-	assertIdentity(t, evs[0], "1", "batch", string(OperationTypeContext), OperationSubTypeMap, "")
+	assertIdentity(t, evs[0], hashID("1"), "batch", string(OperationTypeContext), OperationSubTypeMap, "")
 	assertReplayedTimestamps(t, evs[0], true)
 	if evs[0].info.Result != payload {
 		t.Errorf("replayed batch end Result = %q, want the checkpointed payload", evs[0].info.Result)
@@ -405,7 +405,7 @@ func TestOperationLifecycleBatchReplayedAbandonedFromRecord(t *testing.T) {
 		"end:batch:SUCCEEDED:true",
 	)
 	for i, id := range []string{"2", "3", "4"} {
-		assertIdentity(t, evs[i], id, fmt.Sprintf("item-%d", i), string(OperationTypeContext), OperationSubTypeMapIteration, hashID("1"))
+		assertIdentity(t, evs[i], hashID(id), fmt.Sprintf("item-%d", i), string(OperationTypeContext), OperationSubTypeMapIteration, hashID("1"))
 	}
 	assertReplayedTimestamps(t, evs[1], false)
 }
@@ -445,23 +445,28 @@ func TestOperationLifecycleBatchConcurrentDispatchRace(t *testing.T) {
 		t.Fatalf("len(events) = %d, want %d", len(evs), want)
 	}
 	// Each item has one STARTED start and one SUCCEEDED end, each item ID
-	// once per hook, under its default name.
+	// once per hook, under its default name. Item i has positional ID i+2:
+	// the batch is operation 1. Hooks report the wire ID, so the map below
+	// translates it back to the item index.
+	itemIndex := make(map[string]int, items)
+	for i := range items {
+		itemIndex[hashID(fmt.Sprint(i+2))] = i
+	}
 	counts := map[string]int{}
 	for name, group := range batchItemEvents(evs, "1") {
 		for _, ev := range group {
-			// Item i has ID i+2: the batch is operation 1.
-			var id int
-			if _, err := fmt.Sscan(ev.info.ID, &id); err != nil {
-				t.Fatalf("item ID %q: %v", ev.info.ID, err)
+			i, ok := itemIndex[ev.info.ID]
+			if !ok {
+				t.Fatalf("item ID %q is not the wire ID of any item", ev.info.ID)
 			}
-			if want := fmt.Sprintf("map-item-%d", id-2); name != want {
+			if want := fmt.Sprintf("map-item-%d", i); name != want {
 				t.Errorf("item %s event name = %q, want %q", ev.info.ID, name, want)
 			}
 			counts[ev.hook+":"+ev.info.ID+":"+string(ev.info.Status)]++
 		}
 	}
 	for i := range items {
-		id := fmt.Sprint(i + 2)
+		id := hashID(fmt.Sprint(i + 2))
 		if counts["start:"+id+":STARTED"] != 1 || counts["end:"+id+":SUCCEEDED"] != 1 {
 			t.Errorf("item %s events = %v, want one start and one end", id, counts)
 		}

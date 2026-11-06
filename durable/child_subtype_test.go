@@ -91,7 +91,7 @@ func TestChildSubTypeRecordedInCheckpointAndPlugin(t *testing.T) {
 				live := eventsForName(rec.take(), "child")
 				assertSequence(t, live, "start:child:STARTED:false", "end:child:SUCCEEDED:false")
 				for _, ev := range live {
-					assertIdentity(t, ev, "1", "child", string(OperationTypeContext), tc.subType, "")
+					assertIdentity(t, ev, hashID("1"), "child", string(OperationTypeContext), tc.subType, "")
 				}
 
 				// Replay from the checkpoint the first run wrote: the
@@ -107,7 +107,7 @@ func TestChildSubTypeRecordedInCheckpointAndPlugin(t *testing.T) {
 				}
 				replayed := rec.take()
 				assertSequence(t, replayed, "end:child:SUCCEEDED:true")
-				assertIdentity(t, replayed[0], "1", "child", string(OperationTypeContext), tc.subType, "")
+				assertIdentity(t, replayed[0], hashID("1"), "child", string(OperationTypeContext), tc.subType, "")
 			})
 		}
 	}
@@ -149,7 +149,7 @@ func TestChildSubTypeRecordedOnFailure(t *testing.T) {
 	evs := eventsForName(rec.take(), "child")
 	assertSequence(t, evs, "start:child:STARTED:false", "end:child:FAILED:false")
 	for _, ev := range evs {
-		assertIdentity(t, ev, "1", "child", string(OperationTypeContext), "OrderSaga", "")
+		assertIdentity(t, ev, hashID("1"), "child", string(OperationTypeContext), "OrderSaga", "")
 	}
 }
 
