@@ -1,6 +1,22 @@
 package telemetry
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
+
+// checkDuration asserts a duration pointer is non-nil and carries want.
+func checkDuration(t *testing.T, field string, got *int64, want int64) {
+	t.Helper()
+	if got == nil {
+		t.Errorf("%s = nil, want %d", field, want)
+		return
+	}
+	if *got != want {
+		t.Errorf("%s = %d, want %d", field, *got, want)
+	}
+}
 
 func TestGroupOperationsByName_Empty(t *testing.T) {
 	result := GroupOperationsByName(nil)
@@ -57,15 +73,9 @@ func TestGroupOperationsByName_SingleOccurrence(t *testing.T) {
 	if agg.Status != "SUCCEEDED" {
 		t.Errorf("Status = %q, want SUCCEEDED", agg.Status)
 	}
-	if agg.MinDurationMs != 500 {
-		t.Errorf("MinDurationMs = %d, want 500", agg.MinDurationMs)
-	}
-	if agg.MaxDurationMs != 500 {
-		t.Errorf("MaxDurationMs = %d, want 500", agg.MaxDurationMs)
-	}
-	if agg.TotalDurationMs != 500 {
-		t.Errorf("TotalDurationMs = %d, want 500", agg.TotalDurationMs)
-	}
+	checkDuration(t, "MinDurationMs", agg.MinDurationMs, 500)
+	checkDuration(t, "MaxDurationMs", agg.MaxDurationMs, 500)
+	checkDuration(t, "TotalDurationMs", agg.TotalDurationMs, 500)
 	if agg.MaxAttempt != 1 {
 		t.Errorf("MaxAttempt = %d, want 1", agg.MaxAttempt)
 	}
@@ -102,15 +112,9 @@ func TestGroupOperationsByName_MultipleOccurrences(t *testing.T) {
 	if agg.MaxAttempt != 3 {
 		t.Errorf("MaxAttempt = %d, want 3", agg.MaxAttempt)
 	}
-	if agg.MinDurationMs != 100 {
-		t.Errorf("MinDurationMs = %d, want 100", agg.MinDurationMs)
-	}
-	if agg.MaxDurationMs != 300 {
-		t.Errorf("MaxDurationMs = %d, want 300", agg.MaxDurationMs)
-	}
-	if agg.TotalDurationMs != 600 {
-		t.Errorf("TotalDurationMs = %d, want 600", agg.TotalDurationMs)
-	}
+	checkDuration(t, "MinDurationMs", agg.MinDurationMs, 100)
+	checkDuration(t, "MaxDurationMs", agg.MaxDurationMs, 300)
+	checkDuration(t, "TotalDurationMs", agg.TotalDurationMs, 600)
 	// Status should be the LAST occurrence's status.
 	if agg.Status != "SUCCEEDED" {
 		t.Errorf("Status = %q, want SUCCEEDED (last occurrence)", agg.Status)
@@ -147,14 +151,38 @@ func TestGroupOperationsByName_FirstOccurrenceNilDuration(t *testing.T) {
 	if agg.Count != 2 {
 		t.Errorf("Count = %d, want 2", agg.Count)
 	}
-	if agg.MinDurationMs != 300 {
-		t.Errorf("MinDurationMs = %d, want 300", agg.MinDurationMs)
+	checkDuration(t, "MinDurationMs", agg.MinDurationMs, 300)
+	checkDuration(t, "MaxDurationMs", agg.MaxDurationMs, 300)
+	checkDuration(t, "TotalDurationMs", agg.TotalDurationMs, 300)
+}
+
+// TestGroupOperationsByName_ZeroDurationSerializes pins the wire distinction
+// between "no duration was recorded" (duration fields omitted from the JSON)
+// and "the recorded duration was 0 ms" (fields serialize as 0), matching the
+// JavaScript implementation.
+func TestGroupOperationsByName_ZeroDurationSerializes(t *testing.T) {
+	zero := int64(0)
+	result := GroupOperationsByName([]OperationRecord{
+		{ID: "1", Name: "instant", Type: "STEP", Status: "SUCCEEDED", DurationMs: &zero},
+		{ID: "2", Name: "untimed", Type: "STEP", Status: "STARTED"},
+	})
+
+	instant, err := json.Marshal(result["instant"])
+	if err != nil {
+		t.Fatalf("marshal instant summary: %v", err)
 	}
-	if agg.MaxDurationMs != 300 {
-		t.Errorf("MaxDurationMs = %d, want 300", agg.MaxDurationMs)
+	for _, want := range []string{`"minDurationMs":0`, `"maxDurationMs":0`, `"totalDurationMs":0`} {
+		if !strings.Contains(string(instant), want) {
+			t.Errorf("summary with a recorded 0 ms duration lacks %s: %s", want, instant)
+		}
 	}
-	if agg.TotalDurationMs != 300 {
-		t.Errorf("TotalDurationMs = %d, want 300", agg.TotalDurationMs)
+
+	untimed, err := json.Marshal(result["untimed"])
+	if err != nil {
+		t.Fatalf("marshal untimed summary: %v", err)
+	}
+	if strings.Contains(string(untimed), "DurationMs") {
+		t.Errorf("summary with no recorded duration serializes duration fields: %s", untimed)
 	}
 }
 
