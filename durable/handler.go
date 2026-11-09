@@ -393,8 +393,13 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	// not exist yet. So the factory logger attaches the execution
 	// attributes itself; otherwise a factory failure record would lack the
 	// requestId, executionArn, and tenantId every other record carries.
-	factoryLogger := slog.New(h.options.logHandler.WithAttrs(executionLogAttrs(in.DurableExecutionArn, invMeta)))
-	pd := newPluginDispatcher(newInvocationPlugins(ctx, factoryLogger, h.options.pluginFactories, invInfo))
+	// The logger is built only when a factory is registered: building it
+	// allocates, and with no factory nothing would ever write through it.
+	var pd *pluginDispatcher
+	if hasPlugins {
+		factoryLogger := slog.New(h.options.logHandler.WithAttrs(executionLogAttrs(in.DurableExecutionArn, invMeta)))
+		pd = newPluginDispatcher(newInvocationPlugins(ctx, factoryLogger, h.options.pluginFactories, invInfo))
+	}
 
 	// Item 12: OnInvocationStart fires BEFORE OnOperationChange.
 	dispatchNotification(pd, func(p *Plugin) {
