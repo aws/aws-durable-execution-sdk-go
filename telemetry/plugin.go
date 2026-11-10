@@ -471,9 +471,13 @@ func (p *telemetryInvocation) scheduleOnChangeDispatch(ctx context.Context) {
 		return
 	}
 	p.onChangeDispatching = true
+	// Add before Unlock. onInvocationEnd calls Wait once it observes a
+	// dispatch in flight. An Add after the Unlock would leave a window
+	// where Wait sees a zero counter and returns early, so the final
+	// record could precede this dispatch.
+	p.onChangeWG.Add(1)
 	p.mu.Unlock()
 
-	p.onChangeWG.Add(1)
 	go func() {
 		defer p.onChangeWG.Done()
 		for {

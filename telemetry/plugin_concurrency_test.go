@@ -59,7 +59,14 @@ func TestPlugin_ConcurrentInvocations_IsolateRecords(t *testing.T) {
 					return
 				}
 			}
-			plugin := startTestPlugin(t, ctx, factory, info)
+			// This runs off the test goroutine, so t.Fatalf is not allowed
+			// here; report the failure with t.Errorf and return instead.
+			plugin, err := factory.CreatePlugin(ctx, info)
+			if err != nil || plugin == nil {
+				t.Errorf("CreatePlugin = (%v, %v), want a plugin without error", plugin, err)
+				return
+			}
+			plugin.OnInvocationStart(ctx, info)
 			plugin.OnOperationStart(ctx, durable.OperationHookInfo{ExecutionArn: info.ExecutionArn, ID: "shared-id", Type: "STEP", Status: durable.PluginOperationStarted})
 			if i == 0 {
 				close(aStarted)
