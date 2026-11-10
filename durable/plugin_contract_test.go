@@ -192,7 +192,7 @@ func TestPluginEveryHookFiresFromConcurrentBranches(t *testing.T) {
 		}
 		return sum, nil
 	},
-		WithPlugins(counters[0].plugin(), counters[1].plugin()),
+		withTestPlugins(counters[0].plugin(), counters[1].plugin()),
 		WithLogHandler(slog.NewTextHandler(io.Discard, nil)),
 		withLambdaAPI(&fakePluginClient{}),
 	)
@@ -352,7 +352,7 @@ func TestEnrichLogContextFollowsReplayLogMode(t *testing.T) {
 				return map[string]any{"enriched": true}
 			}}
 			rec := newRecordingHandler()
-			opts := append([]HandlerOption{withLambdaAPI(&fakeLambda{}), WithLogHandler(rec), WithPlugins(plugin)}, tc.opts...)
+			opts := append([]HandlerOption{withLambdaAPI(&fakeLambda{}), WithLogHandler(rec), withTestPlugins(plugin)}, tc.opts...)
 			h := Wrap(func(ctx Context, _ string) (string, error) {
 				ctx.Logger().Info("replaying")
 				if _, err := Step(ctx, "s", func(StepContext) (string, error) { return "done", nil }); err != nil {

@@ -254,7 +254,7 @@ func TestPluginIsReplayOnSecondRun(t *testing.T) {
 			return "done", nil
 		})
 		return result, err
-	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
 
 	// First invocation: live execution.
 	payload := makePluginPayload(t, "arn:test:exec", "tok1", nil)
@@ -306,7 +306,7 @@ func TestPluginPendingOnInvocationEnd(t *testing.T) {
 	handler := Wrap(func(ctx Context, event string) (string, error) {
 		// Wait suspends immediately.
 		return "", Wait(ctx, "", 5*time.Second)
-	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
 
 	payload := makePluginPayload(t, "arn:test:suspend", "tok1", nil)
 	resp, err := handler(makePluginContext(), payload)
@@ -427,7 +427,7 @@ func TestPluginOperationHooksNotFiredForPendingOps(t *testing.T) {
 		// Wait: if STARTED status is already checkpointed, it suspends
 		// again (the timer has not fired).
 		return "", Wait(ctx, "", 60*time.Second)
-	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
 
 	// Pre-checkpointed as STARTED (backend is waiting for timer to fire).
 	ops := []wireOperation{
@@ -501,7 +501,7 @@ func TestPluginWrapChildContextFn(t *testing.T) {
 			return "child-result", nil
 		})
 		return result, err
-	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
 
 	payload := makePluginPayload(t, "arn:test:wrap-child", "tok1", nil)
 	_, err := handler(makePluginContext(), payload)
@@ -546,7 +546,7 @@ func TestPluginAttemptHooksFire(t *testing.T) {
 		return Step(ctx, "attempt-step", func(sc StepContext) (string, error) {
 			return "ok", nil
 		})
-	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
 
 	payload := makePluginPayload(t, "arn:test:attempt", "tok1", nil)
 	_, err := handler(makePluginContext(), payload)
@@ -590,7 +590,7 @@ func TestPluginInvocationStartBeforeOperationChange(t *testing.T) {
 		return Step(ctx, "s1", func(StepContext) (string, error) {
 			return "ok", nil
 		})
-	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
 
 	ops := []wireOperation{
 		{Id: "exec", Status: "STARTED", Type: "EXECUTION", ExecutionDetails: &wireExecutionDetails{InputPayload: `"hello"`}},
@@ -633,7 +633,7 @@ func TestPluginUpdatedOperationsMapKeyedByID(t *testing.T) {
 		return Step(ctx, "s1", func(StepContext) (string, error) {
 			return "ok", nil
 		})
-	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
 
 	stepID := hashID("1")
 	ops := []wireOperation{
@@ -695,7 +695,7 @@ func TestPluginInvocationInfoFieldsPopulated(t *testing.T) {
 
 	handler := Wrap(func(ctx Context, event string) (string, error) {
 		return "result-" + event, nil
-	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
 
 	ops := []wireOperation{
 		{
@@ -745,7 +745,7 @@ func TestPluginInvocationEndErrorPopulated(t *testing.T) {
 	handlerErr := errors.New("handler failed")
 	handler := Wrap(func(ctx Context, event string) (string, error) {
 		return "", handlerErr
-	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
 
 	payload := makePluginPayload(t, "arn:test:fail", "tok1", nil)
 	if _, err := handler(makePluginContext(), payload); err != nil {
@@ -787,7 +787,7 @@ func TestPluginInvocationEndRetrying(t *testing.T) {
 	handlerErr := &ClientError{Scope: ErrorScopeInvocation, Err: errors.New("transient")}
 	handler := Wrap(func(ctx Context, event string) (string, error) {
 		return "", handlerErr
-	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
 
 	payload := makePluginPayload(t, "arn:test:retry", "tok1", nil)
 	_, err := handler(makePluginContext(), payload)
@@ -827,7 +827,7 @@ func TestPluginContextThreadedToHooks(t *testing.T) {
 
 	handler := Wrap(func(ctx Context, event string) (string, error) {
 		return "ok", nil
-	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
 
 	ctx := context.WithValue(context.Background(), ctxKey{}, "threaded")
 	payload := makePluginPayload(t, "arn:test:ctx", "tok1", nil)
@@ -858,7 +858,7 @@ func TestPluginOperationHookParentIDAndTimestamps(t *testing.T) {
 		return Step(ctx, "root-step", func(StepContext) (string, error) {
 			return "ok", nil
 		})
-	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
 
 	payload := makePluginPayload(t, "arn:test:parent", "tok1", nil)
 	if _, err := handler(makePluginContext(), payload); err != nil {
@@ -920,7 +920,7 @@ func TestPluginOperationHookTimestampsFromCheckpointResponse(t *testing.T) {
 		return Step(ctx, "second", func(StepContext) (string, error) {
 			return "must-not-run", nil
 		})
-	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{newState: []Operation{merged}}))
+	}, withTestPlugins(plugin), withLambdaAPI(&fakePluginClient{newState: []Operation{merged}}))
 
 	payload := makePluginPayload(t, "arn:test:exec", "tok1", nil)
 	resp, err := handler(makePluginContext(), payload)

@@ -153,7 +153,7 @@ func runDepthHandler(t *testing.T, depth int, fn func(Context, string) (string, 
 	t.Helper()
 	rec := &depthRecorder{}
 	client := &recordingPluginClient{}
-	opts := []HandlerOption{WithPlugins(rec.plugin(t)), withLambdaAPI(client)}
+	opts := []HandlerOption{withTestPlugins(rec.plugin(t)), withLambdaAPI(client)}
 	if depth >= 0 {
 		opts = append(opts, WithPluginChildOperationsDepth(depth))
 	}
@@ -477,7 +477,7 @@ func TestPluginChildOperationsDepthInvocationMaps(t *testing.T) {
 					mu.Unlock()
 				},
 			}
-			opts := []HandlerOption{WithPlugins(p), withLambdaAPI(&fakePluginClient{})}
+			opts := []HandlerOption{withTestPlugins(p), withLambdaAPI(&fakePluginClient{})}
 			if tc.depth >= 0 {
 				opts = append(opts, WithPluginChildOperationsDepth(tc.depth))
 			}
@@ -522,7 +522,7 @@ func TestPluginChildOperationsDepthOmitsChangeNotification(t *testing.T) {
 	fired := false
 	p := Plugin{OnOperationChange: func(context.Context, OperationChangeHookInfo) { fired = true }}
 	handler := Wrap(func(ctx Context, _ string) (string, error) { return "done", nil },
-		WithPlugins(p), withLambdaAPI(&fakePluginClient{}), WithPluginChildOperationsDepth(0))
+		withTestPlugins(p), withLambdaAPI(&fakePluginClient{}), WithPluginChildOperationsDepth(0))
 	resp, err := handler(makePluginContext(), makePluginPayloadWithUpdated(t, "arn:test:depth", "tok1", ops, []string{hashID("1-1")}))
 	if err != nil {
 		t.Fatal(err)

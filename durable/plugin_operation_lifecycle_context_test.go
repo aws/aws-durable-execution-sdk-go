@@ -120,14 +120,14 @@ func nestedChildHandlers(rec *opRecorder) map[string]func(context.Context, []byt
 					return RunInChildContext(c, "inner", leaf)
 				})
 			})
-		}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
+		}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
 		"RunInChildContextAsync": Wrap(func(ctx Context, _ string) (string, error) {
 			return RunInChildContextAsync(ctx, "outer", func(c Context) (string, error) {
 				return RunInChildContextAsync(c, "mid", func(c Context) (string, error) {
 					return RunInChildContextAsync(c, "inner", leaf).Result(c)
 				}).Result(c)
 			}).Result(ctx)
-		}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
+		}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
 	}
 }
 
@@ -266,12 +266,12 @@ func failingChildHandlers(rec *opRecorder, got *errBox) map[string]func(context.
 			_, err := RunInChildContext(ctx, "child", body)
 			got.set(err)
 			return "", err
-		}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
+		}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
 		"RunInChildContextAsync": Wrap(func(ctx Context, _ string) (string, error) {
 			_, err := RunInChildContextAsync(ctx, "child", body).Result(ctx)
 			got.set(err)
 			return "", err
-		}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
+		}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
 	}
 }
 
@@ -365,7 +365,7 @@ func TestOperationLifecycleChildContextStartBeforeWrap(t *testing.T) {
 		return RunInChildContext(ctx, "child", func(c Context) (string, error) {
 			return Step(c, "s", func(StepContext) (string, error) { return "v", nil })
 		})
-	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
 
 	resp, err := handler(makePluginContext(), makePluginPayload(t, "arn:test:lifecycle", "tok1", nil))
 	if err != nil {
@@ -397,7 +397,7 @@ func callbackLifecycleHandler(rec *opRecorder, got *errBox) func(context.Context
 		out, err := cb.Result(ctx)
 		got.set(err)
 		return out, err
-	}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
 }
 
 // TestOperationLifecycleCreateCallbackSuspendResume asserts the event
@@ -532,7 +532,7 @@ func waitForCallbackHandler(rec *opRecorder, submitErr error, got *errBox) func(
 		}, WithSubmitterRetry(NoRetry()), WithCallbackSerdes(JSONSerdes))
 		got.set(err)
 		return out, err
-	}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
 }
 
 // assertWaitForCallbackHierarchy checks the identity of every event of a
@@ -803,7 +803,7 @@ func TestOperationLifecycleContextAtMostOnePerInvocation(t *testing.T) {
 			return "", err
 		}
 		return WaitForCallback[string](ctx, "wfcb", func(StepContext, string) error { return nil })
-	}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
 
 	resp, err := handler(makePluginContext(), makePluginPayload(t, "arn:test:lifecycle", "tok1", nil))
 	if err != nil {
@@ -846,12 +846,12 @@ func TestOperationLifecycleChildContextReplayedSucceededSerdesFailure(t *testing
 				_, err := RunInChildContext(ctx, "child", body, serdes)
 				got.set(err)
 				return "", nil
-			}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
+			}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
 			"RunInChildContextAsync": Wrap(func(ctx Context, _ string) (string, error) {
 				_, err := RunInChildContextAsync(ctx, "child", body, serdes).Result(ctx)
 				got.set(err)
 				return "", nil
-			}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
+			}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
 		}
 	}
 	for variant := range handlers(&opRecorder{}, &errBox{}) {
@@ -890,7 +890,7 @@ func TestOperationLifecycleChildContextLiveEndUsesCheckpointTimestamp(t *testing
 	client := &fakePluginClient{}
 	handler := Wrap(func(ctx Context, _ string) (string, error) {
 		return RunInChildContext(ctx, "child", func(Context) (string, error) { return "v", nil })
-	}, WithPlugins(rec.plugin()), withLambdaAPI(client))
+	}, withTestPlugins(rec.plugin()), withLambdaAPI(client))
 
 	// Every checkpoint response carries the child's record as SUCCEEDED
 	// with both timestamps.

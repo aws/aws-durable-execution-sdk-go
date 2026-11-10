@@ -161,9 +161,10 @@ type handlerOptions struct {
 	// [WithExecutionClient].
 	client ExecutionClient
 
-	// plugins holds registered instrumentation plugins. Set via
-	// [WithPlugins].
-	plugins []Plugin
+	// pluginFactories holds the registered instrumentation plugin
+	// factories. Set via [WithPlugins]. Each invocation calls every
+	// factory once; see newInvocationPlugins.
+	pluginFactories []PluginFactory
 
 	// pluginChildDepth is the deepest operation depth reported to plugins,
 	// meaningful when pluginChildDepthSet is true. Set via
@@ -316,8 +317,9 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 
 	invMeta := invocationInfoFromContext(ctx)
 
-	// Plugin dispatcher: nil when no plugins are registered (zero overhead).
-	pd := newPluginDispatcher(h.options.plugins)
+	// The plugin path costs nothing when no factory is registered: the
+	// maps below stay nil and the dispatcher is nil.
+	hasPlugins := len(h.options.pluginFactories) > 0
 
 	isFirstInvocation := state.numOperations() <= 1
 
@@ -328,7 +330,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	// Build updated operations map for both InvocationHookInfo and
 	// OnOperationChange (Item 11: map[string]OperationHookInfo keyed by ID).
 	var updatedOpsMap map[string]OperationHookInfo
-	if pd != nil && len(in.UpdatedOperationIds) > 0 {
+	if hasPlugins && len(in.UpdatedOperationIds) > 0 {
 		updatedOpsMap = make(map[string]OperationHookInfo, len(in.UpdatedOperationIds))
 		for _, uid := range in.UpdatedOperationIds {
 			// UpdatedOperationIds carry wire IDs (already hashed), so look
@@ -341,12 +343,13 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		}
 	}
 
-	// The full operation set is built only for a plugin that receives an
-	// InvocationHookInfo. It is a snapshot of the state before the handler
-	// runs: checkpoints the handler records later go to the state's own
-	// map, never to this one, so a plugin may keep reading it.
+	// The full operation set is built whenever a factory is registered,
+	// because the factories receive it before any plugin exists that could
+	// say whether it reads it. It is a snapshot of the state before the
+	// handler runs: checkpoints the handler records later go to the
+	// state's own map, never to this one, so a plugin may keep reading it.
 	var allOpsMap map[string]OperationHookInfo
-	if pd.hasInvocationInfoConsumer() {
+	if hasPlugins {
 		allOpsMap = make(map[string]OperationHookInfo, state.numOperations())
 		state.rangeOperations(func(op *operation) bool {
 			addCheckpointedOperationInfo(allOpsMap, in.DurableExecutionArn, state, depthBound, op)
@@ -374,10 +377,28 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	invInfo := InvocationHookInfo{
 		ExecutionArn:            in.DurableExecutionArn,
 		IsFirstInvocation:       isFirstInvocation,
+		RequestID:               invMeta.requestID,
 		ExecutionInput:          execInput,
 		ExecutionStartTimestamp: execStartTimestamp,
 		UpdatedOperations:       updatedOpsMap,
 		Operations:              allOpsMap,
+	}
+
+	// The factories run now, with the completed invInfo, so each plugin
+	// is created before its first hook fires and receives the same info
+	// its OnInvocationStart then receives. The dispatcher is nil when no
+	// factory is registered or every factory skipped.
+	//
+	// The execution context, which carries the enriched log handler, does
+	// not exist yet. So the factory logger attaches the execution
+	// attributes itself; otherwise a factory failure record would lack the
+	// requestId, executionArn, and tenantId every other record carries.
+	// The logger is built only when a factory is registered: building it
+	// allocates, and with no factory nothing would ever write through it.
+	var pd *pluginDispatcher
+	if hasPlugins {
+		factoryLogger := slog.New(h.options.logHandler.WithAttrs(executionLogAttrs(in.DurableExecutionArn, invMeta)))
+		pd = newPluginDispatcher(newInvocationPlugins(ctx, factoryLogger, h.options.pluginFactories, invInfo))
 	}
 
 	// Item 12: OnInvocationStart fires BEFORE OnOperationChange.

@@ -36,7 +36,7 @@ func TestInvocationHookInfoOperationsFullSet(t *testing.T) {
 			return "", err
 		}
 		return Step(ctx, "s2", func(StepContext) (string, error) { return "two", nil })
-	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
 
 	// s1 was checkpointed by an earlier invocation and did not change; s2
 	// changed since the previous invocation.
@@ -99,7 +99,7 @@ func TestInvocationHookInfoOperationsFirstInvocation(t *testing.T) {
 	var mu sync.Mutex
 	handler := Wrap(func(ctx Context, _ string) (string, error) {
 		return Step(ctx, "s1", func(StepContext) (string, error) { return "one", nil })
-	}, WithPlugins(Plugin{OnInvocationStart: func(_ context.Context, info InvocationHookInfo) {
+	}, withTestPlugins(Plugin{OnInvocationStart: func(_ context.Context, info InvocationHookInfo) {
 		mu.Lock()
 		got = info
 		mu.Unlock()
@@ -128,7 +128,7 @@ func TestInvocationHookInfoOperationsNotMutated(t *testing.T) {
 	var mu sync.Mutex
 	handler := Wrap(func(ctx Context, _ string) (string, error) {
 		return Step(ctx, "s2", func(StepContext) (string, error) { return "two", nil })
-	}, WithPlugins(Plugin{OnInvocationStart: func(_ context.Context, info InvocationHookInfo) {
+	}, withTestPlugins(Plugin{OnInvocationStart: func(_ context.Context, info InvocationHookInfo) {
 		mu.Lock()
 		got = info
 		mu.Unlock()
@@ -146,35 +146,30 @@ func TestInvocationHookInfoOperationsNotMutated(t *testing.T) {
 	}
 }
 
-// TestInvocationHookInfoOperationsSkippedWithoutConsumer asserts the full
-// operation set is not built when no plugin implements a hook that receives
-// InvocationHookInfo, and that the dispatcher reports the consumer check
-// for the zero-plugin path.
-func TestInvocationHookInfoOperationsSkippedWithoutConsumer(t *testing.T) {
-	if (*pluginDispatcher)(nil).hasInvocationInfoConsumer() {
-		t.Error("nil dispatcher reports an invocation info consumer")
-	}
-	if newPluginDispatcher([]Plugin{{OnOperationStart: func(context.Context, OperationHookInfo) {}}}).hasInvocationInfoConsumer() {
-		t.Error("a plugin with operation hooks only reports an invocation info consumer")
-	}
-	if !newPluginDispatcher([]Plugin{{}, {WrapInvocation: func(ctx context.Context, _ InvocationHookInfo, fn func(context.Context) (any, error)) (any, error) {
-		return fn(ctx)
-	}}}).hasInvocationInfoConsumer() {
-		t.Error("a plugin with WrapInvocation does not report an invocation info consumer")
-	}
-
-	// A plugin that implements only OnOperationChange receives the
-	// updated operations but no InvocationHookInfo, so the full set is
-	// not built for it.
+// TestInvocationHookInfoOperationsBuiltForFactory asserts the full
+// operation set is built whenever a factory is registered, even when the
+// plugin the factory returns has no hook that receives InvocationHookInfo.
+// The factory itself is the consumer: it reads Operations before it
+// decides what to return. This is the per-invocation cost the factory
+// contract makes explicit.
+func TestInvocationHookInfoOperationsBuiltForFactory(t *testing.T) {
+	var seen InvocationHookInfo
 	var changed OperationChangeHookInfo
 	var mu sync.Mutex
+	factory := PluginFactoryFunc(func(_ context.Context, info InvocationHookInfo) (*Plugin, error) {
+		mu.Lock()
+		seen = info
+		mu.Unlock()
+		// Operation-level hooks only: no OnInvocationStart, no WrapInvocation.
+		return &Plugin{OnOperationChange: func(_ context.Context, info OperationChangeHookInfo) {
+			mu.Lock()
+			changed = info
+			mu.Unlock()
+		}}, nil
+	})
 	handler := Wrap(func(ctx Context, _ string) (string, error) {
 		return Step(ctx, "s1", func(StepContext) (string, error) { return "one", nil })
-	}, WithPlugins(Plugin{OnOperationChange: func(_ context.Context, info OperationChangeHookInfo) {
-		mu.Lock()
-		changed = info
-		mu.Unlock()
-	}}), withLambdaAPI(&fakePluginClient{}))
+	}, WithPlugins(factory), withLambdaAPI(&fakePluginClient{}))
 	s1 := hashID("1")
 	ops := []wireOperation{lifecycleExecOp(), {Id: s1, Status: "SUCCEEDED", Type: "STEP", SubType: "Step", Name: "s1",
 		StartTimestamp: flexTimestamp{Time: time.Now(), Valid: true},
@@ -184,6 +179,15 @@ func TestInvocationHookInfoOperationsSkippedWithoutConsumer(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
+	if len(seen.Operations) != 2 {
+		t.Errorf("factory saw Operations = %v, want the execution operation and the step", seen.Operations)
+	}
+	if _, ok := seen.Operations[s1]; !ok {
+		t.Errorf("factory saw Operations without the checkpointed step %q: %v", s1, seen.Operations)
+	}
+	if len(seen.UpdatedOperations) != 1 {
+		t.Errorf("factory saw UpdatedOperations = %v, want the changed step", seen.UpdatedOperations)
+	}
 	if len(changed.UpdatedOperations) != 1 {
 		t.Errorf("OnOperationChange UpdatedOperations = %v, want the changed step", changed.UpdatedOperations)
 	}

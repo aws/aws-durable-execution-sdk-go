@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### Changed: one plugin per invocation, registered through a factory
+
+The plugin instrumentation API is experimental, and this is a change to
+it. `durable.WithPlugins` takes `durable.PluginFactory` values instead of
+`durable.Plugin` values. The handler calls every factory once per
+invocation, before any hook fires, and the `Plugin` a factory returns
+serves that invocation alone. Before, one `Plugin` value served every
+invocation of the process, so a plugin that kept per-invocation state in
+its hook closures shared that state across concurrent invocations. The
+JavaScript, Python, and Java SDKs register factories the same way.
+
+- `durable.PluginFactory` is new. Its one method is
+  `CreatePlugin(ctx context.Context, info InvocationHookInfo) (*Plugin, error)`.
+  `ctx` is the invocation context and `info` is the same value
+  `OnInvocationStart` then receives. A `nil` Plugin with a `nil` error
+  skips instrumentation for the invocation. An error, a panic, or a Plugin
+  with no hooks is logged and skipped; no result affects the execution.
+- `durable.PluginFactoryFunc` is new. It adapts a function to
+  `PluginFactory`, as `http.HandlerFunc` does. To migrate a
+  `Plugin`-returning function, wrap it: `durable.WithPlugins(durable.PluginFactoryFunc(newPlugin))`.
+- `durable.WithPlugins` panics in `Wrap` and `Start` when a factory is
+  nil, including a typed nil pointer or a nil `PluginFactoryFunc`.
+- `InvocationHookInfo.RequestID` is new: the Lambda request ID of the
+  invocation, empty outside Lambda.
+- `InvocationHookInfo.Operations` is built whenever a factory is
+  registered.
+- `telemetry.TelemetryPlugin.Plugin()` is removed. `TelemetryPlugin`
+  implements `durable.PluginFactory`, so pass it to `durable.WithPlugins`
+  directly: `durable.WithPlugins(telemetry.New(cfg))`.
+
 ### Changed: Workflow Insight is renamed to Durable Execution Telemetry
 
 The `insight` module is now the `telemetry` module, to match the other

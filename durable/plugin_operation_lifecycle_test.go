@@ -157,14 +157,14 @@ func waitLifecycleHandlers(rec *opRecorder) map[string]func(context.Context, []b
 				return "", err
 			}
 			return after(ctx)
-		}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
+		}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
 		"WaitAsync": Wrap(func(ctx Context, _ string) (string, error) {
 			fut := WaitAsync(ctx, "pause", 5*time.Second)
 			if _, err := fut.Result(ctx); err != nil {
 				return "", err
 			}
 			return after(ctx)
-		}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
+		}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
 	}
 }
 
@@ -246,10 +246,10 @@ func invokeLifecycleHandlers(rec *opRecorder) map[string]func(context.Context, [
 	return map[string]func(context.Context, []byte) ([]byte, error){
 		"Invoke": Wrap(func(ctx Context, _ string) (string, error) {
 			return Invoke[string](ctx, "call", "target-fn", "in")
-		}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
+		}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
 		"InvokeAsync": Wrap(func(ctx Context, _ string) (string, error) {
 			return InvokeAsync[string](ctx, "call", "target-fn", "in").Result(ctx)
-		}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
+		}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
 	}
 }
 
@@ -365,12 +365,12 @@ func TestOperationLifecycleInvokeReplayedSucceededSerdesFailure(t *testing.T) {
 				_, err := Invoke[string](ctx, "call", "target-fn", "in", serdes)
 				*got = err
 				return "", nil
-			}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
+			}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
 			"InvokeAsync": Wrap(func(ctx Context, _ string) (string, error) {
 				_, err := InvokeAsync[string](ctx, "call", "target-fn", "in", serdes).Result(ctx)
 				*got = err
 				return "", nil
-			}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
+			}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
 		}
 	}
 	for variant := range handlers(&opRecorder{}, new(error)) {
@@ -447,7 +447,7 @@ func TestOperationLifecycleParentIDInsideChildContext(t *testing.T) {
 			}
 			return Invoke[string](c, "call", "target-fn", "in")
 		})
-	}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
 
 	// The child context claims "1"; its operations claim "1-1", "1-2".
 	wantParent := hashID("1")
@@ -494,7 +494,7 @@ func TestOperationLifecycleStepEventsPinned(t *testing.T) {
 		}
 		_, err := Step(ctx, "bad", func(StepContext) (string, error) { return "", stepErr }, WithRetry(NoRetry()))
 		return "", err
-	}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
 
 	// Live.
 	resp, err := handler(makePluginContext(), makePluginPayload(t, "arn:test:lifecycle", "tok1", nil))
@@ -598,7 +598,7 @@ func TestOperationLifecycleAtMostOnePerInvocation(t *testing.T) {
 			return "", err
 		}
 		return i.Result(ctx)
-	}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
 
 	count := func(evs []opEvent) map[string]int {
 		m := map[string]int{}
@@ -779,7 +779,7 @@ func TestOperationLifecycleStepInterruptedAtMostOnce(t *testing.T) {
 			executed = true
 			return "", nil
 		}, WithSemantics(AtMostOncePerRetry), WithRetry(NoRetry()))
-	}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
 
 	ops := []wireOperation{
 		lifecycleExecOp(),

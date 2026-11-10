@@ -24,33 +24,34 @@ var out = pluginlog.New(nil)
 // the first invocation. It completes while the execution is suspended, so
 // the invocation that resumes replays it from its terminal checkpoint and
 // dispatches its end.
-var plugin = durable.Plugin{
-	OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
-		out.Capture(info.ExecutionArn)
-	},
-	OnOperationStart: func(_ context.Context, info durable.OperationHookInfo) {
-		if pluginlog.Upper(info.Type) != string(durable.OperationTypeWait) {
-			return
-		}
-		out.Emit(map[string]any{
-			"plugin": "CONFPLUGIN",
-			"hook":   "operation-start",
-			"op":     info.ID,
-			"type":   pluginlog.Upper(info.Type),
-		})
-	},
-	OnOperationEnd: func(_ context.Context, info durable.OperationHookInfo) {
-		if pluginlog.Upper(info.Type) != string(durable.OperationTypeWait) {
-			return
-		}
-		out.Emit(map[string]any{
-			"plugin": "CONFPLUGIN",
-			"hook":   "operation-end",
-			"op":     info.ID,
-			"type":   pluginlog.Upper(info.Type),
-			"status": string(info.Status),
-		})
-	},
+// newPlugin is a durable.PluginFactory: the handler calls it once per
+// invocation and the returned Plugin serves that invocation alone.
+func newPlugin(_ context.Context, inv durable.InvocationHookInfo) (*durable.Plugin, error) {
+	return &durable.Plugin{
+		OnOperationStart: func(_ context.Context, info durable.OperationHookInfo) {
+			if pluginlog.Upper(info.Type) != string(durable.OperationTypeWait) {
+				return
+			}
+			out.EmitWithArn(map[string]any{
+				"plugin": "CONFPLUGIN",
+				"hook":   "operation-start",
+				"op":     info.ID,
+				"type":   pluginlog.Upper(info.Type),
+			}, inv.ExecutionArn)
+		},
+		OnOperationEnd: func(_ context.Context, info durable.OperationHookInfo) {
+			if pluginlog.Upper(info.Type) != string(durable.OperationTypeWait) {
+				return
+			}
+			out.EmitWithArn(map[string]any{
+				"plugin": "CONFPLUGIN",
+				"hook":   "operation-end",
+				"op":     info.ID,
+				"type":   pluginlog.Upper(info.Type),
+				"status": string(info.Status),
+			}, inv.ExecutionArn)
+		},
+	}, nil
 }
 
 func handler(ctx durable.Context, _ any) (string, error) {
@@ -61,5 +62,5 @@ func handler(ctx durable.Context, _ any) (string, error) {
 }
 
 func main() {
-	durable.Start(handler, durable.WithPlugins(plugin))
+	durable.Start(handler, durable.WithPlugins(durable.PluginFactoryFunc(newPlugin)))
 }

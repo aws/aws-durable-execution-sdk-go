@@ -11,24 +11,25 @@ import (
 
 var out = pluginlog.New(nil)
 
-// lifecyclePlugin reports the invocation lifecycle under the given plugin
-// label. With several plugins registered, the hooks of different plugins
-// for one notification may run in parallel, so the records of A and B may
-// interleave in any order.
-func lifecyclePlugin(label string) durable.Plugin {
-	return durable.Plugin{
-		OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
-			out.Capture(info.ExecutionArn)
-			out.EmitWithArn(map[string]any{"plugin": label, "hook": "invocation-start"}, info.ExecutionArn)
-		},
-		OnInvocationEnd: func(_ context.Context, info durable.InvocationEndHookInfo) {
-			out.EmitWithArn(map[string]any{
-				"plugin": label,
-				"hook":   "invocation-end",
-				"status": string(info.Status),
-			}, info.ExecutionArn)
-		},
-	}
+// lifecyclePlugin returns a factory whose plugins report the invocation
+// lifecycle under the given plugin label. With several plugins registered,
+// the hooks of different plugins for one notification may run in parallel,
+// so the records of A and B may interleave in any order.
+func lifecyclePlugin(label string) durable.PluginFactory {
+	return durable.PluginFactoryFunc(func(_ context.Context, inv durable.InvocationHookInfo) (*durable.Plugin, error) {
+		return &durable.Plugin{
+			OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
+				out.EmitWithArn(map[string]any{"plugin": label, "hook": "invocation-start"}, info.ExecutionArn)
+			},
+			OnInvocationEnd: func(_ context.Context, info durable.InvocationEndHookInfo) {
+				out.EmitWithArn(map[string]any{
+					"plugin": label,
+					"hook":   "invocation-end",
+					"status": string(info.Status),
+				}, info.ExecutionArn)
+			},
+		}, nil
+	})
 }
 
 func handler(ctx durable.Context, name string) (string, error) {
