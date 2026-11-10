@@ -36,6 +36,8 @@ func main() {
 	_ = durable.RetryAttempt{[0]func(){}, nil, 1, 0}                // want "implicit assignment to unexported field _ in struct literal"
 	_ = durable.WaitConfig[int]{[0]func(){}, 60, 0, 0, 0, "", nil}  // want "implicit assignment to unexported field _ in struct literal"
 	_ = durable.SerdesConfig{[0]func(){}, nil, nil}                   // want "implicit assignment to unexported field _ in struct literal"
+	_ = durable.PluginRegistration{[0]func(){}, "factory", []string{"views"}} // want "implicit assignment to unexported field _ in struct literal"
+	_ = durable.PluginRegistration{Name: "factory", ExclusiveGroups: []string{"views"}}
 	_ = durable.Branch[string]{Name: "name"}
 	_ = durable.RetryConfig{MaxAttempts: 3}
 	_ = durable.LinearRetryConfig{MaxAttempts: 6}
@@ -161,6 +163,7 @@ func parseDiagnosticLines(out []byte) map[int]string {
 // one is free.
 func TestGuardedStructsHaveLeadingBlankField(t *testing.T) {
 	types := []reflect.Type{
+		reflect.TypeFor[durable.PluginRegistration](),
 		reflect.TypeFor[durable.RetryConfig](),
 		reflect.TypeFor[durable.LinearRetryConfig](),
 		reflect.TypeFor[durable.RetryDecision](),
