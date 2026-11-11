@@ -1,11 +1,13 @@
 package telemetry
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -212,9 +214,33 @@ func sampledIn(executionArn string, rate float64) bool {
 func (p *telemetryInvocation) onInvocationStart(_ context.Context, info durable.InvocationHookInfo) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	for id, opInfo := range info.Operations {
-		p.upsertOperationLocked(id, opInfo)
+	for _, id := range orderedOperationIDs(info.Operations) {
+		p.upsertOperationLocked(id, info.Operations[id])
 	}
+}
+
+// orderedOperationIDs orders a checkpoint snapshot for oldest-first truncation.
+// Snapshot maps have no iteration order, but Truncate removes a slice prefix.
+// Missing timestamps come last because those operations may not have started.
+func orderedOperationIDs(ops map[string]durable.OperationHookInfo) []string {
+	ids := make([]string, 0, len(ops))
+	for id := range ops {
+		ids = append(ids, id)
+	}
+	slices.SortFunc(ids, func(a, b string) int {
+		ta, tb := ops[a].StartTimestamp, ops[b].StartTimestamp
+		switch {
+		case ta.IsZero() && !tb.IsZero():
+			return 1
+		case !ta.IsZero() && tb.IsZero():
+			return -1
+		}
+		if order := ta.Compare(tb); order != 0 {
+			return order
+		}
+		return cmp.Compare(a, b)
+	})
+	return ids
 }
 
 // onInvocationEnd finalizes the record with the terminal outcome and
