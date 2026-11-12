@@ -20,7 +20,8 @@ func TestDynamoDBExporter_TimestampAttributes_UTCMilliseconds(t *testing.T) {
 	exp := &DynamoDBExporter{API: fake, TableName: "telemetry"}
 
 	start := nonUTCEmittedAt.Add(-time.Second)
-	rec := Record{ExecutionArn: "arn:test", EmittedAt: nonUTCEmittedAt, StartTimestamp: &start}
+	end := nonUTCEmittedAt.Add(-500 * time.Millisecond)
+	rec := Record{ExecutionArn: "arn:test", EmittedAt: nonUTCEmittedAt, StartTimestamp: &start, EndTimestamp: &end}
 	if err := exp.Export(context.Background(), rec); err != nil {
 		t.Fatalf("Export: %v", err)
 	}
@@ -32,8 +33,11 @@ func TestDynamoDBExporter_TimestampAttributes_UTCMilliseconds(t *testing.T) {
 	if got := attrS(t, item, "emittedAt"); got != wantNonUTCEmittedAt {
 		t.Errorf("emittedAt = %q, want %q", got, wantNonUTCEmittedAt)
 	}
-	if got := attrS(t, item, "startTimestamp"); got != "2026-06-16T17:00:26.500Z" {
-		t.Errorf("startTimestamp = %q, want UTC millisecond form", got)
+	if got := attrS(t, item, "startTime"); got != "2026-06-16T17:00:26.500Z" {
+		t.Errorf("startTime = %q, want UTC millisecond form", got)
+	}
+	if got := attrS(t, item, "endTime"); got != "2026-06-16T17:00:27.000Z" {
+		t.Errorf("endTime = %q, want UTC millisecond form", got)
 	}
 }
 

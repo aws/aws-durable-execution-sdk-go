@@ -21,10 +21,13 @@ exporters and with the `telemetry-1` conformance test.
   variable digit count. `Record` and `OperationRecord` implement
   `json.Marshaler` to apply the format. `json.Unmarshal` into `Record`
   still works.
-- The DynamoDB `sk`, `emittedAt`, `startTimestamp`, and `endTimestamp`
-  attributes, the SQS FIFO `MessageDeduplicationId`, and the RDS and
-  Redshift `emitted_at` parameter use the same format. They were in the same
-  layout before, but with a numeric offset for a non-UTC clock.
+- The DynamoDB item attributes `startTimestamp` and `endTimestamp` are now
+  `startTime` and `endTime`, the same names as the record JSON keys. The
+  JavaScript exporter uses these names for its item attributes.
+- The DynamoDB `sk`, `emittedAt`, `startTime`, and `endTime` attributes, the
+  SQS FIFO `MessageDeduplicationId`, and the RDS and Redshift `emitted_at`
+  parameter use the same format. They were in the same layout before, but
+  with a numeric offset for a non-UTC clock.
 - `startTime` is always set. When the payload does not report the execution
   start, the plugin uses the oldest operation start in the invocation
   snapshot, then the invocation time. A terminal record therefore always
@@ -34,8 +37,9 @@ exporters and with the `telemetry-1` conformance test.
   DynamoDB sort key are keyed on it, so two records in the same millisecond
   would otherwise be deduplicated or overwrite each other.
 
-Readers that select on `startTimestamp` or `endTimestamp` must select on
-`startTime` or `endTime` instead.
+Readers of the JSON record or of the DynamoDB item that select on
+`startTimestamp` or `endTimestamp` must select on `startTime` or `endTime`
+instead.
 
 ### Changed: operation hooks report the wire ID
 

@@ -86,11 +86,14 @@ func (e *DynamoDBExporter) Export(ctx context.Context, record Record) error {
 	}
 	item["status"] = &ddbtypes.AttributeValueMemberS{Value: string(record.Status)}
 
+	// Attribute names match the record JSON keys, as in the JavaScript
+	// exporter, so a reader can use one name for the attribute and for the
+	// key inside recordJson.
 	if record.StartTimestamp != nil {
-		item["startTimestamp"] = &ddbtypes.AttributeValueMemberS{Value: formatTimestamp(*record.StartTimestamp)}
+		item["startTime"] = &ddbtypes.AttributeValueMemberS{Value: formatTimestamp(*record.StartTimestamp)}
 	}
 	if record.EndTimestamp != nil {
-		item["endTimestamp"] = &ddbtypes.AttributeValueMemberS{Value: formatTimestamp(*record.EndTimestamp)}
+		item["endTime"] = &ddbtypes.AttributeValueMemberS{Value: formatTimestamp(*record.EndTimestamp)}
 	}
 	if record.DurationMs != nil {
 		item["durationMs"] = &ddbtypes.AttributeValueMemberN{Value: strconv.FormatInt(*record.DurationMs, 10)}
