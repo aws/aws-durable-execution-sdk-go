@@ -70,14 +70,14 @@ func TestPlugin_EmitOnChange_InvocationDispatchIsolation(t *testing.T) {
 					}
 				})
 			}
-			factory := New(Config{EmitMode: EmitOnChange, Exporters: []Exporter{exp}, Content: allContent()})
+			factory := New(Config{EmitMode: EmitOnChange, Exporters: []Exporter{exp}, Content: withResults("same")})
 			done := []chan struct{}{make(chan struct{}), make(chan struct{})}
 			for i, arn := range arns {
 				plugin := startTestPlugin(t, ctx, factory, durable.InvocationHookInfo{ExecutionArn: arn})
 				plugin.OnOperationStart(changeCtx, durable.OperationHookInfo{ID: "same-id", Type: "STEP", Status: durable.PluginOperationStarted})
 				awaitSignal(t, exp.gates[arn].entered)
 				// The blocked dispatch must send this later update before the end emission.
-				plugin.OnOperationEnd(changeCtx, durable.OperationHookInfo{ID: "same-id", Type: "STEP", Status: durable.PluginOperationSucceeded, Result: fmt.Sprintf("result-%d", i)})
+				plugin.OnOperationEnd(changeCtx, durable.OperationHookInfo{ID: "same-id", Name: "same", Type: "STEP", Status: durable.PluginOperationSucceeded, Result: fmt.Sprintf("result-%d", i)})
 				go func() {
 					defer close(done[i])
 					plugin.OnInvocationEnd(endCtx, durable.InvocationEndHookInfo{ExecutionArn: arn, Status: outcome})

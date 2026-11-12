@@ -121,25 +121,8 @@ func New(cfg Config) *TelemetryPlugin {
 		operationDetail: operationDetail,
 		samplingRate:    samplingRate,
 		exporters:       exporters,
-		content:         defaultContent(cfg.Content),
+		content:         cfg.Content,
 	}
-}
-
-// defaultContent applies defaults for a zero-value ContentConfig: input,
-// output, operation errors, and the execution error are included;
-// operation results are not. This matches DefaultContentConfig.
-//
-// Note: the zero-value detection is all-or-nothing. If ANY Include* field
-// is set to true, the others are NOT defaulted. Users who partially
-// configure ContentConfig should set all Include* fields explicitly.
-func defaultContent(c ContentConfig) ContentConfig {
-	// If all Include* fields are false (the zero value), it means the
-	// caller did not configure content — default to everything included.
-	if !c.IncludeInput && !c.IncludeOutput && !c.IncludeOperationResults &&
-		!c.IncludeOperationErrors && !c.IncludeExecutionError {
-		return DefaultContentConfig()
-	}
-	return c
 }
 
 // TelemetryPlugin implements durable.PluginFactory, so pass it to
@@ -165,11 +148,7 @@ func (p *TelemetryPlugin) CreatePlugin(_ context.Context, info durable.Invocatio
 	inv.record.Status = StatusRunning
 	start := resolveExecutionStart(info)
 	inv.record.StartTimestamp = &start
-	// Build content only when it is included, so the Redactor never sees
-	// a value that ApplyToRecord would drop at snapshot time.
-	if p.content.IncludeInput {
-		inv.record.Input = p.content.marshalContent(info.ExecutionInput)
-	}
+	inv.record.Input = p.content.inputValue(info.ExecutionInput)
 
 	return &durable.Plugin{
 		OnInvocationStart: inv.onInvocationStart,
@@ -334,9 +313,7 @@ func (p *telemetryInvocation) onInvocationEnd(ctx context.Context, info durable.
 
 	if info.Status == durable.PluginInvocationSucceeded {
 		p.record.Status = StatusSucceeded
-		if p.env.content.IncludeOutput {
-			p.record.Output = p.env.content.marshalContent(info.ExecutionResult)
-		}
+		p.record.Output = p.env.content.outputValue(info.ExecutionResult)
 	} else {
 		p.record.Status = StatusFailed
 		if info.ExecutionError != nil {
@@ -411,7 +388,7 @@ func (p *telemetryInvocation) snapshotRecordLocked() Record {
 		copy(ops, record.Operations)
 		record.Operations = ops
 	}
-	p.env.content.ApplyToRecord(&record)
+	p.env.content.applyOperations(&record)
 	return record
 }
 
@@ -433,8 +410,8 @@ func (p *telemetryInvocation) upsertOperationLocked(id string, info durable.Oper
 
 // toOperationRecord converts a durable.OperationHookInfo into an
 // OperationRecord, computing DurationMs when both timestamps are present.
-// The result is built only when content includes operation results, so
-// the Redactor never runs on a value that ApplyToRecord would drop.
+// The result is built here, at hook time, only when an override opts it
+// in, so a transform never runs on a value the record will not carry.
 func toOperationRecord(id string, info durable.OperationHookInfo, content ContentConfig) OperationRecord {
 	rec := OperationRecord{
 		ID:      id,
@@ -459,9 +436,7 @@ func toOperationRecord(id string, info durable.OperationHookInfo, content Conten
 		d := rec.EndTimestamp.Sub(*rec.StartTimestamp).Milliseconds()
 		rec.DurationMs = &d
 	}
-	if content.IncludeOperationResults {
-		rec.Result = content.contentValue(info.Result)
-	}
+	rec.Result = content.resultValue(info.Name, info.Result)
 	if info.Error != nil {
 		rec.Error = errorRecordFromErr(info.Error)
 	}

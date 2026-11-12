@@ -2,6 +2,8 @@ package telemetry
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -9,12 +11,17 @@ import (
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
 )
 
-// allContent returns a ContentConfig that includes every content field.
-// Tests that assert on operation results use it, because the default
-// excludes them.
-func allContent() ContentConfig {
-	c := DefaultContentConfig()
-	c.IncludeOperationResults = true
+// withResults returns a ContentConfig that records the result of every
+// operation with one of the given names, unchanged. Tests that assert on
+// operation results use it, because results are omitted by default.
+func withResults(names ...string) ContentConfig {
+	var c ContentConfig
+	for _, name := range names {
+		c.Operations.Overrides = append(c.Operations.Overrides, OperationOverride{
+			OperationName: name,
+			Result:        func(v any) any { return v },
+		})
+	}
 	return c
 }
 
@@ -27,30 +34,25 @@ func jsonString(s string) string {
 	return string(b)
 }
 
-func TestDefaultContentConfig(t *testing.T) {
-	cfg := DefaultContentConfig()
-
-	if !cfg.IncludeInput {
-		t.Error("IncludeInput should default to true")
+// TestContentConfig_ZeroValue_IncludesInputOutputOmitsResults verifies the
+// defaults: input and output are recorded unchanged, results are not.
+func TestContentConfig_ZeroValue_IncludesInputOutputOmitsResults(t *testing.T) {
+	var cfg ContentConfig
+	if got := cfg.inputValue(map[string]int{"value": 41}); string(got) != `{"value":41}` {
+		t.Errorf("inputValue = %s, want the value", got)
 	}
-	if !cfg.IncludeOutput {
-		t.Error("IncludeOutput should default to true")
+	if got := cfg.outputValue("done"); string(got) != `"done"` {
+		t.Errorf("outputValue = %s, want JSON string", got)
 	}
-	if cfg.IncludeOperationResults {
-		t.Error("IncludeOperationResults should default to false")
-	}
-	if !cfg.IncludeOperationErrors {
-		t.Error("IncludeOperationErrors should default to true")
-	}
-	if !cfg.IncludeExecutionError {
-		t.Error("IncludeExecutionError should default to true")
+	if got := cfg.resultValue("increment", `{"value":42}`); got != nil {
+		t.Errorf("resultValue without override = %s, want nil", got)
 	}
 }
 
-// TestContentConfig_MarshalContent_PreservesJSONTypes verifies that a
-// typed handler value is marshaled once and stored as that JSON value. A
-// Go string becomes a JSON string, not raw text.
-func TestContentConfig_MarshalContent_PreservesJSONTypes(t *testing.T) {
+// TestContentConfig_TypedValue_PreservesJSONTypes verifies that a typed
+// handler value is marshaled once and stored as that JSON value. A Go
+// string becomes a JSON string, not raw text.
+func TestContentConfig_TypedValue_PreservesJSONTypes(t *testing.T) {
 	tests := []struct {
 		name  string
 		value any
@@ -68,117 +70,399 @@ func TestContentConfig_MarshalContent_PreservesJSONTypes(t *testing.T) {
 			Value int `json:"value"`
 		}{42}, `{"value":42}`},
 	}
-	cfg := DefaultContentConfig()
+	var cfg ContentConfig
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := cfg.marshalContent(tt.value)
-			if string(got) != tt.want {
-				t.Errorf("marshalContent(%v) = %s, want %s", tt.value, got, tt.want)
+			if got := cfg.inputValue(tt.value); string(got) != tt.want {
+				t.Errorf("inputValue(%v) = %s, want %s", tt.value, got, tt.want)
+			}
+			if got := cfg.outputValue(tt.value); string(got) != tt.want {
+				t.Errorf("outputValue(%v) = %s, want %s", tt.value, got, tt.want)
 			}
 		})
 	}
 }
 
-func TestContentConfig_MarshalContent_OmitsNilAndUnmarshalable(t *testing.T) {
-	cfg := DefaultContentConfig()
-	if got := cfg.marshalContent(nil); got != nil {
-		t.Errorf("marshalContent(nil) = %s, want nil", got)
+func TestContentConfig_TypedValue_OmitsNilAndUnmarshalable(t *testing.T) {
+	var cfg ContentConfig
+	if got := cfg.inputValue(nil); got != nil {
+		t.Errorf("inputValue(nil) = %s, want nil", got)
 	}
-	if got := cfg.marshalContent(make(chan int)); got != nil {
-		t.Errorf("marshalContent(chan) = %s, want nil", got)
+	if got := cfg.inputValue(make(chan int)); got != nil {
+		t.Errorf("inputValue(chan) = %s, want nil", got)
 	}
 }
 
-// TestContentConfig_ContentValue verifies the wire-text path used for
-// operation results: valid JSON is kept, anything else becomes a JSON
-// string, and the Redactor's output goes through the same check.
-func TestContentConfig_ContentValue(t *testing.T) {
+func TestContentConfig_Exclude_OmitsAndSkipsTransform(t *testing.T) {
+	calls := 0
+	cfg := ContentConfig{
+		ExcludeInput:    true,
+		InputTransform:  func(v any) any { calls++; return v },
+		ExcludeOutput:   true,
+		OutputTransform: func(v any) any { calls++; return v },
+	}
+	if got := cfg.inputValue("in"); got != nil {
+		t.Errorf("inputValue = %s, want nil", got)
+	}
+	if got := cfg.outputValue("out"); got != nil {
+		t.Errorf("outputValue = %s, want nil", got)
+	}
+	if calls != 0 {
+		t.Errorf("transforms called %d times for excluded content, want 0", calls)
+	}
+}
+
+// TestContentConfig_Transform_ReceivesDecodedValue verifies the shape the
+// transform sees for each JSON type and that its return value is what the
+// record carries.
+func TestContentConfig_Transform_ReceivesDecodedValue(t *testing.T) {
+	type payload struct {
+		Password string `json:"password"`
+		User     string `json:"user"`
+	}
 	tests := []struct {
 		name     string
-		redactor func(string) string
-		text     string
+		value    any
+		wantSeen any
+		fn       func(any) any
 		want     string
 	}{
-		{name: "empty text omits", text: "", want: ""},
-		{name: "json object kept", text: `{"a":1}`, want: `{"a":1}`},
-		{name: "json array kept", text: `[1,"two",null]`, want: `[1,"two",null]`},
-		{name: "json string kept", text: `"quoted"`, want: `"quoted"`},
-		{name: "json number kept", text: `42`, want: `42`},
-		{name: "json boolean kept", text: `false`, want: `false`},
-		{name: "json null kept", text: `null`, want: `null`},
-		{name: "non-json becomes json string", text: `plain text`, want: `"plain text"`},
-		{name: "truncated json becomes json string", text: `{"a":`, want: `"{\"a\":"`},
 		{
-			name:     "redactor applied to json text",
-			redactor: func(s string) string { return strings.ReplaceAll(s, "secret", "***") },
-			text:     `{"token":"secret"}`,
-			want:     `{"token":"***"}`,
+			name:     "struct arrives as map and a key can be deleted",
+			value:    payload{Password: "secret", User: "harry"},
+			wantSeen: map[string]any{"password": "secret", "user": "harry"},
+			fn: func(v any) any {
+				m, ok := v.(map[string]any)
+				if !ok {
+					return "not a map"
+				}
+				delete(m, "password")
+				return m
+			},
+			want: `{"user":"harry"}`,
 		},
 		{
-			name:     "redactor returning non-json becomes json string",
-			redactor: func(string) string { return "[REDACTED]" },
-			text:     `{"token":"secret"}`,
-			want:     `"[REDACTED]"`,
+			name:     "string arrives as string",
+			value:    "secret",
+			wantSeen: "secret",
+			fn:       func(any) any { return "***" },
+			want:     `"***"`,
 		},
 		{
-			name:     "redactor returning invalid json becomes json string",
-			redactor: func(s string) string { return s[:len(s)-1] },
-			text:     `{"token":"secret"}`,
-			want:     `"{\"token\":\"secret\""`,
+			name:     "number arrives as float64",
+			value:    41,
+			wantSeen: float64(41),
+			fn: func(v any) any {
+				f, ok := v.(float64)
+				if !ok {
+					return "not a float64"
+				}
+				return f + 1
+			},
+			want: `42`,
 		},
 		{
-			name:     "redactor returning empty omits",
-			redactor: func(string) string { return "" },
-			text:     `{"token":"secret"}`,
-			want:     "",
+			name:     "array arrives as []any",
+			value:    []string{"a", "b"},
+			wantSeen: []any{"a", "b"},
+			fn: func(v any) any {
+				a, ok := v.([]any)
+				if !ok {
+					return "not a slice"
+				}
+				return len(a)
+			},
+			want: `2`,
+		},
+		{
+			name:     "boolean arrives as bool",
+			value:    true,
+			wantSeen: true,
+			fn: func(v any) any {
+				b, ok := v.(bool)
+				if !ok {
+					return "not a bool"
+				}
+				return !b
+			},
+			want: `false`,
+		},
+		{
+			name:     "transform may replace the whole value",
+			value:    map[string]int{"value": 41},
+			wantSeen: map[string]any{"value": float64(41)},
+			fn:       func(any) any { return map[string]string{"redacted": "yes"} },
+			want:     `{"redacted":"yes"}`,
+		},
+		{
+			name:     "transform returning nil records null",
+			value:    "x",
+			wantSeen: "x",
+			fn:       func(any) any { return nil },
+			want:     `null`,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := ContentConfig{Redactor: tt.redactor}
-			got := cfg.contentValue(tt.text)
+			var seenJSON []byte
+			var seenType string
+			cfg := ContentConfig{InputTransform: func(v any) any {
+				// Snapshot before tt.fn, which may mutate v in place.
+				seenJSON, _ = json.Marshal(v)
+				seenType = fmt.Sprintf("%T", v)
+				return tt.fn(v)
+			}}
+			got := cfg.inputValue(tt.value)
+			if string(got) != tt.want {
+				t.Errorf("inputValue = %s, want %s", got, tt.want)
+			}
+			wantJSON, _ := json.Marshal(tt.wantSeen)
+			if string(seenJSON) != string(wantJSON) || seenType != fmt.Sprintf("%T", tt.wantSeen) {
+				t.Errorf("transform saw %s (%s), want %s (%T)", seenJSON, seenType, wantJSON, tt.wantSeen)
+			}
+		})
+	}
+}
+
+// TestContentConfig_Transform_FailureOmitsField verifies that a transform
+// that panics, or returns a value that cannot be marshaled, omits the
+// field. The raw value is never recorded in its place.
+func TestContentConfig_Transform_FailureOmitsField(t *testing.T) {
+	tests := []struct {
+		name string
+		fn   func(any) any
+	}{
+		{"panics", func(any) any { panic("boom") }},
+		{"panics with error", func(any) any { panic(errors.New("boom")) }},
+		{"returns unmarshalable", func(any) any { return make(chan int) }},
+		{"panics on unexpected shape", func(v any) any {
+			if _, ok := v.(map[string]any); !ok {
+				panic(fmt.Sprintf("unexpected %T", v))
+			}
+			return v
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := ContentConfig{
+				InputTransform:  tt.fn,
+				OutputTransform: tt.fn,
+				Operations: ContentOperations{Overrides: []OperationOverride{
+					{OperationName: "step", Result: tt.fn},
+				}},
+			}
+			if got := cfg.inputValue("secret"); got != nil {
+				t.Errorf("inputValue = %s, want nil", got)
+			}
+			if got := cfg.outputValue("secret"); got != nil {
+				t.Errorf("outputValue = %s, want nil", got)
+			}
+			if got := cfg.resultValue("step", `"secret"`); got != nil {
+				t.Errorf("resultValue = %s, want nil", got)
+			}
+		})
+	}
+}
+
+// TestContentConfig_ResultValue verifies the wire-text path: the override
+// transform receives valid JSON decoded, and anything else as a string.
+func TestContentConfig_ResultValue(t *testing.T) {
+	tests := []struct {
+		name     string
+		text     string
+		wantSeen any
+		want     string
+	}{
+		{"empty text omits", "", nil, ""},
+		{"json object", `{"a":1}`, map[string]any{"a": float64(1)}, `{"a":1}`},
+		{"json array", `[1,"two",null]`, []any{float64(1), "two", nil}, `[1,"two",null]`},
+		{"json string", `"quoted"`, "quoted", `"quoted"`},
+		{"json number", `42`, float64(42), `42`},
+		{"json boolean", `false`, false, `false`},
+		{"json null", `null`, nil, `null`},
+		{"non-json arrives as string", `plain text`, "plain text", `"plain text"`},
+		{"cut json arrives as string", `{"a":`, `{"a":`, `"{\"a\":"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var seen any
+			called := false
+			cfg := ContentConfig{Operations: ContentOperations{Overrides: []OperationOverride{{
+				OperationName: "step",
+				Result: func(v any) any {
+					called = true
+					seen = v
+					return v
+				},
+			}}}}
+			got := cfg.resultValue("step", tt.text)
 			if tt.want == "" {
-				if got != nil {
-					t.Errorf("contentValue(%q) = %s, want nil", tt.text, got)
+				if got != nil || called {
+					t.Errorf("resultValue(%q) = %s (called=%v), want nil and no call", tt.text, got, called)
 				}
 				return
 			}
 			if string(got) != tt.want {
-				t.Errorf("contentValue(%q) = %s, want %s", tt.text, got, tt.want)
+				t.Errorf("resultValue(%q) = %s, want %s", tt.text, got, tt.want)
 			}
 			if !json.Valid(got) {
-				t.Errorf("contentValue(%q) = %s is not valid JSON", tt.text, got)
+				t.Errorf("resultValue(%q) = %s is not valid JSON", tt.text, got)
+			}
+			seenJSON, _ := json.Marshal(seen)
+			wantJSON, _ := json.Marshal(tt.wantSeen)
+			if string(seenJSON) != string(wantJSON) {
+				t.Errorf("transform saw %v (%T), want %v (%T)", seen, seen, tt.wantSeen, tt.wantSeen)
 			}
 		})
+	}
+}
+
+func TestContentConfig_ResultValue_RequiresOverrideWithResult(t *testing.T) {
+	cfg := ContentConfig{Operations: ContentOperations{Overrides: []OperationOverride{
+		{OperationName: "no-result"},
+		{OperationName: "other", Result: func(v any) any { return v }},
+	}}}
+	if got := cfg.resultValue("no-result", `1`); got != nil {
+		t.Errorf("override without Result recorded %s, want nil", got)
+	}
+	if got := cfg.resultValue("unlisted", `1`); got != nil {
+		t.Errorf("unlisted operation recorded %s, want nil", got)
+	}
+	if got := cfg.resultValue("other", `1`); string(got) != `1` {
+		t.Errorf("listed operation recorded %s, want 1", got)
+	}
+}
+
+func TestContentOperations_LastOverrideWins(t *testing.T) {
+	cfg := ContentConfig{Operations: ContentOperations{Overrides: []OperationOverride{
+		{OperationName: "step", Result: func(any) any { return "first" }},
+		{OperationName: "step", Result: func(any) any { return "second" }},
+	}}}
+	if got := cfg.resultValue("step", `1`); string(got) != `"second"` {
+		t.Errorf("resultValue = %s, want the last override's value", got)
+	}
+	cfg.Operations.Overrides = append(cfg.Operations.Overrides, OperationOverride{OperationName: "step", Exclude: true})
+	r := &Record{Operations: []OperationRecord{{ID: "1", Name: "step"}}}
+	cfg.applyOperations(r)
+	if len(r.Operations) != 0 {
+		t.Errorf("operation kept despite a later Exclude override: %+v", r.Operations)
+	}
+}
+
+func TestContentConfig_ApplyOperations_ExcludeDropsOperation(t *testing.T) {
+	ops := []OperationRecord{
+		{ID: "1", Name: "keep", Type: "STEP"},
+		{ID: "2", Name: "drop", Type: "STEP"},
+		{ID: "3", Name: "keep-also", Type: "STEP"},
+	}
+	r := &Record{Operations: ops}
+	cfg := ContentConfig{Operations: ContentOperations{Overrides: []OperationOverride{
+		{OperationName: "drop", Exclude: true},
+	}}}
+	cfg.applyOperations(r)
+
+	if len(r.Operations) != 2 {
+		t.Fatalf("expected 2 operations, got %d", len(r.Operations))
+	}
+	for _, op := range r.Operations {
+		if op.Name == "drop" {
+			t.Error("excluded operation should not be present")
+		}
+	}
+	// The caller's slice is untouched.
+	if ops[1].Name != "drop" || len(ops) != 3 {
+		t.Errorf("applyOperations modified the caller's backing array: %+v", ops)
+	}
+}
+
+func TestContentConfig_ApplyOperations_ExcludeErrors(t *testing.T) {
+	r := &Record{
+		Error: &ErrorRecord{Type: "E", Message: "execution"},
+		Operations: []OperationRecord{
+			{ID: "1", Name: "a", Error: &ErrorRecord{Type: "E", Message: "m"}},
+			{ID: "2", Name: "b", Status: "SUCCEEDED"},
+		},
+	}
+	cfg := ContentConfig{Operations: ContentOperations{ExcludeErrors: true}}
+	cfg.applyOperations(r)
+
+	for _, op := range r.Operations {
+		if op.Error != nil {
+			t.Errorf("operation %s should have Error removed", op.ID)
+		}
+	}
+	if r.Error == nil {
+		t.Error("execution-level error must always be kept")
+	}
+}
+
+func TestContentConfig_ApplyOperations_ZeroValueKeepsEverything(t *testing.T) {
+	r := &Record{
+		Input:  json.RawMessage(`"in"`),
+		Output: json.RawMessage(`"out"`),
+		Error:  &ErrorRecord{Type: "E", Message: "m"},
+		Operations: []OperationRecord{
+			{ID: "1", Name: "a", Error: &ErrorRecord{Type: "E", Message: "m"}, Result: json.RawMessage(`"r"`)},
+		},
+	}
+	var cfg ContentConfig
+	cfg.applyOperations(r)
+
+	if r.Input == nil || r.Output == nil || r.Error == nil {
+		t.Error("record-level fields should be preserved")
+	}
+	if len(r.Operations) != 1 || r.Operations[0].Error == nil || r.Operations[0].Result == nil {
+		t.Errorf("operation fields should be preserved: %+v", r.Operations)
 	}
 }
 
 // TestContentConfig_NoLengthCap verifies that content is never cut by
 // length. The exporter size limiter is the only bound on a record.
 func TestContentConfig_NoLengthCap(t *testing.T) {
-	cfg := DefaultContentConfig()
+	cfg := withResults("step")
 	big := strings.Repeat("x", 1<<20)
-	in := cfg.marshalContent(big)
+	in := cfg.inputValue(big)
 	if string(in) != jsonString(big) {
 		t.Errorf("1 MiB input was altered: len %d", len(in))
 	}
-	res := cfg.contentValue(`"` + big + `"`)
+	res := cfg.resultValue("step", `"`+big+`"`)
 	if len(res) != len(big)+2 {
 		t.Errorf("1 MiB result was altered: len %d", len(res))
 	}
 }
 
-// TestPlugin_Content_RedactorAppliesToInputOutputAndResults drives the
-// plugin end to end and asserts that the Redactor sees the input, the
-// output, and each operation result, and that the record carries the
-// redacted JSON values with no wrapper object.
-func TestPlugin_Content_RedactorAppliesToInputOutputAndResults(t *testing.T) {
+// TestPlugin_Content_TransformsApplyToInputOutputAndResults drives the
+// plugin end to end and asserts that each transform sees its own value,
+// that an opted-in result is recorded, and that the record carries the
+// transformed JSON values with no wrapper object.
+func TestPlugin_Content_TransformsApplyToInputOutputAndResults(t *testing.T) {
 	ctx := t.Context()
 	var seen []string
-	content := allContent()
-	content.Redactor = func(text string) string {
-		seen = append(seen, text)
-		return strings.ReplaceAll(text, "secret", "***")
+	note := func(label string, v any) {
+		b, _ := json.Marshal(v)
+		seen = append(seen, label+":"+string(b))
+	}
+	mask := func(v any) any {
+		if m, ok := v.(map[string]any); ok {
+			for k, val := range m {
+				if val == "secret" {
+					m[k] = "***"
+				}
+			}
+			return m
+		}
+		if s, ok := v.(string); ok {
+			return strings.ReplaceAll(s, "secret", "***")
+		}
+		return v
+	}
+	content := ContentConfig{
+		InputTransform:  func(v any) any { note("input", v); return mask(v) },
+		OutputTransform: func(v any) any { note("output", v); return mask(v) },
+		Operations: ContentOperations{Overrides: []OperationOverride{
+			{OperationName: "increment", Result: func(v any) any { note("increment", v); return mask(v) }},
+			{OperationName: "raw", Result: func(v any) any { note("raw", v); return mask(v) }},
+		}},
 	}
 	exp := &capturingExporter{}
 	factory := New(Config{Content: content, Exporters: []Exporter{exp}})
@@ -201,6 +485,12 @@ func TestPlugin_Content_RedactorAppliesToInputOutputAndResults(t *testing.T) {
 		StartTimestamp: start, EndTimestamp: start.Add(time.Second),
 		Result: `not json secret`,
 	})
+	plugin.OnOperationEnd(ctx, durable.OperationHookInfo{
+		ID: "op-3", Name: "unlisted", Type: "STEP", SubType: "Step",
+		Status: durable.PluginOperationSucceeded, Attempt: 1,
+		StartTimestamp: start, EndTimestamp: start.Add(time.Second),
+		Result: `"secret"`,
+	})
 	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
 		Status:          durable.PluginInvocationSucceeded,
 		ExecutionResult: "secret output",
@@ -212,23 +502,31 @@ func TestPlugin_Content_RedactorAppliesToInputOutputAndResults(t *testing.T) {
 	}
 	rec := records[0]
 	if string(rec.Input) != `{"password":"***"}` {
-		t.Errorf("Input = %s, want redacted object", rec.Input)
+		t.Errorf("Input = %s, want masked object", rec.Input)
 	}
 	if string(rec.Output) != `"*** output"` {
-		t.Errorf("Output = %s, want redacted JSON string", rec.Output)
+		t.Errorf("Output = %s, want masked JSON string", rec.Output)
 	}
-	if len(rec.Operations) != 2 {
-		t.Fatalf("got %d operations, want 2", len(rec.Operations))
+	if len(rec.Operations) != 3 {
+		t.Fatalf("got %d operations, want 3", len(rec.Operations))
 	}
 	if string(rec.Operations[0].Result) != `{"value":"***"}` {
-		t.Errorf("op-1 Result = %s, want redacted object", rec.Operations[0].Result)
+		t.Errorf("op-1 Result = %s, want masked object", rec.Operations[0].Result)
 	}
 	if string(rec.Operations[1].Result) != `"not json ***"` {
-		t.Errorf("op-2 Result = %s, want redacted JSON string", rec.Operations[1].Result)
+		t.Errorf("op-2 Result = %s, want masked JSON string", rec.Operations[1].Result)
 	}
-	wantSeen := []string{`{"password":"secret"}`, `{"value":"secret"}`, `not json secret`, `"secret output"`}
+	if rec.Operations[2].Result != nil {
+		t.Errorf("op-3 Result = %s, want nil for an operation without an override", rec.Operations[2].Result)
+	}
+	wantSeen := []string{
+		`input:{"password":"secret"}`,
+		`increment:{"value":"secret"}`,
+		`raw:"not json secret"`,
+		`output:"secret output"`,
+	}
 	if strings.Join(seen, "\n") != strings.Join(wantSeen, "\n") {
-		t.Errorf("redactor saw %q, want %q", seen, wantSeen)
+		t.Errorf("transforms saw %q, want %q", seen, wantSeen)
 	}
 
 	// The emitted JSON carries the values directly, not {value: ...}.
@@ -253,21 +551,18 @@ func TestPlugin_Content_RedactorAppliesToInputOutputAndResults(t *testing.T) {
 	if decoded.Operations[1]["result"] != "not json ***" {
 		t.Errorf("decoded op-2 result = %v, want string", decoded.Operations[1]["result"])
 	}
+	if _, present := decoded.Operations[2]["result"]; present {
+		t.Errorf("result key present on op-3: %v", decoded.Operations[2])
+	}
 }
 
-// TestPlugin_Content_ResultsExcludedByDefault verifies the default
-// ContentConfig omits operation results and never calls the Redactor on
-// them, while input and output are still included.
-func TestPlugin_Content_ResultsExcludedByDefault(t *testing.T) {
+// TestPlugin_Content_ResultsOmittedByDefault verifies the zero-value
+// ContentConfig omits operation results while input and output are
+// included, and that the omitted result leaves no key.
+func TestPlugin_Content_ResultsOmittedByDefault(t *testing.T) {
 	ctx := t.Context()
-	var seen []string
-	content := DefaultContentConfig()
-	content.Redactor = func(text string) string {
-		seen = append(seen, text)
-		return text
-	}
 	exp := &capturingExporter{}
-	factory := New(Config{Content: content, Exporters: []Exporter{exp}})
+	factory := New(Config{Exporters: []Exporter{exp}})
 	plugin := startTestPlugin(t, ctx, factory, durable.InvocationHookInfo{
 		ExecutionArn:   "arn:test",
 		ExecutionInput: map[string]int{"value": 41},
@@ -292,9 +587,6 @@ func TestPlugin_Content_ResultsExcludedByDefault(t *testing.T) {
 	if len(rec.Operations) != 1 || rec.Operations[0].Result != nil {
 		t.Errorf("operations = %+v, want one operation without a result", rec.Operations)
 	}
-	if len(seen) != 2 {
-		t.Errorf("redactor saw %q, want only input and output", seen)
-	}
 
 	b, err := json.Marshal(rec)
 	if err != nil {
@@ -311,19 +603,16 @@ func TestPlugin_Content_ResultsExcludedByDefault(t *testing.T) {
 	}
 }
 
-// TestPlugin_Content_OmittedContentHasNoKey verifies that excluded content
-// leaves no key in the emitted JSON and never reaches the Redactor.
-func TestPlugin_Content_OmittedContentHasNoKey(t *testing.T) {
+// TestPlugin_Content_ExcludedContentHasNoKey verifies that excluded input
+// and output leave no key in the emitted JSON and that the execution error
+// is recorded even when operation errors are excluded.
+func TestPlugin_Content_ExcludedContentHasNoKey(t *testing.T) {
 	ctx := t.Context()
 	exp := &capturingExporter{}
-	redactorCalls := 0
 	content := ContentConfig{
-		IncludeOperationErrors: true,
-		IncludeExecutionError:  true,
-		Redactor: func(text string) string {
-			redactorCalls++
-			return text
-		},
+		ExcludeInput:  true,
+		ExcludeOutput: true,
+		Operations:    ContentOperations{ExcludeErrors: true},
 	}
 	factory := New(Config{Content: content, Exporters: []Exporter{exp}})
 	plugin := startTestPlugin(t, ctx, factory, durable.InvocationHookInfo{
@@ -332,11 +621,11 @@ func TestPlugin_Content_OmittedContentHasNoKey(t *testing.T) {
 	})
 	plugin.OnOperationEnd(ctx, durable.OperationHookInfo{
 		ID: "op-1", Name: "increment", Type: "STEP",
-		Status: durable.PluginOperationSucceeded, Result: `{"value":42}`,
+		Status: durable.PluginOperationFailed, Error: errors.New("step failed"),
 	})
 	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
-		Status:          durable.PluginInvocationSucceeded,
-		ExecutionResult: map[string]int{"value": 42},
+		Status:         durable.PluginInvocationFailed,
+		ExecutionError: errors.New("execution failed"),
 	})
 
 	records := exp.snapshot()
@@ -356,6 +645,9 @@ func TestPlugin_Content_OmittedContentHasNoKey(t *testing.T) {
 			t.Errorf("%s key present in %v", key, decoded)
 		}
 	}
+	if _, present := decoded["error"]; !present {
+		t.Errorf("execution error missing from %v", decoded)
+	}
 	ops, ok := decoded["operations"].([]any)
 	if !ok || len(ops) != 1 {
 		t.Fatalf("operations = %v, want one entry", decoded["operations"])
@@ -364,11 +656,10 @@ func TestPlugin_Content_OmittedContentHasNoKey(t *testing.T) {
 	if !ok {
 		t.Fatalf("operations[0] = %v, want an object", ops[0])
 	}
-	if _, present := op["result"]; present {
-		t.Errorf("result key present in %v", op)
-	}
-	if redactorCalls != 0 {
-		t.Errorf("redactor called %d times for excluded content, want 0", redactorCalls)
+	for _, key := range []string{"result", "error"} {
+		if _, present := op[key]; present {
+			t.Errorf("%s key present in %v", key, op)
+		}
 	}
 }
 
@@ -394,145 +685,5 @@ func TestPlugin_Content_LargeInputIsNotCut(t *testing.T) {
 	}
 	if string(records[0].Input) != jsonString(big) || string(records[0].Output) != jsonString(big) {
 		t.Errorf("input len %d, output len %d, want %d each", len(records[0].Input), len(records[0].Output), len(big)+2)
-	}
-}
-
-func TestContentConfig_ApplyToRecord_ExcludeInput(t *testing.T) {
-	r := &Record{
-		Input:  json.RawMessage(`"input-data"`),
-		Output: json.RawMessage(`"output-data"`),
-		Error:  &ErrorRecord{Type: "TestError", Message: "boom"},
-	}
-	cfg := ContentConfig{IncludeOutput: true, IncludeExecutionError: true}
-	cfg.ApplyToRecord(r)
-
-	if r.Input != nil {
-		t.Error("Input should be excluded")
-	}
-	if r.Output == nil {
-		t.Error("Output should be preserved")
-	}
-	if r.Error == nil {
-		t.Error("Error should be preserved")
-	}
-}
-
-func TestContentConfig_ApplyToRecord_ExcludeOutput(t *testing.T) {
-	r := &Record{
-		Input:  json.RawMessage(`"input-data"`),
-		Output: json.RawMessage(`"output-data"`),
-	}
-	cfg := ContentConfig{IncludeInput: true}
-	cfg.ApplyToRecord(r)
-
-	if r.Input == nil {
-		t.Error("Input should be preserved")
-	}
-	if r.Output != nil {
-		t.Error("Output should be excluded")
-	}
-}
-
-func TestContentConfig_ApplyToRecord_ExcludeExecutionError(t *testing.T) {
-	r := &Record{
-		Error: &ErrorRecord{Type: "Err", Message: "bad"},
-	}
-	cfg := ContentConfig{}
-	cfg.ApplyToRecord(r)
-
-	if r.Error != nil {
-		t.Error("Error should be excluded when IncludeExecutionError is false")
-	}
-}
-
-func TestContentConfig_ApplyToRecord_ExcludeOperationErrors(t *testing.T) {
-	r := &Record{
-		Operations: []OperationRecord{
-			{ID: "1", Name: "a", Error: &ErrorRecord{Type: "E", Message: "m"}},
-			{ID: "2", Name: "b", Status: "SUCCEEDED"},
-		},
-	}
-	cfg := ContentConfig{IncludeInput: true, IncludeOutput: true, IncludeExecutionError: true, IncludeOperationResults: true}
-	cfg.ApplyToRecord(r)
-
-	for _, op := range r.Operations {
-		if op.Error != nil {
-			t.Errorf("operation %s should have Error removed", op.ID)
-		}
-	}
-}
-
-func TestContentConfig_ApplyToRecord_ExcludeOperationResults(t *testing.T) {
-	r := &Record{
-		Operations: []OperationRecord{
-			{ID: "1", Name: "a", Result: json.RawMessage(`"res"`)},
-			{ID: "2", Name: "b"},
-		},
-	}
-	cfg := ContentConfig{
-		IncludeInput:           true,
-		IncludeOutput:          true,
-		IncludeExecutionError:  true,
-		IncludeOperationErrors: true,
-	}
-	cfg.ApplyToRecord(r)
-
-	for _, op := range r.Operations {
-		if op.Result != nil {
-			t.Errorf("operation %s should have Result removed", op.ID)
-		}
-	}
-}
-
-func TestContentConfig_ApplyToRecord_OperationFilter(t *testing.T) {
-	r := &Record{
-		Operations: []OperationRecord{
-			{ID: "1", Name: "keep", Type: "STEP"},
-			{ID: "2", Name: "drop", Type: "STEP"},
-			{ID: "3", Name: "keep-also", Type: "STEP"},
-		},
-	}
-	cfg := DefaultContentConfig()
-	cfg.OperationFilter = func(op OperationRecord) bool {
-		return op.Name != "drop"
-	}
-	cfg.ApplyToRecord(r)
-
-	if len(r.Operations) != 2 {
-		t.Fatalf("expected 2 operations, got %d", len(r.Operations))
-	}
-	for _, op := range r.Operations {
-		if op.Name == "drop" {
-			t.Error("filtered operation should not be present")
-		}
-	}
-}
-
-func TestContentConfig_ApplyToRecord_AllIncluded(t *testing.T) {
-	r := &Record{
-		Input:  json.RawMessage(`"in"`),
-		Output: json.RawMessage(`"out"`),
-		Error:  &ErrorRecord{Type: "E", Message: "m"},
-		Operations: []OperationRecord{
-			{ID: "1", Error: &ErrorRecord{Type: "E", Message: "m"}, Result: json.RawMessage(`"r"`)},
-		},
-	}
-	cfg := allContent()
-	cfg.ApplyToRecord(r)
-
-	if r.Input == nil {
-		t.Error("Input should be preserved")
-	}
-	if r.Output == nil {
-		t.Error("Output should be preserved")
-	}
-	if r.Error == nil {
-		t.Error("Error should be preserved")
-	}
-	if r.Operations[0].Error == nil {
-		t.Error("Operation Error should be preserved")
-	}
-	if r.Operations[0].Result == nil {
-		t.Error("Operation Result should be preserved")
 	}
 }

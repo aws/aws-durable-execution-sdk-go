@@ -82,19 +82,24 @@ func ExampleNew_withSampling() {
 	// true
 }
 
-// ExampleNew_withContentConfig demonstrates filtering record content to
-// exclude operation results and apply a custom redactor.
+// ExampleNew_withContentConfig demonstrates shaping record content: a
+// sensitive input field is removed, the output is omitted, one operation
+// opts its result in, and another is dropped from the record.
 func ExampleNew_withContentConfig() {
 	plugin := telemetry.New(telemetry.Config{
 		Content: telemetry.ContentConfig{
-			IncludeInput:            true,
-			IncludeOutput:           true,
-			IncludeOperationResults: false, // omit operation results
-			IncludeOperationErrors:  true,
-			IncludeExecutionError:   true,
-			Redactor: func(s string) string {
-				// Replace sensitive patterns before storing
-				return s
+			InputTransform: func(v any) any {
+				if m, ok := v.(map[string]any); ok {
+					delete(m, "password")
+				}
+				return v
+			},
+			ExcludeOutput: true,
+			Operations: telemetry.ContentOperations{
+				Overrides: []telemetry.OperationOverride{
+					{OperationName: "fetch-user", Result: func(v any) any { return v }},
+					{OperationName: "debug-dump", Exclude: true},
+				},
 			},
 		},
 	})

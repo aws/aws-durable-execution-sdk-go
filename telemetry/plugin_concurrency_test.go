@@ -38,7 +38,7 @@ func awaitSignal(t *testing.T, signal <-chan struct{}) {
 func TestPlugin_ConcurrentInvocations_IsolateRecords(t *testing.T) {
 	ctx := t.Context()
 	exp := &capturingExporter{}
-	factory := New(Config{Exporters: []Exporter{exp}, Content: allContent()})
+	factory := New(Config{Exporters: []Exporter{exp}, Content: withResults("shared")})
 	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	infos := []durable.InvocationHookInfo{
 		{ExecutionArn: "arn:aws:lambda:us-east-1:123456789012:function:fn-a:1/durable-execution/name-a/id-a", RequestID: "request-a", ExecutionInput: "input-a", ExecutionStartTimestamp: start},
@@ -78,7 +78,7 @@ func TestPlugin_ConcurrentInvocations_IsolateRecords(t *testing.T) {
 			} else {
 				close(bStarted)
 			}
-			plugin.OnOperationEnd(ctx, durable.OperationHookInfo{ExecutionArn: info.ExecutionArn, ID: "shared-id", Type: "STEP", Status: durable.PluginOperationSucceeded, Result: fmt.Sprintf("result-%d", i)})
+			plugin.OnOperationEnd(ctx, durable.OperationHookInfo{ExecutionArn: info.ExecutionArn, ID: "shared-id", Name: "shared", Type: "STEP", Status: durable.PluginOperationSucceeded, Result: fmt.Sprintf("result-%d", i)})
 			logs <- plugin.EnrichLogContext(ctx)
 			end := durable.InvocationEndHookInfo{ExecutionArn: info.ExecutionArn, Status: durable.PluginInvocationSucceeded, ExecutionResult: "output-a"}
 			if i == 1 {
@@ -141,7 +141,7 @@ func TestPlugin_ConcurrentOperations_PreserveUpdates(t *testing.T) {
 	ctx := t.Context()
 	exp := &capturingExporter{}
 	info := durable.InvocationHookInfo{ExecutionArn: "arn:aws:lambda:us-east-1:123456789012:function:fn:1/durable-execution/name/id"}
-	plugin := startTestPlugin(t, ctx, New(Config{Exporters: []Exporter{exp}, Content: allContent()}), info)
+	plugin := startTestPlugin(t, ctx, New(Config{Exporters: []Exporter{exp}, Content: withResults("op")}), info)
 	const count = 64
 	ready := make(chan struct{}, count)
 	start := make(chan struct{})
@@ -154,7 +154,7 @@ func TestPlugin_ConcurrentOperations_PreserveUpdates(t *testing.T) {
 			<-start
 			id := fmt.Sprintf("op-%d", i)
 			plugin.OnOperationStart(ctx, durable.OperationHookInfo{ID: id, Type: "STEP", Status: durable.PluginOperationStarted})
-			plugin.OnOperationEnd(ctx, durable.OperationHookInfo{ID: id, Type: "STEP", Status: durable.PluginOperationSucceeded, Result: id})
+			plugin.OnOperationEnd(ctx, durable.OperationHookInfo{ID: id, Name: "op", Type: "STEP", Status: durable.PluginOperationSucceeded, Result: id})
 			if fields := plugin.EnrichLogContext(ctx); fields["execution_arn"] != info.ExecutionArn || fields["function_name"] != "fn" {
 				t.Errorf("log fields = %v", fields)
 			}

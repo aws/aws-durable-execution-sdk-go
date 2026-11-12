@@ -64,10 +64,11 @@ excluded from the operations array. `OperationDetail` and the SDK's
 `durable.WithPluginChildOperationsDepth` still limit the operations reported.
 Subsequent hooks update the buffer by operation ID.
 
-Exporters and content callbacks remain shared. `Redactor` and `OperationFilter`
-may be called concurrently by different invocations. Callers must make these
-functions and their captured state safe for concurrent use. Within one invocation,
-content callbacks remain serialized.
+Exporters and content transforms remain shared. `InputTransform`,
+`OutputTransform`, and each `OperationOverride.Result` may be called concurrently
+by different invocations. Callers must make these functions and their captured
+state safe for concurrent use. Within one invocation, content transforms remain
+serialized.
 
 Each invocation waits for its own in-flight on-change dispatches before its final
 emission. It does not wait for another invocation's dispatches. Shared exporters
@@ -124,45 +125,93 @@ plugin := telemetry.New(telemetry.Config{
 
 ### ContentConfig
 
-Controls what data is included in emitted records and how it is formatted.
+Controls what content appears in emitted records.
 
 ```go
 type ContentConfig struct {
-    IncludeInput            bool
-    IncludeOutput           bool
-    IncludeOperationResults bool
-    IncludeOperationErrors  bool
-    IncludeExecutionError   bool
-    OperationFilter         func(OperationRecord) bool
-    Redactor                func(string) string
+    ExcludeInput    bool
+    InputTransform  func(any) any
+    ExcludeOutput   bool
+    OutputTransform func(any) any
+    Operations      ContentOperations
+}
+
+type ContentOperations struct {
+    Overrides     []OperationOverride
+    ExcludeErrors bool
+}
+
+type OperationOverride struct {
+    OperationName string
+    Exclude       bool
+    Result        func(any) any
 }
 ```
 
-When the entire struct is left at its zero value, the defaults apply: input,
-output, operation errors, and the execution error are included; operation
-results are not. `DefaultContentConfig()` returns the default configuration
-explicitly. If any `Include*` field is set, the others keep the value you
-give them, so set every field you need.
+The zero value includes the execution input and output unchanged, omits
+operation results, and includes operation and execution errors. Each field
+changes one thing, so set only the fields you need.
+
+```go
+telemetry.New(telemetry.Config{
+    Content: telemetry.ContentConfig{
+        // Remove a sensitive field from the recorded input.
+        InputTransform: func(v any) any {
+            if m, ok := v.(map[string]any); ok {
+                delete(m, "password")
+            }
+            return v
+        },
+        // Do not record the output at all.
+        ExcludeOutput: true,
+        Operations: telemetry.ContentOperations{
+            Overrides: []telemetry.OperationOverride{
+                // Record this operation's result, masking one field.
+                {OperationName: "fetch-user", Result: func(v any) any {
+                    if m, ok := v.(map[string]any); ok {
+                        m["email"] = "***"
+                    }
+                    return v
+                }},
+                // Drop this operation from the record.
+                {OperationName: "debug-dump", Exclude: true},
+            },
+        },
+    },
+})
+```
 
 Content fields are JSON values (`json.RawMessage`):
 
 - `Record.Input` and `Record.Output` are the handler's typed input and result,
   marshaled once. A Go `string` becomes a JSON string.
-- `OperationRecord.Result` is the checkpointed result. The wire text is used
-  as-is when it is valid JSON; otherwise it is emitted as a JSON string.
+- `OperationRecord.Result` is the checkpointed result. It is recorded only for
+  operations named by an override that sets `Result`.
+
+A transform receives the content decoded as a JSON value: `map[string]any`,
+`[]any`, `string`, `float64`, `bool`, or `nil`. A struct arrives as a
+`map[string]any`, so a field can be deleted or overwritten by key. The return
+value is what the record carries. `InputTransform` and `OutputTransform` are
+not called when the matching `Exclude*` field is true.
+
+`OperationOverride.Result` receives the checkpointed text decoded as a JSON
+value, or the text itself as a `string` when it is not valid JSON. The plugin
+does not run the operation's own serializer, so an operation with a custom
+Serdes delivers its serialized form. To record a result unchanged, return the
+argument.
+
+If a transform panics, or returns a value that cannot be marshaled, the field
+is omitted. The untransformed value is never recorded in its place.
+
+`Overrides` are matched by `OperationName`. When several entries share a name,
+the last one wins. `ExcludeErrors` omits the `error` field from operation
+entries; the execution-level `error` on the record is always included.
 
 There is no per-field length cap. An exporter that implements `SizeLimiter`
 bounds the whole record instead; see [Size Limits](#size-limits).
 
-`Redactor` receives the text of every included content value before it is
-stored: the marshaled JSON for input and output, and the wire text for an
-operation result. If the returned text is valid JSON it is emitted as that
-value; otherwise it is emitted as a JSON string. If it is empty, the field is
-omitted. `Redactor` is not called for content that the `Include*` flags
-exclude.
-
-`Redactor` and `OperationFilter` may run concurrently across invocations. Their
-functions and captured state must support concurrent use. See
+Transforms may run concurrently across invocations. Their functions and
+captured state must support concurrent use. See
 [Invocation lifetime and concurrency](#invocation-lifetime-and-concurrency).
 
 ### OperationsFormat

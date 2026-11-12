@@ -2,7 +2,6 @@ package telemetry
 
 import (
 	"context"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -418,20 +417,19 @@ func TestPlugin_SkipsExecutionOperation(t *testing.T) {
 func TestPlugin_CreatePlugin_InitializesMetadataAndInput(t *testing.T) {
 	ctx := t.Context()
 	arn := "arn:aws:lambda:us-east-1:123456789012:function:fn:1/durable-execution/name/id"
-	var redacted []string
-	content := DefaultContentConfig()
-	content.Redactor = func(value string) string {
-		// value is the marshaled JSON text, so the input string arrives
-		// quoted. Edit inside the quotes so the result stays valid JSON
-		// and the record stores it as-is.
-		redacted = append(redacted, value)
-		return strings.Replace(value, "input", "redacted:input", 1)
-	}
+	var redacted []any
+	content := ContentConfig{InputTransform: func(v any) any {
+		// v is the decoded JSON value, so the input string arrives as a
+		// Go string.
+		redacted = append(redacted, v)
+		s, _ := v.(string)
+		return "redacted:" + s
+	}}
 	exp := &capturingExporter{}
 	factory := New(Config{EmitMode: EmitAlways, Content: content, Exporters: []Exporter{exp}})
 	info := durable.InvocationHookInfo{ExecutionArn: arn, ExecutionInput: "input", ExecutionStartTimestamp: time.Now().Add(-time.Hour)}
 	plugin := createTestPlugin(t, ctx, factory, info)
-	if len(redacted) != 1 || redacted[0] != `"input"` {
+	if len(redacted) != 1 || redacted[0] != "input" {
 		t.Fatalf("input was not prepared by CreatePlugin: %v", redacted)
 	}
 	fields := plugin.EnrichLogContext(ctx)
