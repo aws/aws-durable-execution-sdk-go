@@ -146,8 +146,8 @@ func TestRecord_OmitsEmptyOptionalFields(t *testing.T) {
 	}
 
 	optionals := []string{
-		"endTimestamp", "durationMs", "input", "output", "error",
-		"executionName", "functionName", "custom",
+		"startTime", "endTime", "durationMs", "input", "output", "error",
+		"executionName", "custom",
 	}
 	for _, field := range optionals {
 		if _, present := decoded[field]; present {
@@ -155,9 +155,12 @@ func TestRecord_OmitsEmptyOptionalFields(t *testing.T) {
 		}
 	}
 
-	// operations should always be present (even empty).
-	if _, present := decoded["operations"]; !present {
-		t.Error("operations should always be present, even when empty")
+	// operations should always be present (even empty). The identity
+	// fields are always present too, so every record has the same keys.
+	for _, field := range []string{"operations", "functionName", "functionQualifier", "region", "accountId"} {
+		if _, present := decoded[field]; !present {
+			t.Errorf("field %q should always be present, even when empty", field)
+		}
 	}
 }
 

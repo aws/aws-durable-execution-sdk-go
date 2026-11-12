@@ -78,7 +78,7 @@ func (e *RedshiftExporter) Export(ctx context.Context, record Record) error {
 		return fmt.Errorf("telemetry.RedshiftExporter: %w", err)
 	}
 
-	emittedAt := record.EmittedAt.Format(dynamoDBTimeFormat)
+	emittedAt := formatTimestamp(record.EmittedAt)
 
 	sql := fmt.Sprintf(
 		"INSERT INTO %s (execution_arn, emitted_at, status, record_json) VALUES (:arn, :ts, :status, :json)",

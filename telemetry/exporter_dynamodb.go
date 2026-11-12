@@ -25,7 +25,8 @@ type DynamoDBAPI interface {
 // DynamoDBExporter writes records to Amazon DynamoDB via PutItem.
 //
 // Partition key value is the record's ExecutionArn. Sort key value (when
-// present) is the record's EmittedAt timestamp in ISO 8601 format — so
+// present) is the record's EmittedAt timestamp in the record's own
+// timestamp format (UTC, millisecond precision, Z suffix) — so
 // a full history of every record ever emitted for a given execution
 // accumulates as separate items sharing the same partition key.
 //
@@ -86,16 +87,16 @@ func (e *DynamoDBExporter) Export(ctx context.Context, record Record) error {
 	item["status"] = &ddbtypes.AttributeValueMemberS{Value: string(record.Status)}
 
 	if record.StartTimestamp != nil {
-		item["startTimestamp"] = &ddbtypes.AttributeValueMemberS{Value: record.StartTimestamp.Format(dynamoDBTimeFormat)}
+		item["startTimestamp"] = &ddbtypes.AttributeValueMemberS{Value: formatTimestamp(*record.StartTimestamp)}
 	}
 	if record.EndTimestamp != nil {
-		item["endTimestamp"] = &ddbtypes.AttributeValueMemberS{Value: record.EndTimestamp.Format(dynamoDBTimeFormat)}
+		item["endTimestamp"] = &ddbtypes.AttributeValueMemberS{Value: formatTimestamp(*record.EndTimestamp)}
 	}
 	if record.DurationMs != nil {
 		item["durationMs"] = &ddbtypes.AttributeValueMemberN{Value: strconv.FormatInt(*record.DurationMs, 10)}
 	}
 
-	item["emittedAt"] = &ddbtypes.AttributeValueMemberS{Value: record.EmittedAt.Format(dynamoDBTimeFormat)}
+	item["emittedAt"] = &ddbtypes.AttributeValueMemberS{Value: formatTimestamp(record.EmittedAt)}
 
 	// Full record as JSON for downstream consumers.
 	recordJSON, err := json.Marshal(record)
@@ -110,7 +111,7 @@ func (e *DynamoDBExporter) Export(ctx context.Context, record Record) error {
 		if e.SortKeyField != nil {
 			sk = *e.SortKeyField
 		}
-		item[sk] = &ddbtypes.AttributeValueMemberS{Value: record.EmittedAt.Format(dynamoDBTimeFormat)}
+		item[sk] = &ddbtypes.AttributeValueMemberS{Value: formatTimestamp(record.EmittedAt)}
 	}
 
 	_, err = e.API.PutItem(ctx, &dynamodb.PutItemInput{
@@ -131,7 +132,3 @@ func (e *DynamoDBExporter) MaxRecordSizeBytes() int {
 	}
 	return DefaultMaxRecordSizeBytesDynamoDB
 }
-
-// dynamoDBTimeFormat is the ISO 8601 format used for DynamoDB timestamp
-// attributes.
-const dynamoDBTimeFormat = "2006-01-02T15:04:05.000Z07:00"

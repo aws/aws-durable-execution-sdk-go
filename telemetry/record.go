@@ -9,6 +9,7 @@
 package telemetry
 
 import (
+	"encoding/json"
 	"strings"
 	"time"
 )
@@ -71,8 +72,10 @@ type OperationRecord struct {
 	Status   string `json:"status"`
 	ParentID string `json:"parentId,omitempty"`
 
-	StartTimestamp *time.Time `json:"startTimestamp,omitempty"`
-	EndTimestamp   *time.Time `json:"endTimestamp,omitempty"`
+	// StartTimestamp and EndTimestamp serialize as the JSON keys
+	// startTime and endTime. See Record.MarshalJSON for the format.
+	StartTimestamp *time.Time `json:"startTime,omitempty"`
+	EndTimestamp   *time.Time `json:"endTime,omitempty"`
 	DurationMs     *int64     `json:"durationMs,omitempty"`
 
 	Attempt int `json:"attempt,omitempty"`
@@ -94,11 +97,21 @@ type Record struct {
 
 	ExecutionArn  string `json:"executionArn"`
 	ExecutionName string `json:"executionName,omitempty"`
-	FunctionName  string `json:"functionName,omitempty"`
 
-	Status         Status     `json:"status"`
-	StartTimestamp *time.Time `json:"startTimestamp,omitempty"`
-	EndTimestamp   *time.Time `json:"endTimestamp,omitempty"`
+	// FunctionName, FunctionQualifier, Region, and AccountID are parsed
+	// from the execution ARN. They are always emitted, empty when the ARN
+	// does not carry them, so every record has the same identity keys.
+	FunctionName      string `json:"functionName"`
+	FunctionQualifier string `json:"functionQualifier"`
+	Region            string `json:"region"`
+	AccountID         string `json:"accountId"`
+
+	Status Status `json:"status"`
+
+	// StartTimestamp and EndTimestamp serialize as the JSON keys
+	// startTime and endTime. See MarshalJSON for the format.
+	StartTimestamp *time.Time `json:"startTime,omitempty"`
+	EndTimestamp   *time.Time `json:"endTime,omitempty"`
 	DurationMs     *int64     `json:"durationMs,omitempty"`
 
 	// EmittedAt is the time this record was created, refreshed to the
@@ -119,6 +132,66 @@ type Record struct {
 	DroppedOperations int  `json:"droppedOperations,omitempty"`
 	DroppedInput      bool `json:"droppedInput,omitempty"`
 	DroppedOutput     bool `json:"droppedOutput,omitempty"`
+}
+
+// timestampLayout is the serialized form of every timestamp in a record:
+// UTC, exactly three fraction digits, and a literal Z. time.RFC3339Nano
+// trims trailing zeros, so its digit count varies; this layout does not.
+const timestampLayout = "2006-01-02T15:04:05.000Z"
+
+// formatTimestamp renders t in timestampLayout. Non-UTC times are
+// converted to UTC first, so the Z suffix is always correct.
+func formatTimestamp(t time.Time) string {
+	return t.UTC().Format(timestampLayout)
+}
+
+// formatOptionalTimestamp renders t, or returns nil when t is nil, so
+// omitempty drops the key.
+func formatOptionalTimestamp(t *time.Time) *string {
+	if t == nil {
+		return nil
+	}
+	s := formatTimestamp(*t)
+	return &s
+}
+
+// MarshalJSON writes every timestamp in timestampLayout. encoding/json
+// would otherwise call time.Time.MarshalJSON, which uses RFC3339Nano.
+//
+// The method marshals an alias of Record with shadow string fields that
+// carry the same JSON keys as the time.Time fields. encoding/json keeps
+// the shallower field when two fields share a key, so the shadow strings
+// replace the time values in the output. The Go field types stay
+// time.Time, and json.Unmarshal into Record still works because time.Time
+// parses the three-digit form.
+func (r Record) MarshalJSON() ([]byte, error) {
+	type alias Record
+	return json.Marshal(struct {
+		alias
+		StartTime *string `json:"startTime,omitempty"`
+		EndTime   *string `json:"endTime,omitempty"`
+		EmittedAt string  `json:"emittedAt"`
+	}{
+		alias:     alias(r),
+		StartTime: formatOptionalTimestamp(r.StartTimestamp),
+		EndTime:   formatOptionalTimestamp(r.EndTimestamp),
+		EmittedAt: formatTimestamp(r.EmittedAt),
+	})
+}
+
+// MarshalJSON writes the operation timestamps in timestampLayout. See
+// Record.MarshalJSON for the mechanism.
+func (o OperationRecord) MarshalJSON() ([]byte, error) {
+	type alias OperationRecord
+	return json.Marshal(struct {
+		alias
+		StartTime *string `json:"startTime,omitempty"`
+		EndTime   *string `json:"endTime,omitempty"`
+	}{
+		alias:     alias(o),
+		StartTime: formatOptionalTimestamp(o.StartTimestamp),
+		EndTime:   formatOptionalTimestamp(o.EndTimestamp),
+	})
 }
 
 // NewRecord creates a Record with standard metadata pre-populated.
