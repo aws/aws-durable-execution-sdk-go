@@ -556,6 +556,54 @@ func TestPlugin_Content_TransformsApplyToInputOutputAndResults(t *testing.T) {
 	}
 }
 
+func TestPlugin_Content_ExcludedOperationSkipsResultTransform(t *testing.T) {
+	ctx := t.Context()
+	excludedCalls, includedCalls := 0, 0
+	content := ContentConfig{Operations: ContentOperations{Overrides: []OperationOverride{
+		{
+			OperationName: "excluded",
+			Exclude:       true,
+			Result:        func(v any) any { excludedCalls++; return v },
+		},
+		{
+			OperationName: "included",
+			Result:        func(any) any { includedCalls++; return "transformed" },
+		},
+	}}}
+	exp := &capturingExporter{}
+	factory := New(Config{Content: content, Exporters: []Exporter{exp}})
+	plugin := startTestPlugin(t, ctx, factory, durable.InvocationHookInfo{
+		ExecutionArn: "arn:test",
+	})
+	for _, name := range []string{"excluded", "included"} {
+		plugin.OnOperationEnd(ctx, durable.OperationHookInfo{
+			ID: name, Name: name, Type: "STEP",
+			Status: durable.PluginOperationSucceeded, Result: `{"value":"secret"}`,
+		})
+	}
+	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
+		Status: durable.PluginInvocationSucceeded,
+	})
+
+	if excludedCalls != 0 {
+		t.Errorf("excluded result transform called %d times, want 0", excludedCalls)
+	}
+	if includedCalls != 1 {
+		t.Errorf("included result transform called %d times, want 1", includedCalls)
+	}
+	records := exp.snapshot()
+	if len(records) != 1 {
+		t.Fatalf("got %d records, want 1", len(records))
+	}
+	ops := records[0].Operations
+	if len(ops) != 1 || ops[0].Name != "included" {
+		t.Fatalf("operations = %+v, want only the included operation", ops)
+	}
+	if string(ops[0].Result) != `"transformed"` {
+		t.Errorf("included result = %s, want transformed JSON string", ops[0].Result)
+	}
+}
+
 // TestPlugin_Content_ResultsOmittedByDefault verifies the zero-value
 // ContentConfig omits operation results while input and output are
 // included, and that the omitted result leaves no key.
