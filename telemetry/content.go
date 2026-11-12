@@ -63,7 +63,7 @@ type OperationOverride struct {
 	// string when that text is not valid JSON. The plugin does not run
 	// the operation's own serializer, so an operation with a custom
 	// Serdes delivers its serialized form here. To record a result
-	// unchanged, return the argument.
+	// unchanged, return the argument. It is not called when Exclude is true.
 	Result func(any) any
 }
 
@@ -98,10 +98,10 @@ func (c ContentConfig) outputValue(v any) json.RawMessage {
 
 // resultValue returns the JSON value to record for an operation result.
 // text is the checkpointed wire text. The result is omitted (nil) when no
-// override opts it in or when the text is empty.
+// override opts it in, the operation is excluded, or the text is empty.
 func (c ContentConfig) resultValue(name, text string) json.RawMessage {
 	o := c.Operations.overrideFor(name)
-	if o == nil || o.Result == nil || text == "" {
+	if o == nil || o.Exclude || o.Result == nil || text == "" {
 		return nil
 	}
 	var v any
