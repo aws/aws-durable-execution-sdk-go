@@ -9,9 +9,12 @@ type OperationSummary struct {
 
 	Count int `json:"count"`
 
-	MinDurationMs   int64 `json:"minDurationMs,omitempty"`
-	MaxDurationMs   int64 `json:"maxDurationMs,omitempty"`
-	TotalDurationMs int64 `json:"totalDurationMs,omitempty"`
+	// The duration fields are nil when no occurrence carried a DurationMs,
+	// so the JSON omits them; a recorded duration of 0 ms serializes as 0.
+	// This matches the JavaScript implementation.
+	MinDurationMs   *int64 `json:"minDurationMs,omitempty"`
+	MaxDurationMs   *int64 `json:"maxDurationMs,omitempty"`
+	TotalDurationMs *int64 `json:"totalDurationMs,omitempty"`
 
 	FailedCount int `json:"failedCount"`
 	MaxAttempt  int `json:"maxAttempt,omitempty"`
@@ -64,18 +67,23 @@ func GroupOperationsByName(ops []OperationRecord) map[string]OperationSummary {
 
 		if op.DurationMs != nil {
 			d := *op.DurationMs
-			if agg.Count == 1 {
-				agg.MinDurationMs = d
-				agg.MaxDurationMs = d
+			// A nil MinDurationMs means no occurrence of this name carried a
+			// DurationMs yet (e.g. earlier ones were in progress): seed
+			// min/max from this first timed occurrence rather than comparing
+			// against a zero value.
+			if agg.MinDurationMs == nil {
+				agg.MinDurationMs = ptrTo(d)
+				agg.MaxDurationMs = ptrTo(d)
+				agg.TotalDurationMs = ptrTo(d)
 			} else {
-				if d < agg.MinDurationMs {
-					agg.MinDurationMs = d
+				if d < *agg.MinDurationMs {
+					*agg.MinDurationMs = d
 				}
-				if d > agg.MaxDurationMs {
-					agg.MaxDurationMs = d
+				if d > *agg.MaxDurationMs {
+					*agg.MaxDurationMs = d
 				}
+				*agg.TotalDurationMs += d
 			}
-			agg.TotalDurationMs += d
 		}
 
 		result[op.Name] = agg
@@ -99,3 +107,5 @@ func GroupOperationsByName(ops []OperationRecord) map[string]OperationSummary {
 
 	return result
 }
+
+func ptrTo(v int64) *int64 { return &v }
