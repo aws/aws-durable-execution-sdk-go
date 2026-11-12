@@ -3,7 +3,6 @@ package telemetry
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"regexp"
@@ -126,8 +125,9 @@ func New(cfg Config) *TelemetryPlugin {
 	}
 }
 
-// defaultContent applies defaults for a zero-value ContentConfig: all
-// content is included. This matches the documented default behavior.
+// defaultContent applies defaults for a zero-value ContentConfig: input,
+// output, operation errors, and the execution error are included;
+// operation results are not. This matches DefaultContentConfig.
 //
 // Note: the zero-value detection is all-or-nothing. If ANY Include* field
 // is set to true, the others are NOT defaulted. Users who partially
@@ -165,10 +165,10 @@ func (p *TelemetryPlugin) CreatePlugin(_ context.Context, info durable.Invocatio
 	inv.record.Status = StatusRunning
 	start := resolveExecutionStart(info)
 	inv.record.StartTimestamp = &start
-	if info.ExecutionInput != nil {
-		if raw, err := marshalInput(info.ExecutionInput); err == nil && raw != "" {
-			inv.record.Input = p.content.BuildContentField(raw)
-		}
+	// Build content only when it is included, so the Redactor never sees
+	// a value that ApplyToRecord would drop at snapshot time.
+	if p.content.IncludeInput {
+		inv.record.Input = p.content.marshalContent(info.ExecutionInput)
 	}
 
 	return &durable.Plugin{
@@ -334,10 +334,8 @@ func (p *telemetryInvocation) onInvocationEnd(ctx context.Context, info durable.
 
 	if info.Status == durable.PluginInvocationSucceeded {
 		p.record.Status = StatusSucceeded
-		if info.ExecutionResult != nil {
-			if raw, err := marshalInput(info.ExecutionResult); err == nil && raw != "" {
-				p.record.Output = p.env.content.BuildContentField(raw)
-			}
+		if p.env.content.IncludeOutput {
+			p.record.Output = p.env.content.marshalContent(info.ExecutionResult)
 		}
 	} else {
 		p.record.Status = StatusFailed
@@ -424,7 +422,7 @@ func (p *telemetryInvocation) upsertOperationLocked(id string, info durable.Oper
 	if info.Type == "EXECUTION" || info.Type == "Execution" {
 		return
 	}
-	rec := toOperationRecord(id, info)
+	rec := toOperationRecord(id, info, p.env.content)
 	if idx, ok := p.byOpID[id]; ok {
 		p.record.Operations[idx] = rec
 		return
@@ -435,7 +433,9 @@ func (p *telemetryInvocation) upsertOperationLocked(id string, info durable.Oper
 
 // toOperationRecord converts a durable.OperationHookInfo into an
 // OperationRecord, computing DurationMs when both timestamps are present.
-func toOperationRecord(id string, info durable.OperationHookInfo) OperationRecord {
+// The result is built only when content includes operation results, so
+// the Redactor never runs on a value that ApplyToRecord would drop.
+func toOperationRecord(id string, info durable.OperationHookInfo, content ContentConfig) OperationRecord {
 	rec := OperationRecord{
 		ID:      id,
 		Name:    info.Name,
@@ -459,8 +459,8 @@ func toOperationRecord(id string, info durable.OperationHookInfo) OperationRecor
 		d := rec.EndTimestamp.Sub(*rec.StartTimestamp).Milliseconds()
 		rec.DurationMs = &d
 	}
-	if info.Result != "" {
-		rec.Result = &ContentField{Value: info.Result}
+	if content.IncludeOperationResults {
+		rec.Result = content.contentValue(info.Result)
 	}
 	if info.Error != nil {
 		rec.Error = errorRecordFromErr(info.Error)
@@ -606,20 +606,4 @@ func (p *TelemetryPlugin) dispatch(ctx context.Context, record Record) {
 			}()
 		}
 	}
-}
-
-// marshalInput serializes an arbitrary value to JSON string for storage
-// in a ContentField. Returns empty string on marshal failure.
-func marshalInput(v any) (string, error) {
-	if v == nil {
-		return "", nil
-	}
-	if s, ok := v.(string); ok {
-		return s, nil
-	}
-	b, err := json.Marshal(v)
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil
 }

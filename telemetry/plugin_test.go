@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -420,14 +421,17 @@ func TestPlugin_CreatePlugin_InitializesMetadataAndInput(t *testing.T) {
 	var redacted []string
 	content := DefaultContentConfig()
 	content.Redactor = func(value string) string {
+		// value is the marshaled JSON text, so the input string arrives
+		// quoted. Edit inside the quotes so the result stays valid JSON
+		// and the record stores it as-is.
 		redacted = append(redacted, value)
-		return "redacted:" + value
+		return strings.Replace(value, "input", "redacted:input", 1)
 	}
 	exp := &capturingExporter{}
 	factory := New(Config{EmitMode: EmitAlways, Content: content, Exporters: []Exporter{exp}})
 	info := durable.InvocationHookInfo{ExecutionArn: arn, ExecutionInput: "input", ExecutionStartTimestamp: time.Now().Add(-time.Hour)}
 	plugin := createTestPlugin(t, ctx, factory, info)
-	if len(redacted) != 1 || redacted[0] != "input" {
+	if len(redacted) != 1 || redacted[0] != `"input"` {
 		t.Fatalf("input was not prepared by CreatePlugin: %v", redacted)
 	}
 	fields := plugin.EnrichLogContext(ctx)
@@ -441,7 +445,7 @@ func TestPlugin_CreatePlugin_InitializesMetadataAndInput(t *testing.T) {
 		t.Fatalf("got %d records, want one", len(records))
 	}
 	rec := records[0]
-	if rec.Input == nil || rec.Input.Value != "redacted:input" || len(redacted) != 1 || rec.StartTimestamp == nil || !rec.StartTimestamp.Equal(info.ExecutionStartTimestamp) || rec.Status != StatusRunning {
+	if string(rec.Input) != `"redacted:input"` || len(redacted) != 1 || rec.StartTimestamp == nil || !rec.StartTimestamp.Equal(info.ExecutionStartTimestamp) || rec.Status != StatusRunning {
 		t.Errorf("initialized record = %+v, redactor calls = %v", rec, redacted)
 	}
 }

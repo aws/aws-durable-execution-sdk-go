@@ -94,8 +94,8 @@ func TestRecord_JSONShape(t *testing.T) {
 		EndTimestamp:   &end,
 		DurationMs:     &dur,
 		EmittedAt:      end,
-		Input:          &ContentField{Value: `{"orderId":"12345"}`},
-		Output:         &ContentField{Value: `{"status":"done"}`},
+		Input:          json.RawMessage(`{"orderId":"12345"}`),
+		Output:         json.RawMessage(`{"status":"done"}`),
 		Operations: []OperationRecord{
 			{ID: "op1", Name: "validate", Type: "STEP", Status: "SUCCEEDED"},
 		},

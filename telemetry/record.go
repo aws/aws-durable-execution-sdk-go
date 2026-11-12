@@ -56,13 +56,6 @@ type ErrorRecord struct {
 	StackTrace string `json:"stackTrace,omitempty"`
 }
 
-// ContentField holds a content value that may have been truncated to fit
-// size constraints.
-type ContentField struct {
-	Value     string `json:"value"`
-	Truncated bool   `json:"truncated,omitempty"`
-}
-
 // OperationRecord describes a single durable operation within a Record.
 type OperationRecord struct {
 	ID       string `json:"id"`
@@ -80,9 +73,11 @@ type OperationRecord struct {
 
 	Attempt int `json:"attempt,omitempty"`
 
-	Result *ContentField `json:"result,omitempty"`
-	Error  *ErrorRecord  `json:"error,omitempty"`
-	Input  *ContentField `json:"input,omitempty"`
+	// Result is the operation's result as a JSON value. The checkpointed
+	// wire text is used as-is when it is valid JSON; otherwise it is
+	// encoded as a JSON string. See ContentConfig.
+	Result json.RawMessage `json:"result,omitempty"`
+	Error  *ErrorRecord    `json:"error,omitempty"`
 
 	// Truncated indicates this operation's result was dropped due to
 	// size constraints (see Truncate).
@@ -120,9 +115,13 @@ type Record struct {
 
 	Operations []OperationRecord `json:"operations"`
 
-	Error  *ErrorRecord  `json:"error,omitempty"`
-	Input  *ContentField `json:"input,omitempty"`
-	Output *ContentField `json:"output,omitempty"`
+	Error *ErrorRecord `json:"error,omitempty"`
+
+	// Input and Output are the execution input and result as JSON values,
+	// marshaled once from the handler's typed values. A Go string is a
+	// JSON string. See ContentConfig.
+	Input  json.RawMessage `json:"input,omitempty"`
+	Output json.RawMessage `json:"output,omitempty"`
 
 	Custom map[string]any `json:"custom,omitempty"`
 

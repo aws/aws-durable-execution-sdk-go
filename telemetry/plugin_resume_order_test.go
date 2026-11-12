@@ -83,7 +83,7 @@ func TestResume_SizeLimitedExportDropsOldestFirst(t *testing.T) {
 					op.Result = strings.Repeat("x", 256)
 				}
 				ops[id] = op
-				rec := toOperationRecord(id, op)
+				rec := toOperationRecord(id, op, allContent())
 				if i < count-1 {
 					if !dropResults {
 						continue
@@ -103,7 +103,7 @@ func TestResume_SizeLimitedExportDropsOldestFirst(t *testing.T) {
 			// EmittedAt changes during dispatch. Allow timestamp-length variation,
 			// but less than the space needed to retain another result or operation.
 			exp := &resumeLimitedExporter{maxBytes: len(encoded) + 32}
-			factory := New(Config{EmitMode: EmitAlways, Exporters: []Exporter{exp}})
+			factory := New(Config{EmitMode: EmitAlways, Exporters: []Exporter{exp}, Content: allContent()})
 			pl := resumeInvocation(t, factory, durable.InvocationHookInfo{
 				ExecutionArn:            resumeTestARN,
 				RequestID:               "resumed-request",
@@ -128,7 +128,7 @@ func TestResume_SizeLimitedExportDropsOldestFirst(t *testing.T) {
 			for _, op := range got.Operations {
 				if dropResults {
 					if op.ID == "op-1" {
-						if op.Result == nil || op.Result.Value != ops[op.ID].Result || op.Truncated {
+						if string(op.Result) != jsonString(ops[op.ID].Result) || op.Truncated {
 							t.Errorf("newest operation lost its result: %+v", op)
 						}
 					} else if op.Result != nil || !op.Truncated {

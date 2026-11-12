@@ -70,7 +70,7 @@ func TestPlugin_EmitOnChange_InvocationDispatchIsolation(t *testing.T) {
 					}
 				})
 			}
-			factory := New(Config{EmitMode: EmitOnChange, Exporters: []Exporter{exp}})
+			factory := New(Config{EmitMode: EmitOnChange, Exporters: []Exporter{exp}, Content: allContent()})
 			done := []chan struct{}{make(chan struct{}), make(chan struct{})}
 			for i, arn := range arns {
 				plugin := startTestPlugin(t, ctx, factory, durable.InvocationHookInfo{ExecutionArn: arn})
@@ -109,7 +109,7 @@ func TestPlugin_EmitOnChange_InvocationDispatchIsolation(t *testing.T) {
 					t.Errorf("initial record status = %s, want RUNNING", records[0].Status)
 				}
 				for _, rec := range records[1:] {
-					if rec.ExecutionArn != arn || len(rec.Operations) != 1 || rec.Operations[0].Result == nil || rec.Operations[0].Result.Value != fmt.Sprintf("result-%d", i) {
+					if rec.ExecutionArn != arn || len(rec.Operations) != 1 || string(rec.Operations[0].Result) != jsonString(fmt.Sprintf("result-%d", i)) {
 						t.Errorf("updated record for %s = %+v", arn, rec)
 					}
 				}

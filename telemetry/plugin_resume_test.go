@@ -99,11 +99,11 @@ func TestResume_PreservesStartTimestampInputAndOutput(t *testing.T) {
 		if rec.StartTimestamp == nil || !rec.StartTimestamp.Equal(start) {
 			t.Errorf("%s StartTimestamp = %v, want original %v", name, rec.StartTimestamp, start)
 		}
-		if rec.Input == nil || rec.Input.Value != `{"orderId":"abc"}` {
+		if string(rec.Input) != `{"orderId":"abc"}` {
 			t.Errorf("%s Input = %+v, want {\"orderId\":\"abc\"}", name, rec.Input)
 		}
 	}
-	if final.Output == nil || final.Output.Value != "done" {
+	if string(final.Output) != `"done"` {
 		t.Errorf("final Output = %+v, want done", final.Output)
 	}
 	if final.DurationMs == nil || *final.DurationMs < time.Hour.Milliseconds() {
@@ -233,6 +233,7 @@ func TestResume_FullTreeIncludesUnchangedOperationsFromSnapshot(t *testing.T) {
 		EmitMode:        EmitOnComplete,
 		OperationDetail: OperationDetailFullTree,
 		Exporters:       []Exporter{exp},
+		Content:         allContent(),
 	})
 	ctx := context.Background()
 	start := time.Now().Add(-time.Minute)
@@ -279,11 +280,11 @@ func TestResume_FullTreeIncludesUnchangedOperationsFromSnapshot(t *testing.T) {
 	}
 	for _, op := range records[0].Operations {
 		if op.ID == "nested" {
-			if op.ParentID != "child" || op.Result == nil || op.Result.Value != `"nested-result"` {
+			if op.ParentID != "child" || string(op.Result) != `"nested-result"` {
 				t.Errorf("nested operation = %+v, want parent child and result \"nested-result\"", op)
 			}
 		}
-		if op.ID == "late" && (op.Result == nil || op.Result.Value != `"late-result"`) {
+		if op.ID == "late" && string(op.Result) != `"late-result"` {
 			t.Errorf("late operation = %+v, want the result from its end hook", op)
 		}
 	}
