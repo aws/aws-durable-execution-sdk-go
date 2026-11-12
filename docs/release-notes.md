@@ -2,6 +2,45 @@
 
 ## Unreleased
 
+### Changed: telemetry record identity and timestamp keys
+
+The telemetry record schema is experimental, and this is a change to it. The
+change aligns the Go record with the JavaScript, Python, and Java telemetry
+exporters and with the `telemetry-1` conformance test.
+
+- `Record` has three new fields parsed from the execution ARN:
+  `FunctionQualifier` (JSON `functionQualifier`), `Region` (`region`), and
+  `AccountID` (`accountId`). `functionName` is no longer omitted when empty.
+  The four identity keys are present on every record.
+- The JSON keys `startTimestamp` and `endTimestamp` are now `startTime` and
+  `endTime`, on both the record and each entry of `operations`. The Go fields
+  keep their names `StartTimestamp` and `EndTimestamp`.
+- Every timestamp in the JSON output is UTC with exactly three fraction
+  digits and a `Z` suffix, for example `2026-10-24T02:22:35.088Z`. Before,
+  `emittedAt` and the timestamps used RFC 3339 with nanoseconds and a
+  variable digit count. `Record` and `OperationRecord` implement
+  `json.Marshaler` to apply the format. `json.Unmarshal` into `Record`
+  still works.
+- The DynamoDB item attributes `startTimestamp` and `endTimestamp` are now
+  `startTime` and `endTime`, the same names as the record JSON keys. The
+  JavaScript exporter uses these names for its item attributes.
+- The DynamoDB `sk`, `emittedAt`, `startTime`, and `endTime` attributes, the
+  SQS FIFO `MessageDeduplicationId`, and the RDS and Redshift `emitted_at`
+  parameter use the same format. They were in the same layout before, but
+  with a numeric offset for a non-UTC clock.
+- `startTime` is always set. When the payload does not report the execution
+  start, the plugin uses the oldest operation start in the invocation
+  snapshot, then the invocation time. A terminal record therefore always
+  has `durationMs`.
+- `emittedAt` strictly increases across the records of one invocation, by at
+  least one millisecond. The SQS FIFO deduplication ID and the default
+  DynamoDB sort key are keyed on it, so two records in the same millisecond
+  would otherwise be deduplicated or overwrite each other.
+
+Readers of the JSON record or of the DynamoDB item that select on
+`startTimestamp` or `endTimestamp` must select on `startTime` or `endTime`
+instead.
+
 ### Changed: operation hooks report the wire ID
 
 The plugin instrumentation API is experimental, and this is a change to it.

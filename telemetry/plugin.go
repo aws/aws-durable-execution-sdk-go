@@ -87,6 +87,10 @@ type telemetryInvocation struct {
 	// onChangeWG lets OnInvocationEnd wait for any in-flight on-change
 	// dispatch to finish before sending the final terminal record.
 	onChangeWG sync.WaitGroup
+
+	// lastEmittedMs is the Unix millisecond of the last emitted record.
+	// See nextEmittedAtLocked.
+	lastEmittedMs int64
 }
 
 // New constructs a Durable Execution Telemetry plugin from cfg. A
@@ -147,7 +151,7 @@ var _ durable.PluginFactory = (*TelemetryPlugin)(nil)
 // sampling decision, mutex, and on-change dispatch state belong to the
 // returned plugin alone.
 func (p *TelemetryPlugin) CreatePlugin(_ context.Context, info durable.InvocationHookInfo) (*durable.Plugin, error) {
-	_, _, functionName, _ := parseFunctionARN(info.ExecutionArn)
+	region, accountID, functionName, qualifier := parseFunctionARN(info.ExecutionArn)
 	inv := &telemetryInvocation{
 		env:       p,
 		record:    NewRecord(info.ExecutionArn),
@@ -155,11 +159,12 @@ func (p *TelemetryPlugin) CreatePlugin(_ context.Context, info durable.Invocatio
 		sampledIn: sampledIn(info.ExecutionArn, p.samplingRate),
 	}
 	inv.record.FunctionName = functionName
+	inv.record.FunctionQualifier = qualifier
+	inv.record.Region = region
+	inv.record.AccountID = accountID
 	inv.record.Status = StatusRunning
-	if !info.ExecutionStartTimestamp.IsZero() {
-		t := info.ExecutionStartTimestamp
-		inv.record.StartTimestamp = &t
-	}
+	start := resolveExecutionStart(info)
+	inv.record.StartTimestamp = &start
 	if info.ExecutionInput != nil {
 		if raw, err := marshalInput(info.ExecutionInput); err == nil && raw != "" {
 			inv.record.Input = p.content.BuildContentField(raw)
@@ -188,6 +193,49 @@ func parseFunctionARN(arn string) (region, accountID, functionName, qualifier st
 		return "", "", "", ""
 	}
 	return m[1], m[2], m[3], m[4]
+}
+
+// resolveExecutionStart returns the execution start for a record. The
+// wire payload normally reports it as ExecutionStartTimestamp. When it
+// does not, the oldest operation start in the invocation snapshot is the
+// next best replay-stable instant: on a resumed execution it predates this
+// invocation, where time.Now would yield a duration covering only the
+// final invocation. time.Now is the last resort, so the record always
+// has a start and a terminal record always has a duration.
+func resolveExecutionStart(info durable.InvocationHookInfo) time.Time {
+	if !info.ExecutionStartTimestamp.IsZero() {
+		return info.ExecutionStartTimestamp
+	}
+	var oldest time.Time
+	for _, op := range info.Operations {
+		if op.StartTimestamp.IsZero() {
+			continue
+		}
+		if oldest.IsZero() || op.StartTimestamp.Before(oldest) {
+			oldest = op.StartTimestamp
+		}
+	}
+	if !oldest.IsZero() {
+		return oldest
+	}
+	return time.Now()
+}
+
+// nextEmittedAtLocked returns the EmittedAt value for the next emitted
+// record. Records serialize emittedAt at millisecond precision. The SQS
+// FIFO deduplication ID and the default DynamoDB sort key are
+// executionArn plus emittedAt. Two records of one invocation in the same
+// millisecond, such as an on-change snapshot and the terminal record,
+// would then make SQS drop the second message and DynamoDB overwrite the
+// first item. So the returned value is at least one millisecond after the
+// previous one. Called with p.mu held.
+func (p *telemetryInvocation) nextEmittedAtLocked() time.Time {
+	ms := time.Now().UnixMilli()
+	if ms <= p.lastEmittedMs {
+		ms = p.lastEmittedMs + 1
+	}
+	p.lastEmittedMs = ms
+	return time.UnixMilli(ms).UTC()
 }
 
 // sampledIn reports whether executionArn's deterministic sampling
@@ -262,7 +310,7 @@ func (p *telemetryInvocation) onInvocationEnd(ctx context.Context, info durable.
 		// The execution continues after this invocation: keep the
 		// running status and leave the end timestamp unset.
 		record := p.snapshotRecordLocked()
-		record.EmittedAt = time.Now()
+		record.EmittedAt = p.nextEmittedAtLocked()
 		sampledIn := p.sampledIn
 		p.mu.Unlock()
 
@@ -282,7 +330,7 @@ func (p *telemetryInvocation) onInvocationEnd(ctx context.Context, info durable.
 		p.record.DurationMs = &d
 	}
 	// Refresh EmittedAt to the actual emission time.
-	p.record.EmittedAt = now
+	p.record.EmittedAt = p.nextEmittedAtLocked()
 
 	if info.Status == durable.PluginInvocationSucceeded {
 		p.record.Status = StatusSucceeded
@@ -510,7 +558,7 @@ func (p *telemetryInvocation) scheduleOnChangeDispatch(ctx context.Context) {
 			p.mu.Lock()
 			p.onChangeDirty = false
 			record := p.snapshotRecordLocked()
-			record.EmittedAt = time.Now()
+			record.EmittedAt = p.nextEmittedAtLocked()
 			p.mu.Unlock()
 
 			p.env.dispatch(ctx, record)

@@ -60,7 +60,7 @@ func TestSQSExporter_FIFOQueue_AutoDetectedFromURLSuffix(t *testing.T) {
 	if aws.ToString(call.MessageGroupId) != rec.ExecutionArn {
 		t.Errorf("expected MessageGroupId to default to ExecutionArn=%q, got %q", rec.ExecutionArn, aws.ToString(call.MessageGroupId))
 	}
-	wantDedup := rec.ExecutionArn + ":" + emittedAt.Format(rfc3339Milli)
+	wantDedup := rec.ExecutionArn + ":" + formatTimestamp(emittedAt)
 	if aws.ToString(call.MessageDeduplicationId) != wantDedup {
 		t.Errorf("expected MessageDeduplicationId=%q, got %q", wantDedup, aws.ToString(call.MessageDeduplicationId))
 	}
