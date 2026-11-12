@@ -2,12 +2,13 @@
 
 ## Unreleased
 
-### Changed: telemetry content fields are JSON values
+### Changed: telemetry content fields are JSON values, and ContentConfig is per-value
 
-The telemetry record schema is experimental, and this is a change to it. The
-change aligns the Go record with the JavaScript, Python, and Java telemetry
-exporters and with the `telemetry-1` conformance test, which expects
-`input` and `output` as JSON values.
+The telemetry record schema and the `ContentConfig` API are experimental, and
+this is a change to both. The record change is required by the `telemetry-1`
+conformance test, which expects `input` and `output` as JSON values.
+
+Record:
 
 - `Record.Input`, `Record.Output`, and `OperationRecord.Result` are now
   `json.RawMessage`. Before, each was a `*ContentField` and the JSON output
@@ -19,31 +20,45 @@ exporters and with the `telemetry-1` conformance test, which expects
 - Input and output are marshaled once from the handler's typed values. A Go
   `string` is a JSON string. Before, a Go `string` was stored as its raw
   text.
-- An operation result is the checkpointed wire text. It is used as-is when
-  it is valid JSON and emitted as a JSON string otherwise.
+- An operation result is recorded only for operations named by an
+  `OperationOverride` that sets `Result`. Records emitted with the default
+  configuration no longer carry `result` on operations or on
+  `operationsByName` entries.
 - `OperationSummary.Result` is now `json.RawMessage`, so `operationsByName`
   carries the same value shape.
-- `ContentConfig.MaxContentLength` is removed. There is no per-field length
-  cap. An exporter that implements `SizeLimiter` bounds the whole record,
-  dropping operation results, then operations, then input, then output.
-  That is the same bound the other SDKs apply.
-- `ContentConfig.IncludeOperationResults` now defaults to `false`, as in the
-  JavaScript exporter. Records emitted with the default configuration no
-  longer carry `result` on operations or on `operationsByName` entries. Set
-  `IncludeOperationResults: true` to keep them. The zero-value detection is
-  unchanged: setting any `Include*` field disables the defaults for the
-  others.
-- `ContentConfig.Redactor` now also applies to operation results. Before,
-  it applied to input and output only, so a value redacted from `input` was
-  emitted unredacted when a step returned it. The Redactor receives the
-  marshaled JSON for input and output and the wire text for a result. If it
-  returns text that is not valid JSON, the text is emitted as a JSON string.
-  If it returns an empty string, the field is omitted. The Redactor is not
-  called for content that the `Include*` flags exclude.
+
+`ContentConfig`:
+
+- The five `Include*` booleans, `OperationFilter`, `Redactor`,
+  `MaxContentLength`, and `DefaultContentConfig()` are removed. The zero
+  value of `ContentConfig` is now the default: input and output included
+  unchanged, operation results omitted, operation and execution errors
+  included. There is no all-or-nothing zero-value detection any more; each
+  field changes one thing.
+- `ExcludeInput` and `ExcludeOutput` omit the execution input and output.
+- `InputTransform` and `OutputTransform` receive the value decoded as JSON
+  (`map[string]any`, `[]any`, `string`, `float64`, `bool`, or `nil`) and
+  return the value to record. Use them to delete or mask fields by key.
+  Before, `Redactor` received the serialized text of every content field
+  and returned text.
+- `Operations.Overrides` is a list of `OperationOverride{OperationName,
+  Exclude, Result}`. `Exclude` drops the operation; `Result` opts its result
+  in through a transform. When several entries share a name, the last one
+  wins. Before, `OperationFilter` received each `OperationRecord` and
+  `IncludeOperationResults` switched every result on or off at once.
+- `Operations.ExcludeErrors` omits operation errors. The execution-level
+  error is always recorded. Before, `IncludeOperationErrors` and
+  `IncludeExecutionError` controlled them separately.
+- A transform that panics, or returns a value that cannot be marshaled,
+  omits the field. The untransformed value is never recorded in its place.
+- There is no per-field length cap. An exporter that implements
+  `SizeLimiter` bounds the whole record, dropping operation results, then
+  operations, then input, then output.
 
 Readers that select `input.value`, `output.value`, or `result.value` must
 select `input`, `output`, or `result` instead. Readers that relied on
-`result` being present by default must enable `IncludeOperationResults`.
+`result` being present by default must add an `OperationOverride` with a
+`Result` transform for each operation name they need.
 
 ### Changed: telemetry record identity and timestamp keys
 

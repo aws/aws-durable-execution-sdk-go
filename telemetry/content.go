@@ -2,104 +2,145 @@ package telemetry
 
 import "encoding/json"
 
-// ContentConfig controls what content is included in emitted records and
-// how it is formatted.
+// ContentConfig controls what content appears in emitted records. The
+// zero value includes the execution input and output unchanged, omits
+// operation results, and includes operation and execution errors.
 //
 // Content values (Record.Input, Record.Output, OperationRecord.Result) are
-// JSON values. Input and output are marshaled once from the handler's typed
-// values, so a Go string becomes a JSON string. An operation result is the
-// checkpointed wire text: it is used as-is when it is valid JSON and
-// encoded as a JSON string otherwise. There is no per-field length cap. An
-// exporter that implements SizeLimiter bounds the whole record instead
-// (see Truncate).
-type ContentConfig struct {
-	// IncludeInput controls whether execution input is included in
-	// records. Defaults to true.
-	IncludeInput bool
-
-	// IncludeOutput controls whether execution output is included in
-	// records. Defaults to true.
-	IncludeOutput bool
-
-	// IncludeOperationResults controls whether operation result fields
-	// are included. Defaults to false.
-	IncludeOperationResults bool
-
-	// IncludeOperationErrors controls whether operation error fields
-	// are included. Defaults to true.
-	IncludeOperationErrors bool
-
-	// IncludeExecutionError controls whether the execution-level error
-	// is included. Defaults to true.
-	IncludeExecutionError bool
-
-	// OperationFilter, if non-nil, is called for each operation. Only
-	// operations for which it returns true are included in the record.
-	// Different invocations may call it concurrently. The function and
-	// its captured state must be safe for concurrent use.
-	OperationFilter func(OperationRecord) bool
-
-	// Redactor, if non-nil, is applied to the text of every content value
-	// (input, output, and operation results) before it is stored. Use this
-	// to mask sensitive data. For input and output the text is the
-	// marshaled JSON. For an operation result it is the checkpointed wire
-	// text. If the returned text is valid JSON it is emitted as that JSON
-	// value; otherwise it is emitted as a JSON string. If it is empty, the
-	// field is omitted. Redactor is not called for content that the
-	// Include* fields exclude.
-	// Different invocations may call it concurrently. The function and
-	// its captured state must be safe for concurrent use.
-	Redactor func(string) string
-}
-
-// DefaultContentConfig returns the default configuration: input, output,
-// operation errors, and the execution error are included; operation
-// results are not.
-func DefaultContentConfig() ContentConfig {
-	return ContentConfig{
-		IncludeInput:            true,
-		IncludeOutput:           true,
-		IncludeOperationResults: false,
-		IncludeOperationErrors:  true,
-		IncludeExecutionError:   true,
-	}
-}
-
-// contentValue turns content text into the JSON value stored on a record.
-// It applies Redactor when set. Valid JSON text is stored as-is. Any other
-// text is stored as a JSON string, so the record always marshals. Empty
-// text yields nil, so omitempty drops the key.
+// JSON values. There is no per-field length cap. An exporter that
+// implements SizeLimiter bounds the whole record instead (see Truncate).
 //
-// The operation result path relies on the fallback: the wire text is
-// normally JSON, but a custom serializer may produce something else, and
-// the JS exporter likewise falls back to the raw string.
-func (c ContentConfig) contentValue(text string) json.RawMessage {
-	if text == "" {
-		return nil
-	}
-	if c.Redactor != nil {
-		text = c.Redactor(text)
-		if text == "" {
-			return nil
+// A transform function receives the content decoded as a JSON value: a
+// map[string]any, []any, string, float64, bool, or nil. It returns the
+// value to record, which is marshaled again. If a transform panics, or its
+// return value cannot be marshaled, the field is omitted. Transforms may
+// be called concurrently by different invocations. Each function and its
+// captured state must be safe for concurrent use.
+type ContentConfig struct {
+	// ExcludeInput omits the execution input from records.
+	ExcludeInput bool
+
+	// InputTransform, if non-nil, receives the execution input decoded as
+	// a JSON value and returns the value to record. Use it to remove or
+	// mask sensitive fields. It is not called when ExcludeInput is true.
+	InputTransform func(any) any
+
+	// ExcludeOutput omits the execution output from records.
+	ExcludeOutput bool
+
+	// OutputTransform, if non-nil, receives the execution output decoded
+	// as a JSON value and returns the value to record. It is not called
+	// when ExcludeOutput is true.
+	OutputTransform func(any) any
+
+	// Operations controls per-operation content.
+	Operations ContentOperations
+}
+
+// ContentOperations controls the content of operation entries.
+type ContentOperations struct {
+	// Overrides are matched to operations by OperationName. When several
+	// entries share a name, the last one wins.
+	Overrides []OperationOverride
+
+	// ExcludeErrors omits the error field from every operation entry. The
+	// execution-level error on the record is always included.
+	ExcludeErrors bool
+}
+
+// OperationOverride changes the content of every operation with the
+// given name.
+type OperationOverride struct {
+	// OperationName selects the operations this override applies to.
+	OperationName string
+
+	// Exclude drops the operation from the record.
+	Exclude bool
+
+	// Result opts the operation's result into the record. Results are
+	// omitted unless an override sets this. The function receives the
+	// checkpointed result decoded as a JSON value, or the raw text as a
+	// string when that text is not valid JSON. The plugin does not run
+	// the operation's own serializer, so an operation with a custom
+	// Serdes delivers its serialized form here. To record a result
+	// unchanged, return the argument.
+	Result func(any) any
+}
+
+// overrideFor returns the last override whose OperationName equals name,
+// or nil when there is none.
+func (c ContentOperations) overrideFor(name string) *OperationOverride {
+	for i := len(c.Overrides) - 1; i >= 0; i-- {
+		if c.Overrides[i].OperationName == name {
+			return &c.Overrides[i]
 		}
 	}
-	if json.Valid([]byte(text)) {
-		return json.RawMessage(text)
-	}
-	quoted, err := json.Marshal(text)
-	if err != nil {
-		// json.Marshal of a string only fails on an invalid encoder
-		// state, which cannot happen here. Omit rather than emit an
-		// unmarshalable record.
-		return nil
-	}
-	return quoted
+	return nil
 }
 
-// marshalContent marshals a typed handler value once and passes the JSON
-// text through contentValue. A nil value or a marshal failure yields nil,
-// so the key is omitted.
-func (c ContentConfig) marshalContent(v any) json.RawMessage {
+// inputValue returns the JSON value to record for the execution input,
+// or nil when the input is excluded, absent, or cannot be recorded.
+func (c ContentConfig) inputValue(v any) json.RawMessage {
+	if c.ExcludeInput {
+		return nil
+	}
+	return typedValue(v, c.InputTransform)
+}
+
+// outputValue returns the JSON value to record for the execution output,
+// or nil when the output is excluded, absent, or cannot be recorded.
+func (c ContentConfig) outputValue(v any) json.RawMessage {
+	if c.ExcludeOutput {
+		return nil
+	}
+	return typedValue(v, c.OutputTransform)
+}
+
+// resultValue returns the JSON value to record for an operation result.
+// text is the checkpointed wire text. The result is omitted (nil) when no
+// override opts it in or when the text is empty.
+func (c ContentConfig) resultValue(name, text string) json.RawMessage {
+	o := c.Operations.overrideFor(name)
+	if o == nil || o.Result == nil || text == "" {
+		return nil
+	}
+	var v any
+	if json.Valid([]byte(text)) {
+		if err := json.Unmarshal([]byte(text), &v); err != nil {
+			return nil
+		}
+	} else {
+		v = text
+	}
+	return transformValue(v, o.Result)
+}
+
+// applyOperations drops excluded operations from r and strips operation
+// errors when configured. It writes to a new slice, so the caller's
+// backing array is never modified.
+func (c ContentConfig) applyOperations(r *Record) {
+	if len(c.Operations.Overrides) == 0 && !c.Operations.ExcludeErrors {
+		return
+	}
+	kept := make([]OperationRecord, 0, len(r.Operations))
+	for _, op := range r.Operations {
+		if o := c.Operations.overrideFor(op.Name); o != nil && o.Exclude {
+			continue
+		}
+		if c.Operations.ExcludeErrors {
+			op.Error = nil
+		}
+		kept = append(kept, op)
+	}
+	r.Operations = kept
+}
+
+// typedValue marshals a handler's typed value and applies fn to it. A nil
+// value, a marshal failure, or a failed transform yields nil, so the key
+// is omitted. The value is marshaled once before the transform so that
+// fn sees the JSON form, not the Go type: a Go string arrives as a string
+// and a struct arrives as a map[string]any.
+func typedValue(v any, fn func(any) any) json.RawMessage {
 	if v == nil {
 		return nil
 	}
@@ -107,36 +148,37 @@ func (c ContentConfig) marshalContent(v any) json.RawMessage {
 	if err != nil {
 		return nil
 	}
-	return c.contentValue(string(b))
+	if fn == nil {
+		return b
+	}
+	var decoded any
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		return nil
+	}
+	return transformValue(decoded, fn)
 }
 
-// ApplyToRecord filters and transforms a record's content fields in place
-// based on the configuration.
-func (c ContentConfig) ApplyToRecord(r *Record) {
-	if !c.IncludeInput {
-		r.Input = nil
+// transformValue calls fn on v and marshals the return value. A panic in
+// fn or a marshal failure yields nil, so the field is omitted rather than
+// recorded unredacted.
+func transformValue(v any, fn func(any) any) json.RawMessage {
+	out, ok := callTransform(fn, v)
+	if !ok {
+		return nil
 	}
-	if !c.IncludeOutput {
-		r.Output = nil
+	b, err := json.Marshal(out)
+	if err != nil {
+		return nil
 	}
-	if !c.IncludeExecutionError {
-		r.Error = nil
-	}
+	return b
+}
 
-	if c.OperationFilter != nil || !c.IncludeOperationResults || !c.IncludeOperationErrors {
-		filtered := r.Operations[:0]
-		for _, op := range r.Operations {
-			if c.OperationFilter != nil && !c.OperationFilter(op) {
-				continue
-			}
-			if !c.IncludeOperationResults {
-				op.Result = nil
-			}
-			if !c.IncludeOperationErrors {
-				op.Error = nil
-			}
-			filtered = append(filtered, op)
+// callTransform runs fn and reports false if it panics.
+func callTransform(fn func(any) any, v any) (out any, ok bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			out, ok = nil, false
 		}
-		r.Operations = filtered
-	}
+	}()
+	return fn(v), true
 }

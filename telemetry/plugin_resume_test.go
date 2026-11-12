@@ -233,7 +233,7 @@ func TestResume_FullTreeIncludesUnchangedOperationsFromSnapshot(t *testing.T) {
 		EmitMode:        EmitOnComplete,
 		OperationDetail: OperationDetailFullTree,
 		Exporters:       []Exporter{exp},
-		Content:         allContent(),
+		Content:         withResults("nested", "late"),
 	})
 	ctx := context.Background()
 	start := time.Now().Add(-time.Minute)
