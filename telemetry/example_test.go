@@ -92,7 +92,6 @@ func ExampleNew_withContentConfig() {
 			IncludeOperationResults: false, // omit operation results
 			IncludeOperationErrors:  true,
 			IncludeExecutionError:   true,
-			MaxContentLength:        4096, // 4 KB max per content field
 			Redactor: func(s string) string {
 				// Replace sensitive patterns before storing
 				return s

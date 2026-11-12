@@ -2,6 +2,49 @@
 
 ## Unreleased
 
+### Changed: telemetry content fields are JSON values
+
+The telemetry record schema is experimental, and this is a change to it. The
+change aligns the Go record with the JavaScript, Python, and Java telemetry
+exporters and with the `telemetry-1` conformance test, which expects
+`input` and `output` as JSON values.
+
+- `Record.Input`, `Record.Output`, and `OperationRecord.Result` are now
+  `json.RawMessage`. Before, each was a `*ContentField` and the JSON output
+  was a `{"value": "<text>", "truncated": bool}` wrapper around the content
+  as a string. Now the JSON output is the content value itself: an object,
+  array, string, number, boolean, or null.
+- `ContentField` is removed.
+- `OperationRecord.Input` is removed. Nothing assigned it.
+- Input and output are marshaled once from the handler's typed values. A Go
+  `string` is a JSON string. Before, a Go `string` was stored as its raw
+  text.
+- An operation result is the checkpointed wire text. It is used as-is when
+  it is valid JSON and emitted as a JSON string otherwise.
+- `OperationSummary.Result` is now `json.RawMessage`, so `operationsByName`
+  carries the same value shape.
+- `ContentConfig.MaxContentLength` is removed. There is no per-field length
+  cap. An exporter that implements `SizeLimiter` bounds the whole record,
+  dropping operation results, then operations, then input, then output.
+  That is the same bound the other SDKs apply.
+- `ContentConfig.IncludeOperationResults` now defaults to `false`, as in the
+  JavaScript exporter. Records emitted with the default configuration no
+  longer carry `result` on operations or on `operationsByName` entries. Set
+  `IncludeOperationResults: true` to keep them. The zero-value detection is
+  unchanged: setting any `Include*` field disables the defaults for the
+  others.
+- `ContentConfig.Redactor` now also applies to operation results. Before,
+  it applied to input and output only, so a value redacted from `input` was
+  emitted unredacted when a step returned it. The Redactor receives the
+  marshaled JSON for input and output and the wire text for a result. If it
+  returns text that is not valid JSON, the text is emitted as a JSON string.
+  If it returns an empty string, the field is omitted. The Redactor is not
+  called for content that the `Include*` flags exclude.
+
+Readers that select `input.value`, `output.value`, or `result.value` must
+select `input`, `output`, or `result` instead. Readers that relied on
+`result` being present by default must enable `IncludeOperationResults`.
+
 ### Changed: telemetry record identity and timestamp keys
 
 The telemetry record schema is experimental, and this is a change to it. The

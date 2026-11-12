@@ -1,7 +1,17 @@
 package telemetry
 
+import "encoding/json"
+
 // ContentConfig controls what content is included in emitted records and
 // how it is formatted.
+//
+// Content values (Record.Input, Record.Output, OperationRecord.Result) are
+// JSON values. Input and output are marshaled once from the handler's typed
+// values, so a Go string becomes a JSON string. An operation result is the
+// checkpointed wire text: it is used as-is when it is valid JSON and
+// encoded as a JSON string otherwise. There is no per-field length cap. An
+// exporter that implements SizeLimiter bounds the whole record instead
+// (see Truncate).
 type ContentConfig struct {
 	// IncludeInput controls whether execution input is included in
 	// records. Defaults to true.
@@ -12,7 +22,7 @@ type ContentConfig struct {
 	IncludeOutput bool
 
 	// IncludeOperationResults controls whether operation result fields
-	// are included. Defaults to true.
+	// are included. Defaults to false.
 	IncludeOperationResults bool
 
 	// IncludeOperationErrors controls whether operation error fields
@@ -23,54 +33,81 @@ type ContentConfig struct {
 	// is included. Defaults to true.
 	IncludeExecutionError bool
 
-	// MaxContentLength is the maximum length for content fields. Content
-	// exceeding this length is truncated. A value of 0 disables
-	// truncation.
-	MaxContentLength int
-
 	// OperationFilter, if non-nil, is called for each operation. Only
 	// operations for which it returns true are included in the record.
 	// Different invocations may call it concurrently. The function and
 	// its captured state must be safe for concurrent use.
 	OperationFilter func(OperationRecord) bool
 
-	// Redactor, if non-nil, is applied to content field values before
-	// they are stored. Use this to mask sensitive data.
+	// Redactor, if non-nil, is applied to the text of every content value
+	// (input, output, and operation results) before it is stored. Use this
+	// to mask sensitive data. For input and output the text is the
+	// marshaled JSON. For an operation result it is the checkpointed wire
+	// text. If the returned text is valid JSON it is emitted as that JSON
+	// value; otherwise it is emitted as a JSON string. If it is empty, the
+	// field is omitted. Redactor is not called for content that the
+	// Include* fields exclude.
 	// Different invocations may call it concurrently. The function and
 	// its captured state must be safe for concurrent use.
 	Redactor func(string) string
 }
 
-// DefaultContentConfig returns a ContentConfig with sensible defaults:
-// all content included, 10 KB max content length.
+// DefaultContentConfig returns the default configuration: input, output,
+// operation errors, and the execution error are included; operation
+// results are not.
 func DefaultContentConfig() ContentConfig {
 	return ContentConfig{
 		IncludeInput:            true,
 		IncludeOutput:           true,
-		IncludeOperationResults: true,
+		IncludeOperationResults: false,
 		IncludeOperationErrors:  true,
 		IncludeExecutionError:   true,
-		MaxContentLength:        10 * 1024, // 10 KB
 	}
 }
 
-// BuildContentField creates a ContentField from a raw value, applying
-// redaction and truncation per the config.
-func (c ContentConfig) BuildContentField(value string) *ContentField {
-	if value == "" {
+// contentValue turns content text into the JSON value stored on a record.
+// It applies Redactor when set. Valid JSON text is stored as-is. Any other
+// text is stored as a JSON string, so the record always marshals. Empty
+// text yields nil, so omitempty drops the key.
+//
+// The operation result path relies on the fallback: the wire text is
+// normally JSON, but a custom serializer may produce something else, and
+// the JS exporter likewise falls back to the raw string.
+func (c ContentConfig) contentValue(text string) json.RawMessage {
+	if text == "" {
 		return nil
 	}
-
 	if c.Redactor != nil {
-		value = c.Redactor(value)
+		text = c.Redactor(text)
+		if text == "" {
+			return nil
+		}
 	}
-
-	if c.MaxContentLength > 0 && len(value) > c.MaxContentLength {
-		cf := truncateContent(value, c.MaxContentLength)
-		return &cf
+	if json.Valid([]byte(text)) {
+		return json.RawMessage(text)
 	}
+	quoted, err := json.Marshal(text)
+	if err != nil {
+		// json.Marshal of a string only fails on an invalid encoder
+		// state, which cannot happen here. Omit rather than emit an
+		// unmarshalable record.
+		return nil
+	}
+	return quoted
+}
 
-	return &ContentField{Value: value}
+// marshalContent marshals a typed handler value once and passes the JSON
+// text through contentValue. A nil value or a marshal failure yields nil,
+// so the key is omitted.
+func (c ContentConfig) marshalContent(v any) json.RawMessage {
+	if v == nil {
+		return nil
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	return c.contentValue(string(b))
 }
 
 // ApplyToRecord filters and transforms a record's content fields in place

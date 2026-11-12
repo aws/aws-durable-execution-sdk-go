@@ -38,7 +38,7 @@ func awaitSignal(t *testing.T, signal <-chan struct{}) {
 func TestPlugin_ConcurrentInvocations_IsolateRecords(t *testing.T) {
 	ctx := t.Context()
 	exp := &capturingExporter{}
-	factory := New(Config{Exporters: []Exporter{exp}})
+	factory := New(Config{Exporters: []Exporter{exp}, Content: allContent()})
 	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	infos := []durable.InvocationHookInfo{
 		{ExecutionArn: "arn:aws:lambda:us-east-1:123456789012:function:fn-a:1/durable-execution/name-a/id-a", RequestID: "request-a", ExecutionInput: "input-a", ExecutionStartTimestamp: start},
@@ -107,14 +107,14 @@ func TestPlugin_ConcurrentInvocations_IsolateRecords(t *testing.T) {
 		if rec.FunctionName != []string{"fn-a", "fn-b"}[i] || rec.ExecutionName != []string{"name-a", "name-b"}[i] {
 			t.Errorf("execution %d metadata = %+v", i, rec)
 		}
-		if rec.Input == nil || rec.Input.Value != info.ExecutionInput || rec.StartTimestamp == nil || !rec.StartTimestamp.Equal(info.ExecutionStartTimestamp) {
+		if string(rec.Input) != jsonString([]string{"input-a", "input-b"}[i]) || rec.StartTimestamp == nil || !rec.StartTimestamp.Equal(info.ExecutionStartTimestamp) {
 			t.Errorf("execution %d input/start = %+v / %v", i, rec.Input, rec.StartTimestamp)
 		}
-		if len(rec.Operations) != 1 || rec.Operations[0].ID != "shared-id" || rec.Operations[0].Status != "SUCCEEDED" || rec.Operations[0].Result == nil || rec.Operations[0].Result.Value != fmt.Sprintf("result-%d", i) {
+		if len(rec.Operations) != 1 || rec.Operations[0].ID != "shared-id" || rec.Operations[0].Status != "SUCCEEDED" || string(rec.Operations[0].Result) != jsonString(fmt.Sprintf("result-%d", i)) {
 			t.Errorf("execution %d operations = %+v", i, rec.Operations)
 		}
 		if i == 0 {
-			if rec.Status != StatusSucceeded || rec.Output == nil || rec.Output.Value != "output-a" || rec.Error != nil {
+			if rec.Status != StatusSucceeded || string(rec.Output) != jsonString("output-a") || rec.Error != nil {
 				t.Errorf("execution A outcome = %+v", rec)
 			}
 		} else if rec.Status != StatusFailed || rec.Output != nil || rec.Error == nil || rec.Error.Message != "error-b" {
@@ -141,7 +141,7 @@ func TestPlugin_ConcurrentOperations_PreserveUpdates(t *testing.T) {
 	ctx := t.Context()
 	exp := &capturingExporter{}
 	info := durable.InvocationHookInfo{ExecutionArn: "arn:aws:lambda:us-east-1:123456789012:function:fn:1/durable-execution/name/id"}
-	plugin := startTestPlugin(t, ctx, New(Config{Exporters: []Exporter{exp}}), info)
+	plugin := startTestPlugin(t, ctx, New(Config{Exporters: []Exporter{exp}, Content: allContent()}), info)
 	const count = 64
 	ready := make(chan struct{}, count)
 	start := make(chan struct{})
@@ -172,7 +172,7 @@ func TestPlugin_ConcurrentOperations_PreserveUpdates(t *testing.T) {
 	}
 	seen := make(map[string]bool)
 	for _, op := range records[0].Operations {
-		if seen[op.ID] || op.Status != "SUCCEEDED" || op.Result == nil || op.Result.Value != op.ID {
+		if seen[op.ID] || op.Status != "SUCCEEDED" || string(op.Result) != jsonString(op.ID) {
 			t.Errorf("unexpected operation: %+v", op)
 		}
 		seen[op.ID] = true

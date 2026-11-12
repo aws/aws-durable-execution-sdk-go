@@ -133,17 +133,33 @@ type ContentConfig struct {
     IncludeOperationResults bool
     IncludeOperationErrors  bool
     IncludeExecutionError   bool
-    MaxContentLength        int
     OperationFilter         func(OperationRecord) bool
     Redactor                func(string) string
 }
 ```
 
-All `Include*` fields default to true when the entire struct is left at its zero
-value. `MaxContentLength` defaults to 10 KB. Content exceeding that length is
-truncated and the resulting `ContentField` has `Truncated: true`.
+When the entire struct is left at its zero value, the defaults apply: input,
+output, operation errors, and the execution error are included; operation
+results are not. `DefaultContentConfig()` returns the default configuration
+explicitly. If any `Include*` field is set, the others keep the value you
+give them, so set every field you need.
 
-`DefaultContentConfig()` returns the default configuration explicitly.
+Content fields are JSON values (`json.RawMessage`):
+
+- `Record.Input` and `Record.Output` are the handler's typed input and result,
+  marshaled once. A Go `string` becomes a JSON string.
+- `OperationRecord.Result` is the checkpointed result. The wire text is used
+  as-is when it is valid JSON; otherwise it is emitted as a JSON string.
+
+There is no per-field length cap. An exporter that implements `SizeLimiter`
+bounds the whole record instead; see [Size Limits](#size-limits).
+
+`Redactor` receives the text of every included content value before it is
+stored: the marshaled JSON for input and output, and the wire text for an
+operation result. If the returned text is valid JSON it is emitted as that
+value; otherwise it is emitted as a JSON string. If it is empty, the field is
+omitted. `Redactor` is not called for content that the `Include*` flags
+exclude.
 
 `Redactor` and `OperationFilter` may run concurrently across invocations. Their
 functions and captured state must support concurrent use. See
@@ -417,8 +433,8 @@ Each emitted `Record` contains:
 | `EmittedAt` | time.Time | When this record was emitted. Strictly increases across the records of one invocation. |
 | `Operations` | []OperationRecord | Operation snapshots (filtered by OperationDetail). |
 | `Error` | *ErrorRecord | Execution-level error (failed executions only). |
-| `Input` | *ContentField | Execution input (if ContentConfig allows). |
-| `Output` | *ContentField | Execution output (if ContentConfig allows). |
+| `Input` | json.RawMessage | Execution input as a JSON value (if ContentConfig allows). |
+| `Output` | json.RawMessage | Execution output as a JSON value (if ContentConfig allows). |
 | `Custom` | map[string]any | User-defined metadata. |
 | `Truncated` | bool | True if the record was truncated for size. |
 | `DroppedOperations` | int | Number of operations dropped during truncation. |
@@ -427,7 +443,7 @@ Each emitted `Record` contains:
 
 Each `OperationRecord` contains ID, Name, Type, SubType, Status, ParentID,
 timestamps (JSON keys `startTime` and `endTime`), DurationMs, Attempt count,
-Result, Error, and Input content fields.
+Result (a JSON value), and Error.
 
 Every timestamp in the JSON output (`emittedAt`, `startTime`, `endTime`, at
 both the record and operation level) is UTC with exactly three fraction digits
