@@ -406,12 +406,15 @@ Each emitted `Record` contains:
 | `SchemaVersion` | string | Always `"1.0"`. |
 | `ExecutionArn` | string | The durable execution's full ARN. |
 | `ExecutionName` | string | Extracted from the execution-name segment of the ARN. |
-| `FunctionName` | string | Extracted from the function ARN. |
+| `FunctionName` | string | Function name parsed from the execution ARN. Always emitted. |
+| `FunctionQualifier` | string | Function qualifier parsed from the execution ARN (`$LATEST`, a version, or an alias). JSON key `functionQualifier`. Always emitted. |
+| `Region` | string | Region parsed from the execution ARN. Always emitted. |
+| `AccountID` | string | Account ID parsed from the execution ARN. JSON key `accountId`. Always emitted. |
 | `Status` | Status | `RUNNING`, `SUCCEEDED`, or `FAILED`. |
-| `StartTimestamp` | *time.Time | When the execution started. |
-| `EndTimestamp` | *time.Time | When the execution ended (terminal records only). |
+| `StartTimestamp` | *time.Time | When the execution started. JSON key `startTime`. Falls back to the oldest operation start, then the invocation time, when the payload omits it. |
+| `EndTimestamp` | *time.Time | When the execution ended (terminal records only). JSON key `endTime`. |
 | `DurationMs` | *int64 | End minus start in milliseconds. |
-| `EmittedAt` | time.Time | When this record was emitted. |
+| `EmittedAt` | time.Time | When this record was emitted. Strictly increases across the records of one invocation. |
 | `Operations` | []OperationRecord | Operation snapshots (filtered by OperationDetail). |
 | `Error` | *ErrorRecord | Execution-level error (failed executions only). |
 | `Input` | *ContentField | Execution input (if ContentConfig allows). |
@@ -423,7 +426,16 @@ Each emitted `Record` contains:
 | `DroppedOutput` | bool | True if output was dropped during truncation. |
 
 Each `OperationRecord` contains ID, Name, Type, SubType, Status, ParentID,
-timestamps, DurationMs, Attempt count, Result, Error, and Input content fields.
+timestamps (JSON keys `startTime` and `endTime`), DurationMs, Attempt count,
+Result, Error, and Input content fields.
+
+Every timestamp in the JSON output (`emittedAt`, `startTime`, `endTime`, at
+both the record and operation level) is UTC with exactly three fraction digits
+and a `Z` suffix, for example `2026-10-24T02:22:35.088Z`. The Go fields stay
+`time.Time`; `Record.MarshalJSON` and `OperationRecord.MarshalJSON` apply the
+format. `json.Unmarshal` into `Record` parses it back. The DynamoDB sort key,
+the SQS FIFO deduplication ID, and the RDS/Redshift `emitted_at` column use the
+same format.
 
 ## Size Limits
 
