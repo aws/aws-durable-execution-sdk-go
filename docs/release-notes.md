@@ -2,6 +2,49 @@
 
 ## Unreleased
 
+### Changed: operation hooks report the wire ID
+
+The plugin instrumentation API is experimental, and this is a change to it.
+`durable.OperationHookInfo.ID` now carries the operation's wire ID: the ID
+the checkpoint records, the key of `InvocationHookInfo.Operations` and
+`UpdatedOperations`, and the value that nested operations report as
+`ParentID`. The operation lifecycle hooks (`OnOperationStart`,
+`OnOperationEnd`, the attempt hooks, and the wrap hooks) previously reported
+the positional ID (`"1"`, `"1-2"`), while the invocation hooks reported the
+wire ID for the same operation. A plugin could not join the two.
+
+Every hook now reports one ID per operation. A plugin that keyed its own
+state on the lifecycle hook ID sees different values after upgrading; the
+positional ID is no longer available through the plugin API. The telemetry
+module relies on this change to recognize checkpointed operations across
+invocations.
+
+### Fixed: invocation-local telemetry records
+
+Each `telemetry.TelemetryPlugin.CreatePlugin` call now allocates fresh invocation
+state. Concurrent invocations through one factory no longer share records,
+operation indexes, sampling decisions, mutexes, or on-change dispatch bookkeeping.
+Each invocation waits for its own in-flight on-change dispatches before its final
+emission. Exporters remain shared. Exporter concurrency and scheduling are separate
+follow-up work.
+
+Resumed telemetry records now initialize operations from the full invocation-start
+snapshot, not only externally updated operations. Full-tree records include
+unchanged nested operations in completed child contexts whose bodies are not
+re-executed. Resumes preserve the original execution start timestamp and the
+sampling decision derived from the execution ARN.
+
+`ContentConfig.Redactor` and `ContentConfig.OperationFilter` may now run
+concurrently across invocations. Callers must make these functions and their
+captured state safe for concurrent use. Calls within one invocation remain
+serialized.
+
+`Record.InvocationCount`, the experimental JSON field `invocationCount`, and the
+log field `invocation_count` are removed. A process-local counter cannot count an
+execution's invocations across execution environments. No replacement ordinal is
+provided. Remove dependencies on these fields when upgrading the experimental
+telemetry module.
+
 ### Added: registration metadata for experimental plugin factories
 
 `durable.RegisteredPluginFactory` extends `PluginFactory` with

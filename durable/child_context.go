@@ -850,7 +850,7 @@ func runVirtualChild[O any](ec *execContext, name, subType string, options child
 	if wrappedResult != nil {
 		result, _ = wrappedResult.(O)
 	}
-	return virtualChildSuccess(ec, child.IsReplaying, opInfo, name, options, result)
+	return virtualChildSuccess(ec, child.IsReplaying, opInfo, id, name, options, result)
 }
 
 // wrapVirtualChildBody runs body, the body of the virtual child context
@@ -935,7 +935,7 @@ func runVirtualChildAsync[O any](ec *execContext, name, subType string, options 
 			fut.settle(zero, virtualChildFailure(ec, child.IsReplaying, opInfo, name, options, fnErr, fnTrace))
 			return
 		}
-		fut.settle(virtualChildSuccess(ec, child.IsReplaying, opInfo, name, options, result))
+		fut.settle(virtualChildSuccess(ec, child.IsReplaying, opInfo, id, name, options, result))
 	}()
 	return fut
 }
@@ -982,7 +982,8 @@ func dispatchVirtualContextStart(ec *execContext, id, name, subType string) Oper
 // replay when its code receives a new outcome, while its parent can stay
 // replaying until it reads the child's future.
 func dispatchVirtualContextEnd(ec *execContext, replaying func() bool, start OperationHookInfo, result string, err error) {
-	info := ec.operationHookInfo(start.ID, start.Name, start.Type, start.SubType, true)
+	info := start
+	info.IsReplay = true
 	info.ChildrenOmitted = false
 	info.StartTimestamp = start.StartTimestamp
 	info.EndTimestamp = time.Now()
@@ -1011,23 +1012,23 @@ func virtualChildFailure(ec *execContext, replaying func() bool, start Operation
 }
 
 // virtualChildSuccess round-trips result through the child's serdes, keyed
-// on the virtual child's operation ID, so the value returned live equals
-// the value returned on replay, which re-runs the body, and dispatches the
-// child's end with the serialized result. A virtual child has no
-// checkpoint that could settle it, so its outcome is whatever this
+// on the virtual child's positional ID id, so the value returned live
+// equals the value returned on replay, which re-runs the body, and
+// dispatches the child's end with the serialized result. A virtual child
+// has no checkpoint that could settle it, so its outcome is whatever this
 // function returns to the caller: a serdes failure in either direction
 // dispatches a failed end carrying the [SerdesError] the caller receives,
 // so every start of a virtual child is followed by exactly one end.
-func virtualChildSuccess[O any](ec *execContext, replaying func() bool, start OperationHookInfo, name string, options childOptions, result O) (O, error) {
+func virtualChildSuccess[O any](ec *execContext, replaying func() bool, start OperationHookInfo, id, name string, options childOptions, result O) (O, error) {
 	var zero O
-	serialized, err := options.serdes.Marshal(ec.Context, ec.serdesCtx(start.ID), result)
+	serialized, err := options.serdes.Marshal(ec.Context, ec.serdesCtx(id), result)
 	if err != nil {
 		failure := ec.serdesFailure(name, serdesDirectionMarshal, err)
 		dispatchVirtualContextEnd(ec, replaying, start, "", failure)
 		return zero, failure
 	}
 	var out O
-	if err := options.serdes.Unmarshal(ec.Context, ec.serdesCtx(start.ID), serialized, &out); err != nil {
+	if err := options.serdes.Unmarshal(ec.Context, ec.serdesCtx(id), serialized, &out); err != nil {
 		failure := ec.serdesFailure(name, serdesDirectionUnmarshal, err)
 		dispatchVirtualContextEnd(ec, replaying, start, "", failure)
 		return zero, failure
@@ -1227,16 +1228,16 @@ func dispatchContextStart(ec *execContext, id, name, subType string, op *operati
 	return info
 }
 
-// dispatchContextEnd dispatches the live end of the context operation id
-// once its terminal checkpoint is recorded. start is the info returned by
-// dispatchContextStart. err is the failure the operation returns to its
-// caller, nil for a succeeded context whose checkpointed payload is
+// dispatchContextEnd dispatches the live end of the context operation whose
+// start event is start, as dispatchContextStart returned it, once its
+// terminal checkpoint is recorded. start.ID is the wire ID, so the
+// checkpoint is read by wire ID. err is the failure the operation returns
+// to its caller, nil for a succeeded context whose checkpointed payload is
 // result.
 func dispatchContextEnd(ec *execContext, start OperationHookInfo, result string, err error) {
-	info := ec.operationHookInfo(start.ID, start.Name, start.Type, start.SubType, false)
-	info.ChildrenOmitted = start.ChildrenOmitted
-	info.StartTimestamp = start.StartTimestamp
-	info.EndTimestamp = checkpointedEndTime(ec.state.get(start.ID))
+	info := start
+	info.IsReplay = false
+	info.EndTimestamp = checkpointedEndTime(ec.state.getByWireID(start.ID))
 	if err != nil {
 		info.Error = err
 		dispatchOperationEnd(ec, info, PluginOperationFailed)

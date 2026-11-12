@@ -117,16 +117,22 @@ func (c *execContext) logOperationCompleted(replaying func() bool, info Operatio
 	default:
 		return
 	}
-	attrs := append(debugOperationAttrs(info.ID, info.Name, info.SubType), slog.String(logKeyStatus, s))
+	attrs := append(debugOperationWireAttrs(info.ID, info.Name, info.SubType), slog.String(logKeyStatus, s))
 	c.debugLogReplaying(replaying, nil, debugMsgOperationCompleted, attrs...)
 }
 
 // debugOperationAttrs are the operation attributes of the operation claimed
-// and operation completed records: the wire ID, the wire subtype, and the
-// name when the operation is named.
+// and operation completed records for the operation with positional ID id:
+// the wire ID, the wire subtype, and the name when the operation is named.
 func debugOperationAttrs(id, name, subType string) []slog.Attr {
+	return debugOperationWireAttrs(hashID(id), name, subType)
+}
+
+// debugOperationWireAttrs is debugOperationAttrs for an operation already
+// identified by its wire ID, as an OperationHookInfo reports it.
+func debugOperationWireAttrs(wireID, name, subType string) []slog.Attr {
 	attrs := []slog.Attr{
-		slog.String(logKeyOperationID, hashID(id)),
+		slog.String(logKeyOperationID, wireID),
 		slog.String(logKeyOperationSubtype, subType),
 	}
 	if name != "" {

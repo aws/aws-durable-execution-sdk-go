@@ -73,10 +73,10 @@ func TestVirtualChildCheckpointsOnlyItsOperations(t *testing.T) {
 				"start:inner:STARTED:false", "end:inner:SUCCEEDED:false",
 				"end:virtual:SUCCEEDED:true")
 			for _, ev := range eventsForName(evs, "virtual") {
-				assertIdentity(t, ev, "1", "virtual", string(OperationTypeContext), OperationSubTypeRunInChildContext, "")
+				assertIdentity(t, ev, hashID("1"), "virtual", string(OperationTypeContext), OperationSubTypeRunInChildContext, "")
 			}
 			for _, ev := range eventsForName(evs, "inner") {
-				assertIdentity(t, ev, "1-1", "inner", string(OperationTypeStep), OperationSubTypeStep, "")
+				assertIdentity(t, ev, hashID("1-1"), "inner", string(OperationTypeStep), OperationSubTypeStep, "")
 			}
 		})
 	}
@@ -132,7 +132,7 @@ func TestVirtualChildInsideCheckpointedChild(t *testing.T) {
 	inner := eventsForName(rec.take(), "inner")
 	assertSequence(t, inner, "start:inner:STARTED:false", "end:inner:SUCCEEDED:false")
 	for _, ev := range inner {
-		assertIdentity(t, ev, "1-1-1", "inner", string(OperationTypeStep), OperationSubTypeStep, hashID("1"))
+		assertIdentity(t, ev, hashID("1-1-1"), "inner", string(OperationTypeStep), OperationSubTypeStep, hashID("1"))
 	}
 }
 
@@ -476,14 +476,14 @@ func TestVirtualChildLifecycleHooks(t *testing.T) {
 				evs := rec.take()
 				assertSequence(t, eventsForName(evs, "virtual"), "start:virtual:STARTED:true", oc.wantEnd)
 				for _, ev := range eventsForName(evs, "virtual") {
-					assertIdentity(t, ev, "1-1", "virtual", string(OperationTypeContext), "Enrich", hashID("1"))
+					assertIdentity(t, ev, hashID("1-1"), "virtual", string(OperationTypeContext), "Enrich", hashID("1"))
 					assertLiveTimestamps(t, ev)
 					if ev.info.ChildrenOmitted {
 						t.Errorf("%s ChildrenOmitted = true, want false: no reported operation names the virtual child as parent", ev.hook)
 					}
 				}
 				for _, ev := range eventsForName(evs, "inner") {
-					assertIdentity(t, ev, "1-1-1", "inner", string(OperationTypeStep), OperationSubTypeStep, hashID("1"))
+					assertIdentity(t, ev, hashID("1-1-1"), "inner", string(OperationTypeStep), OperationSubTypeStep, hashID("1"))
 				}
 				end := eventsForName(evs, "virtual")[1]
 				if outcome == "fails" {
@@ -560,8 +560,8 @@ func TestVirtualChildStartBeforeWrap(t *testing.T) {
 			if len(order) != 2 || order[0] != "start" || order[1] != "wrap" {
 				t.Fatalf("order = %v, want [start wrap]", order)
 			}
-			if startInfo.ID != "1" || startInfo.Status != PluginOperationStarted || !startInfo.IsReplay || startInfo.StartTimestamp.IsZero() {
-				t.Errorf("start info = %+v, want ID 1, STARTED, IsReplay true, and a start timestamp", startInfo)
+			if startInfo.ID != hashID("1") || startInfo.Status != PluginOperationStarted || !startInfo.IsReplay || startInfo.StartTimestamp.IsZero() {
+				t.Errorf("start info = %+v, want the wire ID of 1, STARTED, IsReplay true, and a start timestamp", startInfo)
 			}
 			if wrapInfo.IsReplay {
 				t.Errorf("wrap IsReplay = true on the first run, want false: the child executes live")

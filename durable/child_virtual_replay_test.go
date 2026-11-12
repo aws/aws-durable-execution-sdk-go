@@ -380,8 +380,8 @@ func TestVirtualChildHookReplayFlags(t *testing.T) {
 			rec.mu.Lock()
 			defer rec.mu.Unlock()
 			for _, ev := range rec.events {
-				if ev.info.ID != "1" || ev.info.Type != "CONTEXT" || ev.info.SubType != durable.OperationSubTypeRunInChildContext || ev.info.ParentID != "" {
-					t.Errorf("%d:%s identity = %+v, want ID 1, CONTEXT/%s, empty ParentID", ev.invocation, ev.hook, ev.info, durable.OperationSubTypeRunInChildContext)
+				if ev.info.ID != hashID("1") || ev.info.Type != "CONTEXT" || ev.info.SubType != durable.OperationSubTypeRunInChildContext || ev.info.ParentID != "" {
+					t.Errorf("%d:%s identity = %+v, want the wire ID of 1, CONTEXT/%s, empty ParentID", ev.invocation, ev.hook, ev.info, durable.OperationSubTypeRunInChildContext)
 				}
 				if ev.info.StartTimestamp.IsZero() {
 					t.Errorf("%d:%s StartTimestamp is zero", ev.invocation, ev.hook)
