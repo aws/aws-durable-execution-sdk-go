@@ -2,7 +2,6 @@ package telemetry
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -65,7 +64,7 @@ func (e *RedshiftExporter) Export(ctx context.Context, record Record) error {
 		return fmt.Errorf("telemetry.RedshiftExporter: Database is required")
 	}
 
-	recordJSON, err := json.Marshal(record)
+	recordJSON, err := marshalNoHTMLEscape(record)
 	if err != nil {
 		return fmt.Errorf("telemetry.RedshiftExporter: marshaling record: %w", err)
 	}

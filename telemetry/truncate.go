@@ -1,18 +1,15 @@
 package telemetry
 
-import (
-	"encoding/json"
-	"sort"
-)
+import "sort"
 
 // Renderer produces the exact byte shape a Truncate call should size
 // against. Exporters with custom rendering (OperationsFormat) provide
 // their own Renderer so truncation sizes against what is actually sent.
 type Renderer func(Record) ([]byte, error)
 
-// defaultRenderer is the canonical JSON shape via json.Marshal.
+// defaultRenderer is the canonical JSON shape. See marshalNoHTMLEscape.
 func defaultRenderer(record Record) ([]byte, error) {
-	return json.Marshal(record)
+	return marshalNoHTMLEscape(record)
 }
 
 // Truncate returns a copy of record, best-effort truncated to fit within

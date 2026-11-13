@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### Changed: telemetry records keep `<`, `>` and `&` literal
+
+Telemetry records no longer HTML-escape `<`, `>` and `&`. Before, every
+exporter and `RenderRecord` wrote them as `\u003c`, `\u003e` and `\u0026`
+in the input, the output, operation results, and error messages. Now the
+record carries the characters literally, as stored checkpoints do. So a
+text search for one of these characters, for example in CloudWatch Logs
+Insights, matches the record.
+
+Both forms are valid JSON and decode to the same value, so a JSON parser
+reads old and new records alike. A reader that searches the record text
+for an escape such as `\u003c` must search for the character instead.
+
+Calling `json.Marshal` on a `Record` yourself still escapes the
+characters. Use `RenderRecord`, or a `json.Encoder` with
+`SetEscapeHTML(false)`.
+
+A value returned by a transform is marshaled again, which removes
+whitespace and sorts object keys. So an operation result can differ from
+the checkpointed text in key order, even when the transform returns its
+argument.
+
 ### Changed: telemetry content fields are JSON values, and ContentConfig is per-value
 
 The telemetry record schema and the `ContentConfig` API are experimental, and
