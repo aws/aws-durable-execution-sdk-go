@@ -37,8 +37,10 @@ Record:
   field changes one thing.
 - `ExcludeInput` and `ExcludeOutput` omit the execution input and output.
 - `InputTransform` and `OutputTransform` receive the value decoded as JSON
-  (`map[string]any`, `[]any`, `string`, `float64`, `bool`, or `nil`) and
+  (`map[string]any`, `[]any`, `string`, `json.Number`, `bool`, or `nil`) and
   return the value to record. Use them to delete or mask fields by key.
+  Numbers are `json.Number`, not `float64`, so an integer above 2^53 keeps
+  its exact digits through the transform.
   Before, `Redactor` received the serialized text of every content field
   and returned text.
 - `Operations.Overrides` is a list of `OperationOverride{OperationName,

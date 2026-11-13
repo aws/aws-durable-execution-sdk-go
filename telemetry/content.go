@@ -1,6 +1,9 @@
 package telemetry
 
-import "encoding/json"
+import (
+	"bytes"
+	"encoding/json"
+)
 
 // ContentConfig controls what content appears in emitted records. The
 // zero value includes the execution input and output unchanged, omits
@@ -11,11 +14,14 @@ import "encoding/json"
 // implements SizeLimiter bounds the whole record instead (see Truncate).
 //
 // A transform function receives the content decoded as a JSON value: a
-// map[string]any, []any, string, float64, bool, or nil. It returns the
-// value to record, which is marshaled again. If a transform panics, or its
-// return value cannot be marshaled, the field is omitted. Transforms may
-// be called concurrently by different invocations. Each function and its
-// captured state must be safe for concurrent use.
+// map[string]any, []any, string, json.Number, bool, or nil. Numbers are
+// json.Number rather than float64 so that integers above 2^53 keep their
+// exact digits through the transform; call Int64 or Float64 on the value
+// to do arithmetic. The transform returns the value to record, which is
+// marshaled again. If a transform panics, or its return value cannot be
+// marshaled, the field is omitted. Transforms may be called concurrently
+// by different invocations. Each function and its captured state must be
+// safe for concurrent use.
 type ContentConfig struct {
 	// ExcludeInput omits the execution input from records.
 	ExcludeInput bool
@@ -106,9 +112,11 @@ func (c ContentConfig) resultValue(name, text string) json.RawMessage {
 	}
 	var v any
 	if json.Valid([]byte(text)) {
-		if err := json.Unmarshal([]byte(text), &v); err != nil {
+		decoded, err := decodeJSON([]byte(text))
+		if err != nil {
 			return nil
 		}
+		v = decoded
 	} else {
 		v = text
 	}
@@ -135,11 +143,30 @@ func (c ContentConfig) applyOperations(r *Record) {
 	r.Operations = kept
 }
 
-// typedValue marshals a handler's typed value and applies fn to it. A nil
-// value, a marshal failure, or a failed transform yields nil, so the key
-// is omitted. The value is marshaled once before the transform so that
-// fn sees the JSON form, not the Go type: a Go string arrives as a string
-// and a struct arrives as a map[string]any.
+// decodeJSON decodes b into a generic JSON value. Numbers decode as
+// json.Number, not float64. A float64 holds 53 bits of mantissa, so an
+// int64 above 2^53 would be rounded by the decode alone, and a transform
+// that returns its argument unchanged would still record an altered
+// number. json.Number keeps the original digits and json.Marshal writes
+// them back verbatim. Decode reads one value and ignores trailing bytes,
+// so callers that accept arbitrary text must check json.Valid first.
+func decodeJSON(b []byte) (any, error) {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+	var v any
+	err := dec.Decode(&v)
+	return v, err
+}
+
+// typedValue marshals a handler's typed value and applies fn to it. An
+// untyped nil interface value, a marshal failure, or a failed transform
+// yields nil, so the key is omitted. A typed nil (a nil pointer, map, or
+// slice) is not caught by the nil check: it marshals to the JSON text
+// null and is recorded as null. That matches the checkpointed output the
+// SDK stores for the same handler return value. The value is marshaled
+// once before the transform so that fn sees the JSON form, not the Go
+// type: a Go string arrives as a string and a struct arrives as a
+// map[string]any.
 func typedValue(v any, fn func(any) any) json.RawMessage {
 	if v == nil {
 		return nil
@@ -151,8 +178,8 @@ func typedValue(v any, fn func(any) any) json.RawMessage {
 	if fn == nil {
 		return b
 	}
-	var decoded any
-	if err := json.Unmarshal(b, &decoded); err != nil {
+	decoded, err := decodeJSON(b)
+	if err != nil {
 		return nil
 	}
 	return transformValue(decoded, fn)
