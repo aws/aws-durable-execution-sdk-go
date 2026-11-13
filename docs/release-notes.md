@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Fixed: attempt-end hooks report the attempt's end time
+
+`durable.AttemptEndHookInfo.EndTimestamp` was always zero. The SDK copied
+the attempt-start info into every attempt-end info and never set the end
+time. `OnOperationAttemptEnd` now carries the time the attempt body and the
+`WrapOperationAttemptFn` hooks around it returned. This applies to `Step`
+attempts and `WaitForCondition` checks, for every outcome.
+
+The time comes from the SDK's clock, as `StartTimestamp` does, so
+`EndTimestamp - StartTimestamp` is the time the attempt ran. A succeeded
+attempt's end time is earlier than the hook call, because the hook fires
+after the result is checkpointed and the checkpoint is not part of the
+attempt. `OnOperationEnd` still reports when the operation reached its
+terminal status.
+
 ### Changed: telemetry record identity and timestamp keys
 
 The telemetry record schema is experimental, and this is a change to it. The
