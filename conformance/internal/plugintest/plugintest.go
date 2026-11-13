@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/conformance/internal/pluginlog"
+	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
 )
 
 // buffer is a goroutine-safe bytes.Buffer.
@@ -102,6 +103,28 @@ func ExpectAllStamped(t *testing.T, records []pluginlog.Record) {
 	for _, r := range records {
 		if got, _ := r["durableExecutionArn"].(string); got != first {
 			t.Errorf("record stamped with %q, want %q: %v", got, first, r)
+		}
+	}
+}
+
+// ExpectCheckpointedIDs fails the test when a record carries, under one of
+// keys, an operation id that result did not checkpoint. The conformance
+// runner resolves the ${IDn} placeholders of a requirement from the
+// execution history and compares the plugin's op and parent fields against
+// them, so an id the history does not know fails in the cloud. A key that
+// is absent, empty, or [pluginlog.None] is skipped: it reports no
+// operation.
+func ExpectCheckpointedIDs(t *testing.T, records []pluginlog.Record, result *durabletest.TestResult, keys ...string) {
+	t.Helper()
+	for _, r := range records {
+		for _, k := range keys {
+			id, _ := r[k].(string)
+			if id == "" || id == pluginlog.None {
+				continue
+			}
+			if result.OperationByID(id) == nil {
+				t.Errorf("%s=%q names no checkpointed operation: %s", k, id, describe(r))
+			}
 		}
 	}
 }
