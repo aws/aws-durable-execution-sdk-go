@@ -3,6 +3,8 @@ package telemetry
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 )
 
 // ContentConfig controls what content appears in emitted records. The
@@ -110,14 +112,9 @@ func (c ContentConfig) resultValue(name, text string) json.RawMessage {
 	if o == nil || o.Exclude || o.Result == nil || text == "" {
 		return nil
 	}
-	var v any
-	if json.Valid([]byte(text)) {
-		decoded, err := decodeJSON([]byte(text))
-		if err != nil {
-			return nil
-		}
-		v = decoded
-	} else {
+	v, err := decodeJSON([]byte(text))
+	if err != nil {
+		// Not valid JSON: the transform receives the raw text as a string.
 		v = text
 	}
 	return transformValue(v, o.Result)
@@ -148,15 +145,26 @@ func (c ContentConfig) applyOperations(r *Record) {
 // int64 above 2^53 would be rounded by the decode alone, and a transform
 // that returns its argument unchanged would still record an altered
 // number. json.Number keeps the original digits and json.Marshal writes
-// them back verbatim. Decode reads one value and ignores trailing bytes,
-// so callers that accept arbitrary text must check json.Valid first.
+// them back verbatim. Decode reads one value and stops, so trailing bytes
+// would pass unnoticed and "1 2" would decode as 1. The Token call after
+// Decode must therefore reach io.EOF; anything else is an error. So the
+// function accepts exactly the inputs json.Valid accepts, and callers can
+// pass arbitrary text without a separate validity check.
 func decodeJSON(b []byte) (any, error) {
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.UseNumber()
 	var v any
-	err := dec.Decode(&v)
-	return v, err
+	if err := dec.Decode(&v); err != nil {
+		return nil, err
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return nil, errTrailingData
+	}
+	return v, nil
 }
+
+// errTrailingData reports bytes after the first JSON value in decodeJSON.
+var errTrailingData = errors.New("telemetry: trailing data after JSON value")
 
 // typedValue marshals a handler's typed value and applies fn to it. An
 // untyped nil interface value, a marshal failure, or a failed transform
