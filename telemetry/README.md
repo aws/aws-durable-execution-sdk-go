@@ -231,9 +231,10 @@ are rendered in the serialized JSON body:
 
 Exporters that support this: File, HTTP, SQS, EventBridge, Firehose.
 
-The LambdaLog and CloudWatch Logs exporters have no `OperationsFormat` field.
-They always render `OperationsFormatByName`. See
-[LambdaLog](#lambdalog-default) and [CloudWatch Logs](#cloudwatch-logs).
+The LambdaLog, CloudWatch Logs, and DynamoDB exporters have no
+`OperationsFormat` field. They always render `OperationsFormatByName`. See
+[LambdaLog](#lambdalog-default), [CloudWatch Logs](#cloudwatch-logs), and
+[DynamoDB](#dynamodb).
 
 ## Exporters
 
@@ -394,11 +395,40 @@ exporter := &telemetry.DynamoDBExporter{
 }
 ```
 
+Each item holds the record in the by-name shape: `operationsByName` replaces
+the `operations` array (see [OperationsFormat](#operationsformat)). Every
+top-level key of that record JSON is its own item attribute. There is no
+`recordJson` attribute. The JavaScript, Python, and Java exporters also write
+one attribute per top-level key of the by-name record.
+
+Each JSON value becomes the matching DynamoDB attribute type:
+
+| JSON value | Attribute type |
+| --- | --- |
+| object | `M` |
+| array | `L` |
+| string | `S` |
+| number | `N` |
+| boolean | `BOOL` |
+| null | `NULL` |
+
+So `input`, `output`, and `operationsByName` are `M` attributes when the value
+is an object. A reader can address a nested value by its document path, for
+example `operationsByName.increment.count`. A number keeps the digits of the
+record JSON. DynamoDB stores at most 38 significant digits, and a non-zero
+magnitude between 1E-130 and 9.99...E+125. A record that carries any other
+number, for example a `float64` value of `1e200`, fails `PutItem` with a
+`ValidationException`.
+
 Partition key (`pk` by default) is the execution ARN. Sort key (`sk` by default)
 is the EmittedAt timestamp. Set `SortKeyField` to `telemetry.NoSortKey` to disable
 the sort key (each export overwrites the previous record for the same execution).
+The key attributes are written after the record attributes. So a key attribute
+name that equals a record key, for example `PartitionKeyField: "executionName"`,
+holds the key value.
 
-Size limit: 400 KB (configurable via `MaxSizeBytes`).
+Size limit: 400 KB (configurable via `MaxSizeBytes`). The exporter implements
+`RenderingSizeLimiter`, so truncation sizes the by-name record JSON.
 
 ### OpenSearch
 
