@@ -35,8 +35,6 @@ Resources:
           reason: "OnOperationChange fires only for operations updated between invocations; a step that completes inside the invocation that started it is not reported"
         - id: "10-19"
           reason: "no handler: InvocationEndHookInfo carries no first-invocation flag, request id, operations map, or execution start timestamp"
-        - id: "10-21"
-          reason: "no handler: AttemptEndHookInfo carries no end timestamp"
         - id: "10-22"
           reason: "no handler: OnOperationChange fires only for operations updated between invocations"
     Metadata:
@@ -335,6 +333,21 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
 
+  PluginAttemptInfoShape:
+    Type: AWS::Serverless::Function
+    TestingMetadata:
+      TestDescription: ["10-21"]
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/plugin_attempt_info_shape/
+      Handler: bootstrap
+      Description: Attempt-start and attempt-end hook info carries the full attempt field set
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
   PluginInvocationLifecycleLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
@@ -453,4 +466,10 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub "/aws/lambda/${PluginContextInfoShape}"
+      RetentionInDays: 7
+
+  PluginAttemptInfoShapeLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${PluginAttemptInfoShape}"
       RetentionInDays: 7

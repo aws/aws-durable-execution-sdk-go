@@ -501,6 +501,13 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 			return r, e
 		},
 	)
+	// The attempt ends when the body and the wrap hooks around it return.
+	// Every attempt-end info carries this time, so a failed and a
+	// succeeded attempt measure the same span. The success hook fires
+	// after the checkpoint, but the checkpoint is not part of the attempt.
+	// The time comes from the SDK's clock, as StartTimestamp does.
+	attemptEnd := attemptInfo.OperationHookInfo
+	attemptEnd.EndTimestamp = time.Now()
 	if wrappedErr != nil {
 		stepErr = wrappedErr
 	} else if wrappedResult != nil {
@@ -512,7 +519,7 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 		dispatchNotification(ec.operationHooks(), func(p *Plugin) {
 			if p.OnOperationAttemptEnd != nil {
 				p.OnOperationAttemptEnd(ec, AttemptEndHookInfo{
-					OperationHookInfo: attemptInfo.OperationHookInfo,
+					OperationHookInfo: attemptEnd,
 					Attempt:           attempt,
 					Outcome:           PluginAttemptFailed,
 					Error:             stepErr,
@@ -528,7 +535,7 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 		dispatchNotification(ec.operationHooks(), func(p *Plugin) {
 			if p.OnOperationAttemptEnd != nil {
 				p.OnOperationAttemptEnd(ec, AttemptEndHookInfo{
-					OperationHookInfo: attemptInfo.OperationHookInfo,
+					OperationHookInfo: attemptEnd,
 					Attempt:           attempt,
 					Outcome:           PluginAttemptFailed,
 					Error:             failure,
@@ -555,7 +562,7 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 		dispatchNotification(ec.operationHooks(), func(p *Plugin) {
 			if p.OnOperationAttemptEnd != nil {
 				p.OnOperationAttemptEnd(ec, AttemptEndHookInfo{
-					OperationHookInfo: attemptInfo.OperationHookInfo,
+					OperationHookInfo: attemptEnd,
 					Attempt:           attempt,
 					Outcome:           PluginAttemptFailed,
 					Error:             decodeErr,
@@ -578,7 +585,7 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 	dispatchNotification(ec.operationHooks(), func(p *Plugin) {
 		if p.OnOperationAttemptEnd != nil {
 			p.OnOperationAttemptEnd(ec, AttemptEndHookInfo{
-				OperationHookInfo: attemptInfo.OperationHookInfo,
+				OperationHookInfo: attemptEnd,
 				Attempt:           attempt,
 				Outcome:           PluginAttemptSucceeded,
 			})

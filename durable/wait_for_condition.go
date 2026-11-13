@@ -326,6 +326,10 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 			return s, e
 		},
 	)
+	// The attempt ends when the check and the wrap hooks around it return;
+	// see the same stamp in executeStepAttempt.
+	attemptEnd := attemptInfo.OperationHookInfo
+	attemptEnd.EndTimestamp = time.Now()
 	if wrappedErr != nil {
 		checkErr = wrappedErr
 	} else if wrappedResult != nil {
@@ -338,7 +342,7 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 		dispatchNotification(ec.operationHooks(), func(p *Plugin) {
 			if p.OnOperationAttemptEnd != nil {
 				p.OnOperationAttemptEnd(ec, AttemptEndHookInfo{
-					OperationHookInfo: attemptInfo.OperationHookInfo,
+					OperationHookInfo: attemptEnd,
 					Attempt:           attempt,
 					Outcome:           PluginAttemptFailed,
 					Error:             checkErr,
@@ -367,7 +371,7 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 	dispatchNotification(ec.operationHooks(), func(p *Plugin) {
 		if p.OnOperationAttemptEnd != nil {
 			p.OnOperationAttemptEnd(ec, AttemptEndHookInfo{
-				OperationHookInfo: attemptInfo.OperationHookInfo,
+				OperationHookInfo: attemptEnd,
 				Attempt:           attempt,
 				Outcome:           PluginAttemptSucceeded,
 			})
