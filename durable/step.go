@@ -404,6 +404,11 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 		liveInfo.IsReplay = false
 		if err == nil {
 			liveInfo.EndTimestamp = time.Now()
+			// The SUCCEED checkpoint has returned, and its response merged the
+			// step record into the state. So the record holds the
+			// checkpointed result, which the end reports as the replayed
+			// end does.
+			liveInfo.Result = ec.state.get(id).operationResult()
 			dispatchOperationEnd(ec, liveInfo, PluginOperationSucceeded)
 		} else if !errors.Is(err, errSuspendExecution) {
 			liveInfo.EndTimestamp = time.Now()

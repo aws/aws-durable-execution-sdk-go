@@ -480,11 +480,37 @@ func TestOperationLifecycleParentIDInsideChildContext(t *testing.T) {
 	assertIdentity(t, call[0], hashID("1-2"), "call", string(OperationTypeChainedInvoke), OperationSubTypeChainedInvoke, wantParent)
 }
 
+// stepResultEchoClient is a fake ExecutionClient. Like the service, it
+// returns the record of a succeeded step, with its result, in the response
+// to the checkpoint request that recorded the success.
+type stepResultEchoClient struct{}
+
+func (stepResultEchoClient) GetExecutionState(context.Context, GetExecutionStateInput) (GetExecutionStateOutput, error) {
+	return GetExecutionStateOutput{}, nil
+}
+
+func (stepResultEchoClient) Checkpoint(_ context.Context, in CheckpointInput) (CheckpointOutput, error) {
+	out := CheckpointOutput{CheckpointToken: in.CheckpointToken}
+	for _, u := range in.Updates {
+		if u.Type != OperationTypeStep || u.Action != OperationActionSucceed {
+			continue
+		}
+		out.NewExecutionState = append(out.NewExecutionState, Operation{
+			Id: u.Id, Type: u.Type, SubType: u.SubType, Name: u.Name, ParentId: u.ParentId,
+			Status:      OperationStatusSucceeded,
+			StepDetails: &StepDetails{Attempt: 1, Result: u.Payload},
+		})
+	}
+	return out, nil
+}
+
 // TestOperationLifecycleStepEventsPinned pins the events runStep emits so
 // the shared helper does not change them: a live step emits a STARTED
 // start and a SUCCEEDED or FAILED end with IsReplay false; a replayed
 // terminal step emits a start and an end at its checkpointed status with
-// IsReplay true, the attempt count, and the checkpointed timestamps.
+// IsReplay true, the attempt count, and the checkpointed timestamps. The
+// end of a succeeded step carries the checkpointed result, live and
+// replayed.
 func TestOperationLifecycleStepEventsPinned(t *testing.T) {
 	stepErr := errors.New("boom")
 	rec := &opRecorder{}
@@ -494,7 +520,7 @@ func TestOperationLifecycleStepEventsPinned(t *testing.T) {
 		}
 		_, err := Step(ctx, "bad", func(StepContext) (string, error) { return "", stepErr }, WithRetry(NoRetry()))
 		return "", err
-	}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(rec.plugin()), withLambdaAPI(stepResultEchoClient{}))
 
 	// Live.
 	resp, err := handler(makePluginContext(), makePluginPayload(t, "arn:test:lifecycle", "tok1", nil))
@@ -529,6 +555,12 @@ func TestOperationLifecycleStepEventsPinned(t *testing.T) {
 	}
 	if live[1].info.Error != nil {
 		t.Errorf("live succeeded end: Error = %v, want nil", live[1].info.Error)
+	}
+	if got := live[1].info.Result; got != `"v"` {
+		t.Errorf("live succeeded end: Result = %q, want %q", got, `"v"`)
+	}
+	if got := live[3].info.Result; got != "" {
+		t.Errorf("live failed end: Result = %q, want empty", got)
 	}
 
 	// Replay of both terminal steps.
