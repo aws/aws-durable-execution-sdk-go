@@ -351,6 +351,8 @@ func TestContentConfig_ResultValue(t *testing.T) {
 		{"json null", `null`, nil, `null`},
 		{"non-json arrives as string", `plain text`, "plain text", `"plain text"`},
 		{"cut json arrives as string", `{"a":`, `{"a":`, `"{\"a\":"`},
+		{"trailing data arrives as string", `1 2`, "1 2", `"1 2"`},
+		{"surrounding whitespace decodes", ` 7 `, json.Number("7"), `7`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

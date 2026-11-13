@@ -45,6 +45,12 @@ func Truncate(record Record, maxBytes int, render Renderer) Record {
 	ops := record.Operations
 	n := len(ops)
 
+	// The content fields are json.RawMessage with omitempty. An empty
+	// non-nil RawMessage is never rendered, so dropping it frees no bytes.
+	// So every presence check below is len > 0, not != nil; otherwise an
+	// empty value would set Truncated and the Dropped* flags for content
+	// that was never in the output.
+
 	// Step 1: drop each operation's Result field, oldest first.
 	// applyResultDrops returns a copy of ops with the oldest j operations'
 	// Result cleared, and whether any Result was actually cleared.
@@ -52,7 +58,7 @@ func Truncate(record Record, maxBytes int, render Renderer) Record {
 		dropped = make([]OperationRecord, n)
 		copy(dropped, ops)
 		for i := 0; i < j; i++ {
-			if dropped[i].Result != nil {
+			if len(dropped[i].Result) > 0 {
 				dropped[i].Result = nil
 				dropped[i].Truncated = true
 				any = true
@@ -107,7 +113,7 @@ func Truncate(record Record, maxBytes int, render Renderer) Record {
 	}
 
 	// Step 3: Input, then Output, as a last resort.
-	if record.Input != nil {
+	if len(record.Input) > 0 {
 		record.Input = nil
 		record.Truncated = true
 		record.DroppedInput = true
@@ -115,7 +121,7 @@ func Truncate(record Record, maxBytes int, render Renderer) Record {
 			return record
 		}
 	}
-	if record.Output != nil {
+	if len(record.Output) > 0 {
 		record.Output = nil
 		record.Truncated = true
 		record.DroppedOutput = true
