@@ -806,3 +806,121 @@ func TestPlugin_Content_LargeInputIsNotCut(t *testing.T) {
 		t.Errorf("input len %d, output len %d, want %d each", len(records[0].Input), len(records[0].Output), len(big)+2)
 	}
 }
+
+// TestPlugin_Content_ResultTransformRunsOncePerResultText verifies that
+// hooks reporting an unchanged result reuse the transformed value, and
+// that a changed result text runs the transform again.
+func TestPlugin_Content_ResultTransformRunsOncePerResultText(t *testing.T) {
+	ctx := t.Context()
+	calls := 0
+	content := ContentConfig{Operations: ContentOperations{Overrides: []OperationOverride{{
+		OperationName: "step",
+		Result: func(v any) any {
+			calls++
+			return map[string]any{"seen": v}
+		},
+	}}}}
+	exp := &capturingExporter{}
+	factory := New(Config{Content: content, Exporters: []Exporter{exp}})
+	start := time.Now().Add(-time.Minute)
+	op := durable.OperationHookInfo{
+		ID: "op-1", Name: "step", Type: "STEP",
+		Status: durable.PluginOperationSucceeded, Attempt: 1,
+		StartTimestamp: start, EndTimestamp: start.Add(time.Second),
+		Result: `"first"`,
+	}
+	plugin := startTestPlugin(t, ctx, factory, durable.InvocationHookInfo{
+		ExecutionArn: "arn:test",
+		Operations:   map[string]durable.OperationHookInfo{op.ID: op},
+	})
+	plugin.OnOperationEnd(ctx, op)
+	plugin.OnOperationChange(ctx, durable.OperationChangeHookInfo{
+		UpdatedOperations: map[string]durable.OperationHookInfo{op.ID: op},
+	})
+	if calls != 1 {
+		t.Fatalf("after three hooks with the same result, transform called %d times, want 1", calls)
+	}
+
+	op.Result = `"second"`
+	plugin.OnOperationChange(ctx, durable.OperationChangeHookInfo{
+		UpdatedOperations: map[string]durable.OperationHookInfo{op.ID: op},
+	})
+	if calls != 2 {
+		t.Fatalf("after a changed result, transform called %d times, want 2", calls)
+	}
+	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
+		Status: durable.PluginInvocationSucceeded,
+	})
+
+	records := exp.snapshot()
+	if len(records) != 1 {
+		t.Fatalf("got %d records, want 1", len(records))
+	}
+	ops := records[0].Operations
+	if len(ops) != 1 {
+		t.Fatalf("got %d operations, want 1", len(ops))
+	}
+	if string(ops[0].Result) != `{"seen":"second"}` {
+		t.Errorf("Result = %s, want the transform of the changed text", ops[0].Result)
+	}
+	if calls != 2 {
+		t.Errorf("after emission, transform called %d times, want 2", calls)
+	}
+}
+
+// TestPlugin_Content_SampledOutSkipsTransforms verifies that a sampled-out
+// invocation runs none of the content transforms. Its record is never
+// emitted, so their results would be discarded.
+func TestPlugin_Content_SampledOutSkipsTransforms(t *testing.T) {
+	ctx := t.Context()
+	inputCalls, outputCalls, resultCalls := 0, 0, 0
+	content := ContentConfig{
+		InputTransform:  func(v any) any { inputCalls++; return v },
+		OutputTransform: func(v any) any { outputCalls++; return v },
+		Operations: ContentOperations{Overrides: []OperationOverride{{
+			OperationName: "step",
+			Result:        func(v any) any { resultCalls++; return v },
+		}}},
+	}
+	// At this rate the sampling threshold is 0 buckets, so every ARN
+	// samples out.
+	const rate = 1e-9
+	arn := "arn:aws:lambda:us-east-1:123456789012:function:f:1"
+	if sampledIn(arn, rate) {
+		t.Fatalf("ARN %s samples in at rate %v", arn, rate)
+	}
+	exp := &capturingExporter{}
+	factory := New(Config{
+		SamplingRate: rate,
+		EmitMode:     EmitAlways,
+		Content:      content,
+		Exporters:    []Exporter{exp},
+	})
+	op := durable.OperationHookInfo{
+		ID: "op-1", Name: "step", Type: "STEP",
+		Status: durable.PluginOperationSucceeded, Result: `{"value":1}`,
+	}
+	plugin := startTestPlugin(t, ctx, factory, durable.InvocationHookInfo{
+		ExecutionArn:   arn,
+		ExecutionInput: map[string]int{"value": 0},
+		Operations:     map[string]durable.OperationHookInfo{op.ID: op},
+	})
+	plugin.OnOperationStart(ctx, op)
+	plugin.OnOperationEnd(ctx, op)
+	plugin.OnOperationChange(ctx, durable.OperationChangeHookInfo{
+		UpdatedOperations: map[string]durable.OperationHookInfo{op.ID: op},
+	})
+	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
+		ExecutionArn:    arn,
+		Status:          durable.PluginInvocationSucceeded,
+		ExecutionResult: map[string]int{"value": 1},
+	})
+
+	if inputCalls != 0 || outputCalls != 0 || resultCalls != 0 {
+		t.Errorf("transform calls: input=%d output=%d result=%d, want all 0",
+			inputCalls, outputCalls, resultCalls)
+	}
+	if records := exp.snapshot(); len(records) != 0 {
+		t.Errorf("got %d records for a sampled-out invocation, want 0", len(records))
+	}
+}

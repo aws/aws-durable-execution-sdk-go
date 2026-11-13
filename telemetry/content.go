@@ -24,6 +24,15 @@ import (
 // marshaled, the field is omitted. Transforms may be called concurrently
 // by different invocations. Each function and its captured state must be
 // safe for concurrent use.
+//
+// Transforms run only for sampled-in invocations; see Config.SamplingRate.
+// InputTransform and OutputTransform run at most once per invocation. A
+// Result transform runs once for an operation's result in an invocation,
+// and again only if that result text changes. Each new invocation replays
+// checkpointed results, so it calls the Result transform again. Transforms
+// run while the plugin holds its per-invocation lock, which delays that
+// invocation's other hooks. So a transform should return quickly and must
+// not block.
 type ContentConfig struct {
 	// ExcludeInput omits the execution input from records.
 	ExcludeInput bool

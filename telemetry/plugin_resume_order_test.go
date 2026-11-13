@@ -84,7 +84,8 @@ func TestResume_SizeLimitedExportDropsOldestFirst(t *testing.T) {
 					op.Result = strings.Repeat("x", 256)
 				}
 				ops[id] = op
-				rec := toOperationRecord(id, op, withResults(longName))
+				rec := toOperationRecord(id, op)
+				rec.Result = withResults(longName).resultValue(op.Name, op.Result)
 				if i < count-1 {
 					if !dropResults {
 						continue
