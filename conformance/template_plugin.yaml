@@ -41,8 +41,6 @@ Resources:
           reason: "no handler: AttemptEndHookInfo carries no end timestamp"
         - id: "10-22"
           reason: "no handler: OnOperationChange fires only for operations updated between invocations"
-        - id: "10-23"
-          reason: "no handler: the plugin API exposes no children-replay indicator"
     Metadata:
       BuildMethod: makefile
     Properties:
@@ -324,6 +322,21 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
 
+  PluginContextInfoShape:
+    Type: AWS::Serverless::Function
+    TestingMetadata:
+      TestDescription: ["10-23"]
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/plugin_context_info_shape/
+      Handler: bootstrap
+      Description: Context operations expose subType tokens and user-function hooks expose the children-replay indicator
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
   PluginInvocationLifecycleLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
@@ -436,4 +449,10 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub "/aws/lambda/${PluginOperationInfoShape}"
+      RetentionInDays: 7
+
+  PluginContextInfoShapeLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${PluginContextInfoShape}"
       RetentionInDays: 7

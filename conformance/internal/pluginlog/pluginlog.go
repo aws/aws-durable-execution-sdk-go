@@ -21,6 +21,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
 )
@@ -125,4 +126,52 @@ func Outcome(status durable.PluginOperationStatus) string {
 		return string(durable.PluginAttemptSucceeded)
 	}
 	return string(durable.PluginAttemptFailed)
+}
+
+// InfoRecord returns the canonical dump of info that the field-shape
+// requirements (10-20 and later) assert on: every field of
+// OperationHookInfo under its camelCase name, with hook as the record's
+// hook. A field the SDK left unset is omitted rather than written as a
+// zero value, because the requirements assert the presence of each key:
+// an absent key is the signal that the info lacks the field. A string
+// field is written when non-empty, a time when non-zero, the attempt when
+// positive, the error when non-nil. Type and status tokens are written as
+// the SDK reports them; the suite upper-cases both, and the Go tokens are
+// already upper case. Timestamps are RFC 3339 in UTC.
+func InfoRecord(hook string, info durable.OperationHookInfo) map[string]any {
+	rec := map[string]any{
+		"plugin":   "CONFPLUGIN",
+		"hook":     hook,
+		"id":       info.ID,
+		"type":     Upper(info.Type),
+		"isReplay": info.IsReplay,
+	}
+	if info.Name != "" {
+		rec["name"] = info.Name
+	}
+	if info.SubType != "" {
+		rec["subType"] = info.SubType
+	}
+	if info.ParentID != "" {
+		rec["parentId"] = info.ParentID
+	}
+	if info.Status != "" {
+		rec["status"] = string(info.Status)
+	}
+	if !info.StartTimestamp.IsZero() {
+		rec["startTimestamp"] = info.StartTimestamp.UTC().Format(time.RFC3339Nano)
+	}
+	if !info.EndTimestamp.IsZero() {
+		rec["endTimestamp"] = info.EndTimestamp.UTC().Format(time.RFC3339Nano)
+	}
+	if info.Result != "" {
+		rec["result"] = info.Result
+	}
+	if info.Error != nil {
+		rec["error"] = ErrorMessage(info.Error)
+	}
+	if info.Attempt > 0 {
+		rec["attempt"] = info.Attempt
+	}
+	return rec
 }
