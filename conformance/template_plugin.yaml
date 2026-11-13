@@ -33,8 +33,6 @@ Resources:
       NotImplemented:
         - id: "10-8"
           reason: "OnOperationChange fires only for operations updated between invocations; a step that completes inside the invocation that started it is not reported"
-        - id: "10-14"
-          reason: "OperationHookInfo.Result is empty on the end hook of a step that succeeds in the current invocation"
         - id: "10-19"
           reason: "no handler: InvocationEndHookInfo carries no first-invocation flag, request id, operations map, or execution start timestamp"
         - id: "10-21"
@@ -235,7 +233,7 @@ Resources:
   PluginTerminalPayloads:
     Type: AWS::Serverless::Function
     TestingMetadata:
-      TestDescription: []
+      TestDescription: ["10-14"]
     Metadata:
       BuildMethod: makefile
     Properties:
