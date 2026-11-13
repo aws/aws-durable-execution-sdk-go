@@ -20,10 +20,13 @@ import (
 // json.Number rather than float64 so that integers above 2^53 keep their
 // exact digits through the transform; call Int64 or Float64 on the value
 // to do arithmetic. The transform returns the value to record, which is
-// marshaled again. If a transform panics, or its return value cannot be
-// marshaled, the field is omitted. Transforms may be called concurrently
-// by different invocations. Each function and its captured state must be
-// safe for concurrent use.
+// marshaled again. Marshaling writes no whitespace and sorts the keys of
+// every object, so the recorded text can differ from the original text in
+// key order. The characters <, > and & are written literally, not as
+// \u003c, \u003e and \u0026. If a transform panics, or its return value
+// cannot be marshaled, the field is omitted. Transforms may be called
+// concurrently by different invocations. Each function and its captured
+// state must be safe for concurrent use.
 //
 // Transforms run only for sampled-in invocations; see Config.SamplingRate.
 // InputTransform and OutputTransform run at most once per invocation. A
@@ -153,7 +156,7 @@ func (c ContentConfig) applyOperations(r *Record) {
 // json.Number, not float64. A float64 holds 53 bits of mantissa, so an
 // int64 above 2^53 would be rounded by the decode alone, and a transform
 // that returns its argument unchanged would still record an altered
-// number. json.Number keeps the original digits and json.Marshal writes
+// number. json.Number keeps the original digits and the encoder writes
 // them back verbatim. Decode reads one value and stops, so trailing bytes
 // would pass unnoticed and "1 2" would decode as 1. The Token call after
 // Decode must therefore reach io.EOF; anything else is an error. So the
@@ -188,7 +191,7 @@ func typedValue(v any, fn func(any) any) json.RawMessage {
 	if v == nil {
 		return nil
 	}
-	b, err := json.Marshal(v)
+	b, err := marshalNoHTMLEscape(v)
 	if err != nil {
 		return nil
 	}
@@ -210,7 +213,7 @@ func transformValue(v any, fn func(any) any) json.RawMessage {
 	if !ok {
 		return nil
 	}
-	b, err := json.Marshal(out)
+	b, err := marshalNoHTMLEscape(out)
 	if err != nil {
 		return nil
 	}

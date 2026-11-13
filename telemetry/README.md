@@ -211,6 +211,17 @@ does not run the operation's own serializer, so an operation with a custom
 Serdes delivers its serialized form. To record a result unchanged, return the
 argument.
 
+The value a transform returns is marshaled again. Marshaling writes no
+whitespace and sorts the keys of every object. So a recorded result can differ
+from the checkpointed text in key order, even when the transform returns its
+argument.
+
+Every exporter and `RenderRecord` write `<`, `>` and `&` literally, as the SDK
+does in checkpoints. So a text search for one of these characters matches the
+record. Calling `json.Marshal` on a `Record` yourself escapes them as
+`\u003c`, `\u003e` and `\u0026`; use `RenderRecord`, or a `json.Encoder` with
+`SetEscapeHTML(false)`.
+
 If a transform panics, or returns a value that cannot be marshaled, the field
 is omitted. The untransformed value is never recorded in its place.
 

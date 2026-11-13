@@ -73,9 +73,13 @@ type OperationRecord struct {
 
 	Attempt int `json:"attempt,omitempty"`
 
-	// Result is the operation's result as a JSON value. The checkpointed
-	// wire text is used as-is when it is valid JSON; otherwise it is
-	// encoded as a JSON string. See ContentConfig.
+	// Result is the operation's result as a JSON value. A result is
+	// recorded only through an OperationOverride.Result transform. The
+	// transform receives the checkpointed wire text decoded as JSON, or
+	// the text as a string when it is not valid JSON. Its return value is
+	// marshaled again. So the recorded text has no whitespace and has
+	// sorted object keys, even when the transform returns its argument.
+	// See ContentConfig.
 	Result json.RawMessage `json:"result,omitempty"`
 	Error  *ErrorRecord    `json:"error,omitempty"`
 
@@ -163,9 +167,14 @@ func formatOptionalTimestamp(t *time.Time) *string {
 // replace the time values in the output. The Go field types stay
 // time.Time, and json.Unmarshal into Record still works because time.Time
 // parses the three-digit form.
+//
+// The method writes <, > and & literally. A caller's own json.Marshal
+// call on a Record escapes them as \u003c, \u003e and \u0026, because
+// json.Marshal escapes the bytes a json.Marshaler returns. To keep them
+// literal, use RenderRecord or a json.Encoder with SetEscapeHTML(false).
 func (r Record) MarshalJSON() ([]byte, error) {
 	type alias Record
-	return json.Marshal(struct {
+	return marshalNoHTMLEscape(struct {
 		alias
 		StartTime *string `json:"startTime,omitempty"`
 		EndTime   *string `json:"endTime,omitempty"`
@@ -182,7 +191,7 @@ func (r Record) MarshalJSON() ([]byte, error) {
 // Record.MarshalJSON for the mechanism.
 func (o OperationRecord) MarshalJSON() ([]byte, error) {
 	type alias OperationRecord
-	return json.Marshal(struct {
+	return marshalNoHTMLEscape(struct {
 		alias
 		StartTime *string `json:"startTime,omitempty"`
 		EndTime   *string `json:"endTime,omitempty"`
