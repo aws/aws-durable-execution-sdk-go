@@ -10,13 +10,6 @@
 // step's live start and terminal end appear exactly once. A step re-entered
 // before it settled, such as one whose retry is due, reports its
 // checkpointed non-terminal status with IsReplay true and is emitted.
-//
-// The op field of each record is OperationHookInfo.ID. The Go SDK fills it
-// with the operation's positional id (for example 1 or 1-1), while the
-// execution history and the ParentID field carry the checkpointed
-// operation id. The runner compares op against the history id, so the
-// requirement is registered as not implemented in template_plugin.yaml
-// until the two ids agree.
 package main
 
 import (

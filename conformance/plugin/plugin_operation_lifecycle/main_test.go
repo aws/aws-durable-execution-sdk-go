@@ -21,6 +21,7 @@ func TestHandler(t *testing.T) {
 
 	recs := records()
 	plugintest.ExpectAllStamped(t, recs)
+	plugintest.ExpectCheckpointedIDs(t, recs, result, "op", "parent")
 	plugintest.ExpectCount(t, recs, map[string]any{"plugin": "CONFPLUGIN", "hook": "operation-start"}, 1)
 	plugintest.ExpectCount(t, recs, map[string]any{"plugin": "CONFPLUGIN", "hook": "operation-end", "status": "SUCCEEDED"}, 1)
 	plugintest.ExpectCount(t, recs, map[string]any{"hook": "operation-end", "status": "FAILED"}, 0)
