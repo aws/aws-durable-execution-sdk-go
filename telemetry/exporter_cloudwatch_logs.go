@@ -2,7 +2,6 @@ package telemetry
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -28,6 +27,12 @@ type CloudWatchLogsAPI interface {
 //
 // Log stream naming: "{LogStreamPrefix}{YYYY}/{MM}/{DD}" — one stream per
 // UTC calendar day, auto-created on first write.
+//
+// Each log event carries the record with its operations rendered as
+// operationsByName (see OperationsFormatByName), never as the operations
+// array. CloudWatch Logs Insights can read a field by a dotted path, such as
+// operationsByName.charge.status, but it cannot select the array element
+// whose name is "charge". So the format is fixed and has no option.
 type CloudWatchLogsExporter struct {
 	// API is the underlying CloudWatch Logs client. Required.
 	API CloudWatchLogsAPI
@@ -60,7 +65,7 @@ func (e *CloudWatchLogsExporter) Export(ctx context.Context, record Record) erro
 		return fmt.Errorf("telemetry.CloudWatchLogsExporter: LogGroupName is required")
 	}
 
-	b, err := json.Marshal(record)
+	b, err := e.Render(record)
 	if err != nil {
 		return fmt.Errorf("telemetry.CloudWatchLogsExporter: marshaling record: %w", err)
 	}
@@ -102,6 +107,13 @@ func (e *CloudWatchLogsExporter) MaxRecordSizeBytes() int {
 		return e.MaxSizeBytes
 	}
 	return DefaultMaxRecordSizeBytesLog
+}
+
+// Render implements RenderingSizeLimiter. It returns the log event message
+// that Export sends: the record rendered with OperationsFormatByName.
+// Export calls Render, so truncation sizes the bytes that are sent.
+func (e *CloudWatchLogsExporter) Render(record Record) ([]byte, error) {
+	return RenderRecord(record, OperationsFormatByName)
 }
 
 // ensureLogStream returns today's (UTC) log stream name, creating it via

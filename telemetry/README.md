@@ -239,6 +239,10 @@ are rendered in the serialized JSON body:
 
 Exporters that support this: File, HTTP, SQS, EventBridge, Firehose.
 
+The LambdaLog and CloudWatch Logs exporters have no `OperationsFormat` field.
+They always render `OperationsFormatByName`. See
+[LambdaLog](#lambdalog-default) and [CloudWatch Logs](#cloudwatch-logs).
+
 ## Exporters
 
 The plugin dispatches records to all configured exporters concurrently. Each
@@ -255,7 +259,13 @@ function's CloudWatch log group automatically.
 exporter := telemetry.NewLambdaLogExporter()
 ```
 
-Size limit: 256 KB (configurable via `MaxSizeBytes`).
+Each line carries `operationsByName` and no `operations` array. The format is
+fixed. CloudWatch Logs Insights selects a field by a dotted path such as
+`operationsByName.increment.count`. A query cannot select an element of the
+`operations` array by its name.
+
+Size limit: 256 KB (configurable via `MaxSizeBytes`). The limit applies to the
+`operationsByName` rendering.
 
 ### File
 
@@ -322,7 +332,11 @@ exporter := &telemetry.CloudWatchLogsExporter{
 Log streams are named `{prefix}{YYYY}/{MM}/{DD}` (one per UTC calendar day,
 auto-created on first write).
 
-Size limit: 256 KB (configurable via `MaxSizeBytes`).
+Each log event carries `operationsByName` and no `operations` array, for the
+same reason as [LambdaLog](#lambdalog-default). The format is fixed.
+
+Size limit: 256 KB (configurable via `MaxSizeBytes`). The limit applies to the
+`operationsByName` rendering.
 
 ### SQS
 

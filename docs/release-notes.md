@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Changed: LambdaLog and CloudWatch Logs exporters emit operationsByName
+
+The telemetry record schema is experimental, and this is a change to it. The
+change aligns the Go exporters with the JavaScript, Python, and Java
+exporters and with the `telemetry-1` conformance test.
+
+- `LambdaLogExporter` and `CloudWatchLogsExporter` now render each record
+  with `OperationsFormatByName`. The JSON carries `operationsByName` and no
+  `operations` array. Before, both exporters sent the plain `json.Marshal`
+  form, which carries `operations` and no `operationsByName`.
+- `LambdaLogExporter` is the default exporter. So a plugin configured
+  without `Exporters` also changes shape.
+- Neither exporter has an `OperationsFormat` field. The format is fixed.
+- Both exporters now implement `RenderingSizeLimiter`. So the size limit is
+  checked against the `operationsByName` rendering, which is the form that
+  is sent.
+
+Logs Insights queries that read `operations` must read
+`operationsByName.<name>` instead. For example, `operationsByName.charge.status`
+replaces a filter on the `operations` element whose `name` is `charge`. A
+custom exporter that needs the array form can call
+`RenderRecord(record, OperationsFormatArray)`.
+
 ### Changed: telemetry content fields are JSON values, and ContentConfig is per-value
 
 The telemetry record schema and the `ContentConfig` API are experimental, and

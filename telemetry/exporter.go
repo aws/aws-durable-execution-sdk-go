@@ -30,9 +30,11 @@ type SizeLimiter interface {
 }
 
 // RenderingSizeLimiter is SizeLimiter's companion interface for an
-// exporter that also supports OperationsFormat. Render must return the
-// exact byte shape this exporter's Export call would actually send, so
-// truncation sizes against the real rendered form.
+// exporter whose Export does not send the plain json.Marshal form of the
+// record, such as an exporter with an OperationsFormat option or one that
+// always renders operationsByName. Render must return the exact byte shape
+// this exporter's Export call would actually send, so truncation sizes
+// against the real rendered form.
 type RenderingSizeLimiter interface {
 	SizeLimiter
 	Render(record Record) ([]byte, error)
