@@ -1,5 +1,7 @@
 package telemetry
 
+import "encoding/json"
+
 // OperationSummary aggregates every occurrence of a given operation name
 // within a Record's Operations slice. Used by point-access stores
 // (CloudWatch Logs, DynamoDB) that cannot filter array elements by name.
@@ -26,7 +28,7 @@ type OperationSummary struct {
 
 	// Result is populated only when the name occurred exactly once and
 	// the operation has a result.
-	Result *ContentField `json:"result,omitempty"`
+	Result json.RawMessage `json:"result,omitempty"`
 }
 
 // GroupOperationsByName aggregates operations into a by-name view.

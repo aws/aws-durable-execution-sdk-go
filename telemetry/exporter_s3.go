@@ -3,7 +3,6 @@ package telemetry
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -72,7 +71,7 @@ func (e *S3Exporter) Export(ctx context.Context, record Record) error {
 		return fmt.Errorf("telemetry.S3Exporter: Bucket is required")
 	}
 
-	b, err := json.Marshal(record)
+	b, err := marshalNoHTMLEscape(record)
 	if err != nil {
 		return fmt.Errorf("telemetry.S3Exporter: marshaling record: %w", err)
 	}

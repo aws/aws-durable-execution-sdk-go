@@ -15,7 +15,7 @@ func buildOversizedRecord(n int) Record {
 			ID:     "op-" + strings.Repeat("x", 8),
 			Type:   "step",
 			Status: "SUCCEEDED",
-			Result: &ContentField{Value: strings.Repeat("y", 64)},
+			Result: json.RawMessage(`"` + strings.Repeat("y", 64) + `"`),
 		}
 	}
 	return Record{
