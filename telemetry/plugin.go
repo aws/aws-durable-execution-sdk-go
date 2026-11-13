@@ -73,6 +73,13 @@ type telemetryInvocation struct {
 	record *Record
 	byOpID map[string]int // operation ID -> index in record.Operations
 
+	// resultText maps an operation ID to the checkpointed result text
+	// that produced the operation's current Result. Several hooks report
+	// the same unchanged result for one operation. So upsertOperationLocked
+	// reuses the stored Result when the text matches, and the Result
+	// transform runs only when the text changes.
+	resultText map[string]string
+
 	// sampledIn is computed in CreatePlugin from the execution ARN.
 	// The same execution has the same decision across invocations.
 	sampledIn bool
@@ -136,10 +143,11 @@ var _ durable.PluginFactory = (*TelemetryPlugin)(nil)
 func (p *TelemetryPlugin) CreatePlugin(_ context.Context, info durable.InvocationHookInfo) (*durable.Plugin, error) {
 	region, accountID, functionName, qualifier := parseFunctionARN(info.ExecutionArn)
 	inv := &telemetryInvocation{
-		env:       p,
-		record:    NewRecord(info.ExecutionArn),
-		byOpID:    make(map[string]int),
-		sampledIn: sampledIn(info.ExecutionArn, p.samplingRate),
+		env:        p,
+		record:     NewRecord(info.ExecutionArn),
+		byOpID:     make(map[string]int),
+		resultText: make(map[string]string),
+		sampledIn:  sampledIn(info.ExecutionArn, p.samplingRate),
 	}
 	inv.record.FunctionName = functionName
 	inv.record.FunctionQualifier = qualifier
@@ -148,7 +156,11 @@ func (p *TelemetryPlugin) CreatePlugin(_ context.Context, info durable.Invocatio
 	inv.record.Status = StatusRunning
 	start := resolveExecutionStart(info)
 	inv.record.StartTimestamp = &start
-	inv.record.Input = p.content.inputValue(info.ExecutionInput)
+	// A sampled-out invocation emits nothing. So its transforms are
+	// skipped: their results would be discarded.
+	if inv.sampledIn {
+		inv.record.Input = p.content.inputValue(info.ExecutionInput)
+	}
 
 	return &durable.Plugin{
 		OnInvocationStart: inv.onInvocationStart,
@@ -313,7 +325,9 @@ func (p *telemetryInvocation) onInvocationEnd(ctx context.Context, info durable.
 
 	if info.Status == durable.PluginInvocationSucceeded {
 		p.record.Status = StatusSucceeded
-		p.record.Output = p.env.content.outputValue(info.ExecutionResult)
+		if p.sampledIn {
+			p.record.Output = p.env.content.outputValue(info.ExecutionResult)
+		}
 	} else {
 		p.record.Status = StatusFailed
 		if info.ExecutionError != nil {
@@ -395,12 +409,31 @@ func (p *telemetryInvocation) snapshotRecordLocked() Record {
 // upsertOperationLocked inserts or updates in place the OperationRecord
 // for the given operation ID. Skips the root EXECUTION operation (already
 // covered by the record's top-level fields). Called with p.mu held.
+//
+// The Result field is set in one of three ways:
+//   - The invocation is sampled out: Result stays nil and no transform
+//     runs, because the record is never emitted.
+//   - The result text and operation name equal those that produced the
+//     stored Result: the stored Result is reused and no transform runs.
+//   - Otherwise: resultValue runs the transform, and the text is stored.
 func (p *telemetryInvocation) upsertOperationLocked(id string, info durable.OperationHookInfo) {
 	if info.Type == "EXECUTION" || info.Type == "Execution" {
 		return
 	}
-	rec := toOperationRecord(id, info, p.env.content)
-	if idx, ok := p.byOpID[id]; ok {
+	rec := toOperationRecord(id, info)
+	idx, exists := p.byOpID[id]
+	if p.sampledIn {
+		// The name check keeps the reuse correct if a hook reports a
+		// different name, because overrides are matched by name.
+		if text, seen := p.resultText[id]; exists && seen && text == info.Result &&
+			p.record.Operations[idx].Name == info.Name {
+			rec.Result = p.record.Operations[idx].Result
+		} else {
+			rec.Result = p.env.content.resultValue(info.Name, info.Result)
+			p.resultText[id] = info.Result
+		}
+	}
+	if exists {
 		p.record.Operations[idx] = rec
 		return
 	}
@@ -410,9 +443,9 @@ func (p *telemetryInvocation) upsertOperationLocked(id string, info durable.Oper
 
 // toOperationRecord converts a durable.OperationHookInfo into an
 // OperationRecord, computing DurationMs when both timestamps are present.
-// The result is built here, at hook time, only when an override opts it
-// in, so a transform never runs on a value the record will not carry.
-func toOperationRecord(id string, info durable.OperationHookInfo, content ContentConfig) OperationRecord {
+// It leaves Result unset. upsertOperationLocked sets Result, so that it
+// can skip the transform when the result text has not changed.
+func toOperationRecord(id string, info durable.OperationHookInfo) OperationRecord {
 	rec := OperationRecord{
 		ID:      id,
 		Name:    info.Name,
@@ -436,7 +469,6 @@ func toOperationRecord(id string, info durable.OperationHookInfo, content Conten
 		d := rec.EndTimestamp.Sub(*rec.StartTimestamp).Milliseconds()
 		rec.DurationMs = &d
 	}
-	rec.Result = content.resultValue(info.Name, info.Result)
 	if info.Error != nil {
 		rec.Error = errorRecordFromErr(info.Error)
 	}

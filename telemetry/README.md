@@ -70,6 +70,13 @@ by different invocations. Callers must make these functions and their captured
 state safe for concurrent use. Within one invocation, content transforms remain
 serialized.
 
+Transforms run only for sampled-in invocations. `InputTransform` and
+`OutputTransform` run at most once per invocation. A `Result` transform runs once
+for an operation's result in an invocation, and again only if that result text
+changes. Each new invocation replays checkpointed results, so it calls the
+`Result` transform again. Transforms run while the plugin holds its
+per-invocation lock. So a transform should return quickly and must not block.
+
 Each invocation waits for its own in-flight on-change dispatches before its final
 emission. It does not wait for another invocation's dispatches. Shared exporters
 can receive overlapping `Export` and `Flush` calls from different invocations.
@@ -215,7 +222,8 @@ There is no per-field length cap. An exporter that implements `SizeLimiter`
 bounds the whole record instead; see [Size Limits](#size-limits).
 
 Transforms may run concurrently across invocations. Their functions and
-captured state must support concurrent use. See
+captured state must support concurrent use. They run only for sampled-in
+invocations, and must not block. For how often each transform runs, see
 [Invocation lifetime and concurrency](#invocation-lifetime-and-concurrency).
 
 ### OperationsFormat
