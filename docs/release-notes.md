@@ -2,6 +2,66 @@
 
 ## Unreleased
 
+### Changed: telemetry content fields are JSON values, and ContentConfig is per-value
+
+The telemetry record schema and the `ContentConfig` API are experimental, and
+this is a change to both. The record change is required by the `telemetry-1`
+conformance test, which expects `input` and `output` as JSON values.
+
+Record:
+
+- `Record.Input`, `Record.Output`, and `OperationRecord.Result` are now
+  `json.RawMessage`. Before, each was a `*ContentField` and the JSON output
+  was a `{"value": "<text>", "truncated": bool}` wrapper around the content
+  as a string. Now the JSON output is the content value itself: an object,
+  array, string, number, boolean, or null.
+- `ContentField` is removed.
+- `OperationRecord.Input` is removed. Nothing assigned it.
+- Input and output are marshaled once from the handler's typed values. A Go
+  `string` is a JSON string. Before, a Go `string` was stored as its raw
+  text.
+- An operation result is recorded only for operations named by an
+  `OperationOverride` that sets `Result`. Records emitted with the default
+  configuration no longer carry `result` on operations or on
+  `operationsByName` entries.
+- `OperationSummary.Result` is now `json.RawMessage`, so `operationsByName`
+  carries the same value shape.
+
+`ContentConfig`:
+
+- The five `Include*` booleans, `OperationFilter`, `Redactor`,
+  `MaxContentLength`, and `DefaultContentConfig()` are removed. The zero
+  value of `ContentConfig` is now the default: input and output included
+  unchanged, operation results omitted, operation and execution errors
+  included. There is no all-or-nothing zero-value detection any more; each
+  field changes one thing.
+- `ExcludeInput` and `ExcludeOutput` omit the execution input and output.
+- `InputTransform` and `OutputTransform` receive the value decoded as JSON
+  (`map[string]any`, `[]any`, `string`, `json.Number`, `bool`, or `nil`) and
+  return the value to record. Use them to delete or mask fields by key.
+  Numbers are `json.Number`, not `float64`, so an integer above 2^53 keeps
+  its exact digits through the transform.
+  Before, `Redactor` received the serialized text of every content field
+  and returned text.
+- `Operations.Overrides` is a list of `OperationOverride{OperationName,
+  Exclude, Result}`. `Exclude` drops the operation; `Result` opts its result
+  in through a transform. When several entries share a name, the last one
+  wins. Before, `OperationFilter` received each `OperationRecord` and
+  `IncludeOperationResults` switched every result on or off at once.
+- `Operations.ExcludeErrors` omits operation errors. The execution-level
+  error is always recorded. Before, `IncludeOperationErrors` and
+  `IncludeExecutionError` controlled them separately.
+- A transform that panics, or returns a value that cannot be marshaled,
+  omits the field. The untransformed value is never recorded in its place.
+- There is no per-field length cap. An exporter that implements
+  `SizeLimiter` bounds the whole record, dropping operation results, then
+  operations, then input, then output.
+
+Readers that select `input.value`, `output.value`, or `result.value` must
+select `input`, `output`, or `result` instead. Readers that relied on
+`result` being present by default must add an `OperationOverride` with a
+`Result` transform for each operation name they need.
+
 ### Changed: telemetry record identity and timestamp keys
 
 The telemetry record schema is experimental, and this is a change to it. The

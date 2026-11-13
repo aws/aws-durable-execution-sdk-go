@@ -51,6 +51,7 @@ func TestResume_LocalRunnerCompletedChildContext(t *testing.T) {
 		EmitMode:        EmitAlways,
 		OperationDetail: OperationDetailFullTree,
 		Exporters:       []Exporter{exp},
+		Content:         withResults("nested"),
 	})
 	spy := &resumeSpy{starts: make(chan durable.InvocationHookInfo, 4)}
 	runner := durabletest.NewLocalRunner(handler, durable.WithPlugins(spy, factory))
