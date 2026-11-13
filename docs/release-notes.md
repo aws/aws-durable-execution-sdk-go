@@ -2,6 +2,51 @@
 
 ## Unreleased
 
+### Changed: the DynamoDB item carries one attribute per record field
+
+The telemetry record schema is experimental, and this is a change to the
+DynamoDB item that `DynamoDBExporter` writes. The change aligns the Go item
+with the JavaScript, Python, and Java DynamoDB exporters.
+
+- Each record key is now its own item attribute. The record is rendered in
+  the by-name shape: `operationsByName` replaces the `operations` array.
+- The `recordJson` attribute is removed. Before, it held the whole record,
+  in the array shape, as a JSON string.
+- The six attributes copied from the record are removed as a separate set:
+  `executionName`, `functionName`, `status`, `startTime`, `endTime`, and
+  `durationMs`. Each one is now one of the record attributes.
+- `executionName`, `startTime`, `endTime`, and `durationMs` are omitted when
+  empty or unset, as before.
+- `functionName` was omitted when empty. It is now always present.
+- `status` is always present, as before.
+- New attributes: `recordType`, `schemaVersion`, `executionArn`,
+  `functionQualifier`, `region`, `accountId`, `operationsByName`, and, when
+  the record carries them, `input`, `output`, `error`, `custom`, and the
+  truncation flags.
+- A JSON object becomes an `M` attribute, an array an `L`, a string an `S`,
+  a number an `N`, a boolean a `BOOL`, and null a `NULL`. So `input`,
+  `output`, and `operationsByName` are `M` attributes when the value is an
+  object.
+- The sort key (`sk`) attribute is unchanged. The partition key (`pk`)
+  attribute keeps its name and value.
+- The key attributes are now written after the record attributes. Before,
+  the record attributes were written after the partition key. So a
+  `PartitionKeyField` that equals a record key, for example
+  `executionName`, held the record value. Now it holds the key value.
+- `DynamoDBExporter` now implements `RenderingSizeLimiter`. Truncation sizes
+  the by-name record JSON. Before, it sized the array-shape record, which is
+  larger when an operation name repeats.
+- A number in the record that DynamoDB cannot store fails `PutItem` with a
+  `ValidationException`. DynamoDB stores at most 38 significant digits, and
+  a non-zero magnitude between 1E-130 and 9.99...E+125. So a `float64`
+  input value of `1e200` fails. Before, the number was inside the
+  `recordJson` string and was stored.
+- `telemetry` now requires
+  `github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue` v1.19.6.
+
+Readers that parsed `recordJson` must read the item attributes instead, and
+must read `operationsByName` instead of `operations`.
+
 ### Changed: LambdaLog and CloudWatch Logs exporters emit operationsByName
 
 The telemetry record schema is experimental, and this is a change to it. The
