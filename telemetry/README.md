@@ -184,14 +184,18 @@ telemetry.New(telemetry.Config{
 Content fields are JSON values (`json.RawMessage`):
 
 - `Record.Input` and `Record.Output` are the handler's typed input and result,
-  marshaled once. A Go `string` becomes a JSON string.
+  marshaled once. A Go `string` becomes a JSON string. A nil pointer, map, or
+  slice becomes `null`, the same text the SDK checkpoints for that value.
 - `OperationRecord.Result` is the checkpointed result. It is recorded only for
   operations named by an override that sets `Result`.
 
 A transform receives the content decoded as a JSON value: `map[string]any`,
-`[]any`, `string`, `float64`, `bool`, or `nil`. A struct arrives as a
-`map[string]any`, so a field can be deleted or overwritten by key. The return
-value is what the record carries. `InputTransform` and `OutputTransform` are
+`[]any`, `string`, `json.Number`, `bool`, or `nil`. A struct arrives as a
+`map[string]any`, so a field can be deleted or overwritten by key. Numbers
+arrive as `json.Number` rather than `float64`. A `float64` holds 53 bits of
+mantissa, so an integer above 2^53 would be rounded by the decode alone.
+`json.Number` keeps the exact digits; call `Int64()` or `Float64()` on it to do
+arithmetic. The return value is what the record carries. `InputTransform` and `OutputTransform` are
 not called when the matching `Exclude*` field is true.
 
 `OperationOverride.Result` receives the checkpointed text decoded as a JSON

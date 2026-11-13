@@ -93,6 +93,70 @@ func TestContentConfig_TypedValue_OmitsNilAndUnmarshalable(t *testing.T) {
 	}
 }
 
+// TestContentConfig_TypedValue_TypedNilRecordsNull verifies that a typed
+// nil is recorded as the JSON text null rather than omitted. A handler
+// declared with a pointer result type that returns nil produces exactly
+// this value, and the SDK checkpoints it as null.
+func TestContentConfig_TypedValue_TypedNilRecordsNull(t *testing.T) {
+	type out struct{ OK bool }
+	var cfg ContentConfig
+	tests := []struct {
+		name  string
+		value any
+	}{
+		{"nil pointer", (*out)(nil)},
+		{"nil map", map[string]any(nil)},
+		{"nil slice", []string(nil)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := cfg.outputValue(tt.value); string(got) != `null` {
+				t.Errorf("outputValue(%s) = %q, want null", tt.name, got)
+			}
+		})
+	}
+}
+
+// TestContentConfig_Transform_PreservesLargeIntegers verifies that an
+// int64 above 2^53 survives a transform unchanged. The transform receives
+// the number as json.Number, so no float64 conversion rounds it.
+func TestContentConfig_Transform_PreservesLargeIntegers(t *testing.T) {
+	type order struct {
+		ID        int64  `json:"id"`
+		CreatedNs int64  `json:"createdNs"`
+		Secret    string `json:"secret"`
+	}
+	in := order{ID: 9007199254740993, CreatedNs: 1762990123456789012, Secret: "x"}
+	redact := func(v any) any {
+		m, ok := v.(map[string]any)
+		if !ok {
+			return "unexpected shape"
+		}
+		delete(m, "secret")
+		return m
+	}
+	cfg := ContentConfig{
+		InputTransform:  func(v any) any { return v },
+		OutputTransform: redact,
+		Operations: ContentOperations{Overrides: []OperationOverride{
+			{OperationName: "step", Result: redact},
+		}},
+	}
+	// A transform re-marshals a map, so keys come back sorted.
+	const text = `{"id":9007199254740993,"createdNs":1762990123456789012,"secret":"x"}`
+	const wantFull = `{"createdNs":1762990123456789012,"id":9007199254740993,"secret":"x"}`
+	const wantRedacted = `{"createdNs":1762990123456789012,"id":9007199254740993}`
+	if got := cfg.inputValue(in); string(got) != wantFull {
+		t.Errorf("inputValue = %s, want %s", got, wantFull)
+	}
+	if got := cfg.outputValue(in); string(got) != wantRedacted {
+		t.Errorf("outputValue = %s, want %s", got, wantRedacted)
+	}
+	if got := cfg.resultValue("step", text); string(got) != wantRedacted {
+		t.Errorf("resultValue = %s, want %s", got, wantRedacted)
+	}
+}
+
 func TestContentConfig_Exclude_OmitsAndSkipsTransform(t *testing.T) {
 	calls := 0
 	cfg := ContentConfig{
@@ -149,15 +213,19 @@ func TestContentConfig_Transform_ReceivesDecodedValue(t *testing.T) {
 			want:     `"***"`,
 		},
 		{
-			name:     "number arrives as float64",
+			name:     "number arrives as json.Number",
 			value:    41,
-			wantSeen: float64(41),
+			wantSeen: json.Number("41"),
 			fn: func(v any) any {
-				f, ok := v.(float64)
+				n, ok := v.(json.Number)
 				if !ok {
-					return "not a float64"
+					return "not a json.Number"
 				}
-				return f + 1
+				i, err := n.Int64()
+				if err != nil {
+					return err.Error()
+				}
+				return i + 1
 			},
 			want: `42`,
 		},
@@ -190,7 +258,7 @@ func TestContentConfig_Transform_ReceivesDecodedValue(t *testing.T) {
 		{
 			name:     "transform may replace the whole value",
 			value:    map[string]int{"value": 41},
-			wantSeen: map[string]any{"value": float64(41)},
+			wantSeen: map[string]any{"value": json.Number("41")},
 			fn:       func(any) any { return map[string]string{"redacted": "yes"} },
 			want:     `{"redacted":"yes"}`,
 		},
@@ -274,10 +342,11 @@ func TestContentConfig_ResultValue(t *testing.T) {
 		want     string
 	}{
 		{"empty text omits", "", nil, ""},
-		{"json object", `{"a":1}`, map[string]any{"a": float64(1)}, `{"a":1}`},
-		{"json array", `[1,"two",null]`, []any{float64(1), "two", nil}, `[1,"two",null]`},
+		{"json object", `{"a":1}`, map[string]any{"a": json.Number("1")}, `{"a":1}`},
+		{"json array", `[1,"two",null]`, []any{json.Number("1"), "two", nil}, `[1,"two",null]`},
 		{"json string", `"quoted"`, "quoted", `"quoted"`},
-		{"json number", `42`, float64(42), `42`},
+		{"json number", `42`, json.Number("42"), `42`},
+		{"large integer keeps digits", `9007199254740993`, json.Number("9007199254740993"), `9007199254740993`},
 		{"json boolean", `false`, false, `false`},
 		{"json null", `null`, nil, `null`},
 		{"non-json arrives as string", `plain text`, "plain text", `"plain text"`},
