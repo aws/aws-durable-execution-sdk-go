@@ -78,6 +78,10 @@ type telemetryInvocation struct {
 	// The same execution has the same decision across invocations.
 	sampledIn bool
 
+	// ended prevents new on-change dispatches once invocation finalization starts.
+	// Protected by mu, so every WaitGroup Add precedes the final Wait.
+	ended bool
+
 	// onChangeDispatching/onChangeDirty implement EmitOnChange's
 	// coalescing behavior: at most one dispatch goroutine runs at a
 	// time per Plugin instance.
@@ -297,6 +301,10 @@ func orderedOperationIDs(ops map[string]durable.OperationHookInfo) []string {
 // so it leaves the record running; EmitAlways still emits a snapshot for
 // it, since that mode reports every invocation regardless of outcome.
 func (p *telemetryInvocation) onInvocationEnd(ctx context.Context, info durable.InvocationEndHookInfo) {
+	p.mu.Lock()
+	p.ended = true
+	p.mu.Unlock()
+
 	if info.Status == durable.PluginInvocationPending || info.Status == durable.PluginInvocationRetrying {
 		if p.env.emitMode == EmitOnChange {
 			// Finish this invocation's on-change dispatches before its
@@ -535,7 +543,7 @@ func (p *telemetryInvocation) scheduleOnChangeDispatch(ctx context.Context) {
 	}
 
 	p.mu.Lock()
-	if !p.sampledIn {
+	if !p.sampledIn || p.ended {
 		p.mu.Unlock()
 		return
 	}
@@ -545,10 +553,8 @@ func (p *telemetryInvocation) scheduleOnChangeDispatch(ctx context.Context) {
 		return
 	}
 	p.onChangeDispatching = true
-	// Add before Unlock. onInvocationEnd calls Wait once it observes a
-	// dispatch in flight. An Add after the Unlock would leave a window
-	// where Wait sees a zero counter and returns early, so the final
-	// record could precede this dispatch.
+	// Add while holding mu, before onInvocationEnd can set ended and
+	// begin waiting. Once ended is set, no new dispatch can be added.
 	p.onChangeWG.Add(1)
 	p.mu.Unlock()
 
