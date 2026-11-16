@@ -33,6 +33,8 @@ Resources:
       NotImplemented:
         - id: "10-8"
           reason: "OnOperationChange fires only for operations updated between invocations; a step that completes inside the invocation that started it is not reported"
+        - id: "10-13"
+          reason: "OnOperationStart and OnOperationEnd fire for a step replayed from a terminal checkpoint; the requirement expects neither"
         - id: "10-14"
           reason: "OperationHookInfo.Result is empty on the end hook of a step that succeeds in the current invocation"
         - id: "10-19"
@@ -41,6 +43,8 @@ Resources:
           reason: "no handler: AttemptEndHookInfo carries no end timestamp"
         - id: "10-22"
           reason: "no handler: OnOperationChange fires only for operations updated between invocations"
+        - id: "10-23"
+          reason: "no handler: the plugin API has no branch user-function start hook and no children-replay field"
     Metadata:
       BuildMethod: makefile
     Properties:
@@ -220,7 +224,7 @@ Resources:
   PluginReplayFlags:
     Type: AWS::Serverless::Function
     TestingMetadata:
-      TestDescription: ["10-13"]
+      TestDescription: []
     Metadata:
       BuildMethod: makefile
     Properties:
@@ -317,21 +321,6 @@ Resources:
       CodeUri: publish/plugin_operation_info_shape/
       Handler: bootstrap
       Description: Operation-start and operation-end hook info carries the full operation field set
-      Role: !Ref ExecutionRoleArn
-      DurableConfig:
-        RetentionPeriodInDays: 7
-        ExecutionTimeout: 300
-
-  PluginContextInfoShape:
-    Type: AWS::Serverless::Function
-    TestingMetadata:
-      TestDescription: ["10-23"]
-    Metadata:
-      BuildMethod: makefile
-    Properties:
-      CodeUri: publish/plugin_context_info_shape/
-      Handler: bootstrap
-      Description: Context operations expose subType tokens and user-function hooks expose the children-replay indicator
       Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
@@ -449,10 +438,4 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub "/aws/lambda/${PluginOperationInfoShape}"
-      RetentionInDays: 7
-
-  PluginContextInfoShapeLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub "/aws/lambda/${PluginContextInfoShape}"
       RetentionInDays: 7
