@@ -546,11 +546,15 @@ the record exceeds their limit. The size is measured on the `json.Marshal` form
 of the record. An exporter that also implements `RenderingSizeLimiter` is
 measured on its own `Render` output instead, which is the form it sends.
 
-Truncation removes content in this order and stops as soon as the record fits:
+Truncation removes content in this order. Each step runs only when the record
+is still over the limit after the previous step:
 
 1. Operation results, oldest operation first. Each operation that loses its
-   result is marked `Truncated`.
-2. Whole operations, oldest first. `DroppedOperations` counts them.
+   result is marked `Truncated`. This step can clear more results than the
+   limit requires. That happens only when the rendering carries the
+   `operations` array and a cleared result is shorter than 7 bytes.
+2. Whole operations, oldest first, one at a time. This step stops at the
+   first count that fits. `DroppedOperations` counts them.
 3. The execution input. `DroppedInput` is set.
 4. The execution output. `DroppedOutput` is set.
 
