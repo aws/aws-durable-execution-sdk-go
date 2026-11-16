@@ -1,13 +1,6 @@
 // Command plugin_attempt_hooks_retry implements conformance requirement
 // 10-3: a plugin reports each attempt of a retried step with its attempt
 // number and outcome.
-//
-// The op field of each record is OperationHookInfo.ID. The Go SDK fills it
-// with the operation's positional id (for example 1 or 1-1), while the
-// execution history and the ParentID field carry the checkpointed
-// operation id. The runner compares op against the history id, so the
-// requirement is registered as not implemented in template_plugin.yaml
-// until the two ids agree.
 package main
 
 import (

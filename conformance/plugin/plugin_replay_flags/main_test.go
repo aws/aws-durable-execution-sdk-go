@@ -21,6 +21,7 @@ func TestHandler(t *testing.T) {
 
 	recs := records()
 	plugintest.ExpectAllStamped(t, recs)
+	plugintest.ExpectCheckpointedIDs(t, recs, result, "op", "parent")
 	// Two live starts (one per step), at least one replayed start (step B
 	// on the retry invocation), and exactly one terminal end per step.
 	plugintest.ExpectCount(t, recs, map[string]any{"plugin": "CONFPLUGIN", "hook": "operation-start", "replay": false}, 2)
