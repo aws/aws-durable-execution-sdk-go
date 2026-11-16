@@ -542,9 +542,20 @@ same format.
 ## Size Limits
 
 Exporters that implement `SizeLimiter` trigger automatic record truncation when
-the serialized record exceeds their limit. Truncation drops operation results
-first (largest to smallest), then input/output fields, and sets the `Truncated`
-metadata fields.
+the record exceeds their limit. The size is measured on the `json.Marshal` form
+of the record. An exporter that also implements `RenderingSizeLimiter` is
+measured on its own `Render` output instead, which is the form it sends.
+
+Truncation removes content in this order and stops as soon as the record fits:
+
+1. Operation results, oldest operation first. Each operation that loses its
+   result is marked `Truncated`.
+2. Whole operations, oldest first. `DroppedOperations` counts them.
+3. The execution input. `DroppedInput` is set.
+4. The execution output. `DroppedOutput` is set.
+
+"Oldest" is the order of the `Operations` slice. The record's `Truncated`
+field is set when anything was removed.
 
 | Exporter | Default Limit |
 | --- | --- |

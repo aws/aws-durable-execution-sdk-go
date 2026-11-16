@@ -38,6 +38,15 @@ func Truncate(record Record, maxBytes int, render Renderer) Record {
 	// instead of once per operation. A binary search is correct only when
 	// clearing more results never makes the rendered record larger.
 	//
+	// The array rendering does not always meet that condition. Clearing a
+	// Result also sets the operation's Truncated flag. The flag renders as
+	// `,"truncated":true`, which is 17 bytes. The cleared Result frees 10
+	// bytes for `,"result":` plus the length of its value. So clearing a
+	// Result whose value is shorter than 7 bytes makes the operation up to
+	// 6 bytes larger. Step 1 can then clear more results than the limit
+	// required. The by-name rendering has no per-operation Truncated key,
+	// so it always meets the condition.
+	//
 	// Step 2 removes whole operations. Removing an operation can make the
 	// rendered record larger. The by-name rendering shows a name's Error
 	// and Result only when the name occurs once (see GroupOperationsByName).
