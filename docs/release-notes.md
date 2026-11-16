@@ -25,6 +25,24 @@ replaces a filter on the `operations` element whose `name` is `charge`. A
 custom exporter that needs the array form can call
 `RenderRecord(record, OperationsFormatArray)`.
 
+### Fixed: Truncate drops only as many operations as the size limit requires
+
+`Truncate` drops whole operations, oldest first, when a record is over an
+exporter's size limit. It chose the number to drop with a binary search.
+A binary search is correct only when every dropped operation makes the
+rendered record smaller.
+
+That is not true for the `operationsByName` rendering. An entry there
+carries `error` and `result` only when its name occurs once. So dropping
+one of two operations that share a name makes the other operation's
+`error` and `result` appear, and the rendered record can grow. `Truncate`
+could then drop more operations than the limit required.
+
+`Truncate` now drops one operation at a time and stops at the first number
+that fits. This affects every exporter that renders `OperationsFormatByName`
+or `OperationsFormatBoth`. The cost is one render of the record per dropped
+operation, for every format.
+
 ### Changed: telemetry records keep `<`, `>` and `&` literal
 
 Telemetry records no longer HTML-escape `<`, `>` and `&`. Before, every

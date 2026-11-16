@@ -30,14 +30,26 @@ func Truncate(record Record, maxBytes int, render Renderer) Record {
 		return record
 	}
 
-	// Steps 1 and 2 drop content oldest-first. Both have the same monotonic
-	// property: dropping more only shrinks the rendered record. So instead of
-	// re-rendering the whole record once per dropped item (O(n) full renders of
-	// a multi-megabyte record for a large invocation, which can stall for
-	// minutes), binary-search for the smallest number to drop — O(log n)
-	// renders. Each candidate is sized with the final truncation metadata
-	// already set, so the returned record accounts for those extra bytes and
-	// cannot creep back over the cap after the metadata is written.
+	// Steps 1 and 2 drop content oldest-first. They choose how much to drop
+	// in different ways.
+	//
+	// Step 1 clears operation results. It binary-searches for the smallest
+	// number of results to clear, so it renders the record O(log n) times
+	// instead of once per operation. A binary search is correct only when
+	// clearing more results never makes the rendered record larger.
+	//
+	// Step 2 removes whole operations. Removing an operation can make the
+	// rendered record larger. The by-name rendering shows a name's Error
+	// and Result only when the name occurs once (see GroupOperationsByName).
+	// So removing one of two operations that share a name makes the other
+	// operation's Error and Result appear. A binary search could then skip
+	// a smaller number of removals that fits, and remove more operations
+	// than needed. So Step 2 removes one operation at a time and stops at
+	// the first number that fits. This costs one render per removed
+	// operation.
+	//
+	// Each candidate is sized with the final truncation metadata already
+	// set. So the returned record accounts for those extra bytes.
 
 	ops := record.Operations
 	n := len(ops)
@@ -85,28 +97,16 @@ func Truncate(record Record, maxBytes int, render Renderer) Record {
 		return record
 	}
 
-	// Step 2: drop whole operations, oldest first.
+	// Step 2: drop whole operations, oldest first, one at a time. If even
+	// dropping every operation does not fit, all are dropped and Step 3 runs.
 	ops = record.Operations
-	n = len(ops)
-	k := sort.Search(n+1, func(k int) bool {
-		candidate := record
-		candidate.Operations = ops[k:]
-		if k > 0 {
-			candidate.Truncated = true
-			candidate.DroppedOperations = k
-		}
-		return fits(candidate, maxBytes, render)
-	})
-	if k > n {
-		k = n // even dropping every operation does not fit; drop all, then Step 3.
-	}
-	record.Operations = ops[k:]
-	if k > 0 {
+	for k := 1; k <= len(ops); k++ {
+		record.Operations = ops[k:]
 		record.Truncated = true
 		record.DroppedOperations = k
-	}
-	if fits(record, maxBytes, render) {
-		return record
+		if fits(record, maxBytes, render) {
+			return record
+		}
 	}
 
 	// Step 3: Input, then Output, as a last resort.

@@ -264,6 +264,82 @@ func TestLogExporters_TruncatesOverLimitByNameRendering(t *testing.T) {
 	}
 }
 
+// TestLogExporters_TruncateDropsOnlyAsManyOperationsAsNeeded checks that
+// Truncate stops at the first number of dropped operations that fits, when
+// the size is measured on the by-name rendering.
+//
+// The by-name rendering shows an operation's Error only when its name
+// occurs once. The record has three operations, oldest first: "big" with a
+// large Error, then two operations named "repeated" with a smaller Error
+// each. The rendered size for each number of dropped operations is:
+//
+//   - 0 dropped: over the limit, because the Error of "big" is rendered.
+//   - 1 dropped: exactly the limit. "repeated" occurs twice, so neither
+//     Error is rendered.
+//   - 2 dropped: over the limit. "repeated" now occurs once, so its Error
+//     is rendered.
+//   - 3 dropped: under the limit.
+//
+// So the size does not shrink with every dropped operation, and the
+// correct answer is 1.
+func TestLogExporters_TruncateDropsOnlyAsManyOperationsAsNeeded(t *testing.T) {
+	for _, tc := range logExporterCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			exp, _ := tc.build(0)
+
+			failed := func(id, name string, messageLen int) OperationRecord {
+				return OperationRecord{
+					ID: id, Name: name, Type: "STEP", SubType: "Step", Status: "FAILED", Attempt: 1,
+					Error: &ErrorRecord{Type: "TestError", Message: strings.Repeat("e", messageLen)},
+				}
+			}
+			rec := *NewRecord("arn:aws:lambda:us-west-2:123456789012:function:fn:$LATEST/durable-execution/exec-1/inv-1")
+			rec.Status = StatusFailed
+			rec.Operations = []OperationRecord{
+				failed("1", "big", 2000),
+				failed("2", "repeated", 300),
+				failed("3", "repeated", 300),
+			}
+
+			// The limit is the rendered size of the record with only the
+			// oldest operation dropped.
+			oneDropped := rec
+			oneDropped.Operations = rec.Operations[1:]
+			oneDropped.Truncated = true
+			oneDropped.DroppedOperations = 1
+			want, err := exp.Render(oneDropped)
+			if err != nil {
+				t.Fatalf("Render: %v", err)
+			}
+			limit := len(want)
+
+			out := Truncate(rec, limit, exp.Render)
+
+			if out.DroppedOperations != 1 || len(out.Operations) != 2 {
+				t.Fatalf("DroppedOperations = %d with %d operations kept, want 1 dropped and 2 kept",
+					out.DroppedOperations, len(out.Operations))
+			}
+			got, err := exp.Render(out)
+			if err != nil {
+				t.Fatalf("Render: %v", err)
+			}
+			if len(got) > limit {
+				t.Errorf("rendered record is %d bytes, over the %d-byte limit", len(got), limit)
+			}
+			fields := decodeWithNumbers(t, string(got))
+			byName, _ := fields["operationsByName"].(map[string]any)
+			repeated, ok := byName["repeated"].(map[string]any)
+			if !ok {
+				t.Fatalf("operationsByName = %#v, want a \"repeated\" entry", fields["operationsByName"])
+			}
+			assertInteger(t, "operationsByName.repeated.count", repeated["count"], 2)
+			if _, ok := byName["big"]; ok {
+				t.Error("operationsByName still has \"big\", the oldest operation")
+			}
+		})
+	}
+}
+
 // decodeWithNumbers decodes a JSON object with Decoder.UseNumber, so every
 // number keeps its literal text and an integer can be told from 41.0.
 func decodeWithNumbers(t *testing.T, s string) map[string]any {
