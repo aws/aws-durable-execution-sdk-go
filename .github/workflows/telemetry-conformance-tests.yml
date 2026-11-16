@@ -4,8 +4,9 @@ name: Telemetry Conformance Tests
 
 on:
   pull_request:
-    # Include the parent PR branch while this change is stacked on PR #150. Remove that branch filter when retargeting this PR to main.
-    branches: [main, feat/conformance-tests-telemetry]
+    # Include the parent PR branches while these changes are stacked. feat/conformance-tests-telemetry is the branch of PR #150.
+    # ci/telemetry-conformance-workflow is the branch of PR #151. Remove each branch filter when its child PR is retargeted to main.
+    branches: [main, feat/conformance-tests-telemetry, ci/telemetry-conformance-workflow]
     paths:
       - "durable/**"
       - "telemetry/**"
@@ -48,11 +49,10 @@ jobs:
       contents: read
       id-token: write
     # The pinned SHA also selects the runner and telemetry-extension revision the shared
-    # workflow installs. It is the merge commit of aws-durable-execution-conformance-tests
-    # PR #150 on main. At that commit the telemetry suite has one requirement, telemetry-1,
-    # which matches the handlers in conformance-telemetry/. Advance the pin when this
-    # repository adds handlers for later requirements.
-    uses: aws/aws-durable-execution-conformance-tests/.github/workflows/telemetry-suite.yml@d4b7df927ea7eb7022bcca339d2cddd387d3d650
+    # workflow installs. At that commit the telemetry suite has four requirements,
+    # telemetry-1 to telemetry-4, which match the handlers in conformance-telemetry/.
+    # Advance the pin when this repository adds handlers for later requirements.
+    uses: aws/aws-durable-execution-conformance-tests/.github/workflows/telemetry-suite.yml@30915949a9f08023f6227357338d3a7cf1495313
     with:
       language: go
       resource_prefix: go
