@@ -33,6 +33,8 @@ type logExporter interface {
 type logExporterCase struct {
 	name  string
 	build func(maxSizeBytes int) (logExporter, func() []string)
+	// suffix is what the exporter's Render appends to the by-name JSON.
+	suffix string
 }
 
 func logExporterCases() []logExporterCase {
@@ -59,9 +61,14 @@ func logExporterCases() []logExporterCase {
 				var buf bytes.Buffer
 				exp := &LambdaLogExporter{Writer: &buf, MaxSizeBytes: maxSizeBytes}
 				return exp, func() []string {
-					return strings.Split(strings.TrimSuffix(buf.String(), "\n"), "\n")
+					// Each payload keeps its newline, because the size
+					// limit counts it. SplitAfter leaves one empty string
+					// after the last newline, which is not a payload.
+					lines := strings.SplitAfter(buf.String(), "\n")
+					return lines[:len(lines)-1]
 				}
 			},
+			suffix: "\n",
 		},
 	}
 }
@@ -105,8 +112,8 @@ func TestLogExporters_ExportSendsRender(t *testing.T) {
 			if err != nil {
 				t.Fatalf("RenderRecord: %v", err)
 			}
-			if !bytes.Equal(want, byNameOnly) {
-				t.Errorf("Render = %s, want RenderRecord(record, OperationsFormatByName) = %s", want, byNameOnly)
+			if wantRender := string(byNameOnly) + tc.suffix; string(want) != wantRender {
+				t.Errorf("Render = %q, want RenderRecord(record, OperationsFormatByName) plus %q = %q", want, tc.suffix, wantRender)
 			}
 
 			var fields map[string]json.RawMessage
@@ -335,6 +342,46 @@ func TestLogExporters_TruncateDropsOnlyAsManyOperationsAsNeeded(t *testing.T) {
 			assertInteger(t, "operationsByName.repeated.count", repeated["count"], 2)
 			if _, ok := byName["big"]; ok {
 				t.Error("operationsByName still has \"big\", the oldest operation")
+			}
+		})
+	}
+}
+
+// TestLambdaLogExporter_SizeLimitIncludesNewline checks that the size limit
+// counts the newline that ends the written line. With a limit equal to the
+// full line length, the record is written whole. With a limit one byte
+// lower, the record is truncated and the written line still fits.
+func TestLambdaLogExporter_SizeLimitIncludesNewline(t *testing.T) {
+	rec := byNameTestRecord()
+	var whole bytes.Buffer
+	if err := (&LambdaLogExporter{Writer: &whole}).Export(context.Background(), rec); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	lineLen := whole.Len()
+
+	for _, tc := range []struct {
+		name          string
+		limit         int
+		wantTruncated bool
+	}{
+		{name: "limit equals the line length", limit: lineLen, wantTruncated: false},
+		{name: "limit is one byte lower", limit: lineLen - 1, wantTruncated: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			exp := &LambdaLogExporter{Writer: &buf, MaxSizeBytes: tc.limit}
+			out := Truncate(rec, exp.MaxRecordSizeBytes(), exp.Render)
+			if out.Truncated != tc.wantTruncated {
+				t.Fatalf("Truncated = %v, want %v", out.Truncated, tc.wantTruncated)
+			}
+			if err := exp.Export(context.Background(), out); err != nil {
+				t.Fatalf("Export: %v", err)
+			}
+			if buf.Len() > tc.limit {
+				t.Errorf("wrote %d bytes, over the %d-byte limit", buf.Len(), tc.limit)
+			}
+			if !strings.HasSuffix(buf.String(), "\n") {
+				t.Error("written line does not end with a newline")
 			}
 		})
 	}

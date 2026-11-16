@@ -17,7 +17,8 @@ exporters and with the `telemetry-1` conformance test.
 - Neither exporter has an `OperationsFormat` field. The format is fixed.
 - Both exporters now implement `RenderingSizeLimiter`. So the size limit is
   checked against the `operationsByName` rendering, which is the form that
-  is sent.
+  is sent. For `LambdaLogExporter`, the checked form includes the newline
+  that ends the line.
 
 Logs Insights queries that read `operations` must read
 `operationsByName.<name>` instead. For example, `operationsByName.charge.status`

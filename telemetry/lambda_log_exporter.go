@@ -32,7 +32,7 @@ func NewLambdaLogExporter() *LambdaLogExporter {
 }
 
 // Export writes record as a single line of JSON to the configured Writer
-// (os.Stdout if unset). The line is Render's output followed by a newline.
+// (os.Stdout if unset). It writes exactly Render's output.
 func (e *LambdaLogExporter) Export(_ context.Context, record Record) error {
 	w := e.Writer
 	if w == nil {
@@ -42,7 +42,6 @@ func (e *LambdaLogExporter) Export(_ context.Context, record Record) error {
 	if err != nil {
 		return fmt.Errorf("telemetry.LambdaLogExporter: marshaling record: %w", err)
 	}
-	b = append(b, '\n')
 	if _, err := w.Write(b); err != nil {
 		return fmt.Errorf("telemetry.LambdaLogExporter: writing record: %w", err)
 	}
@@ -58,10 +57,13 @@ func (e *LambdaLogExporter) MaxRecordSizeBytes() int {
 	return DefaultMaxRecordSizeBytesLog
 }
 
-// Render implements RenderingSizeLimiter. It returns the line Export
-// writes, without the trailing newline: the record rendered with
-// OperationsFormatByName. Export calls Render, so truncation sizes the
-// bytes that are written.
+// Render implements RenderingSizeLimiter. It returns the exact bytes Export
+// writes: the record rendered with OperationsFormatByName, then one newline.
+// Truncation sizes Render's output. So the size limit includes the newline.
 func (e *LambdaLogExporter) Render(record Record) ([]byte, error) {
-	return RenderRecord(record, OperationsFormatByName)
+	b, err := RenderRecord(record, OperationsFormatByName)
+	if err != nil {
+		return nil, err
+	}
+	return append(b, '\n'), nil
 }

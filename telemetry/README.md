@@ -276,7 +276,7 @@ fixed. CloudWatch Logs Insights selects a field by a dotted path such as
 `operations` array by its name.
 
 Size limit: 256 KB (configurable via `MaxSizeBytes`). The limit applies to the
-`operationsByName` rendering.
+written line: the `operationsByName` rendering and the newline that ends it.
 
 ### File
 
