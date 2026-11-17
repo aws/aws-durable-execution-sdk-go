@@ -417,12 +417,14 @@ func TestPlugin_SkipsExecutionOperation(t *testing.T) {
 func TestPlugin_CreatePlugin_InitializesMetadataAndInput(t *testing.T) {
 	ctx := t.Context()
 	arn := "arn:aws:lambda:us-east-1:123456789012:function:fn:1/durable-execution/name/id"
-	var redacted []string
-	content := DefaultContentConfig()
-	content.Redactor = func(value string) string {
-		redacted = append(redacted, value)
-		return "redacted:" + value
-	}
+	var redacted []any
+	content := ContentConfig{InputTransform: func(v any) any {
+		// v is the decoded JSON value, so the input string arrives as a
+		// Go string.
+		redacted = append(redacted, v)
+		s, _ := v.(string)
+		return "redacted:" + s
+	}}
 	exp := &capturingExporter{}
 	factory := New(Config{EmitMode: EmitAlways, Content: content, Exporters: []Exporter{exp}})
 	info := durable.InvocationHookInfo{ExecutionArn: arn, ExecutionInput: "input", ExecutionStartTimestamp: time.Now().Add(-time.Hour)}
@@ -441,7 +443,7 @@ func TestPlugin_CreatePlugin_InitializesMetadataAndInput(t *testing.T) {
 		t.Fatalf("got %d records, want one", len(records))
 	}
 	rec := records[0]
-	if rec.Input == nil || rec.Input.Value != "redacted:input" || len(redacted) != 1 || rec.StartTimestamp == nil || !rec.StartTimestamp.Equal(info.ExecutionStartTimestamp) || rec.Status != StatusRunning {
+	if string(rec.Input) != `"redacted:input"` || len(redacted) != 1 || rec.StartTimestamp == nil || !rec.StartTimestamp.Equal(info.ExecutionStartTimestamp) || rec.Status != StatusRunning {
 		t.Errorf("initialized record = %+v, redactor calls = %v", rec, redacted)
 	}
 }

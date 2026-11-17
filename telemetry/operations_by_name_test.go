@@ -52,7 +52,7 @@ func TestGroupOperationsByName_SingleOccurrence(t *testing.T) {
 			DurationMs: &dur,
 			Attempt:    1,
 			Error:      &ErrorRecord{Type: "TestErr", Message: "oops"},
-			Result:     &ContentField{Value: "result-data"},
+			Result:     json.RawMessage(`"result-data"`),
 		},
 	}
 	result := GroupOperationsByName(ops)

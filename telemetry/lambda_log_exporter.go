@@ -2,7 +2,6 @@ package telemetry
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -33,7 +32,7 @@ func (e *LambdaLogExporter) Export(_ context.Context, record Record) error {
 	if w == nil {
 		w = os.Stdout
 	}
-	b, err := json.Marshal(record)
+	b, err := marshalNoHTMLEscape(record)
 	if err != nil {
 		return fmt.Errorf("telemetry.LambdaLogExporter: marshaling record: %w", err)
 	}
