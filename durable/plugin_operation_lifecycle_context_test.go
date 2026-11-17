@@ -156,8 +156,15 @@ func nestedChildHandlers(rec *opRecorder) map[string]func(context.Context, []byt
 // checkpoint, innermost first. Every event's ParentID is the wire ID of the
 // enclosing context, so the tree is reconstructable from the events alone.
 //
-// Replay of the settled tree: the outer context is SUCCEEDED, so only its
-// replayed end is dispatched; the inner levels are not visited.
+// Replay of the settled tree: the outer context is SUCCEEDED and the inner
+// levels are not visited. The first invocation dispatched the outer end, so
+// the replay dispatches no hook. A payload that lists the outer context as
+// updated makes the replay the first to observe the outcome, so the outer
+// context dispatches one end with IsReplay false.
+//
+// Replay of a partially settled tree: the re-entered levels dispatch
+// replayed starts and live ends. The settled inner level dispatches no
+// hook.
 //
 // Replay of a partially settled tree: the outer and middle contexts are
 // STARTED and the inner context is SUCCEEDED. The outer and middle
@@ -220,8 +227,15 @@ func TestOperationLifecycleChildContextThreeLevelTree(t *testing.T) {
 				t.Fatal(err)
 			}
 			assertPluginResponseStatus(t, resp, invocationSucceeded)
+			assertSequence(t, rec.take())
+
+			resp, err = handler(makePluginContext(), makePluginPayloadWithUpdated(t, "arn:test:lifecycle", "tok2", ops, []string{hashID("1")}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertPluginResponseStatus(t, resp, invocationSucceeded)
 			settled := rec.take()
-			assertSequence(t, settled, "end:outer:SUCCEEDED:true")
+			assertSequence(t, settled, "end:outer:SUCCEEDED:false")
 			assertIdentity(t, settled[0], hashID("1"), "outer", ctxType, ctxSub, "")
 			assertReplayedTimestamps(t, settled[0], true)
 			if settled[0].info.Result != `"v"` {
@@ -244,19 +258,16 @@ func TestOperationLifecycleChildContextThreeLevelTree(t *testing.T) {
 			assertSequence(t, partial,
 				"start:outer:STARTED:true",
 				"start:mid:STARTED:true",
-				"end:inner:SUCCEEDED:true",
 				"end:mid:SUCCEEDED:false",
 				"end:outer:SUCCEEDED:false",
 			)
 			assertIdentity(t, partial[0], hashID("1"), "outer", ctxType, ctxSub, "")
 			assertIdentity(t, partial[1], hashID("1-1"), "mid", ctxType, ctxSub, hashID("1"))
-			assertIdentity(t, partial[2], hashID("1-1-1"), "inner", ctxType, ctxSub, hashID("1-1"))
-			assertIdentity(t, partial[3], hashID("1-1"), "mid", ctxType, ctxSub, hashID("1"))
-			assertIdentity(t, partial[4], hashID("1"), "outer", ctxType, ctxSub, "")
+			assertIdentity(t, partial[2], hashID("1-1"), "mid", ctxType, ctxSub, hashID("1"))
+			assertIdentity(t, partial[3], hashID("1"), "outer", ctxType, ctxSub, "")
 			assertReplayedTimestamps(t, partial[0], false)
 			assertReplayedTimestamps(t, partial[1], false)
-			assertReplayedTimestamps(t, partial[2], true)
-			for _, ev := range partial[3:] {
+			for _, ev := range partial[2:] {
 				// A re-entered context keeps its checkpointed start
 				// and completes now.
 				if !ev.info.StartTimestamp.Equal(lifecycleStart) {
@@ -344,8 +355,15 @@ func TestOperationLifecycleChildContextFailure(t *testing.T) {
 				t.Fatal(err)
 			}
 			assertPluginResponseStatus(t, resp, invocationFailed)
+			assertSequence(t, rec.take())
+
+			resp, err = handler(makePluginContext(), makePluginPayloadWithUpdated(t, "arn:test:lifecycle", "tok2", ops, []string{hashID("1")}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertPluginResponseStatus(t, resp, invocationFailed)
 			replay := rec.take()
-			assertSequence(t, replay, "end:child:FAILED:true")
+			assertSequence(t, replay, "end:child:FAILED:false")
 			assertReplayedTimestamps(t, replay[0], true)
 			assertFailedEnd(t, replay[0])
 		})
@@ -422,12 +440,12 @@ func callbackLifecycleHandler(rec *opRecorder, got *errBox) func(context.Context
 //
 // Invocation 1 creates the callback live: one STARTED start, no end, then
 // the invocation suspends on Result. Invocation 2 observes the settled
-// callback: no start and one end with the checkpointed timestamps and
-// outcome. The end is live (IsReplay false) when the invocation payload
-// lists the callback among the operations updated since the previous
-// invocation, because this invocation is the first to observe the outcome;
-// it is replayed (IsReplay true) otherwise. A succeeded, an externally
-// failed, and a timed-out outcome are covered in both cases.
+// callback: no start. When the invocation payload lists the callback among
+// the operations updated since the previous invocation, this invocation is
+// the first to observe the outcome. So it dispatches one end with IsReplay
+// false and the checkpointed timestamps and outcome. Otherwise an earlier
+// invocation dispatched the end, so no hook is dispatched. A succeeded, an
+// externally failed, and a timed-out outcome are covered in both cases.
 func TestOperationLifecycleCreateCallbackSuspendResume(t *testing.T) {
 	failure := &wireFullError{ErrorType: "Error", ErrorMessage: "external system said no"}
 	outcomes := []struct {
@@ -465,10 +483,10 @@ func TestOperationLifecycleCreateCallbackSuspendResume(t *testing.T) {
 	settled := []struct {
 		name       string
 		updatedIDs []string
-		wantReplay bool
+		wantEnd    bool
 	}{
-		{name: "replayed", updatedIDs: nil, wantReplay: true},
-		{name: "updated between invocations", updatedIDs: []string{hashID("1")}, wantReplay: false},
+		{name: "replayed", updatedIDs: nil, wantEnd: false},
+		{name: "updated between invocations", updatedIDs: []string{hashID("1")}, wantEnd: true},
 	}
 	for _, s := range settled {
 		for _, tc := range outcomes {
@@ -488,7 +506,11 @@ func TestOperationLifecycleCreateCallbackSuspendResume(t *testing.T) {
 				assertIdentity(t, first[0], hashID("1"), "cb", string(OperationTypeCallback), OperationSubTypeCallback, "")
 				assertLiveTimestamps(t, first[0])
 
-				assertSequence(t, second, fmt.Sprintf("end:cb:%s:%v", tc.wantStatus, s.wantReplay))
+				if !s.wantEnd {
+					assertSequence(t, second)
+					return
+				}
+				assertSequence(t, second, fmt.Sprintf("end:cb:%s:false", tc.wantStatus))
 				ev := second[0]
 				assertIdentity(t, ev, hashID("1"), "cb", string(OperationTypeCallback), OperationSubTypeCallback, "")
 				assertReplayedTimestamps(t, ev, true)
@@ -625,9 +647,11 @@ func wfcbResumeOps(status string, details *wireCallbackDetails) []wireOperation 
 // callback as updated since invocation 1. It re-enters the STARTED context
 // with a replayed start, dispatches the callback's end live (IsReplay
 // false, since this invocation is the first to observe the outcome),
-// replays the settled step as a start and an end, then completes the
-// context live with a SUCCEEDED end carrying the result. Invocation 3
-// replays the SUCCEEDED context: only its replayed end is dispatched.
+// replays the settled step with no hook, then completes the context live
+// with a SUCCEEDED end carrying the result. Invocation 3 replays the
+// SUCCEEDED context. Invocation 2 dispatched its end, so invocation 3
+// dispatches no hook. When the payload lists the context as updated, the
+// replay dispatches one end with IsReplay false.
 func TestOperationLifecycleWaitForCallbackSucceeded(t *testing.T) {
 	rec := &opRecorder{}
 	got := &errBox{}
@@ -644,8 +668,6 @@ func TestOperationLifecycleWaitForCallbackSucceeded(t *testing.T) {
 	assertSequenceByID(t, second,
 		"start:1:STARTED:true",
 		"end:1-1:SUCCEEDED:false",
-		"start:1-2:SUCCEEDED:true",
-		"end:1-2:SUCCEEDED:true",
 		"end:1:SUCCEEDED:false",
 	)
 	assertWaitForCallbackHierarchy(t, second)
@@ -654,7 +676,7 @@ func TestOperationLifecycleWaitForCallbackSucceeded(t *testing.T) {
 	if second[1].info.Result != `"ok"` {
 		t.Errorf("callback end Result = %q, want %q", second[1].info.Result, `"ok"`)
 	}
-	ctxEnd := second[4]
+	ctxEnd := second[2]
 	if ctxEnd.info.Result != `"ok"` || ctxEnd.info.Error != nil {
 		t.Errorf("context end Result = %q Error = %v, want %q and nil", ctxEnd.info.Result, ctxEnd.info.Error, `"ok"`)
 	}
@@ -671,8 +693,15 @@ func TestOperationLifecycleWaitForCallbackSucceeded(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertPluginResponseStatus(t, resp, invocationSucceeded)
+	assertSequenceByID(t, rec.take())
+
+	resp, err = handler(makePluginContext(), makePluginPayloadWithUpdated(t, "arn:test:lifecycle", "tok3", ops, []string{hashID("1")}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPluginResponseStatus(t, resp, invocationSucceeded)
 	third := rec.take()
-	assertSequenceByID(t, third, "end:1:SUCCEEDED:true")
+	assertSequenceByID(t, third, "end:1:SUCCEEDED:false")
 	assertWaitForCallbackHierarchy(t, third)
 	assertReplayedTimestamps(t, third[0], true)
 	if third[0].info.Result != `"ok"` {
@@ -684,9 +713,9 @@ func TestOperationLifecycleWaitForCallbackSucceeded(t *testing.T) {
 // of a WaitForCallback whose callback times out on a later invocation that
 // lists it as updated: the callback's live end reports TIMED_OUT and the
 // context's live end reports FAILED with the [*CallbackTimeoutError] the
-// operation returns. A
-// third invocation replays the FAILED context as one replayed end carrying
-// the same error.
+// operation returns. A third invocation replays the FAILED context with no
+// hook. When its payload lists the context as updated, it dispatches one
+// end carrying the same error.
 func TestOperationLifecycleWaitForCallbackTimedOut(t *testing.T) {
 	rec := &opRecorder{}
 	got := &errBox{}
@@ -704,8 +733,6 @@ func TestOperationLifecycleWaitForCallbackTimedOut(t *testing.T) {
 	assertSequenceByID(t, second,
 		"start:1:STARTED:true",
 		"end:1-1:TIMED_OUT:false",
-		"start:1-2:SUCCEEDED:true",
-		"end:1-2:SUCCEEDED:true",
 		"end:1:FAILED:false",
 	)
 	assertWaitForCallbackHierarchy(t, second)
@@ -713,7 +740,7 @@ func TestOperationLifecycleWaitForCallbackTimedOut(t *testing.T) {
 	if second[1].info.Error == nil || !errors.As(second[1].info.Error, &cbTimeout) {
 		t.Errorf("callback end Error = %#v, want *CallbackTimeoutError", second[1].info.Error)
 	}
-	ctxEnd := second[4]
+	ctxEnd := second[2]
 	if ctxEnd.info.Error == nil || ctxEnd.info.Error != got.get() {
 		t.Fatalf("context end Error = %v, want the error WaitForCallback returned %v", ctxEnd.info.Error, got.get())
 	}
@@ -721,16 +748,23 @@ func TestOperationLifecycleWaitForCallbackTimedOut(t *testing.T) {
 		t.Errorf("context end Error = %#v, want *CallbackTimeoutError named wfcb", ctxEnd.info.Error)
 	}
 
-	// The context's own FAILED record replays as one end; the child
-	// records stay so the same error is rebuilt.
+	// The context's own FAILED record replays; the child records stay so
+	// the same error is rebuilt.
 	ops[1] = contextOp("1", "", OperationSubTypeWaitForCallback, "wfcb", "FAILED", &wireContextDetails{Error: timeout})
 	resp, err = handler(makePluginContext(), makePluginPayload(t, "arn:test:lifecycle", "tok3", ops))
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertPluginResponseStatus(t, resp, invocationFailed)
+	assertSequenceByID(t, rec.take())
+
+	resp, err = handler(makePluginContext(), makePluginPayloadWithUpdated(t, "arn:test:lifecycle", "tok3", ops, []string{hashID("1")}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPluginResponseStatus(t, resp, invocationFailed)
 	third := rec.take()
-	assertSequenceByID(t, third, "end:1:FAILED:true")
+	assertSequenceByID(t, third, "end:1:FAILED:false")
 	assertReplayedTimestamps(t, third[0], true)
 	if third[0].info.Error == nil || third[0].info.Error != got.get() || !errors.As(third[0].info.Error, &cbTimeout) {
 		t.Errorf("replayed context end Error = %#v, want the *CallbackTimeoutError WaitForCallback returned", third[0].info.Error)
@@ -742,7 +776,8 @@ func TestOperationLifecycleWaitForCallbackTimedOut(t *testing.T) {
 // callback, and step start; the step ends FAILED; the context ends FAILED
 // with the [*CallbackSubmitterError] the operation returns; the callback,
 // which never settles, dispatches no end. A second invocation replays the
-// FAILED context as one replayed end carrying the same error.
+// FAILED context with no hook. When its payload lists the context as
+// updated, it dispatches one end carrying the same error.
 func TestOperationLifecycleWaitForCallbackFailedSubmitter(t *testing.T) {
 	rec := &opRecorder{}
 	got := &errBox{}
@@ -797,8 +832,15 @@ func TestOperationLifecycleWaitForCallbackFailedSubmitter(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertPluginResponseStatus(t, resp, invocationFailed)
+	assertSequenceByID(t, rec.take())
+
+	resp, err = handler(makePluginContext(), makePluginPayloadWithUpdated(t, "arn:test:lifecycle", "tok2", ops, []string{hashID("1")}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPluginResponseStatus(t, resp, invocationFailed)
 	replay := rec.take()
-	assertSequenceByID(t, replay, "end:1:FAILED:true")
+	assertSequenceByID(t, replay, "end:1:FAILED:false")
 	assertReplayedTimestamps(t, replay[0], true)
 	if replay[0].info.Error == nil || replay[0].info.Error != got.get() || !errors.As(replay[0].info.Error, &submitter) {
 		t.Errorf("replayed context end Error = %#v, want the *CallbackSubmitterError WaitForCallback returned", replay[0].info.Error)
@@ -851,9 +893,10 @@ func TestOperationLifecycleContextAtMostOnePerInvocation(t *testing.T) {
 
 // TestOperationLifecycleChildContextReplayedSucceededSerdesFailure asserts
 // that a SUCCEEDED child context whose result cannot be deserialized still
-// dispatches one replayed end, for RunInChildContext and
-// RunInChildContextAsync: the context settled when the checkpoint recorded
-// it, so the result Serdes failure belongs to the caller.
+// dispatches its end in an invocation that lists it as updated, for
+// RunInChildContext and RunInChildContextAsync: the context settled when
+// the checkpoint recorded it, so the result Serdes failure belongs to the
+// caller.
 func TestOperationLifecycleChildContextReplayedSucceededSerdesFailure(t *testing.T) {
 	cause := errors.New("unmarshal exploded")
 	serdes := WithChildSerdes(failingSerdes{failUnmarshal: true, cause: cause})
@@ -881,14 +924,14 @@ func TestOperationLifecycleChildContextReplayedSucceededSerdesFailure(t *testing
 				lifecycleExecOp(),
 				contextOp("1", "", OperationSubTypeRunInChildContext, "child", "SUCCEEDED", &wireContextDetails{Result: `"v"`}),
 			}
-			resp, err := handler(makePluginContext(), makePluginPayload(t, "arn:test:lifecycle", "tok1", ops))
+			resp, err := handler(makePluginContext(), makePluginPayloadWithUpdated(t, "arn:test:lifecycle", "tok1", ops, []string{hashID("1")}))
 			if err != nil {
 				t.Fatal(err)
 			}
 			assertPluginResponseStatus(t, resp, invocationSucceeded)
 			assertSerdesError(t, got.get(), "child", "unmarshal", cause)
 			evs := rec.take()
-			assertSequence(t, evs, "end:child:SUCCEEDED:true")
+			assertSequence(t, evs, "end:child:SUCCEEDED:false")
 			assertReplayedTimestamps(t, evs[0], true)
 			if evs[0].info.Result != `"v"` {
 				t.Errorf("replayed end Result = %q, want %q", evs[0].info.Result, `"v"`)

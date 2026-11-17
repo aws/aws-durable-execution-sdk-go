@@ -22,7 +22,8 @@ func isWait(info durable.OperationHookInfo) bool {
 // stable wait name: branch operation ids are not deterministic under
 // concurrency. A replayed start reports the wait's checkpointed status, so
 // pending is read from that status alone. A wait replayed from a terminal
-// checkpoint dispatches only its end.
+// checkpoint dispatches no start. It dispatches its end only in the first
+// invocation that observes the outcome.
 // newPlugin is a durable.PluginFactory: the handler calls it once per
 // invocation and the returned Plugin serves that invocation alone.
 func newPlugin(_ context.Context, inv durable.InvocationHookInfo) (*durable.Plugin, error) {

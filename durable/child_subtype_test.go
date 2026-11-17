@@ -60,8 +60,9 @@ func assertContextSubTypes(t *testing.T, fake *fakeLambda, subType string) {
 
 // TestChildSubTypeRecordedInCheckpointAndPlugin asserts that the subtype a
 // caller supplies is written to the child's START and SUCCEED checkpoints
-// and reported in the start and end plugin notifications, live and on
-// replay, for RunInChildContext and Go. Without the option the default
+// and reported in the start and end plugin notifications, live and in the
+// end of a replay that lists the child as updated, for RunInChildContext
+// and Go. Without the option the default
 // subtype is recorded and reported in the same places.
 func TestChildSubTypeRecordedInCheckpointAndPlugin(t *testing.T) {
 	cases := []struct {
@@ -94,10 +95,10 @@ func TestChildSubTypeRecordedInCheckpointAndPlugin(t *testing.T) {
 					assertIdentity(t, ev, hashID("1"), "child", string(OperationTypeContext), tc.subType, "")
 				}
 
-				// Replay from the checkpoint the first run wrote: the
-				// replayed end reports the recorded subtype.
-				replay := childPayload(`"x"`,
-					contextOp("1", "", tc.subType, "child", "SUCCEEDED", &wireContextDetails{Result: `"v"`}))
+				// Replay from the checkpoint the first run wrote, listed
+				// as updated: the end reports the recorded subtype.
+				replay := withUpdatedOperationIDs(t, childPayload(`"x"`,
+					contextOp("1", "", tc.subType, "child", "SUCCEEDED", &wireContextDetails{Result: `"v"`})), hashID("1"))
 				resp, err = h(context.Background(), replay)
 				if err != nil {
 					t.Fatal(err)
@@ -106,7 +107,7 @@ func TestChildSubTypeRecordedInCheckpointAndPlugin(t *testing.T) {
 					t.Fatalf("replay response = %s, want %s", resp, want)
 				}
 				replayed := rec.take()
-				assertSequence(t, replayed, "end:child:SUCCEEDED:true")
+				assertSequence(t, replayed, "end:child:SUCCEEDED:false")
 				assertIdentity(t, replayed[0], hashID("1"), "child", string(OperationTypeContext), tc.subType, "")
 			})
 		}

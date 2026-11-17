@@ -240,13 +240,6 @@ func (s *executionState) setUpdatedOperationIDs(wireIDs []string) {
 	}
 }
 
-// updatedSinceLastInvocation reports whether the operation with the
-// positional ID changed between the previous invocation and this one.
-func (s *executionState) updatedSinceLastInvocation(positionalID string) bool {
-	_, ok := s.updated[hashID(positionalID)]
-	return ok
-}
-
 // newOutcome reports whether the outcome of the operation with the
 // positional ID is one the previous invocation did not have. That holds
 // in two cases:

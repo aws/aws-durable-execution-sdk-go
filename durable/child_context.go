@@ -400,9 +400,10 @@ func runClaimedChild[O any](ec *execContext, id, name, subType string, summary f
 				return zero, fmt.Errorf("durable: child context %q: checkpointed %s operation has no context details", name, op.status)
 			}
 			// The child reached its terminal state when the checkpoint
-			// recorded it, so its end is dispatched before the result is
-			// rebuilt: neither a failing result Serdes nor a failing
-			// re-execution suppresses it.
+			// recorded it. So the end, when this invocation dispatches
+			// one, is dispatched before the result is rebuilt: neither a
+			// failing result Serdes nor a failing re-execution suppresses
+			// it.
 			dispatchReplayedContextEnd(ec, id, name, subType, op, nil)
 			// ReplayChildren mode: the result was too large to
 			// checkpoint, so re-execute the child body to reconstruct it.
@@ -1040,8 +1041,9 @@ func virtualChildSuccess[O any](ec *execContext, replaying func() bool, start Op
 // resolveTerminalChild handles a child operation that already has a terminal
 // status in the checkpoint log. It returns a pre-settled future, except in
 // ReplayChildren mode, where the child body runs again on its own goroutine
-// and the future settles when it finishes. The replayed end is dispatched
-// here, before the result is rebuilt, as in [RunInChildContext]. subType is
+// and the future settles when it finishes. The end, when this invocation
+// dispatches one, is dispatched here, before the result is rebuilt, as in
+// [RunInChildContext]. subType is
 // the operation's resolved subtype.
 func resolveTerminalChild[O any](ec *execContext, op *operation, id, name, subType string, options childOptions, fn func(Context) (O, error)) *Future[O] {
 	switch op.status {
@@ -1207,9 +1209,11 @@ func childFailureRecord(op *operation) errorRecord {
 //   - The body's outcome is recorded by this invocation, so the end that
 //     follows the terminal checkpoint is live: IsReplay false. A body that
 //     suspends has no outcome, so no end is dispatched.
-//   - A context replayed from a terminal checkpoint dispatches only a
-//     replayed end with the checkpointed timestamps and outcome: its start
-//     was dispatched by the invocation that recorded it.
+//   - A context replayed from a terminal checkpoint dispatches no start:
+//     its start was dispatched by the invocation that recorded it. It
+//     dispatches its end, with the checkpointed timestamps and outcome,
+//     only when this invocation is the first to observe the outcome; see
+//     dispatchReplayedEnd.
 //
 // The events are dispatched on the parent context ec, so ParentID names
 // the context that claimed the operation, and nested contexts report a
@@ -1247,10 +1251,11 @@ func dispatchContextEnd(ec *execContext, start OperationHookInfo, result string,
 	dispatchOperationEnd(ec, info, PluginOperationSucceeded)
 }
 
-// dispatchReplayedContextEnd dispatches the replayed end of the context
-// operation id whose checkpoint op is terminal. err is the failure the
-// operation returns to its caller, nil for a SUCCEEDED context, whose
-// checkpointed payload is reported as Result.
+// dispatchReplayedContextEnd passes the end of the context operation id,
+// whose checkpoint op is terminal, to dispatchReplayedEnd. So the end is
+// dispatched only when this invocation is the first to observe the
+// outcome. err is the failure the operation returns to its caller, nil for
+// a SUCCEEDED context, whose checkpointed payload is reported as Result.
 func dispatchReplayedContextEnd(ec *execContext, id, name, subType string, op *operation, err error) {
 	info := ec.operationHookInfo(id, name, string(OperationTypeContext), subType, true)
 	info.StartTimestamp = op.startTimestamp
@@ -1260,7 +1265,7 @@ func dispatchReplayedContextEnd(ec *execContext, id, name, subType string, op *o
 	} else if op.childCtx != nil {
 		info.Result = op.childCtx.result
 	}
-	dispatchOperationEnd(ec, info, toPluginOperationStatus(op.status))
+	dispatchReplayedEnd(ec, id, info, toPluginOperationStatus(op.status))
 }
 
 // checkpointedEndTime returns op's end timestamp when op exists and

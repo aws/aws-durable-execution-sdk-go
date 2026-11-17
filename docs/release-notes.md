@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+### Changed: replayed operations dispatch each end once per execution
+
+The plugin API is experimental, and this is a change to its replay
+behavior. It fixes issue #187.
+
+Before, an operation replayed from a terminal checkpoint dispatched
+`OnOperationEnd` with `IsReplay` true on every invocation that replayed it.
+A replayed `Step` also dispatched `OnOperationStart`. So a plugin that
+counted ends counted each operation once per invocation.
+
+Now each operation's end is dispatched once per execution. The first
+invocation that observes the outcome dispatches it, with `IsReplay` false.
+This covers three cases:
+
+1. The operation runs live. The end is dispatched after the terminal
+   checkpoint is recorded, as before.
+2. The outcome is recorded while no invocation runs, for example when a
+   `Wait` elapses, a callback is resolved, or an `Invoke` finishes. The next
+   invocation lists the operation in `UpdatedOperations`. When the handler
+   reaches the operation, the end is dispatched.
+3. A checkpoint response or a poll delivers the outcome before the handler
+   reaches the operation. The end is dispatched when the handler reaches
+   it.
+
+A later invocation that replays the operation dispatches no start and no
+end. This applies to every operation type, including `Map` and `Parallel`
+items. An abandoned `Map` or `Parallel` item dispatches no end on replay.
+
+If the handler does not reach an operation in the invocation that first
+observes its outcome, no end is dispatched for that operation. A plugin
+reads the outcome from `InvocationHookInfo.Operations`, which holds every
+checkpointed operation with its status, timestamps, result, and error.
+
+A child context under `WithChildVirtual` is unchanged. It has no
+checkpoint, so it dispatches a start and an end, with `IsReplay` true, on
+every invocation that replays it.
+
+The telemetry plugin builds its record from `InvocationHookInfo.Operations`
+at each invocation start. So record contents are unchanged. With
+`EmitOnChange`, a replay can emit fewer records, because fewer hooks fire.
+
 ### Fixed: attempt-end hooks report the attempt's end time
 
 `durable.AttemptEndHookInfo.EndTimestamp` was always zero. The SDK copied

@@ -109,8 +109,10 @@ func wfcOp(status string, details *wireStepDetails) wireOperation {
 // Invocations 2 and 3 run attempts 2 and 3 with no operation start;
 // attempt 3 satisfies the condition and the end reports SUCCEEDED with the
 // final attempt count and state. Invocation 4 replays the terminal
-// checkpoint: one replayed end with the checkpointed attempt count and
-// timestamps, no attempt hooks. The attempt-level hooks fire once per
+// checkpoint with no hook, because invocation 3 dispatched the end.
+// Invocation 5 lists the operation as updated, so it dispatches one end
+// with IsReplay false, the checkpointed attempt count and timestamps, and
+// no attempt hooks. The attempt-level hooks fire once per
 // attempt, in every invocation, as before: their IsReplay reports whether
 // the context was replaying when the attempt ran, true from the second
 // invocation on, unchanged by the operation-level events.
@@ -119,9 +121,9 @@ func TestOperationLifecycleWaitForConditionMultiInvocation(t *testing.T) {
 	handler := pollingHandler(rec.plugin())
 	arn := "arn:test:lifecycle"
 
-	invoke := func(token string, ops []wireOperation, wantStatus string) ([]string, []opEvent, []AttemptEndHookInfo) {
+	invoke := func(token string, ops []wireOperation, wantStatus string, updated ...string) ([]string, []opEvent, []AttemptEndHookInfo) {
 		t.Helper()
-		resp, err := handler(makePluginContext(), makePluginPayload(t, arn, token, ops))
+		resp, err := handler(makePluginContext(), makePluginPayloadWithUpdated(t, arn, token, ops, updated))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -160,8 +162,12 @@ func TestOperationLifecycleWaitForConditionMultiInvocation(t *testing.T) {
 		t.Errorf("attempt end = %+v, want attempt 3 SUCCEEDED", aends)
 	}
 
-	events, ops, _ = invoke("tok4", []wireOperation{lifecycleExecOp(), wfcOp("SUCCEEDED", &wireStepDetails{Attempt: 3, Result: "3"})}, invocationSucceeded)
-	assertStrings(t, events, "end:SUCCEEDED:3:true")
+	settled := []wireOperation{lifecycleExecOp(), wfcOp("SUCCEEDED", &wireStepDetails{Attempt: 3, Result: "3"})}
+	events, _, _ = invoke("tok4", settled, invocationSucceeded)
+	assertStrings(t, events)
+
+	events, ops, _ = invoke("tok5", settled, invocationSucceeded, hashID("1"))
+	assertStrings(t, events, "end:SUCCEEDED:3:false")
 	assertIdentity(t, ops[0], hashID("1"), "poll", string(OperationTypeStep), OperationSubTypeWaitForCondition, "")
 	assertReplayedTimestamps(t, ops[0], true)
 	if ops[0].info.Result != "3" {
@@ -269,8 +275,16 @@ func TestOperationLifecycleWaitForConditionFailed(t *testing.T) {
 			t.Fatal(err)
 		}
 		assertPluginResponseStatus(t, resp, invocationFailed)
+		events, _, _ := rec.take()
+		assertStrings(t, events)
+
+		resp, err = handler(makePluginContext(), makePluginPayloadWithUpdated(t, "arn:test:lifecycle", "tok1", []wireOperation{lifecycleExecOp(), op}, []string{hashID("1")}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertPluginResponseStatus(t, resp, invocationFailed)
 		events, ops, _ := rec.take()
-		assertStrings(t, events, "end:FAILED:2:true")
+		assertStrings(t, events, "end:FAILED:2:false")
 		assertReplayedTimestamps(t, ops[0], true)
 		var wfcErr *WaitForConditionError
 		if !errors.As(ops[0].info.Error, &wfcErr) || wfcErr.Attempts != 2 || wfcErr.ErrorType != "boom" {

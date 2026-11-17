@@ -249,7 +249,9 @@ func retryDue(err error) time.Time {
 // previous attempt was interrupted under AtMostOncePerRetry replays its
 // start instead, with IsReplay true and the checkpointed start time. The end is
 // dispatched with the step's outcome; a step that is still waiting for an
-// attempt when the invocation suspends dispatches no end.
+// attempt when the invocation suspends dispatches no end. A step replayed
+// from a terminal checkpoint dispatches no hook: the invocation that ran
+// its last attempt dispatched its end.
 //
 // start, when non-nil, is the START that StepAsync queued for a step with
 // no record. The first attempt then sends no START of its own; a later
@@ -290,34 +292,24 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 				if op.step == nil {
 					return zero, fmt.Errorf("durable: step %q: checkpointed %s operation has no step details", name, op.status)
 				}
-				// Fire operation hooks for replayed terminal operations.
-				info := ec.operationHookInfo(id, name, string(OperationTypeStep), options.subType, true)
-				info.Attempt = op.step.attempt
-				info.StartTimestamp = op.startTimestamp
-				info.Result = op.step.result
-				dispatchOperationStart(ec, info, PluginOperationSucceeded)
+				// The invocation that ran the step's last attempt
+				// recorded the outcome and dispatched the step's end.
+				// So a replay dispatches no operation hook.
 				var out O
 				if err := options.serdes.Unmarshal(ec.Context, ec.serdesCtx(id), []byte(op.step.result), &out); err != nil {
 					return zero, ec.serdesFailure(name, serdesDirectionUnmarshal, err)
 				}
-				info.EndTimestamp = op.endTimestamp
-				dispatchOperationEnd(ec, info, PluginOperationSucceeded)
+				logReplayedOperationCompleted(ec, ec.operationHookInfo(id, name, string(OperationTypeStep), options.subType, true), PluginOperationSucceeded)
 				return out, nil
 
 			case statusFailed:
 				if op.step == nil {
 					return zero, fmt.Errorf("durable: step %q: checkpointed %s operation has no step details", name, op.status)
 				}
-				info := ec.operationHookInfo(id, name, string(OperationTypeStep), options.subType, true)
-				info.Attempt = op.step.attempt
-				info.StartTimestamp = op.startTimestamp
-				info.Error = op.step.record().standIn(nil)
-				dispatchOperationStart(ec, info, PluginOperationFailed)
-				stepErr := newStepError(name, op.step.attempt, op.step.record())
-				info.EndTimestamp = op.endTimestamp
-				info.Error = stepErr.Err
-				dispatchOperationEnd(ec, info, PluginOperationFailed)
-				return zero, stepErr
+				// As for a succeeded step, a replay dispatches no
+				// operation hook.
+				logReplayedOperationCompleted(ec, ec.operationHookInfo(id, name, string(OperationTypeStep), options.subType, true), PluginOperationFailed)
+				return zero, newStepError(name, op.step.attempt, op.step.record())
 
 			case statusPending:
 				// A retry is scheduled and its timer has not fired.
