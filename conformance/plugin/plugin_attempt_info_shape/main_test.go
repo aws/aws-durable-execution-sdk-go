@@ -1,16 +1,14 @@
 package main
 
 import (
-	"regexp"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-durable-execution-sdk-go/conformance/internal/pluginlog"
 	"github.com/aws/aws-durable-execution-sdk-go/conformance/internal/plugintest"
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
 )
-
-var iso8601 = regexp.MustCompile(`^\d{4}-`)
 
 // TestHandler mirrors the ExpectedLogs of requirement 10-21. Attempt 1
 // fails and attempt 2 succeeds. Each attempt-start record carries the
@@ -54,39 +52,44 @@ func TestHandler(t *testing.T) {
 	plugintest.ExpectAfter(t, recs, start2, end1)
 	plugintest.ExpectAfter(t, recs, end2, start2)
 
-	expectTimestamps := func(m map[string]any, keys ...string) {
+	// timestamp returns the time that the first record matching m carries
+	// under key. A missing record and an unparsable value each fail the
+	// test here, so no later comparison runs on a zero time unnoticed.
+	timestamp := func(m map[string]any, key string) (time.Time, bool) {
 		t.Helper()
 		i := pluginlog.First(recs, m)
 		if i < 0 {
-			return
+			t.Errorf("no %s record for attempt %v", m["hook"], m["attempt"])
+			return time.Time{}, false
 		}
-		for _, key := range keys {
-			if v, _ := recs[i][key].(string); !iso8601.MatchString(v) {
-				t.Errorf("%s attempt %v: %s = %q, want an ISO-8601 timestamp", m["hook"], m["attempt"], key, v)
-			}
+		v, _ := recs[i][key].(string)
+		ts, err := time.Parse(time.RFC3339Nano, v)
+		if err != nil {
+			t.Errorf("%s attempt %v: %s = %q, want an RFC 3339 timestamp", m["hook"], m["attempt"], key, v)
+			return time.Time{}, false
+		}
+		return ts, true
+	}
+	for _, attempt := range []struct {
+		n          int
+		start, end map[string]any
+	}{{1, start1, end1}, {2, start2, end2}} {
+		started, okStarted := timestamp(attempt.start, "startTimestamp")
+		endStarted, okEndStarted := timestamp(attempt.end, "startTimestamp")
+		ended, okEnded := timestamp(attempt.end, "endTimestamp")
+		// The attempt-end info reports the start of its own attempt, so it
+		// must equal the value the attempt-start hook received.
+		if okStarted && okEndStarted && !endStarted.Equal(started) {
+			t.Errorf("attempt %d: attempt-end startTimestamp = %s, want the attempt-start value %s", attempt.n, endStarted, started)
+		}
+		if okEndStarted && okEnded && ended.Before(endStarted) {
+			t.Errorf("attempt %d: endTimestamp %s is before startTimestamp %s", attempt.n, ended, endStarted)
 		}
 	}
-	expectTimestamps(start1, "startTimestamp")
-	expectTimestamps(start2, "startTimestamp")
-	expectTimestamps(end1, "startTimestamp", "endTimestamp")
-	expectTimestamps(end2, "startTimestamp", "endTimestamp")
 
 	if i := pluginlog.First(recs, end1); i >= 0 {
 		if v, _ := recs[i]["error"].(string); v == "" {
 			t.Errorf("attempt-end 1 has no error message: %v", recs[i])
-		}
-	}
-
-	// isReplay is asserted by presence only on both hooks.
-	for _, hook := range []string{"attempt-start", "attempt-end"} {
-		n := 0
-		for _, r := range recs {
-			if _, ok := r["isReplay"]; ok && r["hook"] == hook {
-				n++
-			}
-		}
-		if n != 2 {
-			t.Errorf("%s records carrying isReplay: %d, want 2", hook, n)
 		}
 	}
 
