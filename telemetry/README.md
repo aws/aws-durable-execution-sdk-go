@@ -64,10 +64,18 @@ excluded from the operations array. `OperationDetail` and the SDK's
 `durable.WithPluginChildOperationsDepth` still limit the operations reported.
 Subsequent hooks update the buffer by operation ID.
 
-Exporters and content callbacks remain shared. `Redactor` and `OperationFilter`
-may be called concurrently by different invocations. Callers must make these
-functions and their captured state safe for concurrent use. Within one invocation,
-content callbacks remain serialized.
+Exporters and content transforms remain shared. `InputTransform`,
+`OutputTransform`, and each `OperationOverride.Result` may be called concurrently
+by different invocations. Callers must make these functions and their captured
+state safe for concurrent use. Within one invocation, content transforms remain
+serialized.
+
+Transforms run only for sampled-in invocations. `InputTransform` and
+`OutputTransform` run at most once per invocation. A `Result` transform runs once
+for an operation's result in an invocation, and again only if that result text
+changes. Each new invocation replays checkpointed results, so it calls the
+`Result` transform again. Transforms run while the plugin holds its
+per-invocation lock. So a transform should return quickly and must not block.
 
 Each invocation waits for its own in-flight on-change dispatches before its final
 emission. It does not wait for another invocation's dispatches. Shared exporters
@@ -124,29 +132,109 @@ plugin := telemetry.New(telemetry.Config{
 
 ### ContentConfig
 
-Controls what data is included in emitted records and how it is formatted.
+Controls what content appears in emitted records.
 
 ```go
 type ContentConfig struct {
-    IncludeInput            bool
-    IncludeOutput           bool
-    IncludeOperationResults bool
-    IncludeOperationErrors  bool
-    IncludeExecutionError   bool
-    MaxContentLength        int
-    OperationFilter         func(OperationRecord) bool
-    Redactor                func(string) string
+    ExcludeInput    bool
+    InputTransform  func(any) any
+    ExcludeOutput   bool
+    OutputTransform func(any) any
+    Operations      ContentOperations
+}
+
+type ContentOperations struct {
+    Overrides     []OperationOverride
+    ExcludeErrors bool
+}
+
+type OperationOverride struct {
+    OperationName string
+    Exclude       bool
+    Result        func(any) any
 }
 ```
 
-All `Include*` fields default to true when the entire struct is left at its zero
-value. `MaxContentLength` defaults to 10 KB. Content exceeding that length is
-truncated and the resulting `ContentField` has `Truncated: true`.
+The zero value includes the execution input and output unchanged, omits
+operation results, and includes operation and execution errors. Each field
+changes one thing, so set only the fields you need.
 
-`DefaultContentConfig()` returns the default configuration explicitly.
+```go
+telemetry.New(telemetry.Config{
+    Content: telemetry.ContentConfig{
+        // Remove a sensitive field from the recorded input.
+        InputTransform: func(v any) any {
+            if m, ok := v.(map[string]any); ok {
+                delete(m, "password")
+            }
+            return v
+        },
+        // Do not record the output at all.
+        ExcludeOutput: true,
+        Operations: telemetry.ContentOperations{
+            Overrides: []telemetry.OperationOverride{
+                // Record this operation's result, masking one field.
+                {OperationName: "fetch-user", Result: func(v any) any {
+                    if m, ok := v.(map[string]any); ok {
+                        m["email"] = "***"
+                    }
+                    return v
+                }},
+                // Drop this operation from the record.
+                {OperationName: "debug-dump", Exclude: true},
+            },
+        },
+    },
+})
+```
 
-`Redactor` and `OperationFilter` may run concurrently across invocations. Their
-functions and captured state must support concurrent use. See
+Content fields are JSON values (`json.RawMessage`):
+
+- `Record.Input` and `Record.Output` are the handler's typed input and result,
+  marshaled once. A Go `string` becomes a JSON string. A nil pointer, map, or
+  slice becomes `null`, the same text the SDK checkpoints for that value.
+- `OperationRecord.Result` is the checkpointed result. It is recorded only for
+  operations named by an override that sets `Result`.
+
+A transform receives the content decoded as a JSON value: `map[string]any`,
+`[]any`, `string`, `json.Number`, `bool`, or `nil`. A struct arrives as a
+`map[string]any`, so a field can be deleted or overwritten by key. Numbers
+arrive as `json.Number` rather than `float64`. A `float64` holds 53 bits of
+mantissa, so an integer above 2^53 would be rounded by the decode alone.
+`json.Number` keeps the exact digits; call `Int64()` or `Float64()` on it to do
+arithmetic. The return value is what the record carries. `InputTransform` and `OutputTransform` are
+not called when the matching `Exclude*` field is true.
+
+`OperationOverride.Result` receives the checkpointed text decoded as a JSON
+value, or the text itself as a `string` when it is not valid JSON. The plugin
+does not run the operation's own serializer, so an operation with a custom
+Serdes delivers its serialized form. To record a result unchanged, return the
+argument.
+
+The value a transform returns is marshaled again. Marshaling writes no
+whitespace and sorts the keys of every object. So a recorded result can differ
+from the checkpointed text in key order, even when the transform returns its
+argument.
+
+Every exporter and `RenderRecord` write `<`, `>` and `&` literally, as the SDK
+does in checkpoints. So a text search for one of these characters matches the
+record. Calling `json.Marshal` on a `Record` yourself escapes them as
+`\u003c`, `\u003e` and `\u0026`; use `RenderRecord`, or a `json.Encoder` with
+`SetEscapeHTML(false)`.
+
+If a transform panics, or returns a value that cannot be marshaled, the field
+is omitted. The untransformed value is never recorded in its place.
+
+`Overrides` are matched by `OperationName`. When several entries share a name,
+the last one wins. `ExcludeErrors` omits the `error` field from operation
+entries; the execution-level `error` on the record is always included.
+
+There is no per-field length cap. An exporter that implements `SizeLimiter`
+bounds the whole record instead; see [Size Limits](#size-limits).
+
+Transforms may run concurrently across invocations. Their functions and
+captured state must support concurrent use. They run only for sampled-in
+invocations, and must not block. For how often each transform runs, see
 [Invocation lifetime and concurrency](#invocation-lifetime-and-concurrency).
 
 ### OperationsFormat
@@ -417,8 +505,8 @@ Each emitted `Record` contains:
 | `EmittedAt` | time.Time | When this record was emitted. Strictly increases across the records of one invocation. |
 | `Operations` | []OperationRecord | Operation snapshots (filtered by OperationDetail). |
 | `Error` | *ErrorRecord | Execution-level error (failed executions only). |
-| `Input` | *ContentField | Execution input (if ContentConfig allows). |
-| `Output` | *ContentField | Execution output (if ContentConfig allows). |
+| `Input` | json.RawMessage | Execution input as a JSON value (if ContentConfig allows). |
+| `Output` | json.RawMessage | Execution output as a JSON value (if ContentConfig allows). |
 | `Custom` | map[string]any | User-defined metadata. |
 | `Truncated` | bool | True if the record was truncated for size. |
 | `DroppedOperations` | int | Number of operations dropped during truncation. |
@@ -427,7 +515,7 @@ Each emitted `Record` contains:
 
 Each `OperationRecord` contains ID, Name, Type, SubType, Status, ParentID,
 timestamps (JSON keys `startTime` and `endTime`), DurationMs, Attempt count,
-Result, Error, and Input content fields.
+Result (a JSON value), and Error.
 
 Every timestamp in the JSON output (`emittedAt`, `startTime`, `endTime`, at
 both the record and operation level) is UTC with exactly three fraction digits

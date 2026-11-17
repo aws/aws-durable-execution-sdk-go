@@ -68,6 +68,7 @@ func TestResume_SizeLimitedExportDropsOldestFirst(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			const count = 8
+			longName := strings.Repeat("n", 128)
 			start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 			ops := make(map[string]durable.OperationHookInfo, count)
 			want := *NewRecord(resumeTestARN)
@@ -78,12 +79,13 @@ func TestResume_SizeLimitedExportDropsOldestFirst(t *testing.T) {
 			for i := range count {
 				id := fmt.Sprintf("op-%d", count-i)
 				op := resumeOp(id, "", "STEP", durable.PluginOperationSucceeded, start.Add(time.Duration(i)*time.Second))
-				op.Name = strings.Repeat("n", 128)
+				op.Name = longName
 				if dropResults {
 					op.Result = strings.Repeat("x", 256)
 				}
 				ops[id] = op
 				rec := toOperationRecord(id, op)
+				rec.Result = withResults(longName).resultValue(op.Name, op.Result)
 				if i < count-1 {
 					if !dropResults {
 						continue
@@ -103,7 +105,7 @@ func TestResume_SizeLimitedExportDropsOldestFirst(t *testing.T) {
 			// EmittedAt changes during dispatch. Allow timestamp-length variation,
 			// but less than the space needed to retain another result or operation.
 			exp := &resumeLimitedExporter{maxBytes: len(encoded) + 32}
-			factory := New(Config{EmitMode: EmitAlways, Exporters: []Exporter{exp}})
+			factory := New(Config{EmitMode: EmitAlways, Exporters: []Exporter{exp}, Content: withResults(longName)})
 			pl := resumeInvocation(t, factory, durable.InvocationHookInfo{
 				ExecutionArn:            resumeTestARN,
 				RequestID:               "resumed-request",
@@ -128,7 +130,7 @@ func TestResume_SizeLimitedExportDropsOldestFirst(t *testing.T) {
 			for _, op := range got.Operations {
 				if dropResults {
 					if op.ID == "op-1" {
-						if op.Result == nil || op.Result.Value != ops[op.ID].Result || op.Truncated {
+						if string(op.Result) != jsonString(ops[op.ID].Result) || op.Truncated {
 							t.Errorf("newest operation lost its result: %+v", op)
 						}
 					} else if op.Result != nil || !op.Truncated {

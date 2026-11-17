@@ -2,7 +2,6 @@ package telemetry
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -60,7 +59,7 @@ func (e *CloudWatchLogsExporter) Export(ctx context.Context, record Record) erro
 		return fmt.Errorf("telemetry.CloudWatchLogsExporter: LogGroupName is required")
 	}
 
-	b, err := json.Marshal(record)
+	b, err := marshalNoHTMLEscape(record)
 	if err != nil {
 		return fmt.Errorf("telemetry.CloudWatchLogsExporter: marshaling record: %w", err)
 	}
