@@ -21,11 +21,25 @@ func defaultRenderer(record Record) ([]byte, error) {
 // first), then Input, then Output. Identity/timeline fields are never
 // dropped.
 //
+// When render is nil, dropping more content cannot increase canonical JSON
+// size, so Truncate binary-searches for the smallest drop count. A caller-
+// supplied renderer may grow — for example by-name output that starts
+// including an error once a duplicate name is gone — so those paths walk
+// oldest-first and stop at the first candidate that fits.
+//
+// Each candidate is sized with the final truncation metadata already set,
+// so the returned record accounts for those extra bytes. Truncate copies
+// the operations slice and does not write through to the caller's backing
+// array.
+//
 // When maxBytes <= 0, returns record unchanged (truncation disabled).
 func Truncate(record Record, maxBytes int, render Renderer) Record {
 	if maxBytes <= 0 {
 		return record
 	}
+	// Binary search is only sound for the canonical JSON renderer. Capture
+	// that before substituting defaultRenderer for a nil argument.
+	ordered := render != nil
 	if render == nil {
 		render = defaultRenderer
 	}
@@ -33,59 +47,74 @@ func Truncate(record Record, maxBytes int, render Renderer) Record {
 		return record
 	}
 
-	// Steps 1 and 2 drop content oldest-first. Both have the same monotonic
-	// property: dropping more only shrinks the rendered record. So instead of
-	// re-rendering the whole record once per dropped item (O(n) full renders of
-	// a multi-megabyte record for a large invocation, which can stall for
-	// minutes), binary-search for the smallest number to drop — O(log n)
-	// renders. Each candidate is sized with the final truncation metadata
-	// already set, so the returned record accounts for those extra bytes and
-	// cannot creep back over the cap after the metadata is written.
-
 	ops := record.Operations
 	n := len(ops)
 
 	// Step 1: drop each operation's Result field, oldest first.
-	// applyResultDrops returns a copy of ops with the oldest j operations'
-	// Result cleared, and whether any Result was actually cleared.
-	applyResultDrops := func(j int) (dropped []OperationRecord, any bool) {
-		dropped = make([]OperationRecord, n)
+	if ordered {
+		// A supplied renderer is not assumed monotonic, so this walks
+		// oldest-first. Copy once, skip ops with no Result, and render
+		// only after a result is actually removed. Otherwise
+		// IncludeOperationResults:false re-encodes the same record once
+		// per operation before any whole-operation drop.
+		dropped := make([]OperationRecord, n)
 		copy(dropped, ops)
-		for i := 0; i < j; i++ {
-			if dropped[i].Result != nil {
-				dropped[i].Result = nil
-				dropped[i].Truncated = true
-				any = true
+		record.Operations = dropped
+		for i := 0; i < n; i++ {
+			if dropped[i].Result == nil {
+				continue
+			}
+			dropped[i].Result = nil
+			dropped[i].Truncated = true
+			record.Truncated = true
+			if fits(record, maxBytes, render) {
+				return record
 			}
 		}
-		return dropped, any
-	}
-	j := sort.Search(n+1, func(j int) bool {
-		candidate := record
-		cops, any := applyResultDrops(j)
-		candidate.Operations = cops
-		if any {
-			candidate.Truncated = true
-		}
-		return fits(candidate, maxBytes, render)
-	})
-	if j > n {
-		j = n // clearing every Result still doesn't fit; apply all, then Step 2.
-	}
-	if cops, any := applyResultDrops(j); any {
-		record.Operations = cops
-		record.Truncated = true
 	} else {
-		record.Operations = cops
-	}
-	if fits(record, maxBytes, render) {
-		return record
+		// applyResultDrops returns a copy of ops with the oldest j
+		// operations' Result cleared, and whether any Result was
+		// actually cleared.
+		applyResultDrops := func(j int) (dropped []OperationRecord, any bool) {
+			dropped = make([]OperationRecord, n)
+			copy(dropped, ops)
+			for i := 0; i < j; i++ {
+				if dropped[i].Result != nil {
+					dropped[i].Result = nil
+					dropped[i].Truncated = true
+					any = true
+				}
+			}
+			return dropped, any
+		}
+		resultFits := func(j int) bool {
+			candidate := record
+			cops, any := applyResultDrops(j)
+			candidate.Operations = cops
+			if any {
+				candidate.Truncated = true
+			}
+			return fits(candidate, maxBytes, render)
+		}
+		j := dropCount(n+1, false, resultFits)
+		if j > n {
+			j = n // clearing every Result still doesn't fit; apply all, then Step 2.
+		}
+		if cops, any := applyResultDrops(j); any {
+			record.Operations = cops
+			record.Truncated = true
+		} else {
+			record.Operations = cops
+		}
+		if fits(record, maxBytes, render) {
+			return record
+		}
 	}
 
 	// Step 2: drop whole operations, oldest first.
 	ops = record.Operations
 	n = len(ops)
-	k := sort.Search(n+1, func(k int) bool {
+	opFits := func(k int) bool {
 		candidate := record
 		candidate.Operations = ops[k:]
 		if k > 0 {
@@ -93,7 +122,8 @@ func Truncate(record Record, maxBytes int, render Renderer) Record {
 			candidate.DroppedOperations = k
 		}
 		return fits(candidate, maxBytes, render)
-	})
+	}
+	k := dropCount(n+1, ordered, opFits)
 	if k > n {
 		k = n // even dropping every operation does not fit; drop all, then Step 3.
 	}
@@ -121,6 +151,23 @@ func Truncate(record Record, maxBytes int, render Renderer) Record {
 		record.DroppedOutput = true
 	}
 	return record
+}
+
+// dropCount returns how many leading items to drop. n is the search space
+// (typically len(ops)+1, including "drop none"). When ordered is true it
+// walks 0..n-1 and returns the first index that fits, so a later false
+// after an earlier true cannot skip that first fit. When ordered is false
+// it binary-searches; pred must then be monotonic.
+func dropCount(n int, ordered bool, pred func(int) bool) int {
+	if ordered {
+		for i := 0; i < n; i++ {
+			if pred(i) {
+				return i
+			}
+		}
+		return n
+	}
+	return sort.Search(n, pred)
 }
 
 // fits reports whether record's rendered size is within maxBytes.
