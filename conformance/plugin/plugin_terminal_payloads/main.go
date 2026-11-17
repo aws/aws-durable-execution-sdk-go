@@ -1,13 +1,6 @@
 // Command plugin_terminal_payloads implements conformance requirement
 // 10-14: the operation-end hook carries the checkpointed result of a
 // succeeded step and the error message of a failed one.
-//
-// The end hook of a step that succeeds in the current invocation carries
-// an empty Result: the SDK sets Result on the replayed end of a
-// checkpointed step, not on the live end. So the record for step A reports
-// NONE where the requirement expects the serialized result, and the
-// requirement is registered as not implemented in template_plugin.yaml
-// until the live end carries the result.
 package main
 
 import (

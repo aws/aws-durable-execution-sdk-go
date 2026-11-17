@@ -41,6 +41,15 @@ Readers of the JSON record or of the DynamoDB item that select on
 `startTimestamp` or `endTimestamp` must select on `startTime` or `endTime`
 instead.
 
+### Fixed: live step end hook carries the result
+
+The plugin instrumentation API is experimental, and this is a fix to it.
+`durable.OperationHookInfo.Result` on `OnOperationEnd` was empty when a step
+succeeded in the current invocation. Only the replayed end of a checkpointed
+step carried it. The field doc states that `Result` is set on the end of every
+succeeded operation. The live end now carries the checkpointed serialized
+result, the same value the replayed end reports.
+
 ### Changed: operation hooks report the wire ID
 
 The plugin instrumentation API is experimental, and this is a change to it.
