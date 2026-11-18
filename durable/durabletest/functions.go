@@ -383,6 +383,15 @@ func responseError(resp wire.InvocationResponse) *durable.ErrorObject {
 func (e *localExecution) driveUntilSettled(eventJSON []byte, maxInvocations int) ([]byte, bool, error) {
 	var response []byte
 	for range maxInvocations {
+		if paused, _ := e.client.isPaused(); paused {
+			// The service does not invoke a paused execution. An
+			// invocation that paused the execution ends the loop here.
+			// A registered durable target that paused reports PENDING.
+			if response == nil {
+				response = pendingResponse
+			}
+			return response, false, nil
+		}
 		outcome, err := e.invoke(eventJSON, maxInvocations)
 		if err != nil {
 			return nil, false, err

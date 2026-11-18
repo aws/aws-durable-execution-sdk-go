@@ -26,6 +26,38 @@ type RetryDecision struct {
 	// Delay waits one second. A negative Delay is an error that fails the
 	// step.
 	Delay time.Duration
+
+	// Pause asks the SDK to pause the durable execution after it records
+	// this retry. It is ignored when Retry is false.
+	//
+	// Experimental: Pause may change or be removed in a later release.
+	//
+	// A [Step] pauses only when its function failed in the current
+	// invocation and the decision sets both Retry and Pause. The SDK first
+	// records the retry as usual. It then calls the Lambda
+	// PauseDurableExecution API for the execution and ends the invocation
+	// with PENDING. It does not wait for Delay. Lambda does not invoke the
+	// function again until an operator calls ResumeDurableExecution. The
+	// next attempt then runs as usual. Pause does not change the attempt
+	// count.
+	//
+	// The execution role needs lambda:PauseDurableExecution on the
+	// function's own durable executions. A function that uses a customer
+	// managed AWS KMS key also needs kms:Decrypt on that key. When the
+	// pause call fails, or the [ExecutionClient] does not implement
+	// [ExecutionPauser], the SDK logs a warning and the step retries as
+	// usual.
+	//
+	// The SDK ignores Pause when it asks the strategy about an attempt
+	// that an earlier invocation interrupted under [AtMostOncePerRetry],
+	// and in [Retry], which does not run as a step. The submitter of
+	// [WaitForCallback] runs as a step, so it honors Pause.
+	//
+	// Steps already running in other branches, such as [Parallel] or
+	// [Map] items, finish their current attempt. The SDK sends no
+	// checkpoint after the pause request, so an attempt that finishes
+	// after it runs again after the resume.
+	Pause bool
 }
 
 // DefaultRetryDelay is the delay before the next attempt when a
@@ -273,6 +305,21 @@ type RetryConfig struct {
 	// strategy delegate to the configured one, which then applies the
 	// matchers, or apply an [ErrorMatcher] directly to [RetryAttempt.Err].
 	RetryableErrors []ErrorMatcher
+
+	// PauseEvery makes the strategy pause the durable execution on every
+	// PauseEvery-th attempt: on a retry after attempt n where
+	// n % PauseEvery == 0, the decision sets [RetryDecision.Pause]. So
+	// PauseEvery 5 pauses after attempts 5, 10, 15, and so on. The delay
+	// and the jitter of that retry are the same as without the option.
+	// See [RetryDecision.Pause] for what a pause does and the permission
+	// it needs.
+	//
+	// Experimental: PauseEvery may change or be removed in a later
+	// release.
+	//
+	// The zero value never pauses. The SDK does not validate PauseEvery:
+	// a negative value pauses on the multiples of its absolute value.
+	PauseEvery int
 }
 
 // NewRetryStrategy returns an exponential backoff retry strategy: the delay
@@ -362,7 +409,11 @@ func newRetryStrategy(cfg RetryConfig) RetryStrategy {
 			cfg.InitialDelay.Seconds()*math.Pow(cfg.BackoffRate, float64(a.Attempt-1)),
 			cfg.MaxDelay.Seconds(),
 		)
-		return RetryDecision{Retry: true, Delay: finalizeDelay(base, cfg.Jitter)}
+		return RetryDecision{
+			Retry: true,
+			Delay: finalizeDelay(base, cfg.Jitter),
+			Pause: cfg.PauseEvery != 0 && a.Attempt%cfg.PauseEvery == 0,
+		}
 	}
 }
 
