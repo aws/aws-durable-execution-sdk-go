@@ -553,8 +553,10 @@ is still over the limit after the previous step:
    result is marked `Truncated`. This step can clear more results than the
    limit requires. That happens only when the rendering carries the
    `operations` array and a cleared result is shorter than 7 bytes.
-2. Whole operations, oldest first, one at a time. This step stops at the
-   first count that fits. `DroppedOperations` counts them.
+2. Whole operations, oldest first. This step drops the smallest count that
+   fits. It finds the count with a binary search, then checks the smaller
+   counts at which a name's `error` or `result` would appear in
+   `operationsByName`. `DroppedOperations` counts them.
 3. The execution input. `DroppedInput` is set.
 4. The execution output. `DroppedOutput` is set.
 

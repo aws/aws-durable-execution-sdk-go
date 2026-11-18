@@ -1,6 +1,9 @@
 package telemetry
 
-import "sort"
+import (
+	"slices"
+	"sort"
+)
 
 // Renderer produces the exact byte shape a Truncate call should size
 // against. Exporters with custom rendering (OperationsFormat) provide
@@ -51,11 +54,34 @@ func Truncate(record Record, maxBytes int, render Renderer) Record {
 	// rendered record larger. The by-name rendering shows a name's Error
 	// and Result only when the name occurs once (see GroupOperationsByName).
 	// So removing one of two operations that share a name makes the other
-	// operation's Error and Result appear. A binary search could then skip
-	// a smaller number of removals that fits, and remove more operations
-	// than needed. So Step 2 removes one operation at a time and stops at
-	// the first number that fits. This costs one render per removed
-	// operation.
+	// operation's Error and Result appear. A count of removed operations at
+	// which this can happen is a reveal count (see revealCounts).
+	//
+	// A segment is a range of counts that starts at a reveal count and ends
+	// just before the next one. Inside a segment, one more removal does not
+	// make the record larger. So the last count of a segment renders the
+	// smallest record in that segment. A smaller count that fits can exist
+	// only in an earlier segment. So a binary search alone can return a
+	// count that is not the smallest. Step 2 therefore runs in three parts:
+	//
+	//  1. A binary search finds a count k that fits, where k-1 does not.
+	//  2. Step 2 renders the last count of every segment below k. It keeps
+	//     the lowest of these counts that fits.
+	//  3. If one fits, a binary search inside its segment finds the first
+	//     count that fits. If none fits, the result is k.
+	//
+	// The cost is two binary searches plus one render per reveal count
+	// below k. A record with unique names has no reveal count. The worst
+	// case is a record in which every name occurs exactly twice and the
+	// newer operation has an Error. It has n/2 reveal counts. So for that
+	// shape the total cost still grows quadratically.
+	//
+	// The result is the smallest count that fits, with one exception. A
+	// removal inside a segment can add a few bytes. DroppedOperations gains
+	// a digit at 10, 100, and so on. A name's minDurationMs can gain digits
+	// when its shortest operation is removed. So when the record is within
+	// a few bytes of the limit, Step 2 can remove more operations than
+	// needed.
 	//
 	// Each candidate is sized with the final truncation metadata already
 	// set. So the returned record accounts for those extra bytes.
@@ -106,16 +132,53 @@ func Truncate(record Record, maxBytes int, render Renderer) Record {
 		return record
 	}
 
-	// Step 2: drop whole operations, oldest first, one at a time. If even
-	// dropping every operation does not fit, all are dropped and Step 3 runs.
+	// Step 2: drop whole operations, oldest first. If even dropping every
+	// operation does not fit, all are dropped and Step 3 runs.
 	ops = record.Operations
-	for k := 1; k <= len(ops); k++ {
-		record.Operations = ops[k:]
-		record.Truncated = true
-		record.DroppedOperations = k
-		if fits(record, maxBytes, render) {
-			return record
+	if n > 0 {
+		dropOldest := func(k int) Record {
+			candidate := record
+			candidate.Operations = ops[k:]
+			candidate.Truncated = true
+			candidate.DroppedOperations = k
+			return candidate
 		}
+		fitsAfter := func(k int) bool {
+			return fits(dropOldest(k), maxBytes, render)
+		}
+
+		// Part 1. sort.Search keeps the invariant that k-1 does not fit.
+		k := 1 + sort.Search(n, func(i int) bool { return fitsAfter(i + 1) })
+		if k <= n {
+			// Part 2. The last count of a segment is one less than the next
+			// reveal count. Count 0 was checked before Step 2, and k-1 was
+			// checked by part 1. So only ends from 1 to k-2 are rendered.
+			var ends []int
+			for _, r := range revealCounts(ops) {
+				if end := r - 1; end >= 1 && end <= k-2 {
+					ends = append(ends, end)
+				}
+			}
+			lowest := -1
+			for i := len(ends) - 1; i >= 0; i-- {
+				if fitsAfter(ends[i]) {
+					lowest = i
+				}
+			}
+
+			// Part 3. Every segment end below ends[lowest] does not fit. So
+			// the first count that fits lies in ends[lowest]'s segment.
+			if lowest >= 0 {
+				lo := 1
+				if lowest > 0 {
+					lo = ends[lowest-1] + 1
+				}
+				hi := ends[lowest]
+				k = lo + sort.Search(hi-lo, func(i int) bool { return fitsAfter(lo + i) })
+			}
+			return dropOldest(k)
+		}
+		record = dropOldest(n)
 	}
 
 	// Step 3: Input, then Output, as a last resort.
@@ -142,4 +205,40 @@ func fits(record Record, maxBytes int, render Renderer) bool {
 		return false
 	}
 	return len(b) <= maxBytes
+}
+
+// revealCounts returns, in ascending order, every count of removed oldest
+// operations at which the by-name rendering can grow.
+//
+// Removing the oldest r operations can remove the second-newest operation
+// with some name. That name then occurs once. So GroupOperationsByName
+// copies the newest operation's Error and Result into the name's summary.
+// If that operation has an Error or a non-empty Result, the rendering can
+// grow at r. So r is a reveal count. Each name has at most one reveal
+// count. An operation without a name has none, because
+// GroupOperationsByName excludes it.
+//
+// The scan runs newest to oldest. The second operation it sees with a
+// name is that name's second-newest operation.
+func revealCounts(ops []OperationRecord) []int {
+	seen := make(map[string]int)
+	newest := make(map[string]int)
+	var counts []int // descending
+	for i := len(ops) - 1; i >= 0; i-- {
+		name := ops[i].Name
+		if name == "" {
+			continue
+		}
+		seen[name]++
+		switch seen[name] {
+		case 1:
+			newest[name] = i
+		case 2:
+			if op := ops[newest[name]]; op.Error != nil || len(op.Result) > 0 {
+				counts = append(counts, i+1)
+			}
+		}
+	}
+	slices.Reverse(counts)
+	return counts
 }

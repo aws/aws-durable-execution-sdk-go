@@ -39,10 +39,20 @@ one of two operations that share a name makes the other operation's
 `error` and `result` appear, and the rendered record can grow. `Truncate`
 could then drop more operations than the limit required.
 
-`Truncate` now drops one operation at a time and stops at the first number
-that fits. This affects every exporter that renders `OperationsFormatByName`
-or `OperationsFormatBoth`. The cost is one render of the record per dropped
-operation, for every format.
+`Truncate` now finds the smallest number that fits in three parts. A
+binary search finds a number that fits. Then `Truncate` renders the record
+at each number below it where a name drops to one occurrence and that
+occurrence has an `error` or a `result`. If any of those fits, a second
+binary search runs between the lowest one that fits and the next lower
+number it checked. This affects
+every exporter that renders `OperationsFormatByName` or
+`OperationsFormatBoth`.
+
+The cost is two binary searches plus one render per such number. A record
+with unique names needs only the binary search. In the worst case every
+name occurs exactly twice and the newer occurrence has an `error`. Then the
+cost is one render per name, so the total cost grows quadratically with the
+number of operations.
 
 ### Changed: telemetry records keep `<`, `>` and `&` literal
 
