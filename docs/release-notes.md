@@ -26,7 +26,7 @@ replaces a filter on the `operations` element whose `name` is `charge`. A
 custom exporter that needs the array form can call
 `RenderRecord(record, OperationsFormatArray)`.
 
-### Fixed: Truncate drops only as many operations as the size limit requires
+### Fixed: Truncate no longer skips a smaller drop count that fits
 
 `Truncate` drops whole operations, oldest first, when a record is over an
 exporter's size limit. It chose the number to drop with a binary search.
@@ -39,16 +39,20 @@ one of two operations that share a name makes the other operation's
 `error` and `result` appear, and the rendered record can grow. `Truncate`
 could then drop more operations than the limit required.
 
-`Truncate` now finds the smallest number that fits in three parts. A
-binary search finds a number that fits. Then `Truncate` renders the record
-at each number below it where a name drops to one occurrence and that
-occurrence has an `error` or a `result`. If any of those fits, a second
-binary search runs between the lowest one that fits and the next lower
-number it checked. This affects
+`Truncate` now chooses the number in three parts. A binary search finds a
+number that fits. Then `Truncate` renders the record at the number just
+below each point where a name drops to one occurrence and that occurrence
+has an `error` or a `result`. If any of those fits, a second binary search
+runs inside the range that ends at the lowest one that fits. This affects
 every exporter that renders `OperationsFormatByName` or
 `OperationsFormatBoth`.
 
-The cost is two binary searches plus one render per such number. A record
+The result is the smallest number that fits, with one exception. Near the
+limit, one more dropped operation can add a few bytes, because
+`droppedOperations` or a name's `minDurationMs` gains a digit. `Truncate`
+can then drop more operations than needed.
+
+The cost is two binary searches plus one render per such point. A record
 with unique names needs only the binary search. In the worst case every
 name occurs exactly twice and the newer occurrence has an `error`. Then the
 cost is one render per name, so the total cost grows quadratically with the
