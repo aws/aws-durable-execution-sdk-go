@@ -2,6 +2,62 @@
 
 ## Unreleased
 
+### Changed: LambdaLog and CloudWatch Logs exporters emit operationsByName
+
+The telemetry record schema is experimental, and this is a change to it. The
+change aligns the Go exporters with the JavaScript, Python, and Java
+exporters and with the `telemetry-1` conformance test.
+
+- `LambdaLogExporter` and `CloudWatchLogsExporter` now render each record
+  with `OperationsFormatByName`. The JSON carries `operationsByName` and no
+  `operations` array. Before, both exporters sent the plain `json.Marshal`
+  form, which carries `operations` and no `operationsByName`.
+- `LambdaLogExporter` is the default exporter. So a plugin configured
+  without `Exporters` also changes shape.
+- Neither exporter has an `OperationsFormat` field. The format is fixed.
+- Both exporters now implement `RenderingSizeLimiter`. So the size limit is
+  checked against the `operationsByName` rendering, which is the form that
+  is sent. For `LambdaLogExporter`, the checked form includes the newline
+  that ends the line.
+
+Logs Insights queries that read `operations` must read
+`operationsByName.<name>` instead. For example, `operationsByName.charge.status`
+replaces a filter on the `operations` element whose `name` is `charge`. A
+custom exporter that needs the array form can call
+`RenderRecord(record, OperationsFormatArray)`.
+
+### Fixed: Truncate no longer skips a smaller drop count that fits
+
+`Truncate` drops whole operations, oldest first, when a record is over an
+exporter's size limit. It chose the number to drop with a binary search.
+A binary search is correct only when every dropped operation makes the
+rendered record smaller.
+
+That is not true for the `operationsByName` rendering. An entry there
+carries `error` and `result` only when its name occurs once. So dropping
+one of two operations that share a name makes the other operation's
+`error` and `result` appear, and the rendered record can grow. `Truncate`
+could then drop more operations than the limit required.
+
+`Truncate` now chooses the number in three parts. A binary search finds a
+number that fits. Then `Truncate` renders the record at the number just
+below each point where a name drops to one occurrence and that occurrence
+has an `error` or a `result`. If any of those fits, a second binary search
+runs inside the range that ends at the lowest one that fits. This affects
+every exporter that renders `OperationsFormatByName` or
+`OperationsFormatBoth`.
+
+The result is the smallest number that fits, with one exception. Near the
+limit, one more dropped operation can add a few bytes, because
+`droppedOperations` or a name's `minDurationMs` gains a digit. `Truncate`
+can then drop more operations than needed.
+
+The cost is two binary searches plus one render per such point. A record
+with unique names needs only the binary search. In the worst case every
+name occurs exactly twice and the newer occurrence has an `error`. Then the
+cost is one render per name, so the total cost grows quadratically with the
+number of operations.
+
 ### Fixed: attempt-end hooks report the attempt's end time
 
 `durable.AttemptEndHookInfo.EndTimestamp` was always zero. The SDK copied
