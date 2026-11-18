@@ -31,6 +31,8 @@ permissions:
 jobs:
   example-tests:
     name: example-tests
+    # Fork and Dependabot pull requests get no secrets, so skip them.
+    if: github.event_name != 'pull_request' || (github.actor != 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository)
     # CodeBuild-hosted runner in the Go testing account (EC2 compute); the label
     # must match the CodeBuild project name. Pull requests from forks are routed
     # to GitHub-hosted runners. This is routing, not a trust boundary: the fork

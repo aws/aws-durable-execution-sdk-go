@@ -67,6 +67,8 @@ jobs:
   conformance:
     name: conformance (${{ matrix.suite }})
     needs: discover_suites
+    # Fork and Dependabot pull requests get no secrets, so skip them.
+    if: github.event_name != 'pull_request' || (github.actor != 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository)
     # Same routing as above.
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || format('codebuild-github-actions-runner-{0}-{1}', github.run_id, github.run_attempt) }}
     permissions:

@@ -232,7 +232,8 @@ type Plugin struct {
 	OnOperationAttemptStart func(ctx context.Context, info AttemptHookInfo)
 
 	// OnOperationAttemptEnd is called after each attempt of a retryable
-	// operation has an outcome. With [PluginAttemptSucceeded] it fires
+	// operation has an outcome. The info carries the attempt's
+	// StartTimestamp and EndTimestamp. With [PluginAttemptSucceeded] it fires
 	// after the attempt's result is checkpointed and before
 	// OnOperationEnd. With [PluginAttemptFailed] it fires when the body
 	// returns an error, or when the result cannot be serialized or is
@@ -495,11 +496,15 @@ type OperationHookInfo struct {
 	ChildrenOmitted bool
 
 	// StartTimestamp is when this operation began. Set on OnOperationStart
-	// and OnOperationEnd; zero on hooks where not yet known.
+	// and OnOperationEnd; zero on hooks where not yet known. On the attempt
+	// hooks it is when the attempt began, before WrapOperationAttemptFn.
 	StartTimestamp time.Time
 
 	// EndTimestamp is when this operation reached a terminal state. Set on
-	// OnOperationEnd; zero on OnOperationStart.
+	// OnOperationEnd; zero on OnOperationStart. On OnOperationAttemptEnd it
+	// is when the attempt body and the WrapOperationAttemptFn hooks around
+	// it returned, for every outcome, read from the SDK's clock. Zero on
+	// OnOperationAttemptStart.
 	EndTimestamp time.Time
 
 	// Result is the operation's serialized result (raw wire form), if any.
