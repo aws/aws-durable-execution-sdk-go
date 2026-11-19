@@ -431,16 +431,11 @@ func (r *LocalRunner[I, O]) OmitTokenOnCheckpoint(n int) {
 // [LocalRunner.RunUntilComplete] when the execution is paused. Lambda does
 // not invoke a paused execution either. Call [LocalRunner.ResumeExecution]
 // first.
-//
-// Experimental: ErrExecutionPaused may change or be removed in a later
-// release.
 var ErrExecutionPaused = errors.New("durabletest: the execution is paused; call ResumeExecution first")
 
 // Paused reports whether the execution is paused, and the reason the
 // pause request gave. A step pauses the execution when its retry decision
 // sets [durable.RetryDecision.Pause].
-//
-// Experimental: Paused may change or be removed in a later release.
 func (r *LocalRunner[I, O]) Paused() (bool, string) {
 	return r.client.isPaused()
 }
@@ -451,9 +446,6 @@ func (r *LocalRunner[I, O]) Paused() (bool, string) {
 // that paused the execution runs its next attempt. ResumeExecution returns
 // an error with the code ResourceConflictException when the execution is
 // not paused.
-//
-// Experimental: ResumeExecution may change or be removed in a later
-// release.
 func (r *LocalRunner[I, O]) ResumeExecution() error {
 	return r.client.resume()
 }

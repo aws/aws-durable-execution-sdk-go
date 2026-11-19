@@ -4,9 +4,8 @@
 // After an operator resumes the execution, attempt 3 fails and retries as
 // usual, and attempt 4 succeeds.
 //
-// Pausing is experimental. The execution role needs
-// lambda:PauseDurableExecution on its own durable executions. The example
-// runs only on the local runner.
+// The execution role needs lambda:PauseDurableExecution on its own
+// durable executions. The example runs only on the local runner.
 package main
 
 import (

@@ -375,11 +375,10 @@ When the strategy stops, `Step` returns a `*durable.StepError` with the
 attempt count and the recorded `ErrorType` and `Message` of the last
 attempt.
 
-#### Pausing from a retry decision (experimental)
+#### Pausing from a retry decision
 
 A retry decision can pause the durable execution, so an operator can check
-the cause of the failures before the step runs again. This feature is
-experimental and may change in a later release.
+the cause of the failures before the step runs again.
 
 `RetryConfig.PauseEvery` pauses on every N-th attempt. With `PauseEvery: 5`
 the strategy pauses after attempts 5, 10, 15, and so on. The delay and the

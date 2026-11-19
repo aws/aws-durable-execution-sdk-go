@@ -30,8 +30,6 @@ type RetryDecision struct {
 	// Pause asks the SDK to pause the durable execution after it records
 	// this retry. It is ignored when Retry is false.
 	//
-	// Experimental: Pause may change or be removed in a later release.
-	//
 	// A [Step] pauses only when its function failed in the current
 	// invocation and the decision sets both Retry and Pause. The SDK first
 	// records the retry as usual. It then calls the Lambda
@@ -44,9 +42,9 @@ type RetryDecision struct {
 	// The execution role needs lambda:PauseDurableExecution on the
 	// function's own durable executions. A function that uses a customer
 	// managed AWS KMS key also needs kms:Decrypt on that key. When the
-	// pause call fails, or the [ExecutionClient] does not implement
-	// [ExecutionPauser], the SDK logs a warning and the step retries as
-	// usual.
+	// pause call fails, the SDK logs a warning and the step retries as
+	// usual. When the [ExecutionClient] does not implement
+	// [ExecutionPauser], the step retries as usual with no warning.
 	//
 	// The SDK ignores Pause when it asks the strategy about an attempt
 	// that an earlier invocation interrupted under [AtMostOncePerRetry],
@@ -313,9 +311,6 @@ type RetryConfig struct {
 	// and the jitter of that retry are the same as without the option.
 	// See [RetryDecision.Pause] for what a pause does and the permission
 	// it needs.
-	//
-	// Experimental: PauseEvery may change or be removed in a later
-	// release.
 	//
 	// The zero value never pauses. The SDK does not validate PauseEvery:
 	// a negative value pauses on the multiples of its absolute value.
