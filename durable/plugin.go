@@ -183,37 +183,58 @@ type Plugin struct {
 	// operation dispatches at most one start per invocation. An
 	// operation that runs live reports [PluginOperationStarted] with
 	// IsReplay false. An operation that is re-entered before it settled
-	// reports its checkpointed status with IsReplay true. A [Step]
-	// replayed from a terminal checkpoint reports that status with
-	// IsReplay true and then dispatches OnOperationEnd with no hook in
-	// between. For a succeeded Step the SDK decodes the checkpointed
-	// result between the two; if decoding fails, the Step returns the
-	// decoding error to its caller and dispatches no end. Every other
-	// operation replayed from a terminal checkpoint dispatches only the
-	// end, because its start was dispatched by the invocation that
-	// recorded it. A Step whose retry is scheduled and not yet due
-	// dispatches no hook until the attempt runs. Each operation's own
-	// documentation states any further detail of its replayed events. It
-	// is dispatched from the goroutine that runs the operation: on that
-	// goroutine with one plugin registered, on a goroutine the dispatch
-	// joins with several. Starts of concurrent operations may run in
-	// parallel.
+	// reports its checkpointed status with IsReplay true. An operation
+	// replayed from a terminal checkpoint dispatches no start, because
+	// the invocation that started it dispatched the start. A Step whose
+	// retry is scheduled and not yet due dispatches no hook until the
+	// attempt runs. A child context under [WithChildVirtual] has no
+	// checkpoint, so it dispatches a start, with IsReplay true, on every
+	// invocation that replays it. Each operation's own documentation
+	// states any further detail of its replayed events. It is dispatched
+	// from the goroutine that runs the operation: on that goroutine with
+	// one plugin registered, on a goroutine the dispatch joins with
+	// several. Starts of concurrent operations may run in parallel.
 	OnOperationStart func(ctx context.Context, info OperationHookInfo)
 
 	// OnOperationEnd is called when a durable operation reaches a
 	// terminal status: Succeeded, Failed, TimedOut, Stopped, or
 	// Cancelled. Each operation dispatches at most one end per
 	// invocation, after OnOperationAttemptEnd of its final attempt and,
-	// for a context operation, after its body has returned. A live operation
-	// dispatches its end after its terminal checkpoint is recorded, with
-	// IsReplay false. An operation that suspends the invocation has no
-	// outcome yet and dispatches no end; the later invocation that
-	// observes its terminal checkpoint dispatches the end with IsReplay
-	// true and the checkpointed timestamps, result, and error. An
-	// operation replayed from a terminal checkpoint dispatches the end
-	// with IsReplay true on every invocation that replays it, with one
-	// exception: a succeeded [Step] whose checkpointed result fails to
-	// decode dispatches no end on that invocation (see OnOperationStart).
+	// for a context operation, after its body has returned. The first
+	// invocation that observes an operation's outcome dispatches its end,
+	// with IsReplay false:
+	//
+	//   - A live operation dispatches its end after its terminal
+	//     checkpoint is recorded.
+	//   - An operation that suspends the invocation has no outcome yet and
+	//     dispatches no end. Its outcome is recorded while no invocation
+	//     runs: a [Wait] elapses, a callback is resolved, or an [Invoke]
+	//     finishes. The next invocation lists the operation in
+	//     [InvocationHookInfo].UpdatedOperations. When the handler reaches
+	//     the operation in that invocation, the end is dispatched with
+	//     the checkpointed timestamps, result, and error.
+	//   - A later invocation that does not list the operation in
+	//     UpdatedOperations dispatches no end when it replays the
+	//     operation.
+	//
+	// An end can repeat. When an invocation fails and is retried, the
+	// retry can list in UpdatedOperations an operation whose end the
+	// failed invocation dispatched. The retry then dispatches that end
+	// again when the handler reaches the operation, with IsReplay false
+	// and the same timestamps, result, and error. A [Step] is the
+	// exception: it dispatches no end on replay, as described below. So a
+	// plugin that must act once per operation deduplicates on
+	// [OperationHookInfo].ID.
+	//
+	// An outcome that the handler does not reach in the invocation that
+	// first observes it dispatches no end. A plugin reads it from
+	// [InvocationHookInfo].Operations instead. A [Step] replayed from a
+	// terminal checkpoint never dispatches an end, because the invocation
+	// that ran its last attempt dispatched it. A child context under
+	// [WithChildVirtual] has no checkpoint, so it dispatches an end, with
+	// IsReplay true, on every invocation that replays it. It is the only
+	// operation whose end reports IsReplay true.
+	//
 	// It is dispatched from the goroutine that runs the operation: on
 	// that goroutine with one plugin registered, on a goroutine the
 	// dispatch joins with several.
@@ -290,12 +311,11 @@ type Plugin struct {
 	// IsReplay false for a live child and IsReplay true for a child
 	// re-entered before it settled or a virtual child replaying the
 	// operations inside it. A child replayed from a terminal checkpoint
-	// dispatches only its end and, in general, does not run its body, so
-	// the hook does not fire. One such child does run its body: a
-	// succeeded child whose result was too large to checkpoint runs its
-	// body again to rebuild the result. That run is not wrapped, so the
-	// hook does not fire for it either; its OnOperationEnd, with the
-	// checkpointed timestamps, is dispatched before the body runs. [Map]
+	// dispatches no start and, in general, does not run its body, so the
+	// hook does not fire. One such child does run its body: a succeeded
+	// child whose result was too large to checkpoint runs its body again
+	// to rebuild the result. That run is not wrapped, so the hook does not
+	// fire for it either. [Map]
 	// and [Parallel] items and [WaitForCallback] are context operations
 	// too but do not fire it. fn must be called exactly once; the
 	// context passed to fn is the parent of the child [Context]. See the
@@ -379,7 +399,9 @@ type InvocationHookInfo struct {
 	// invocation. UpdatedOperations is a subset of it. On the first
 	// invocation it holds the execution operation alone. Each entry
 	// carries the checkpointed status, timestamps, result, and error, with
-	// IsReplay set, as an OnOperationEnd hook would report the operation.
+	// IsReplay set. An operation replayed from a terminal checkpoint
+	// dispatches no OnOperationEnd when an earlier invocation reported its
+	// end, so this map is where a plugin reads that operation's outcome.
 	//
 	// The map is built before the plugin factories are called and is not
 	// modified afterwards, so a factory or a plugin may read it at any
@@ -1013,6 +1035,52 @@ func notifyOperationEnd(d *pluginDispatcher, ctx context.Context, info Operation
 			p.OnOperationEnd(ctx, info)
 		}
 	})
+}
+
+// dispatchReplayedEnd handles the end of the operation id, claimed on ec,
+// which ec replays from a terminal checkpoint. info describes the
+// operation with its checkpointed timestamps, result, and error.
+//
+// The invocation that first observes an outcome dispatches the end.
+// executionState.newOutcome reports whether this invocation observes the
+// outcome as new:
+//
+//   - The invocation payload lists the operation among the operations
+//     updated since the previous invocation. So the outcome was recorded
+//     while no invocation observed it, for example while the previous
+//     invocation was suspended.
+//   - The operation was not terminal when this invocation started. So a
+//     checkpoint response or a poll of this invocation delivered the
+//     outcome before the handler reached the operation.
+//
+// In either case the end is dispatched with IsReplay false. Otherwise an
+// earlier invocation observed the outcome and dispatched the end. So no end
+// is dispatched. The operation completed Debug record is still written, as
+// a replayed record.
+//
+// The SDK keeps no record across invocations of the ends it dispatched.
+// So when the retry of a failed invocation lists an operation as updated
+// again, the retry dispatches its end again. OnOperationEnd documents
+// this repeat.
+func dispatchReplayedEnd(ec *execContext, id string, info OperationHookInfo, status PluginOperationStatus) {
+	dispatchReplayedEndTo(ec.operationHooks(), ec, id, info, status)
+}
+
+// dispatchReplayedEndTo is dispatchReplayedEnd with the dispatcher chosen by
+// the caller; see dispatchOperationStartTo.
+func dispatchReplayedEndTo(d *pluginDispatcher, ec *execContext, id string, info OperationHookInfo, status PluginOperationStatus) {
+	if ec.state.newOutcome(id) {
+		info.IsReplay = false
+		dispatchOperationEndTo(d, ec, info, status)
+		return
+	}
+	logReplayedOperationCompleted(ec, info, status)
+}
+
+// logReplayedOperationCompleted writes the replayed operation completed
+// Debug record of an operation whose end an earlier invocation dispatched.
+func logReplayedOperationCompleted(ec *execContext, info OperationHookInfo, status PluginOperationStatus) {
+	ec.logOperationCompleted(func() bool { return true }, info, status)
 }
 
 // wrapBody is the wrapped work a wrap hook receives: it runs the body with
