@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Added: pause the execution from a retry decision
+
+- `RetryDecision.Pause` asks the SDK to pause the durable execution after
+  it records the retry. A step pauses only when its function failed in the
+  current invocation and the decision also sets `Retry`. The SDK calls the
+  Lambda `PauseDurableExecution` API and ends the invocation with PENDING.
+  The next attempt runs after `ResumeDurableExecution`.
+- `RetryConfig.PauseEvery` makes `NewRetryStrategy` pause on every N-th
+  attempt. The delay and the jitter do not change.
+- `ExecutionPauser` is an optional interface for an `ExecutionClient`. The
+  default client implements it. A client without it retries as usual.
+- The execution role needs `lambda:PauseDurableExecution` on its own
+  durable executions. A failed pause call logs a warning, and the step
+  retries as usual.
+- `durabletest.LocalRunner` gains `Paused`, `ResumeExecution` and
+  `ErrExecutionPaused`.
+- The `github.com/aws/aws-sdk-go-v2/service/lambda` requirement goes from
+  v1.99.0 to v1.117.0, the first version with `PauseDurableExecution`.
+- The module also moves `github.com/aws/aws-sdk-go-v2` from v1.42.1 to
+  v1.48.0 and `github.com/aws/smithy-go` from v1.27.3 to v1.28.9.
+
 ### Changed: LambdaLog and CloudWatch Logs exporters emit operationsByName
 
 The telemetry record schema is experimental, and this is a change to it. The
