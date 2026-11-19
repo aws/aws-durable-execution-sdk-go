@@ -49,6 +49,19 @@ func TestMemoryClientPauseExecution(t *testing.T) {
 		t.Errorf("second resume() error = %v, want ResourceConflictException", err)
 	}
 
+	// A pause without a client token is not idempotent: a second one
+	// conflicts.
+	untokened := durable.PauseExecutionInput{ExecutionArn: "arn", Reason: "r"}
+	if _, err := m.PauseExecution(ctx, untokened); err != nil {
+		t.Fatalf("PauseExecution() without a token error = %v", err)
+	}
+	if _, err := m.PauseExecution(ctx, untokened); !isConflict(err) {
+		t.Errorf("repeated PauseExecution() without a token error = %v, want ResourceConflictException", err)
+	}
+	if err := m.resume(); err != nil {
+		t.Fatalf("resume() error = %v", err)
+	}
+
 	m.mu.Lock()
 	m.executionEnded = true
 	m.mu.Unlock()

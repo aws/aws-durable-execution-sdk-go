@@ -317,6 +317,11 @@ func TestStepPauseFailureLogsWarningAndRetries(t *testing.T) {
 			want: []string{"Error: *errors.errorString: boom.", "one possible cause"},
 		},
 		{
+			name: "API error without a code",
+			err:  &smithy.GenericAPIError{Message: "no code"},
+			want: []string{"Error: *smithy.GenericAPIError: api error : no code.", "one possible cause"},
+		},
+		{
 			name:     "ResourceConflictException",
 			err:      &smithy.GenericAPIError{Code: "ResourceConflictException", Message: "paused"},
 			want:     []string{"Error: ResourceConflictException:", "The execution has closed (for example, stopped) or is already paused."},
@@ -360,29 +365,28 @@ func TestStepClientWithoutPauserRetriesAsUsual(t *testing.T) {
 // execution, and it must not hang.
 func TestAbandonedStepDoesNotPause(t *testing.T) {
 	fake := &pausingFake{retryFake: &retryFake{}}
-	done := make(chan string, 1)
-	go func() {
-		resp, _ := runPauseHandler(t, fake, stepPayload(`""`), func(ctx Context, _ string) (string, error) {
-			_, err := Parallel(ctx, "p", []Branch[string]{
-				{Name: "fast", Func: func(c Context) (string, error) { return "fast", nil }},
-				{Name: "slow", Func: func(c Context) (string, error) {
-					return Step(c, "slow-step", func(StepContext) (string, error) {
-						time.Sleep(200 * time.Millisecond)
-						return "", errors.New("transient")
-					}, WithRetry(pauseOnFirst))
-				}},
-			}, WithCompletion(CompletionConfig{MinSuccessful: 1}))
-			return "done", err
-		})
-		done <- resp
-	}()
-	select {
-	case resp := <-done:
-		if !strings.Contains(resp, `"Status":"SUCCEEDED"`) {
-			t.Errorf("response = %s, want SUCCEEDED", resp)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("invocation did not end")
+	// started makes the fast branch wait until the slow step runs its
+	// body. Without it, the batch can abandon the slow branch before its
+	// step starts, and no RETRY is recorded.
+	started := make(chan struct{})
+	resp, _ := runPauseHandler(t, fake, stepPayload(`""`), func(ctx Context, _ string) (string, error) {
+		_, err := Parallel(ctx, "p", []Branch[string]{
+			{Name: "fast", Func: func(c Context) (string, error) {
+				<-started
+				return "fast", nil
+			}},
+			{Name: "slow", Func: func(c Context) (string, error) {
+				return Step(c, "slow-step", func(StepContext) (string, error) {
+					close(started)
+					time.Sleep(200 * time.Millisecond)
+					return "", errors.New("transient")
+				}, WithRetry(pauseOnFirst))
+			}},
+		}, WithCompletion(CompletionConfig{MinSuccessful: 1}))
+		return "done", err
+	})
+	if !strings.Contains(resp, `"Status":"SUCCEEDED"`) {
+		t.Errorf("response = %s, want SUCCEEDED", resp)
 	}
 	if n := len(fake.pauseCalls()); n != 0 {
 		t.Errorf("pause calls = %d, want 0", n)

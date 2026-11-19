@@ -445,7 +445,8 @@ func (r *LocalRunner[I, O]) Paused() (bool, string) {
 // [LocalRunner.RunUntilComplete] invokes the handler again, and the step
 // that paused the execution runs its next attempt. ResumeExecution returns
 // an error with the code ResourceConflictException when the execution is
-// not paused.
+// not paused. It resumes only the runner's own execution, not a paused
+// execution of a durable target registered with [LocalRunner.RegisterFunction].
 func (r *LocalRunner[I, O]) ResumeExecution() error {
 	return r.client.resume()
 }

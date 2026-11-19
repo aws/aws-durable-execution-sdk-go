@@ -20,6 +20,8 @@
   `ErrExecutionPaused`.
 - The `github.com/aws/aws-sdk-go-v2/service/lambda` requirement goes from
   v1.99.0 to v1.117.0, the first version with `PauseDurableExecution`.
+- The module also moves `github.com/aws/aws-sdk-go-v2` from v1.42.1 to
+  v1.48.0 and `github.com/aws/smithy-go` from v1.27.3 to v1.28.9.
 
 ### Changed: LambdaLog and CloudWatch Logs exporters emit operationsByName
 
