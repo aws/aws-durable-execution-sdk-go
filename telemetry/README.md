@@ -250,6 +250,10 @@ are rendered in the serialized JSON body:
 
 Exporters that support this: File, HTTP, SQS, EventBridge, Firehose.
 
+The LambdaLog and CloudWatch Logs exporters have no `OperationsFormat` field.
+They always render `OperationsFormatByName`. See
+[LambdaLog](#lambdalog-default) and [CloudWatch Logs](#cloudwatch-logs).
+
 ## Exporters
 
 The plugin dispatches records to all configured exporters concurrently. Each
@@ -266,7 +270,13 @@ function's CloudWatch log group automatically.
 exporter := telemetry.NewLambdaLogExporter()
 ```
 
-Size limit: 256 KB (configurable via `MaxSizeBytes`).
+Each line carries `operationsByName` and no `operations` array. The format is
+fixed. CloudWatch Logs Insights selects a field by a dotted path such as
+`operationsByName.increment.count`. A query cannot select an element of the
+`operations` array by its name.
+
+Size limit: 256 KB (configurable via `MaxSizeBytes`). The limit applies to the
+written line: the `operationsByName` rendering and the newline that ends it.
 
 ### File
 
@@ -333,7 +343,11 @@ exporter := &telemetry.CloudWatchLogsExporter{
 Log streams are named `{prefix}{YYYY}/{MM}/{DD}` (one per UTC calendar day,
 auto-created on first write).
 
-Size limit: 256 KB (configurable via `MaxSizeBytes`).
+Each log event carries `operationsByName` and no `operations` array, for the
+same reason as [LambdaLog](#lambdalog-default). The format is fixed.
+
+Size limit: 256 KB (configurable via `MaxSizeBytes`). The limit applies to the
+`operationsByName` rendering.
 
 ### SQS
 
@@ -528,9 +542,28 @@ same format.
 ## Size Limits
 
 Exporters that implement `SizeLimiter` trigger automatic record truncation when
-the serialized record exceeds their limit. Truncation drops operation results
-first (largest to smallest), then input/output fields, and sets the `Truncated`
-metadata fields.
+the record exceeds their limit. The size is measured on the `json.Marshal` form
+of the record. An exporter that also implements `RenderingSizeLimiter` is
+measured on its own `Render` output instead, which is the form it sends.
+
+Truncation removes content in this order. Each step runs only when the record
+is still over the limit after the previous step:
+
+1. Operation results, oldest operation first. Each operation that loses its
+   result is marked `Truncated`. This step can clear more results than the
+   limit requires. That happens only when the rendering carries the
+   `operations` array and a cleared result is shorter than 7 bytes.
+2. Whole operations, oldest first. A binary search finds a count that fits.
+   This step then checks the count just below each point where a name's
+   `error` or `result` would appear in `operationsByName`, and keeps the
+   smallest count that fits. Near the limit it can drop more operations
+   than needed, because `DroppedOperations` or a name's `minDurationMs` can
+   gain a digit. `DroppedOperations` counts the dropped operations.
+3. The execution input. `DroppedInput` is set.
+4. The execution output. `DroppedOutput` is set.
+
+"Oldest" is the order of the `Operations` slice. The record's `Truncated`
+field is set when anything was removed.
 
 | Exporter | Default Limit |
 | --- | --- |

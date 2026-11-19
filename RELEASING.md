@@ -19,8 +19,8 @@ creates its tag, and from then on every user can fetch that version.
 The go command requires the leading `v` of each version. The tag of a
 module in a subdirectory starts with the directory, as in
 `telemetry/v0.1.0` ([Go modules reference](https://go.dev/ref/mod#vcs-version)).
-The `conformance` and `examples` modules exist only for this repository's
-tests, so they are never released.
+The `conformance`, `conformance-telemetry`, and `examples` modules exist
+only for this repository's tests, so they are never released.
 
 Each GitHub Release releases one module. To release two modules at the
 same commit, create two GitHub Releases.
@@ -45,8 +45,8 @@ release promises to users. These rules follow from it:
   User-Agent header of every Lambda API call, as
   `aws-durable-execution-sdk-go/1.2.0`. That is the token format of the
   durable execution SDKs for the other languages.
-- telemetry, conformance, and examples require the SDK. Each must require
-  the SDK version that `durable.Version` names. Their `replace` directives
+- telemetry, conformance, conformance-telemetry, and examples require the
+  SDK. Each must require the SDK version that `durable.Version` names. Their `replace` directives
   point at this checkout, so builds inside the repository use the current
   SDK source. A user's build ignores those directives and reads only the
   `require` line. So a telemetry release requires the SDK version it was
@@ -85,11 +85,12 @@ go run -C .github/scripts/release . prepare v1.1.0
 ```
 
 The command sets `durable.Version` to `1.1.0`. It also sets the SDK
-version that telemetry, conformance, and examples require to `v1.1.0`. In
-`docs/release-notes.md`, put the changes since the last release under a
-`## v1.1.0` heading. Commit the changes as `chore(release): v1.1.0`, open
-a pull request, and merge it to `main`. CI runs on the pull request, so
-it checks the User-Agent header with the new version.
+version that telemetry, conformance, conformance-telemetry, and examples
+require to `v1.1.0`. In `docs/release-notes.md`, put the changes since the
+last release under a `## v1.1.0` heading. Commit the changes as
+`chore(release): v1.1.0`, open a pull request, and merge it to `main`. CI
+runs on the pull request, so it checks the User-Agent header with the new
+version.
 
 Create the release soon after the merge. Until the `v1.1.0` tag exists,
 telemetry at `main` requires an SDK version that does not exist.

@@ -52,6 +52,7 @@ The repository holds several Go modules:
 | `telemetry/` | `telemetry` (published) | Observability plugin, built on the experimental plugin API; versions below v1 |
 | `analysis/` | `analysis` (published) | `durablelint` static analyzer for determinism rules; versions below v1 |
 | `conformance/` | `conformance` (internal) | Conformance test handlers for cross-SDK validation |
+| `conformance-telemetry/` | `conformance-telemetry` (internal) | Conformance test handlers for the Durable Execution Telemetry suite |
 | `examples/` | `examples` (internal) | Self-contained example Lambda functions |
 | `.github/scripts/release/` | `release` (internal) | Release tool; see [RELEASING.md](RELEASING.md) |
 
@@ -84,10 +85,11 @@ in the repository, but users cannot build it until the next SDK release.
 See [RELEASING.md](RELEASING.md).
 
 `analysis` does not depend on the root module. The internal modules
-(`conformance`, `examples`) have the same `require` and `replace` pair, and
-`prepare` sets their requirement too: `examples` depends on both the root
-module and `telemetry`, and Go requires it to record the same root version
-as `telemetry`. Nobody consumes the internal modules from outside, so they
+(`conformance`, `conformance-telemetry`, `examples`) have the same `require`
+and `replace` pair, and `prepare` sets their requirement too:
+`conformance-telemetry` and `examples` depend on both the root module and
+`telemetry`, and Go requires each to record the same root version as
+`telemetry`. Nobody consumes the internal modules from outside, so they
 are never released.
 
 The `consumable` job in CI builds a new module that imports every package
@@ -132,9 +134,9 @@ Or through the Makefile wrapper:
 make check-all
 ```
 
-Both run the following steps in each of the five modules (root/durable,
-telemetry, conformance, examples, analysis) and in the release tool's module
-(`.github/scripts/release`):
+Both run the following steps in each of the six modules (root/durable,
+telemetry, conformance, conformance-telemetry, examples, analysis) and in
+the release tool's module (`.github/scripts/release`):
 
 1. `go build ./...`
 2. `go vet ./...`
@@ -146,8 +148,8 @@ The examples module also runs `go vet -tags cloud ./cloud` to check the
 cloud test harness compiles, and its `readme` package compiles every Go
 code block of the root `README.md` against the checkout and runs the ones
 that declare tests. The analysis module also builds `durablelint`
-and runs it over the examples and conformance modules, which must report
-nothing. See [analysis/README.md](analysis/README.md) for the analyzer.
+and runs it over the examples, conformance, and conformance-telemetry
+modules, which must report nothing. See [analysis/README.md](analysis/README.md) for the analyzer.
 
 With no module argument, the script also runs the release tool's `check`
 and `consumer` commands, as the `release-tool` and `consumable` CI jobs do.

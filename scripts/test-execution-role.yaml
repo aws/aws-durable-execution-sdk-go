@@ -1,11 +1,14 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
   One-time setup: Lambda execution role for running this repository's cloud
-  test suites (the conformance suites under conformance/ and the example suite
-  under examples/) in your own AWS account. Deploy once with IAM-capable
-  credentials, then pass the RoleArn output as ExecutionRoleArn to every test
-  stack. The test stacks themselves never create IAM resources, so day-to-day
-  test runs need no IAM permissions.
+  test suites (the conformance suites under conformance/, the telemetry
+  conformance suite under conformance-telemetry/, and the example suite under
+  examples/) in your own AWS account. Deploy once with IAM-capable
+  credentials, then pass the RoleArn output to every test stack. The
+  conformance/ and examples/ templates take it as ExecutionRoleArn. The
+  conformance-telemetry/ template takes it as LambdaExecutionRoleArn. The test
+  stacks themselves never create IAM resources, so day-to-day test runs need
+  no IAM permissions.
 
     aws cloudformation deploy \
         --template-file test-execution-role.yaml \
@@ -22,8 +25,9 @@ Resources:
     Properties:
       Description: >-
         Execution role for aws-durable-execution-sdk cloud test suites.
-        Grants the union of what the conformance suites and the example suite
-        need. Intended for a dedicated test account.
+        Grants the union of what the conformance suites, the telemetry
+        conformance suite, and the example suite need. Intended for a
+        dedicated test account.
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -32,7 +36,9 @@ Resources:
               Service: lambda.amazonaws.com
             Action: sts:AssumeRole
       ManagedPolicyArns:
-        # CloudWatch Logs write access, so handler output is visible.
+        # CloudWatch Logs write access, so handler output is visible. The
+        # telemetry conformance handlers also use it to write telemetry
+        # records to their stack's log group.
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
       Policies:
         - PolicyName: DurableExecutionTestPolicy
@@ -71,5 +77,8 @@ Resources:
 
 Outputs:
   RoleArn:
-    Description: Pass this as ExecutionRoleArn when deploying the test stacks.
+    Description: >-
+      Pass this when deploying the test stacks, as ExecutionRoleArn to the
+      conformance/ and examples/ templates and as LambdaExecutionRoleArn to
+      the conformance-telemetry/ template.
     Value: !GetAtt TestExecutionRole.Arn

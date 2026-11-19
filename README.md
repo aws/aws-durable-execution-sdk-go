@@ -375,6 +375,74 @@ When the strategy stops, `Step` returns a `*durable.StepError` with the
 attempt count and the recorded `ErrorType` and `Message` of the last
 attempt.
 
+#### Pausing from a retry decision
+
+A retry decision can pause the durable execution, so an operator can check
+the cause of the failures before the step runs again.
+
+`RetryConfig.PauseEvery` pauses on every N-th attempt. With `PauseEvery: 5`
+the strategy pauses after attempts 5, 10, 15, and so on. The delay and the
+jitter of that retry stay the same. A custom strategy sets
+`RetryDecision.Pause` on any condition:
+
+```go
+type ThrottledError struct{}
+
+func (ThrottledError) Error() string { return "throttled" }
+
+func pausingHandler(ctx durable.Context, _ any) (string, error) {
+	everyFifth := durable.MustNewRetryStrategy(durable.RetryConfig{
+		MaxAttempts: 20,
+		PauseEvery:  5,
+	})
+	backoff := durable.ExponentialBackoff()
+	custom := func(a durable.RetryAttempt) durable.RetryDecision {
+		d := backoff(a)
+		var throttled ThrottledError
+		d.Pause = a.Attempt == 5 && errors.As(a.Err, &throttled)
+		return d
+	}
+	if _, err := durable.Step(ctx, "charge", func(durable.StepContext) (string, error) {
+		return "charged", nil
+	}, durable.WithRetry(everyFifth)); err != nil {
+		return "", err
+	}
+	return durable.Step(ctx, "notify", func(durable.StepContext) (string, error) {
+		return "notified", nil
+	}, durable.WithRetry(custom))
+}
+```
+
+A step pauses only when its function failed in the current invocation and
+the decision sets both `Retry` and `Pause`. The SDK records the retry as
+usual, calls the Lambda `PauseDurableExecution` API, and ends the
+invocation. It does not wait for the retry delay. Lambda does not invoke
+the function again until an operator calls `ResumeDurableExecution`. The
+next attempt then runs as usual. A pause does not change the attempt count,
+and the SDK ignores `Pause` when the decision does not retry.
+
+- Give the function's execution role `lambda:PauseDurableExecution` on its
+  own durable executions. If the function uses a customer managed AWS KMS
+  key, the role also needs `kms:Decrypt` on that key. See
+  [Pausing and resuming durable executions](https://docs.aws.amazon.com/lambda/latest/dg/durable-pause-resume.html).
+- When the pause call fails, the SDK logs a warning with the error and the
+  step retries as usual. A missing permission is one possible cause. A
+  custom `ExecutionClient` that does not implement `ExecutionPauser` also
+  retries as usual.
+- An attempt that an earlier invocation interrupted under
+  `AtMostOncePerRetry` does not pause.
+- The submitter of `WaitForCallback` runs as a step, so it pauses.
+  `durable.Retry` does not run as a step and ignores `Pause`.
+- Steps already running in other branches, such as `Parallel` or `Map`
+  items, finish their current attempt. The SDK sends no checkpoint after
+  the pause request, so an attempt that finishes after it runs again after
+  the resume.
+- The SDK does not validate `PauseEvery`. Zero never pauses.
+
+The local runner models the pause: `LocalRunner.Paused` reports it, `Run`
+and `RunUntilComplete` return `durabletest.ErrExecutionPaused` while it
+lasts, and `LocalRunner.ResumeExecution` ends it.
+
 `WithStepSubType` sets the subtype a step records in its checkpoints and
 reports to plugins, in place of `Step`, so the history can tell one kind
 of step from another. `WithCallbackSubType` does the same for a callback.

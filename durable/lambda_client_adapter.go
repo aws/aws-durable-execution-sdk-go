@@ -29,6 +29,7 @@ import (
 type lambdaDurableAPI interface {
 	GetDurableExecutionState(ctx context.Context, in *lambdaservice.GetDurableExecutionStateInput, opts ...func(*lambdaservice.Options)) (*lambdaservice.GetDurableExecutionStateOutput, error)
 	CheckpointDurableExecution(ctx context.Context, in *lambdaservice.CheckpointDurableExecutionInput, opts ...func(*lambdaservice.Options)) (*lambdaservice.CheckpointDurableExecutionOutput, error)
+	PauseDurableExecution(ctx context.Context, in *lambdaservice.PauseDurableExecutionInput, opts ...func(*lambdaservice.Options)) (*lambdaservice.PauseDurableExecutionOutput, error)
 }
 
 // lambdaExecutionClient adapts the AWS Lambda service client to
@@ -37,7 +38,10 @@ type lambdaExecutionClient struct {
 	api lambdaDurableAPI
 }
 
-var _ ExecutionClient = (*lambdaExecutionClient)(nil)
+var (
+	_ ExecutionClient = (*lambdaExecutionClient)(nil)
+	_ ExecutionPauser = (*lambdaExecutionClient)(nil)
+)
 
 // Request timeouts of the default client's HTTP client.
 const (
@@ -134,6 +138,21 @@ func (c *lambdaExecutionClient) Checkpoint(ctx context.Context, in CheckpointInp
 		out.NewExecutionState = operationsFromWire(wireOut.NewExecutionState.Operations)
 	}
 	return out, nil
+}
+
+// PauseExecution calls the Lambda PauseDurableExecution API. It leaves
+// ExecutionTimeoutPaused unset, so the API default applies. It returns the
+// service error unchanged; the step that asked for the pause logs it.
+func (c *lambdaExecutionClient) PauseExecution(ctx context.Context, in PauseExecutionInput) (PauseExecutionOutput, error) {
+	_, err := c.api.PauseDurableExecution(ctx, &lambdaservice.PauseDurableExecutionInput{
+		DurableExecutionArn: aws.String(in.ExecutionArn),
+		ClientToken:         aws.String(in.ClientToken),
+		Reason:              aws.String(in.Reason),
+	})
+	if err != nil {
+		return PauseExecutionOutput{}, err
+	}
+	return PauseExecutionOutput{}, nil
 }
 
 // updatesToWire converts operation updates to the generated wire type.

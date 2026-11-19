@@ -3,8 +3,10 @@ package telemetry
 import "encoding/json"
 
 // OperationSummary aggregates every occurrence of a given operation name
-// within a Record's Operations slice. Used by point-access stores
-// (CloudWatch Logs, DynamoDB) that cannot filter array elements by name.
+// within a Record's Operations slice. The CloudWatch Logs and Lambda log
+// exporters always render it. Other exporters render it when configured
+// with OperationsFormatByName or OperationsFormatBoth. DynamoDBExporter
+// does not render it: it writes the Operations array inside recordJson.
 type OperationSummary struct {
 	Type    string `json:"type"`
 	SubType string `json:"subType,omitempty"`
@@ -92,7 +94,22 @@ func GroupOperationsByName(ops []OperationRecord) map[string]OperationSummary {
 		lastByName[op.Name] = op
 	}
 
-	// Populate Error and Result only for names with a single occurrence.
+	// Error and Result are copied only for a name that occurred exactly once.
+	//
+	// A summary has one Error field and one Result field. A name that
+	// occurred more than once (for example a step called in a loop) has one
+	// error or result per occurrence. No single occurrence represents all of
+	// them. So for a repeated name both fields stay empty. Count,
+	// FailedCount, MaxAttempt, and the duration fields describe the
+	// occurrences instead. FailedCount > 0 still shows that one failed.
+	//
+	// The copy runs in this second pass because Count is final only after
+	// the first pass has seen every operation.
+	//
+	// Consequence for Truncate: removing one of two operations that share a
+	// name lowers Count to 1. The remaining operation's Error and Result
+	// then appear in the summary. So removing an operation can make the
+	// by-name rendering larger.
 	for name, agg := range result {
 		if agg.Count != 1 {
 			continue
