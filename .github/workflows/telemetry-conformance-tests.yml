@@ -4,8 +4,7 @@ name: Telemetry Conformance Tests
 
 on:
   pull_request:
-    # Include the parent PR branch while this change is stacked on PR #150. Remove that branch filter when retargeting this PR to main.
-    branches: [main, feat/conformance-tests-telemetry]
+    branches: [main]
     paths:
       - "durable/**"
       - "telemetry/**"
@@ -13,7 +12,6 @@ on:
       - "go.mod"
       - "go.sum"
       - ".github/workflows/telemetry-conformance-tests.yml"
-      - ".github/workflows/scripts/setup-go*.sh"
   push:
     branches: [main]
     paths:
@@ -23,7 +21,6 @@ on:
       - "go.mod"
       - "go.sum"
       - ".github/workflows/telemetry-conformance-tests.yml"
-      - ".github/workflows/scripts/setup-go*.sh"
   workflow_dispatch:
     inputs:
       aws_region:
@@ -64,8 +61,8 @@ jobs:
       aws_region: ${{ inputs.aws_region || 'us-west-2' }}
       runs_on: codebuild-github-actions-runner-${{ github.run_id }}-${{ github.run_attempt }}
       timeout_minutes: 30
-      setup_command: |
-        source "$SDK_CHECKOUT/.github/workflows/scripts/setup-go.sh"
+      # The shared workflow installs no Go toolchain. The commands below use the Go that
+      # the CodeBuild runner image provides.
       prepare_command: |
         cd "$SDK_CHECKOUT/conformance-telemetry"
         go vet ./...
