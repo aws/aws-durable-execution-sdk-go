@@ -343,7 +343,9 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 					liveInfo.StartTimestamp = op.startTimestamp
 					dispatchOperationStart(ec, liveInfo, PluginOperationStarted)
 					liveInfo.IsReplay = false
-					result, err := settleStepFailure[O](ec, id, name, options, &StepInterruptedError{Name: name}, nil, attempt)
+					// The body did not fail in this invocation, so the
+					// decision's Pause is ignored.
+					result, err := settleStepFailure[O](ec, id, name, options, &StepInterruptedError{Name: name}, nil, attempt, false)
 					if !errors.Is(err, errRetryScheduled) {
 						if err != nil && !errors.Is(err, errSuspendExecution) {
 							liveInfo.EndTimestamp = time.Now()
@@ -526,7 +528,7 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 				})
 			}
 		})
-		return settleStepFailure[O](ec, id, name, options, stepErr, stepTrace, attempt)
+		return settleStepFailure[O](ec, id, name, options, stepErr, stepTrace, attempt, true)
 	}
 
 	serialized, err := options.serdes.Marshal(ec.Context, ec.serdesCtx(id), result)
@@ -622,7 +624,13 @@ func failStep[O any](ec *execContext, id, name, subType string, cause error, tra
 // checkpoints the outcome: RETRY with a delay, then returns an error
 // matching errRetryScheduled, or FAIL when retries are exhausted. trace is the stack trace
 // captured where the step body failed; it is recorded with the failure.
-func settleStepFailure[O any](ec *execContext, id, name string, options stepOptions, cause error, trace []string, attempt int) (O, error) {
+//
+// mayPause reports whether the step body failed in this invocation. Only
+// then does a decision with Pause set pause the execution: after the RETRY
+// checkpoint returns, settleStepFailure asks the client to pause and, when
+// the request succeeds, ends the invocation with PENDING. See
+// pauseAfterRetry.
+func settleStepFailure[O any](ec *execContext, id, name string, options stepOptions, cause error, trace []string, attempt int, mayPause bool) (O, error) {
 	var zero O
 
 	decision := options.retry(RetryAttempt{Err: cause, Attempt: attempt})
@@ -651,6 +659,12 @@ func settleStepFailure[O any](ec *execContext, id, name string, options stepOpti
 			return zero, errSuspendExecution
 		}
 		return zero, err
+	}
+
+	// The RETRY is recorded, so the pause cannot take the place of this
+	// step's last saved checkpoint.
+	if mayPause && decision.Pause && pauseAfterRetry(ec, id, name, attempt) {
+		return zero, errSuspendExecution
 	}
 
 	// The service owns the retry timer and reports the step READY once

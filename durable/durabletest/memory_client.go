@@ -111,6 +111,13 @@ type memoryClient struct {
 	// terminal event stays last as it is in a cloud history. Nil when no
 	// such checkpoint has been made.
 	checkpointedEnd *checkpointedExecutionEnd
+
+	// paused is set while the execution is paused (see PauseExecution).
+	// pauseToken and pauseReason are the client token and the reason of
+	// the request that paused it.
+	paused      bool
+	pauseToken  string
+	pauseReason string
 }
 
 // checkpointedExecutionEnd is the terminal outcome a checkpoint on the
@@ -164,6 +171,9 @@ func (m *memoryClient) resetLocked() {
 	m.clock = time.Now().UTC()
 	m.changed = nil
 	m.tokenWithheld = false
+	m.paused = false
+	m.pauseToken = ""
+	m.pauseReason = ""
 	m.delivered = make(map[string]string)
 	m.settled = make(map[string]string)
 }
@@ -359,6 +369,13 @@ func (m *memoryClient) Checkpoint(_ context.Context, in durable.CheckpointInput)
 	out := durable.CheckpointOutput{
 		CheckpointToken:   m.token,
 		NewExecutionState: updated,
+	}
+	if m.paused {
+		// Once a pause takes effect, the service records the next
+		// checkpoint of the running invocation and answers it without a
+		// token.
+		out.CheckpointToken = ""
+		m.tokenWithheld = true
 	}
 	if m.omitTokenIn > 0 {
 		m.omitTokenIn--
