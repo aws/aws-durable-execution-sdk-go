@@ -27,6 +27,15 @@ PUBLISH_DIR="$SCRIPT_DIR/publish"
 cd "$SCRIPT_DIR"
 
 if [ $# -gt 0 ]; then
+    # A name given on the command line must be a handler. The loop below
+    # skips a directory that has no main.go, so a misspelled name would
+    # build nothing and still exit 0. So check every name before building.
+    for handler in "$@"; do
+        if [ ! -f "$handler/main.go" ]; then
+            echo "build.sh: no handler \"$handler\" (expected $handler/main.go)" >&2
+            exit 1
+        fi
+    done
     handlers=$*
 else
     handlers=$(find . -maxdepth 1 -mindepth 1 -type d \
