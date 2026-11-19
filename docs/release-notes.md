@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-### Changed: replayed operations dispatch each end once per execution
+### Changed: a replayed operation no longer dispatches an end on every invocation
 
 The plugin API is experimental, and this is a change to its replay
 behavior. It fixes issue #187.
@@ -12,9 +12,8 @@ Before, an operation replayed from a terminal checkpoint dispatched
 A replayed `Step` also dispatched `OnOperationStart`. So a plugin that
 counted ends counted each operation once per invocation.
 
-Now each operation's end is dispatched once per execution. The first
-invocation that observes the outcome dispatches it, with `IsReplay` false.
-This covers three cases:
+Now the first invocation that observes an operation's outcome dispatches
+its end, with `IsReplay` false. This covers three cases:
 
 1. The operation runs live. The end is dispatched after the terminal
    checkpoint is recorded, as before.
@@ -26,9 +25,18 @@ This covers three cases:
    reaches the operation. The end is dispatched when the handler reaches
    it.
 
-A later invocation that replays the operation dispatches no start and no
-end. This applies to every operation type, including `Map` and `Parallel`
-items. An abandoned `Map` or `Parallel` item dispatches no end on replay.
+A later invocation that replays the operation dispatches no start. It
+dispatches no end either, unless it lists the operation in
+`UpdatedOperations` again. This applies to every operation type, including
+`Map` and `Parallel` items. An abandoned `Map` or `Parallel` item
+dispatches no end on replay.
+
+An end can repeat when an invocation fails and is retried. The retry can
+list in `UpdatedOperations` an operation whose end the failed invocation
+dispatched. The retry then dispatches that end again, with `IsReplay`
+false. A `Step` is the exception: a `Step` replayed from a terminal
+checkpoint dispatches no end. A plugin that must act once per operation
+deduplicates on the operation ID.
 
 If the handler does not reach an operation in the invocation that first
 observes its outcome, no end is dispatched for that operation. A plugin

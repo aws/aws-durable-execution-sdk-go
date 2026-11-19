@@ -162,14 +162,10 @@ func nestedChildHandlers(rec *opRecorder) map[string]func(context.Context, []byt
 // updated makes the replay the first to observe the outcome, so the outer
 // context dispatches one end with IsReplay false.
 //
-// Replay of a partially settled tree: the re-entered levels dispatch
-// replayed starts and live ends. The settled inner level dispatches no
-// hook.
-//
 // Replay of a partially settled tree: the outer and middle contexts are
 // STARTED and the inner context is SUCCEEDED. The outer and middle
-// contexts re-enter with replayed starts, the inner context dispatches a
-// replayed end, and the outer and middle contexts complete live.
+// contexts re-enter with replayed starts and complete live. The settled
+// inner context dispatches no hook.
 func TestOperationLifecycleChildContextThreeLevelTree(t *testing.T) {
 	for variant := range nestedChildHandlers(&opRecorder{}) {
 		t.Run(variant, func(t *testing.T) {

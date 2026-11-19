@@ -200,9 +200,9 @@ type Plugin struct {
 	// terminal status: Succeeded, Failed, TimedOut, Stopped, or
 	// Cancelled. Each operation dispatches at most one end per
 	// invocation, after OnOperationAttemptEnd of its final attempt and,
-	// for a context operation, after its body has returned. Each
-	// operation's end is dispatched once per execution, by the first
-	// invocation that observes its outcome, with IsReplay false:
+	// for a context operation, after its body has returned. The first
+	// invocation that observes an operation's outcome dispatches its end,
+	// with IsReplay false:
 	//
 	//   - A live operation dispatches its end after its terminal
 	//     checkpoint is recorded.
@@ -213,8 +213,18 @@ type Plugin struct {
 	//     [InvocationHookInfo].UpdatedOperations. When the handler reaches
 	//     the operation in that invocation, the end is dispatched with
 	//     the checkpointed timestamps, result, and error.
-	//   - A later invocation that replays the operation dispatches no end,
-	//     because an earlier invocation dispatched it.
+	//   - A later invocation that does not list the operation in
+	//     UpdatedOperations dispatches no end when it replays the
+	//     operation.
+	//
+	// An end can repeat. When an invocation fails and is retried, the
+	// retry can list in UpdatedOperations an operation whose end the
+	// failed invocation dispatched. The retry then dispatches that end
+	// again when the handler reaches the operation, with IsReplay false
+	// and the same timestamps, result, and error. A [Step] is the
+	// exception: it dispatches no end on replay, as described below. So a
+	// plugin that must act once per operation deduplicates on
+	// [OperationHookInfo].ID.
 	//
 	// An outcome that the handler does not reach in the invocation that
 	// first observes it dispatches no end. A plugin reads it from
@@ -1031,9 +1041,9 @@ func notifyOperationEnd(d *pluginDispatcher, ctx context.Context, info Operation
 // which ec replays from a terminal checkpoint. info describes the
 // operation with its checkpointed timestamps, result, and error.
 //
-// An end must reach a plugin once per execution. The invocation that first
-// observes the outcome dispatches it. executionState.newOutcome reports
-// whether this invocation is that invocation:
+// The invocation that first observes an outcome dispatches the end.
+// executionState.newOutcome reports whether this invocation observes the
+// outcome as new:
 //
 //   - The invocation payload lists the operation among the operations
 //     updated since the previous invocation. So the outcome was recorded
@@ -1047,6 +1057,11 @@ func notifyOperationEnd(d *pluginDispatcher, ctx context.Context, info Operation
 // earlier invocation observed the outcome and dispatched the end. So no end
 // is dispatched. The operation completed Debug record is still written, as
 // a replayed record.
+//
+// The SDK keeps no record across invocations of the ends it dispatched.
+// So when the retry of a failed invocation lists an operation as updated
+// again, the retry dispatches its end again. OnOperationEnd documents
+// this repeat.
 func dispatchReplayedEnd(ec *execContext, id string, info OperationHookInfo, status PluginOperationStatus) {
 	dispatchReplayedEndTo(ec.operationHooks(), ec, id, info, status)
 }
