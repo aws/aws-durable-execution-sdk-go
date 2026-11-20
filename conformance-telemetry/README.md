@@ -71,18 +71,18 @@ durable-execution-conformance \
 
 ## CI
 
-[`.github/workflows/telemetry-conformance-tests.yml:5–75`](../.github/workflows/telemetry-conformance-tests.yml#L5-L75)
+[`.github/workflows/telemetry-conformance-tests.yml`](../.github/workflows/telemetry-conformance-tests.yml)
 runs on pull requests and pushes to `main` that touch the SDK, the telemetry
 module, this module, or related CI and dependency files. It also supports
 manual dispatch.
 
 It calls the conformance repository's reusable telemetry workflow at a pinned
-SHA. `sdk_ref` selects the PR head commit, and `examples_dir` points to this
-module. The reusable workflow installs no Go toolchain. CI uses the Go that the
-CodeBuild runner image provides. CI vets the module and builds the handlers
-with `build.sh`, because SAM's makefile build only copies the built
-`bootstrap` binary. CI then deploys the template and validates the `telemetry`
-suite.
+SHA. For a pull request, `sdk_ref` selects the merge commit of the PR head into
+`main`. `examples_dir` points to this module. The reusable workflow installs no
+Go toolchain. CI uses the Go that the CodeBuild runner image provides. CI prints
+the Go version, vets the module, and builds the handlers with `build.sh`,
+because SAM's makefile build only copies the built `bootstrap` binary. CI then
+deploys the template and validates the `telemetry` suite.
 Reports and execution histories are uploaded as artifacts.
 
 CI assumes AWS credentials through OIDC using the repository's existing test
