@@ -98,6 +98,8 @@ EXAMPLES="
   map-virtual-context
   map-custom-summary-generator-replay
   map-flat-summarized-replay
+  map-serdes
+  map-completion-policy
   parallel-basic
   parallel-empty
   parallel-invoke
