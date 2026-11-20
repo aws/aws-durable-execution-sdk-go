@@ -4,9 +4,7 @@ name: Telemetry Conformance Tests
 
 on:
   pull_request:
-    # Include the parent PR branches while these changes are stacked. feat/conformance-tests-telemetry is the branch of PR #150.
-    # ci/telemetry-conformance-workflow is the branch of PR #151. Remove each branch filter when its child PR is retargeted to main.
-    branches: [main, feat/conformance-tests-telemetry, ci/telemetry-conformance-workflow]
+    branches: [main]
     paths:
       - "durable/**"
       - "telemetry/**"
@@ -14,7 +12,6 @@ on:
       - "go.mod"
       - "go.sum"
       - ".github/workflows/telemetry-conformance-tests.yml"
-      - ".github/workflows/scripts/setup-go*.sh"
   push:
     branches: [main]
     paths:
@@ -24,7 +21,6 @@ on:
       - "go.mod"
       - "go.sum"
       - ".github/workflows/telemetry-conformance-tests.yml"
-      - ".github/workflows/scripts/setup-go*.sh"
   workflow_dispatch:
     inputs:
       aws_region:
@@ -37,6 +33,15 @@ on:
         required: false
         type: string
         default: ""
+
+# The shared job deploys one persistent stack per prefix and region, and it queues every run.
+# Without this group, each push to a branch queues another full cloud run.
+# The group keeps one running and one pending run per branch. A newer run replaces the pending one.
+# The shared workflow recovers only a stack in ROLLBACK_COMPLETE. Cancelling a run during a
+# deploy can leave the stack in another state. So a running run is never cancelled.
+concurrency:
+  group: telemetry-conformance-${{ github.head_ref || github.ref }}
+  cancel-in-progress: false
 
 permissions: {}
 
@@ -57,17 +62,21 @@ jobs:
       language: go
       resource_prefix: go
       sdk_repository: aws/aws-durable-execution-sdk-go
-      sdk_ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      # For a pull request, github.sha is the merge commit of the PR head into main.
+      # So the job tests the merge result, as conformance-tests.yml does.
+      sdk_ref: ${{ github.sha }}
       # Path relative to the conformance workspace, where this repo is checked out at .build/durable-sdk.
       examples_dir: .build/durable-sdk/conformance-telemetry
       conformance_test_ref: ${{ inputs.conformance_test_ref }}
       aws_region: ${{ inputs.aws_region || 'us-west-2' }}
       runs_on: codebuild-github-actions-runner-${{ github.run_id }}-${{ github.run_attempt }}
       timeout_minutes: 30
-      setup_command: |
-        source "$SDK_CHECKOUT/.github/workflows/scripts/setup-go.sh"
+      # The shared workflow installs no Go toolchain. The commands below use the Go that
+      # the CodeBuild runner image provides.
       prepare_command: |
         cd "$SDK_CHECKOUT/conformance-telemetry"
+        # The log records the Go version, so an image change that breaks the build is visible.
+        go version
         go vet ./...
         # SAM builds the provided.al2023 function with BuildMethod: makefile. The Makefile only copies
         # publish/<handler>/bootstrap, so the binary must exist before the runner calls sam build.
