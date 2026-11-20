@@ -2,7 +2,10 @@
 
 ## Unreleased
 
-### Added: pause the execution from a retry decision
+### Added: pause the execution from a retry decision (experimental)
+
+The step pause API is experimental. It may be changed or removed in a
+future release.
 
 - `RetryDecision.Pause` asks the SDK to pause the durable execution after
   it records the retry. A step pauses only when its function failed in the
