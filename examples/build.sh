@@ -135,6 +135,8 @@ EXAMPLES="
   logger-exactly-once
   logger-log-levels
   logger-slog-handler
+  logger-replay-mode
+  error-stack-traces
   plugin-lifecycle
   telemetry-exporter
   serde-basic
