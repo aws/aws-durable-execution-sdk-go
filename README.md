@@ -375,10 +375,11 @@ When the strategy stops, `Step` returns a `*durable.StepError` with the
 attempt count and the recorded `ErrorType` and `Message` of the last
 attempt.
 
-#### Pausing from a retry decision
+#### Pausing from a retry decision (experimental)
 
 A retry decision can pause the durable execution, so an operator can check
-the cause of the failures before the step runs again.
+the cause of the failures before the step runs again. This feature is
+experimental and may be changed or removed in future releases.
 
 `RetryConfig.PauseEvery` pauses on every N-th attempt. With `PauseEvery: 5`
 the strategy pauses after attempts 5, 10, 15, and so on. The delay and the
@@ -1341,13 +1342,18 @@ later v1 release. A minor release may add fields to exported structs, so
 construct structs with keyed fields, as the
 [Go 1 compatibility promise](https://go.dev/doc/go1compat) advises.
 
-The [plugin API](#plugin-api) is the one exception. It is experimental,
-and any part of it may change or be removed in a minor release. It
-comprises `durable.Plugin`, `durable.PluginFactory`,
-`durable.PluginFactoryFunc`, `durable.WithPlugins`,
+The [plugin API](#plugin-api) and the
+[step pause API](#pausing-from-a-retry-decision-experimental) are the two
+exceptions. Each is experimental, and any part of it may change or be
+removed in a minor release. The plugin API comprises `durable.Plugin`,
+`durable.PluginFactory`, `durable.PluginFactoryFunc`, `durable.WithPlugins`,
 `durable.WithPluginChildOperationsDepth`, the hook info types, and the
-plugin status and outcome types and constants. Each of these carries an
-`EXPERIMENTAL` marker in its documentation.
+plugin status and outcome types and constants. The step pause API
+comprises `durable.RetryDecision.Pause`, `durable.RetryConfig.PauseEvery`,
+`durable.ExecutionPauser`, `durable.PauseExecutionInput`,
+`durable.PauseExecutionOutput`, and the `durabletest.LocalRunner` pause
+methods. Each of these carries an `EXPERIMENTAL` marker in its
+documentation.
 
 The telemetry and analysis modules stay below v1. So any release of either
 module may make incompatible changes, and for telemetry that includes its

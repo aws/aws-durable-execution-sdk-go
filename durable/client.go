@@ -37,6 +37,9 @@ type ExecutionClient interface {
 // so an ExecutionClient without it still compiles, and its steps retry
 // without pausing. The default client implements it with the Lambda
 // PauseDurableExecution API.
+//
+// EXPERIMENTAL: this interface is experimental and may be changed or
+// removed in future releases.
 type ExecutionPauser interface {
 	// PauseExecution asks the backend to pause the execution. The pause
 	// takes effect asynchronously: a nil error means the backend accepted
@@ -45,6 +48,9 @@ type ExecutionPauser interface {
 }
 
 // PauseExecutionInput requests a pause of a durable execution.
+//
+// EXPERIMENTAL: this type is experimental and may be changed or
+// removed in future releases.
 type PauseExecutionInput struct {
 	// ExecutionArn identifies the durable execution.
 	ExecutionArn string
@@ -61,6 +67,9 @@ type PauseExecutionInput struct {
 
 // PauseExecutionOutput is the result of a successful pause request. It
 // has no fields.
+//
+// EXPERIMENTAL: this type is experimental and may be changed or
+// removed in future releases.
 type PauseExecutionOutput struct{}
 
 // GetExecutionStateInput requests one page of an execution's checkpointed
