@@ -1,0 +1,32 @@
+[
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "request-quote",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "WAIT",
+    "subType": "Wait",
+    "name": "quote-backoff-1",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "request-quote",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "WAIT",
+    "subType": "Wait",
+    "name": "quote-backoff-2",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "request-quote",
+    "status": "SUCCEEDED"
+  }
+]
