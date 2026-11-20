@@ -286,7 +286,7 @@ var expectations = map[string]expectation{
 	"create-callback-failures":       {result: `{"success":false,"error":"durable: callback \"failing-operation\" failed: CallbackError: external system failed"}`},
 	"create-callback-heartbeat":      {result: `{"longTaskResult":"long-task-done"}`},
 	"create-callback-mixed-ops":      {result: `{"stepResult":{"userId":123,"name":"John Doe"},"callbackResult":"processed","completed":true}`},
-	"create-callback-serdes":         {result: `{"receivedData":{"id":99,"message":"custom serialized data","timestamp":"2026-07-01T12:00:00Z"}}`},
+	"create-callback-serdes":         {result: `{"receivedData":{"id":99,"message":"CUSTOM SERIALIZED DATA","timestamp":"2026-07-01T12:00:00Z"}}`},
 	"create-callback-simple":         {result: `{"value":"hello from external"}`},
 	"create-callback-timeout":        {result: `{"timedOut":true,"error":"durable: callback \"timeout-callback\" failed: Callback.Timeout: Callback timed out"}`},
 
