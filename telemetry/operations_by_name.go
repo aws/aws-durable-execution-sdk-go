@@ -3,10 +3,9 @@ package telemetry
 import "encoding/json"
 
 // OperationSummary aggregates every occurrence of a given operation name
-// within a Record's Operations slice. The CloudWatch Logs and Lambda log
-// exporters always render it. Other exporters render it when configured
-// with OperationsFormatByName or OperationsFormatBoth. DynamoDBExporter
-// does not render it: it writes the Operations array inside recordJson.
+// within a Record's Operations slice. The CloudWatch Logs, Lambda log, and
+// DynamoDB exporters always render it. Other exporters render it when
+// configured with OperationsFormatByName or OperationsFormatBoth.
 type OperationSummary struct {
 	Type    string `json:"type"`
 	SubType string `json:"subType,omitempty"`
