@@ -46,16 +46,16 @@ jobs:
       group: go-cloud-tests
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v6.0.0
         with:
           go-version-file: go.mod
           cache-dependency-path: examples/go.sum
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@517a711dbcd0e402f90c77e7e2f81e849156e31d # v6.2.2
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: "${{ secrets.TEST_ROLE_ARN }}"
           role-session-name: goExamplesGitHubCloudTest
@@ -73,7 +73,7 @@ jobs:
           echo "Using AWS test account $ACTUAL_ACCOUNT_ID"
 
       - name: Setup SAM CLI
-        uses: aws-actions/setup-sam@89ddb14d60e682855e3fea4be85b3c56485de310 # v3
+        uses: aws-actions/setup-sam@341eee193f458fa5aae5d52c94b0c5cf3a1c5a52 # v3
 
       - name: Build examples
         working-directory: examples
