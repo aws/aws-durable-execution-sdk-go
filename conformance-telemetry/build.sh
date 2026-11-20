@@ -14,6 +14,9 @@
 #
 # Handlers (default: every directory here that contains a main.go):
 #   telemetry_1_success
+#   telemetry_2_failure
+#   telemetry_3_result_select
+#   telemetry_4_full_tree_map
 #
 # Examples:
 #   ./build.sh telemetry_1_success
