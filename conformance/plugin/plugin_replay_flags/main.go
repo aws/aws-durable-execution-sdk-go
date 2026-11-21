@@ -11,12 +11,12 @@
 // before it settled, such as one whose retry is due, reports its
 // checkpointed non-terminal status with IsReplay true and is emitted.
 //
-// The op field of each record is OperationHookInfo.ID. The Go SDK fills it
-// with the operation's positional id (for example 1 or 1-1), while the
-// execution history and the ParentID field carry the checkpointed
-// operation id. The runner compares op against the history id, so the
-// requirement is registered as not implemented in template_plugin.yaml
-// until the two ids agree.
+// The requirement expects the SDK itself to dispatch no hook for a step
+// that is already terminal. The Go SDK dispatches the pair described
+// above, and only the filter in this plugin keeps the pair out of the
+// records. So the records would satisfy the requirement without the SDK
+// meeting it, and the requirement is registered as not implemented in
+// template_plugin.yaml until the SDK stops dispatching the pair.
 package main
 
 import (

@@ -21,6 +21,7 @@ func TestHandler(t *testing.T) {
 
 	recs := records()
 	plugintest.ExpectAllStamped(t, recs)
+	plugintest.ExpectCheckpointedIDs(t, recs, result, "op", "parent")
 	// The child context ends with no parent; the step ends with a parent.
 	plugintest.ExpectCount(t, recs, map[string]any{"plugin": "CONFPLUGIN", "hook": "operation-end", "parent": "NONE", "status": "SUCCEEDED"}, 1)
 	plugintest.ExpectCount(t, recs, map[string]any{"plugin": "CONFPLUGIN", "hook": "operation-end", "status": "SUCCEEDED"}, 2)

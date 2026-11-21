@@ -56,13 +56,6 @@ type ErrorRecord struct {
 	StackTrace string `json:"stackTrace,omitempty"`
 }
 
-// ContentField holds a content value that may have been truncated to fit
-// size constraints.
-type ContentField struct {
-	Value     string `json:"value"`
-	Truncated bool   `json:"truncated,omitempty"`
-}
-
 // OperationRecord describes a single durable operation within a Record.
 type OperationRecord struct {
 	ID       string `json:"id"`
@@ -80,9 +73,15 @@ type OperationRecord struct {
 
 	Attempt int `json:"attempt,omitempty"`
 
-	Result *ContentField `json:"result,omitempty"`
-	Error  *ErrorRecord  `json:"error,omitempty"`
-	Input  *ContentField `json:"input,omitempty"`
+	// Result is the operation's result as a JSON value. A result is
+	// recorded only through an OperationOverride.Result transform. The
+	// transform receives the checkpointed wire text decoded as JSON, or
+	// the text as a string when it is not valid JSON. Its return value is
+	// marshaled again. So the recorded text has no whitespace and has
+	// sorted object keys, even when the transform returns its argument.
+	// See ContentConfig.
+	Result json.RawMessage `json:"result,omitempty"`
+	Error  *ErrorRecord    `json:"error,omitempty"`
 
 	// Truncated indicates this operation's result was dropped due to
 	// size constraints (see Truncate).
@@ -120,9 +119,13 @@ type Record struct {
 
 	Operations []OperationRecord `json:"operations"`
 
-	Error  *ErrorRecord  `json:"error,omitempty"`
-	Input  *ContentField `json:"input,omitempty"`
-	Output *ContentField `json:"output,omitempty"`
+	Error *ErrorRecord `json:"error,omitempty"`
+
+	// Input and Output are the execution input and result as JSON values,
+	// marshaled once from the handler's typed values. A Go string is a
+	// JSON string. See ContentConfig.
+	Input  json.RawMessage `json:"input,omitempty"`
+	Output json.RawMessage `json:"output,omitempty"`
 
 	Custom map[string]any `json:"custom,omitempty"`
 
@@ -164,9 +167,14 @@ func formatOptionalTimestamp(t *time.Time) *string {
 // replace the time values in the output. The Go field types stay
 // time.Time, and json.Unmarshal into Record still works because time.Time
 // parses the three-digit form.
+//
+// The method writes <, > and & literally. A caller's own json.Marshal
+// call on a Record escapes them as \u003c, \u003e and \u0026, because
+// json.Marshal escapes the bytes a json.Marshaler returns. To keep them
+// literal, use RenderRecord or a json.Encoder with SetEscapeHTML(false).
 func (r Record) MarshalJSON() ([]byte, error) {
 	type alias Record
-	return json.Marshal(struct {
+	return marshalNoHTMLEscape(struct {
 		alias
 		StartTime *string `json:"startTime,omitempty"`
 		EndTime   *string `json:"endTime,omitempty"`
@@ -183,7 +191,7 @@ func (r Record) MarshalJSON() ([]byte, error) {
 // Record.MarshalJSON for the mechanism.
 func (o OperationRecord) MarshalJSON() ([]byte, error) {
 	type alias OperationRecord
-	return json.Marshal(struct {
+	return marshalNoHTMLEscape(struct {
 		alias
 		StartTime *string `json:"startTime,omitempty"`
 		EndTime   *string `json:"endTime,omitempty"`

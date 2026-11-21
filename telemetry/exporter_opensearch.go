@@ -3,7 +3,6 @@ package telemetry
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -60,7 +59,7 @@ func (e *OpenSearchExporter) Export(ctx context.Context, record Record) error {
 		indexName = "durable-execution-telemetry"
 	}
 
-	body, err := json.Marshal(record)
+	body, err := marshalNoHTMLEscape(record)
 	if err != nil {
 		return fmt.Errorf("telemetry.OpenSearchExporter: marshaling record: %w", err)
 	}

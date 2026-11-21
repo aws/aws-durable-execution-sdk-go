@@ -2,7 +2,6 @@ package telemetry
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strconv"
 
@@ -102,7 +101,7 @@ func (e *DynamoDBExporter) Export(ctx context.Context, record Record) error {
 	item["emittedAt"] = &ddbtypes.AttributeValueMemberS{Value: formatTimestamp(record.EmittedAt)}
 
 	// Full record as JSON for downstream consumers.
-	recordJSON, err := json.Marshal(record)
+	recordJSON, err := marshalNoHTMLEscape(record)
 	if err != nil {
 		return fmt.Errorf("telemetry.DynamoDBExporter: marshaling record: %w", err)
 	}

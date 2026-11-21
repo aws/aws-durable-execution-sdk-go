@@ -2,6 +2,183 @@
 
 ## Unreleased
 
+### Added: pause the execution from a retry decision (experimental)
+
+The step pause API is experimental. It may be changed or removed in a
+future release.
+
+- `RetryDecision.Pause` asks the SDK to pause the durable execution after
+  it records the retry. A step pauses only when its function failed in the
+  current invocation and the decision also sets `Retry`. The SDK calls the
+  Lambda `PauseDurableExecution` API and ends the invocation with PENDING.
+  The next attempt runs after `ResumeDurableExecution`.
+- `RetryConfig.PauseEvery` makes `NewRetryStrategy` pause on every N-th
+  attempt. The delay and the jitter do not change.
+- `ExecutionPauser` is an optional interface for an `ExecutionClient`. The
+  default client implements it. A client without it retries as usual.
+- The execution role needs `lambda:PauseDurableExecution` on its own
+  durable executions. A failed pause call logs a warning, and the step
+  retries as usual.
+- `durabletest.LocalRunner` gains `Paused`, `ResumeExecution` and
+  `ErrExecutionPaused`.
+- The `github.com/aws/aws-sdk-go-v2/service/lambda` requirement goes from
+  v1.99.0 to v1.117.0, the first version with `PauseDurableExecution`.
+- The module also moves `github.com/aws/aws-sdk-go-v2` from v1.42.1 to
+  v1.48.0 and `github.com/aws/smithy-go` from v1.27.3 to v1.28.9.
+
+### Changed: LambdaLog and CloudWatch Logs exporters emit operationsByName
+
+The telemetry record schema is experimental, and this is a change to it. The
+change aligns the Go exporters with the JavaScript, Python, and Java
+exporters and with the `telemetry-1` conformance test.
+
+- `LambdaLogExporter` and `CloudWatchLogsExporter` now render each record
+  with `OperationsFormatByName`. The JSON carries `operationsByName` and no
+  `operations` array. Before, both exporters sent the plain `json.Marshal`
+  form, which carries `operations` and no `operationsByName`.
+- `LambdaLogExporter` is the default exporter. So a plugin configured
+  without `Exporters` also changes shape.
+- Neither exporter has an `OperationsFormat` field. The format is fixed.
+- Both exporters now implement `RenderingSizeLimiter`. So the size limit is
+  checked against the `operationsByName` rendering, which is the form that
+  is sent. For `LambdaLogExporter`, the checked form includes the newline
+  that ends the line.
+
+Logs Insights queries that read `operations` must read
+`operationsByName.<name>` instead. For example, `operationsByName.charge.status`
+replaces a filter on the `operations` element whose `name` is `charge`. A
+custom exporter that needs the array form can call
+`RenderRecord(record, OperationsFormatArray)`.
+
+### Fixed: Truncate no longer skips a smaller drop count that fits
+
+`Truncate` drops whole operations, oldest first, when a record is over an
+exporter's size limit. It chose the number to drop with a binary search.
+A binary search is correct only when every dropped operation makes the
+rendered record smaller.
+
+That is not true for the `operationsByName` rendering. An entry there
+carries `error` and `result` only when its name occurs once. So dropping
+one of two operations that share a name makes the other operation's
+`error` and `result` appear, and the rendered record can grow. `Truncate`
+could then drop more operations than the limit required.
+
+`Truncate` now chooses the number in three parts. A binary search finds a
+number that fits. Then `Truncate` renders the record at the number just
+below each point where a name drops to one occurrence and that occurrence
+has an `error` or a `result`. If any of those fits, a second binary search
+runs inside the range that ends at the lowest one that fits. This affects
+every exporter that renders `OperationsFormatByName` or
+`OperationsFormatBoth`.
+
+The result is the smallest number that fits, with one exception. Near the
+limit, one more dropped operation can add a few bytes, because
+`droppedOperations` or a name's `minDurationMs` gains a digit. `Truncate`
+can then drop more operations than needed.
+
+The cost is two binary searches plus one render per such point. A record
+with unique names needs only the binary search. In the worst case every
+name occurs exactly twice and the newer occurrence has an `error`. Then the
+cost is one render per name, so the total cost grows quadratically with the
+number of operations.
+
+### Fixed: attempt-end hooks report the attempt's end time
+
+`durable.AttemptEndHookInfo.EndTimestamp` was always zero. The SDK copied
+the attempt-start info into every attempt-end info and never set the end
+time. `OnOperationAttemptEnd` now carries the time the attempt body and the
+`WrapOperationAttemptFn` hooks around it returned. This applies to `Step`
+attempts and `WaitForCondition` checks, for every outcome.
+
+The time comes from the SDK's clock, as `StartTimestamp` does, so
+`EndTimestamp - StartTimestamp` is the time the attempt ran. A succeeded
+attempt's end time is earlier than the hook call, because the hook fires
+after the result is checkpointed and the checkpoint is not part of the
+attempt. `OnOperationEnd` still reports when the operation reached its
+terminal status.
+
+### Changed: telemetry records keep `<`, `>` and `&` literal
+
+Telemetry records no longer HTML-escape `<`, `>` and `&`. Before, every
+exporter and `RenderRecord` wrote them as `\u003c`, `\u003e` and `\u0026`
+in the input, the output, operation results, and error messages. Now the
+record carries the characters literally, as stored checkpoints do. So a
+text search for one of these characters, for example in CloudWatch Logs
+Insights, matches the record.
+
+Both forms are valid JSON and decode to the same value, so a JSON parser
+reads old and new records alike. A reader that searches the record text
+for an escape such as `\u003c` must search for the character instead.
+
+Calling `json.Marshal` on a `Record` yourself still escapes the
+characters. Use `RenderRecord`, or a `json.Encoder` with
+`SetEscapeHTML(false)`.
+
+A value returned by a transform is marshaled again, which removes
+whitespace and sorts object keys. So an operation result can differ from
+the checkpointed text in key order, even when the transform returns its
+argument.
+
+### Changed: telemetry content fields are JSON values, and ContentConfig is per-value
+
+The telemetry record schema and the `ContentConfig` API are experimental, and
+this is a change to both. The record change is required by the `telemetry-1`
+conformance test, which expects `input` and `output` as JSON values.
+
+Record:
+
+- `Record.Input`, `Record.Output`, and `OperationRecord.Result` are now
+  `json.RawMessage`. Before, each was a `*ContentField` and the JSON output
+  was a `{"value": "<text>", "truncated": bool}` wrapper around the content
+  as a string. Now the JSON output is the content value itself: an object,
+  array, string, number, boolean, or null.
+- `ContentField` is removed.
+- `OperationRecord.Input` is removed. Nothing assigned it.
+- Input and output are marshaled once from the handler's typed values. A Go
+  `string` is a JSON string. Before, a Go `string` was stored as its raw
+  text.
+- An operation result is recorded only for operations named by an
+  `OperationOverride` that sets `Result`. Records emitted with the default
+  configuration no longer carry `result` on operations or on
+  `operationsByName` entries.
+- `OperationSummary.Result` is now `json.RawMessage`, so `operationsByName`
+  carries the same value shape.
+
+`ContentConfig`:
+
+- The five `Include*` booleans, `OperationFilter`, `Redactor`,
+  `MaxContentLength`, and `DefaultContentConfig()` are removed. The zero
+  value of `ContentConfig` is now the default: input and output included
+  unchanged, operation results omitted, operation and execution errors
+  included. There is no all-or-nothing zero-value detection any more; each
+  field changes one thing.
+- `ExcludeInput` and `ExcludeOutput` omit the execution input and output.
+- `InputTransform` and `OutputTransform` receive the value decoded as JSON
+  (`map[string]any`, `[]any`, `string`, `json.Number`, `bool`, or `nil`) and
+  return the value to record. Use them to delete or mask fields by key.
+  Numbers are `json.Number`, not `float64`, so an integer above 2^53 keeps
+  its exact digits through the transform.
+  Before, `Redactor` received the serialized text of every content field
+  and returned text.
+- `Operations.Overrides` is a list of `OperationOverride{OperationName,
+  Exclude, Result}`. `Exclude` drops the operation; `Result` opts its result
+  in through a transform. When several entries share a name, the last one
+  wins. Before, `OperationFilter` received each `OperationRecord` and
+  `IncludeOperationResults` switched every result on or off at once.
+- `Operations.ExcludeErrors` omits operation errors. The execution-level
+  error is always recorded. Before, `IncludeOperationErrors` and
+  `IncludeExecutionError` controlled them separately.
+- A transform that panics, or returns a value that cannot be marshaled,
+  omits the field. The untransformed value is never recorded in its place.
+- There is no per-field length cap. An exporter that implements
+  `SizeLimiter` bounds the whole record, dropping operation results, then
+  operations, then input, then output.
+
+Readers that select `input.value`, `output.value`, or `result.value` must
+select `input`, `output`, or `result` instead. Readers that relied on
+`result` being present by default must add an `OperationOverride` with a
+`Result` transform for each operation name they need.
+
 ### Changed: telemetry record identity and timestamp keys
 
 The telemetry record schema is experimental, and this is a change to it. The
@@ -40,6 +217,15 @@ exporters and with the `telemetry-1` conformance test.
 Readers of the JSON record or of the DynamoDB item that select on
 `startTimestamp` or `endTimestamp` must select on `startTime` or `endTime`
 instead.
+
+### Fixed: live step end hook carries the result
+
+The plugin instrumentation API is experimental, and this is a fix to it.
+`durable.OperationHookInfo.Result` on `OnOperationEnd` was empty when a step
+succeeded in the current invocation. Only the replayed end of a checkpointed
+step carried it. The field doc states that `Result` is set on the end of every
+succeeded operation. The live end now carries the checkpointed serialized
+result, the same value the replayed end reports.
 
 ### Changed: operation hooks report the wire ID
 

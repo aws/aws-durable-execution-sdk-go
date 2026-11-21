@@ -3,16 +3,32 @@
     "type": "CONTEXT",
     "subType": "WaitForCallback",
     "name": "approval-1",
-    "status": "FAILED"
+    "status": "SUCCEEDED"
   },
   {
     "type": "CALLBACK",
     "subType": "Callback",
-    "status": "STARTED"
+    "status": "SUCCEEDED"
   },
   {
     "type": "STEP",
     "subType": "Step",
-    "status": "FAILED"
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "WaitForCallback",
+    "name": "approval-2",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CALLBACK",
+    "subType": "Callback",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "status": "SUCCEEDED"
   }
 ]

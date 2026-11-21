@@ -1,0 +1,87 @@
+name: Telemetry Conformance Tests
+
+# SDK handlers and builds live here. The shared workflow deploys and validates them.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "durable/**"
+      - "telemetry/**"
+      - "conformance-telemetry/**"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/telemetry-conformance-tests.yml"
+  push:
+    branches: [main]
+    paths:
+      - "durable/**"
+      - "telemetry/**"
+      - "conformance-telemetry/**"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/telemetry-conformance-tests.yml"
+  workflow_dispatch:
+    inputs:
+      aws_region:
+        description: AWS region
+        required: true
+        default: us-west-2
+        type: string
+      conformance_test_ref:
+        description: Optional conformance test commit SHA or branch name. Empty uses the shared workflow commit.
+        required: false
+        type: string
+        default: ""
+
+# The shared job deploys one persistent stack per prefix and region, and it queues every run.
+# Without this group, each push to a branch queues another full cloud run.
+# The group keeps one running and one pending run per branch. A newer run replaces the pending one.
+# The shared workflow recovers only a stack in ROLLBACK_COMPLETE. Cancelling a run during a
+# deploy can leave the stack in another state. So a running run is never cancelled.
+concurrency:
+  group: telemetry-conformance-${{ github.head_ref || github.ref }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  telemetry:
+    # 1. Run for non-PR events, such as pushes and manual invocations.
+    # 2. For PRs, run only same-repo branches from non-Dependabot actors. Forked PRs and Dependabot cannot read secrets.
+    if: github.event_name != 'pull_request' || (github.actor != 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository)
+    permissions:
+      contents: read
+      id-token: write
+    # The pinned SHA also selects the runner and telemetry-extension revision the shared
+    # workflow installs. At that commit the telemetry suite has four requirements,
+    # telemetry-1 to telemetry-4, which match the handlers in conformance-telemetry/.
+    # Advance the pin when this repository adds handlers for later requirements.
+    uses: aws/aws-durable-execution-conformance-tests/.github/workflows/telemetry-suite.yml@30915949a9f08023f6227357338d3a7cf1495313
+    with:
+      language: go
+      resource_prefix: go
+      sdk_repository: aws/aws-durable-execution-sdk-go
+      # For a pull request, github.sha is the merge commit of the PR head into main.
+      # So the job tests the merge result, as conformance-tests.yml does.
+      sdk_ref: ${{ github.sha }}
+      # Path relative to the conformance workspace, where this repo is checked out at .build/durable-sdk.
+      examples_dir: .build/durable-sdk/conformance-telemetry
+      conformance_test_ref: ${{ inputs.conformance_test_ref }}
+      aws_region: ${{ inputs.aws_region || 'us-west-2' }}
+      runs_on: codebuild-github-actions-runner-${{ github.run_id }}-${{ github.run_attempt }}
+      timeout_minutes: 30
+      # The shared workflow installs no Go toolchain. The commands below use the Go that
+      # the CodeBuild runner image provides.
+      prepare_command: |
+        cd "$SDK_CHECKOUT/conformance-telemetry"
+        # The log records the Go version, so an image change that breaks the build is visible.
+        go version
+        go vet ./...
+        # SAM builds the provided.al2023 function with BuildMethod: makefile. The Makefile only copies
+        # publish/<handler>/bootstrap, so the binary must exist before the runner calls sam build.
+        ./build.sh
+    secrets:
+      CONFORMANCE_TEST_ROLE_ARN: ${{ secrets.TEST_ROLE_ARN }}
+      CONFORMANCE_TEST_ACCOUNT_ID: ${{ secrets.TEST_ACCOUNT_ID }}
+      CONFORMANCE_TEST_LAMBDA_EXECUTION_ROLE_ARN: ${{ secrets.TEST_LAMBDA_EXECUTION_ROLE_ARN }}

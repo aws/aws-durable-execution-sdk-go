@@ -8,13 +8,6 @@
 // recorded, both from the goroutine that runs the branch. WrapChildContextFn
 // does not fire for batch items. So the fn-start and fn-end records come
 // from those two hooks, filtered to the ParallelBranch subtype.
-//
-// The op field of each record is OperationHookInfo.ID. The Go SDK fills it
-// with the operation's positional id (for example 1 or 1-1), while the
-// execution history and the ParentID field carry the checkpointed
-// operation id. The runner compares op against the history id, so the
-// requirement is registered as not implemented in template_plugin.yaml
-// until the two ids agree.
 package main
 
 import (

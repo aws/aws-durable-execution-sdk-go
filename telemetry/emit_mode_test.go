@@ -285,23 +285,18 @@ func TestNew_EmitOnChange_Accepted(t *testing.T) {
 }
 
 func TestPlugin_EmitOnChange_FullTree_ContentFilter_NoBackingArrayCorruption(t *testing.T) {
-	// Regression test: under OperationDetailFullTree + OperationFilter,
-	// ApplyToRecord's filter-in-place must not corrupt p.record's backing
-	// array (which would cause subsequent on-change snapshots to lose data).
+	// Regression test: under OperationDetailFullTree with an Exclude
+	// override, dropping operations at snapshot time must not corrupt
+	// p.record's backing array (which would cause subsequent on-change
+	// snapshots to lose data).
 	exp := &capturingExporter{exported: make(chan struct{}, 16)}
 	ip := New(Config{
 		EmitMode:        EmitOnChange,
 		OperationDetail: OperationDetailFullTree,
 		Exporters:       []Exporter{exp},
 		Content: ContentConfig{
-			IncludeInput:            true,
-			IncludeOutput:           true,
-			IncludeOperationResults: true,
-			IncludeOperationErrors:  true,
-			IncludeExecutionError:   true,
-			// Filter that excludes "filtered-out" operations.
-			OperationFilter: func(op OperationRecord) bool {
-				return op.Name != "filtered-out"
+			Operations: ContentOperations{
+				Overrides: []OperationOverride{{OperationName: "filtered-out", Exclude: true}},
 			},
 		},
 	})
@@ -369,7 +364,7 @@ func TestPlugin_EmitOnChange_FullTree_ContentFilter_NoBackingArrayCorruption(t *
 	}
 
 	// The final record should have exactly 2 "keep" ops (the
-	// "filtered-out" op is excluded by OperationFilter).
+	// "filtered-out" op is excluded by the override).
 	last := records[len(records)-1]
 	if last.Status != StatusSucceeded {
 		t.Errorf("expected final Status=SUCCEEDED, got %s", last.Status)

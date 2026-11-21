@@ -2,7 +2,6 @@ package telemetry
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -63,7 +62,7 @@ func (e *RDSExporter) Export(ctx context.Context, record Record) error {
 		return fmt.Errorf("telemetry.RDSExporter: ResourceArn, SecretArn, and Database are all required")
 	}
 
-	recordJSON, err := json.Marshal(record)
+	recordJSON, err := marshalNoHTMLEscape(record)
 	if err != nil {
 		return fmt.Errorf("telemetry.RDSExporter: marshaling record: %w", err)
 	}

@@ -28,6 +28,9 @@ type fakeLambdaAPI struct {
 	gotCheckpointIn *lambdaservice.CheckpointDurableExecutionInput
 	checkpointOut   *lambdaservice.CheckpointDurableExecutionOutput
 	checkpointErr   error
+
+	gotPauseIn *lambdaservice.PauseDurableExecutionInput
+	pauseErr   error
 }
 
 func (f *fakeLambdaAPI) GetDurableExecutionState(_ context.Context, in *lambdaservice.GetDurableExecutionStateInput, _ ...func(*lambdaservice.Options)) (*lambdaservice.GetDurableExecutionStateOutput, error) {
@@ -38,6 +41,14 @@ func (f *fakeLambdaAPI) GetDurableExecutionState(_ context.Context, in *lambdase
 func (f *fakeLambdaAPI) CheckpointDurableExecution(_ context.Context, in *lambdaservice.CheckpointDurableExecutionInput, _ ...func(*lambdaservice.Options)) (*lambdaservice.CheckpointDurableExecutionOutput, error) {
 	f.gotCheckpointIn = in
 	return f.checkpointOut, f.checkpointErr
+}
+
+func (f *fakeLambdaAPI) PauseDurableExecution(_ context.Context, in *lambdaservice.PauseDurableExecutionInput, _ ...func(*lambdaservice.Options)) (*lambdaservice.PauseDurableExecutionOutput, error) {
+	f.gotPauseIn = in
+	if f.pauseErr != nil {
+		return nil, f.pauseErr
+	}
+	return &lambdaservice.PauseDurableExecutionOutput{}, nil
 }
 
 // wireOperationsAllFields returns a wire operation of each type, together
@@ -465,5 +476,34 @@ func TestDefaultClientRequestTimeouts(t *testing.T) {
 	}
 	if got := hc.GetTimeout(); got != 55*time.Second {
 		t.Errorf("client Timeout = %v, want 55s", got)
+	}
+}
+
+func TestLambdaClientPauseExecutionMapsFields(t *testing.T) {
+	fake := &fakeLambdaAPI{}
+	c := &lambdaExecutionClient{api: fake}
+	_, err := c.PauseExecution(context.Background(), PauseExecutionInput{
+		ExecutionArn: "arn:exec", ClientToken: "tok", Reason: "why",
+	})
+	if err != nil {
+		t.Fatalf("PauseExecution() error = %v", err)
+	}
+	in := fake.gotPauseIn
+	if in == nil {
+		t.Fatal("PauseDurableExecution was not called")
+	}
+	if aws.ToString(in.DurableExecutionArn) != "arn:exec" || aws.ToString(in.ClientToken) != "tok" || aws.ToString(in.Reason) != "why" {
+		t.Errorf("input = %+v, want ARN, token and reason passed through", in)
+	}
+	if in.ExecutionTimeoutPaused != nil {
+		t.Errorf("ExecutionTimeoutPaused = %v, want unset so the API default applies", *in.ExecutionTimeoutPaused)
+	}
+}
+
+func TestLambdaClientPauseExecutionReturnsServiceError(t *testing.T) {
+	wantErr := errors.New("denied")
+	c := &lambdaExecutionClient{api: &fakeLambdaAPI{pauseErr: wantErr}}
+	if _, err := c.PauseExecution(context.Background(), PauseExecutionInput{}); !errors.Is(err, wantErr) {
+		t.Errorf("PauseExecution() error = %v, want %v", err, wantErr)
 	}
 }
