@@ -19,7 +19,7 @@ func TestPlugin_LateHookDoesNotEmitAfterInvocationEnd(t *testing.T) {
 			p := &telemetryInvocation{
 				env:    New(Config{EmitMode: EmitOnChange, Exporters: []Exporter{exp}}),
 				record: &Record{Status: StatusRunning, ExecutionArn: "test-execution"},
-				byOpID: make(map[string]int), sampledIn: true,
+				byOpID: make(map[string]int), resultText: make(map[string]string), sampledIn: true,
 			}
 			ctx := context.Background()
 			p.onInvocationEnd(ctx, durable.InvocationEndHookInfo{Status: status})
@@ -42,7 +42,7 @@ func TestPlugin_ConcurrentHooksAndInvocationEnd(t *testing.T) {
 		p := &telemetryInvocation{
 			env:    New(Config{EmitMode: EmitOnChange, Exporters: []Exporter{exp}}),
 			record: &Record{Status: StatusRunning, ExecutionArn: "test-execution"},
-			byOpID: make(map[string]int), sampledIn: true,
+			byOpID: make(map[string]int), resultText: make(map[string]string), sampledIn: true,
 		}
 		ctx := context.Background()
 		start := make(chan struct{})
