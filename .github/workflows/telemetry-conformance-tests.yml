@@ -57,7 +57,7 @@ jobs:
     # workflow installs. At that commit the telemetry suite has four requirements,
     # telemetry-1 to telemetry-4, which match the handlers in conformance-telemetry/.
     # Advance the pin when this repository adds handlers for later requirements.
-    uses: aws/aws-durable-execution-conformance-tests/.github/workflows/telemetry-suite.yml@30915949a9f08023f6227357338d3a7cf1495313
+    uses: aws/aws-durable-execution-conformance-tests/.github/workflows/telemetry-suite.yml@06960bf0106b07cecb9e6bda9571884e532a9fb5
     with:
       language: go
       resource_prefix: go
