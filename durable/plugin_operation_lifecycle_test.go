@@ -599,22 +599,57 @@ func TestOperationLifecycleStepEventsPinned(t *testing.T) {
 			EndTimestamp:   flexTimestamp{Time: lifecycleEnd, Valid: true},
 		},
 	}
-	resp, err = handler(makePluginContext(), makePluginPayloadWithUpdated(t, "arn:test:lifecycle", "tok2", ops, []string{hashID("1"), hashID("2")}))
+	// The payload lists neither step as updated. So an earlier invocation
+	// observed both outcomes, and the replay dispatches no operation hook.
+	resp, err = handler(makePluginContext(), makePluginPayload(t, "arn:test:lifecycle", "tok2", ops))
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertPluginResponseStatus(t, resp, invocationFailed)
-	// The first invocation dispatched both steps' starts and ends. So the
-	// replay dispatches no operation hook.
 	assertSequence(t, rec.take())
+
+	// The payload lists both steps as updated, as the retry of a failed
+	// invocation can. So both outcomes are new to this invocation. Each
+	// step dispatches no start and one end, with IsReplay false and the
+	// checkpointed attempt count, timestamps, result, and error.
+	resp, err = handler(makePluginContext(), makePluginPayloadWithUpdated(t, "arn:test:lifecycle", "tok3", ops, []string{hashID("1"), hashID("2")}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPluginResponseStatus(t, resp, invocationFailed)
+	listed := rec.take()
+	assertSequence(t, listed,
+		"end:ok:SUCCEEDED:false",
+		"end:bad:FAILED:false",
+	)
+	for i, ev := range listed {
+		assertIdentity(t, ev, hashID(fmt.Sprint(i+1)), ev.info.Name, string(OperationTypeStep), OperationSubTypeStep, "")
+		if ev.info.Attempt != i+1 {
+			t.Errorf("listed end %s Attempt = %d, want %d", ev.info.Name, ev.info.Attempt, i+1)
+		}
+		if !ev.info.StartTimestamp.Equal(lifecycleStart) || !ev.info.EndTimestamp.Equal(lifecycleEnd) {
+			t.Errorf("listed end %s timestamps = %v %v, want the checkpointed ones", ev.info.Name, ev.info.StartTimestamp, ev.info.EndTimestamp)
+		}
+	}
+	if got := listed[0].info.Result; got != `"v"` {
+		t.Errorf("listed succeeded end: Result = %q, want %q", got, `"v"`)
+	}
+	if listed[0].info.Error != nil {
+		t.Errorf("listed succeeded end: Error = %v, want nil", listed[0].info.Error)
+	}
+	var replayedErr *StepError
+	if !errors.As(listed[1].info.Error, &replayedErr) || replayedErr.Message != "boom" || replayedErr.Attempts != 2 {
+		t.Errorf("listed failed end: Error = %v, want *StepError with message boom and 2 attempts", listed[1].info.Error)
+	}
 }
 
 // TestOperationLifecycleAtMostOnePerInvocation asserts that a handler
 // running a wait, an invoke, and a step in one invocation dispatches at
 // most one start and at most one end per operation, live and on replay.
 // The replay lists the wait and the invoke as updated. So each dispatches
-// one end with IsReplay false. The step settled in the first invocation, so
-// it dispatches no hook on replay.
+// one end with IsReplay false. The step settled in the first invocation and
+// the replay does not list it as updated, so it dispatches no hook on
+// replay.
 func TestOperationLifecycleAtMostOnePerInvocation(t *testing.T) {
 	rec := &opRecorder{}
 	handler := Wrap(func(ctx Context, _ string) (string, error) {
@@ -708,7 +743,7 @@ func TestDispatchOperationHelpersRecoverPanics(t *testing.T) {
 		},
 		{}, // no hooks
 	}
-	ec := &execContext{Context: context.Background(), executionArn: "arn", pluginDispatcher: newPluginDispatcher(plugins)}
+	ec := &execContext{Context: context.Background(), executionArn: "arn", state: newExecutionState(nil), pluginDispatcher: newPluginDispatcher(plugins)}
 	info := ec.operationHookInfo("1", "n", string(OperationTypeWait), OperationSubTypeWait, false)
 	dispatchOperationStart(ec, info, PluginOperationStarted)
 	dispatchOperationEnd(ec, info, PluginOperationSucceeded)
@@ -716,7 +751,7 @@ func TestDispatchOperationHelpersRecoverPanics(t *testing.T) {
 		t.Fatalf("starts=%d ends=%d, want 1 and 1", starts.Load(), ends.Load())
 	}
 
-	none := &execContext{Context: context.Background()}
+	none := &execContext{Context: context.Background(), state: newExecutionState(nil)}
 	dispatchOperationStart(none, none.operationHookInfo("1", "n", "WAIT", "Wait", false), PluginOperationStarted)
 	dispatchOperationEnd(none, none.operationHookInfo("1", "n", "WAIT", "Wait", false), PluginOperationSucceeded)
 }
@@ -738,7 +773,7 @@ func TestDispatchOperationHelpersSetStatus(t *testing.T) {
 			mu.Unlock()
 		},
 	}
-	ec := &execContext{Context: context.Background(), executionArn: "arn:x", checkpointParent: "7", pluginDispatcher: newPluginDispatcher([]Plugin{p})}
+	ec := &execContext{Context: context.Background(), executionArn: "arn:x", checkpointParent: "7", state: newExecutionState(nil), pluginDispatcher: newPluginDispatcher([]Plugin{p})}
 	info := ec.operationHookInfo("7-1", "n", string(OperationTypeChainedInvoke), OperationSubTypeChainedInvoke, true)
 	info.StartTimestamp = lifecycleStart
 	dispatchOperationStart(ec, info, PluginOperationPending)
@@ -779,7 +814,7 @@ func TestDispatchOperationHelpersConcurrent(t *testing.T) {
 		OnOperationStart: func(context.Context, OperationHookInfo) { n.Add(1) },
 		OnOperationEnd:   func(context.Context, OperationHookInfo) { n.Add(1) },
 	}
-	ec := &execContext{Context: context.Background(), pluginDispatcher: newPluginDispatcher([]Plugin{p, p})}
+	ec := &execContext{Context: context.Background(), state: newExecutionState(nil), pluginDispatcher: newPluginDispatcher([]Plugin{p, p})}
 	var wg sync.WaitGroup
 	for i := 0; i < 50; i++ {
 		wg.Add(1)
@@ -851,69 +886,4 @@ func TestOperationLifecycleStepInterruptedAtMostOnce(t *testing.T) {
 	if !errors.As(evs[1].info.Error, &stepErr) || stepErr.ErrorType != "StepInterruptedError" {
 		t.Errorf("end Error = %v, want *StepError with ErrorType StepInterruptedError", evs[1].info.Error)
 	}
-}
-
-// TestOperationLifecycleUnreachedOutcomeDispatchesNoEnd asserts the end of
-// an outcome the handler does not reach in the invocation that first
-// observes it. That invocation dispatches no end for the operation. Its
-// InvocationHookInfo.Operations carries the outcome. A later invocation
-// that reaches the operation replays an outcome an earlier invocation
-// already observed, so it dispatches no end either.
-func TestOperationLifecycleUnreachedOutcomeDispatchesNoEnd(t *testing.T) {
-	rec := &opRecorder{}
-	var mu sync.Mutex
-	var operations map[string]OperationHookInfo
-	plugin := rec.plugin()
-	plugin.OnInvocationStart = func(_ context.Context, info InvocationHookInfo) {
-		mu.Lock()
-		operations = info.Operations
-		mu.Unlock()
-	}
-	// skip makes the handler return before it reaches the wait. It
-	// simulates an invocation that ends before the handler reaches an
-	// operation listed as updated.
-	var skip atomic.Bool
-	handler := Wrap(func(ctx Context, _ string) (string, error) {
-		if skip.Load() {
-			return "skipped", nil
-		}
-		if err := Wait(ctx, "pause", 5*time.Second); err != nil {
-			return "", err
-		}
-		return Step(ctx, "after", func(StepContext) (string, error) { return "ok", nil })
-	}, withTestPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
-
-	waitID := hashID("1")
-	waitOp := wireOperation{Id: waitID, Status: "SUCCEEDED", Type: "WAIT", SubType: "Wait", Name: "pause",
-		StartTimestamp: flexTimestamp{Time: lifecycleStart, Valid: true},
-		EndTimestamp:   flexTimestamp{Time: lifecycleEnd, Valid: true}}
-
-	skip.Store(true)
-	resp, err := handler(makePluginContext(), makePluginPayloadWithUpdated(t, "arn:test:lifecycle", "tok2",
-		[]wireOperation{lifecycleExecOp(), waitOp}, []string{waitID}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertPluginResponseStatus(t, resp, invocationSucceeded)
-	assertSequence(t, rec.take())
-
-	mu.Lock()
-	got, ok := operations[waitID]
-	mu.Unlock()
-	if !ok {
-		t.Fatalf("Operations lacks the wait %q: %v", waitID, operations)
-	}
-	if got.Status != PluginOperationSucceeded || got.Name != "pause" {
-		t.Errorf("Operations[%q] = %+v, want the SUCCEEDED wait %q", waitID, got, "pause")
-	}
-	if !got.StartTimestamp.Equal(lifecycleStart) || !got.EndTimestamp.Equal(lifecycleEnd) {
-		t.Errorf("Operations[%q] timestamps = %v %v, want the checkpointed ones", waitID, got.StartTimestamp, got.EndTimestamp)
-	}
-
-	skip.Store(false)
-	evs := runReplayAgain(t, handler, rec, []wireOperation{waitOp}, invocationSucceeded)
-	assertSequence(t, evs,
-		"start:after:STARTED:false",
-		"end:after:SUCCEEDED:false",
-	)
 }

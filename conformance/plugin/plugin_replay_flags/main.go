@@ -2,9 +2,11 @@
 // non-terminal step observed during replay reports replay=true, and a
 // step that is already terminal is not re-emitted.
 //
-// The Go SDK dispatches no hook for a step replayed from a terminal
-// checkpoint. The invocation that ran the step's last attempt dispatched
-// its start and its end. A step re-entered before it settled, such as one
+// The Go SDK dispatches no start for a step replayed from a terminal
+// checkpoint. It dispatches the step's end only when the invocation lists
+// the step as updated. Otherwise the invocation that ran the step's last
+// attempt dispatched its start and its end, and the replay dispatches no
+// hook. A step re-entered before it settled, such as one
 // whose retry is due, reports its checkpointed non-terminal status with
 // IsReplay true. So the plugin below emits every step hook it receives.
 package main

@@ -12,8 +12,10 @@ Before, an operation replayed from a terminal checkpoint dispatched
 A replayed `Step` also dispatched `OnOperationStart`. So a plugin that
 counted ends counted each operation once per invocation.
 
-Now the first invocation that observes an operation's outcome dispatches
-its end, with `IsReplay` false. This covers three cases:
+Now one rule applies to every operation type, including `Step` and `Map`
+and `Parallel` items. An invocation dispatches the end of an operation when
+the outcome is new to that invocation. The end reports `IsReplay` false. An
+outcome is new in three cases:
 
 1. The operation runs live. The end is dispatched after the terminal
    checkpoint is recorded, as before.
@@ -27,21 +29,34 @@ its end, with `IsReplay` false. This covers three cases:
 
 A later invocation that replays the operation dispatches no start. It
 dispatches no end either, unless it lists the operation in
-`UpdatedOperations` again. This applies to every operation type, including
-`Map` and `Parallel` items. An abandoned `Map` or `Parallel` item
-dispatches no end on replay.
+`UpdatedOperations` again. An abandoned `Map` or `Parallel` item dispatches
+no end on replay.
 
 An end can repeat when an invocation fails and is retried. The retry can
 list in `UpdatedOperations` an operation whose end the failed invocation
 dispatched. The retry then dispatches that end again, with `IsReplay`
-false. A `Step` is the exception: a `Step` replayed from a terminal
-checkpoint dispatches no end. A plugin that must act once per operation
-deduplicates on the operation ID.
+false. A plugin that must act once per operation deduplicates on the
+operation ID.
 
-If the handler does not reach an operation in the invocation that first
-observes its outcome, no end is dispatched for that operation. A plugin
-reads the outcome from `InvocationHookInfo.Operations`, which holds every
-checkpointed operation with its status, timestamps, result, and error.
+The handler can end the invocation without reaching an operation whose
+outcome is new. For example, it returns early or suspends on another
+operation. Then the end of a `Wait`, a callback, or an `Invoke` is
+dispatched after the handler returns and before `OnInvocationEnd`. These
+ends are ordered by end time and obey `WithPluginChildOperationsDepth`. They
+are not dispatched when the invocation ends as `Retrying`, because the retry
+observes the same outcomes again. An operation of any other type that the
+handler does not reach dispatches no end. A plugin reads its outcome from
+`InvocationHookInfo.Operations`, which holds every checkpointed operation
+with its status, timestamps, result, and error.
+
+The JavaScript SDK differs in three ways:
+
+1. It dispatches the end of a settled wait, callback, or invoke on every
+   invocation that replays it, with `isReplay` true.
+2. It reports `isReplay` true for an outcome that is delivered while the
+   invocation runs, before the handler reaches the operation.
+3. It dispatches no end for a context that it replays from a terminal
+   checkpoint.
 
 A child context under `WithChildVirtual` is unchanged. It has no
 checkpoint, so it dispatches a start and an end, with `IsReplay` true, on

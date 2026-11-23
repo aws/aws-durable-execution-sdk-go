@@ -1,11 +1,14 @@
 package durable
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"reflect"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 )
@@ -200,44 +203,61 @@ type Plugin struct {
 	// terminal status: Succeeded, Failed, TimedOut, Stopped, or
 	// Cancelled. Each operation dispatches at most one end per
 	// invocation, after OnOperationAttemptEnd of its final attempt and,
-	// for a context operation, after its body has returned. The first
-	// invocation that observes an operation's outcome dispatches its end,
-	// with IsReplay false:
+	// for a context operation, after its body has returned.
 	//
-	//   - A live operation dispatches its end after its terminal
-	//     checkpoint is recorded.
-	//   - An operation that suspends the invocation has no outcome yet and
-	//     dispatches no end. Its outcome is recorded while no invocation
-	//     runs: a [Wait] elapses, a callback is resolved, or an [Invoke]
-	//     finishes. The next invocation lists the operation in
-	//     [InvocationHookInfo].UpdatedOperations. When the handler reaches
-	//     the operation in that invocation, the end is dispatched with
-	//     the checkpointed timestamps, result, and error.
-	//   - A later invocation that does not list the operation in
-	//     UpdatedOperations dispatches no end when it replays the
-	//     operation.
+	// One rule decides which invocation dispatches the end. It applies
+	// to every operation type. An invocation dispatches the end of an
+	// operation when the outcome is new to that invocation. An outcome
+	// is new in two cases:
+	//
+	//   - The outcome was recorded or delivered while the invocation
+	//     ran. A live operation records its outcome with its terminal
+	//     checkpoint. A checkpoint response or a poll can deliver the
+	//     outcome of a [Wait], a callback, or an [Invoke].
+	//   - The invocation lists the operation in
+	//     [InvocationHookInfo].UpdatedOperations. The outcome was
+	//     recorded while no invocation ran: a [Wait] elapsed, a
+	//     callback was resolved, or an [Invoke] finished.
+	//
+	// Such an end reports IsReplay false, with the checkpointed
+	// timestamps, result, and error. An invocation that replays an
+	// operation whose outcome is not new dispatches no end for it.
+	//
+	// The end is dispatched when the handler reaches the operation. The
+	// handler can also end the invocation without reaching an operation
+	// whose outcome is new. Then the end of a [Wait], a callback, or an
+	// [Invoke] is dispatched after the handler returns and before
+	// OnInvocationEnd. These ends are ordered by EndTimestamp, and they
+	// obey [WithPluginChildOperationsDepth]. They are not dispatched
+	// when the invocation ends with [PluginInvocationRetrying], because
+	// the retry observes the same outcomes again. An operation of any
+	// other type that the handler does not reach dispatches no end. A
+	// plugin reads its outcome from [InvocationHookInfo].Operations.
 	//
 	// An end can repeat. When an invocation fails and is retried, the
 	// retry can list in UpdatedOperations an operation whose end the
 	// failed invocation dispatched. The retry then dispatches that end
-	// again when the handler reaches the operation, with IsReplay false
-	// and the same timestamps, result, and error. A [Step] is the
-	// exception: it dispatches no end on replay, as described below. So a
-	// plugin that must act once per operation deduplicates on
-	// [OperationHookInfo].ID.
+	// again, with IsReplay false and the same timestamps, result, and
+	// error. So a plugin that must act once per operation deduplicates
+	// on [OperationHookInfo].ID.
 	//
-	// An outcome that the handler does not reach in the invocation that
-	// first observes it dispatches no end. A plugin reads it from
-	// [InvocationHookInfo].Operations instead. A [Step] replayed from a
-	// terminal checkpoint never dispatches an end, because the invocation
-	// that ran its last attempt dispatched it. A child context under
-	// [WithChildVirtual] has no checkpoint, so it dispatches an end, with
-	// IsReplay true, on every invocation that replays it. It is the only
-	// operation whose end reports IsReplay true.
+	// A child context under [WithChildVirtual] has no checkpoint, so it
+	// dispatches an end, with IsReplay true, on every invocation that
+	// replays it. It is the only operation whose end reports IsReplay
+	// true.
+	//
+	// The JavaScript SDK differs in three ways. It dispatches the end of
+	// a settled wait, callback, or invoke on every invocation that
+	// replays it, with isReplay true. It reports isReplay true for an
+	// outcome that is delivered while the invocation runs, before the
+	// handler reaches the operation. It dispatches no end for a context
+	// that it replays from a terminal checkpoint.
 	//
 	// It is dispatched from the goroutine that runs the operation: on
 	// that goroutine with one plugin registered, on a goroutine the
-	// dispatch joins with several.
+	// dispatch joins with several. The end of an operation that the
+	// handler did not reach is dispatched from the goroutine that ends
+	// the invocation, and its ctx is the invocation's context.
 	OnOperationEnd func(ctx context.Context, info OperationHookInfo)
 
 	// OnOperationAttemptStart is called before each attempt of a
@@ -400,8 +420,9 @@ type InvocationHookInfo struct {
 	// invocation it holds the execution operation alone. Each entry
 	// carries the checkpointed status, timestamps, result, and error, with
 	// IsReplay set. An operation replayed from a terminal checkpoint
-	// dispatches no OnOperationEnd when an earlier invocation reported its
-	// end, so this map is where a plugin reads that operation's outcome.
+	// dispatches no OnOperationEnd when its outcome is not new to the
+	// invocation, so this map is where a plugin reads that operation's
+	// outcome. See [Plugin].OnOperationEnd for the rule.
 	//
 	// The map is built before the plugin factories are called and is not
 	// modified afterwards, so a factory or a plugin may read it at any
@@ -1005,8 +1026,8 @@ func dispatchOperationStartTo(d *pluginDispatcher, ctx context.Context, info Ope
 //
 // Each operation dispatches at most one end per invocation, and only once
 // it has a terminal outcome. An operation that suspends the invocation has
-// no outcome yet, so it dispatches no end; the invocation that observes
-// its terminal checkpoint dispatches the end, with info.IsReplay set.
+// no outcome yet, so it dispatches no end. The invocation to which the
+// outcome is new dispatches the end; see dispatchReplayedEnd.
 func dispatchOperationEnd(ec *execContext, info OperationHookInfo, status PluginOperationStatus) {
 	dispatchOperationEndTo(ec.operationHooks(), ec, info, status)
 }
@@ -1018,10 +1039,19 @@ func dispatchOperationEnd(ec *execContext, info OperationHookInfo, status Plugin
 // terminal and ctx is the context the operation was claimed on. The record
 // is replayed when info.IsReplay is set, and it does not depend on the
 // plugin depth bound.
+//
+// The hooks are notified only when executionState.claimEnd reports that
+// this invocation has not dispatched the operation's end yet. The
+// invocation can dispatch the end of an operation the handler did not
+// reach while a branch goroutine replays the same operation; see
+// dispatchUnreachedEnds. The claim lets exactly one of the two notify.
 func dispatchOperationEndTo(d *pluginDispatcher, ctx context.Context, info OperationHookInfo, status PluginOperationStatus) {
 	if ec, ok := ctx.(*execContext); ok {
 		replayed := info.IsReplay
 		ec.logOperationCompleted(func() bool { return replayed }, info, status)
+		if !ec.state.claimEnd(info.ID) {
+			return
+		}
 	}
 	notifyOperationEnd(d, ctx, info, status)
 }
@@ -1041,9 +1071,9 @@ func notifyOperationEnd(d *pluginDispatcher, ctx context.Context, info Operation
 // which ec replays from a terminal checkpoint. info describes the
 // operation with its checkpointed timestamps, result, and error.
 //
-// The invocation that first observes an outcome dispatches the end.
-// executionState.newOutcome reports whether this invocation observes the
-// outcome as new:
+// One rule covers every operation type: an invocation dispatches the end
+// of an operation when the outcome is new to that invocation.
+// executionState.newOutcome reports whether it is:
 //
 //   - The invocation payload lists the operation among the operations
 //     updated since the previous invocation. So the outcome was recorded
@@ -1062,6 +1092,10 @@ func notifyOperationEnd(d *pluginDispatcher, ctx context.Context, info Operation
 // So when the retry of a failed invocation lists an operation as updated
 // again, the retry dispatches its end again. OnOperationEnd documents
 // this repeat.
+//
+// The handler can end the invocation before it reaches an operation whose
+// outcome is new. dispatchUnreachedEnds dispatches the end of such a
+// wait, callback, or invoke.
 func dispatchReplayedEnd(ec *execContext, id string, info OperationHookInfo, status PluginOperationStatus) {
 	dispatchReplayedEndTo(ec.operationHooks(), ec, id, info, status)
 }
@@ -1081,6 +1115,89 @@ func dispatchReplayedEndTo(d *pluginDispatcher, ec *execContext, id string, info
 // Debug record of an operation whose end an earlier invocation dispatched.
 func logReplayedOperationCompleted(ec *execContext, info OperationHookInfo, status PluginOperationStatus) {
 	ec.logOperationCompleted(func() bool { return true }, info, status)
+}
+
+// dispatchUnreachedEnds dispatches the ends that the handler did not reach
+// in this invocation. The handler calls it after the user handler has
+// returned and before OnInvocationEnd. d is the invocation's dispatcher
+// and ctx is the context the hooks receive.
+//
+// A wait, a callback, and an invoke settle outside the invocation that
+// started them. dispatchReplayedEnd dispatches the end of such an
+// operation only when the handler reaches it. A handler can end the
+// invocation first: it branches on an input, returns early, or suspends on
+// another operation. The next invocation does not see the outcome as new.
+// So without this function no invocation would dispatch that end.
+//
+// It dispatches an end for each operation that meets every condition:
+//
+//   - The type is WAIT, CALLBACK, or CHAINED_INVOKE. A step, a
+//     wait-for-condition, and a context settle through code the handler
+//     runs, so the invocation that settles them reaches them.
+//   - The status is terminal.
+//   - The outcome is new to this invocation; see
+//     executionState.newOutcomeByWireID.
+//   - The plugin depth bound reports the operation. The depth is found
+//     from the checkpointed parent chain, as for
+//     InvocationHookInfo.Operations.
+//   - No end was dispatched for the operation in this invocation; see
+//     executionState.claimEnd.
+//
+// The info is built from the checkpoint, with IsReplay false. The ends are
+// dispatched in order of end time, then of ID, so the order does not
+// depend on map iteration. No operation completed Debug record is written:
+// that record belongs to the context that claims the operation, and no
+// context claimed these.
+//
+// The caller skips this function when the invocation ends as Retrying. The
+// retry starts from the same state or lists the operations as updated
+// again, so the retry dispatches these ends.
+func dispatchUnreachedEnds(d *pluginDispatcher, ctx context.Context, executionArn string, state *executionState, bound int) {
+	if d == nil {
+		return
+	}
+	// The operations are collected first. checkpointedOperationDepth reads
+	// the state, and rangeOperations holds the state's read lock.
+	var ops []*operation
+	state.rangeOperations(func(op *operation) bool {
+		if op.status.terminal() && settlesOutsideInvocation(op.opType) && state.newOutcomeByWireID(op.id) {
+			ops = append(ops, op)
+		}
+		return true
+	})
+	ends := make([]OperationHookInfo, 0, len(ops))
+	for _, op := range ops {
+		info := checkpointedOperationInfo(executionArn, op)
+		info.IsReplay = false
+		if bound != 0 {
+			depth := checkpointedOperationDepth(state, op, bound)
+			if depth >= bound {
+				continue
+			}
+			info.ChildrenOmitted = depth == bound-1
+		}
+		ends = append(ends, info)
+	}
+	slices.SortFunc(ends, func(a, b OperationHookInfo) int {
+		return cmp.Or(a.EndTimestamp.Compare(b.EndTimestamp), strings.Compare(a.ID, b.ID))
+	})
+	for _, info := range ends {
+		if state.claimEnd(info.ID) {
+			notifyOperationEnd(d, ctx, info, info.Status)
+		}
+	}
+}
+
+// settlesOutsideInvocation reports whether an operation of the wire type
+// opType settles without the handler running: a wait, a callback, or an
+// invoke.
+func settlesOutsideInvocation(opType string) bool {
+	switch OperationType(opType) {
+	case OperationTypeWait, OperationTypeCallback, OperationTypeChainedInvoke:
+		return true
+	default:
+		return false
+	}
 }
 
 // wrapBody is the wrapped work a wrap hook receives: it runs the body with

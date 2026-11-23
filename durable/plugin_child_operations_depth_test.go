@@ -159,8 +159,8 @@ func runDepthHandler(t *testing.T, depth int, fn func(Context, string) (string, 
 	}
 	handler := Wrap(fn, opts...)
 	// Every operation in ops is listed as updated. So each replayed
-	// terminal operation other than a step dispatches its end, and the
-	// tests observe ChildrenOmitted on the replay paths too.
+	// terminal operation dispatches its end, and the tests observe
+	// ChildrenOmitted on the replay paths too.
 	updated := make([]string, 0, len(ops))
 	for _, op := range ops {
 		updated = append(updated, op.Id)
