@@ -560,19 +560,26 @@ func resolveCallbackSuccess[O any](ec *execContext, op *operation, id, name stri
 // [*CallbackExternalError] when the external system reported the failure,
 // a [*CallbackTimeoutError] when the callback timed out.
 func resolveCallbackFailure[O any](op *operation, name string) (*Callback[O], error) {
-	callbackID := ""
+	callbackID, cbErr := callbackFailureError(op, name)
+	return &Callback[O]{id: callbackID, future: newFailedFuture[O](cbErr)}, cbErr
+}
+
+// callbackFailureError returns the callback ID and the error of the
+// callback whose record op is FAILED or TIMED_OUT: a
+// [*CallbackTimeoutError] for TIMED_OUT, a [*CallbackExternalError]
+// otherwise. It does not depend on the callback's result type, so the
+// plugin dispatch of an end the handler does not reach builds the same
+// error as [resolveCallbackFailure].
+func callbackFailureError(op *operation, name string) (callbackID string, err error) {
 	rec := errorRecord{}
 	if op.callback != nil {
 		callbackID = op.callback.callbackID
 		rec = op.callback.record()
 	}
-	var cbErr error
 	if op.status == statusTimedOut {
-		cbErr = newCallbackTimeoutError(name, callbackID, rec)
-	} else {
-		cbErr = newCallbackExternalError(name, callbackID, rec)
+		return callbackID, newCallbackTimeoutError(name, callbackID, rec)
 	}
-	return &Callback[O]{id: callbackID, future: newFailedFuture[O](cbErr)}, cbErr
+	return callbackID, newCallbackExternalError(name, callbackID, rec)
 }
 
 // callbackUpdate assembles the shared fields of a callback operation

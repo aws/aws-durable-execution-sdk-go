@@ -3,6 +3,7 @@ package durable
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -157,6 +158,95 @@ func TestOperationLifecycleUnreachedEndByType(t *testing.T) {
 			}
 			if tc.name == "invoke" && evs[0].info.Result != `"out"` {
 				t.Errorf("invoke end Result = %q, want %q", evs[0].info.Result, `"out"`)
+			}
+		})
+	}
+}
+
+// TestOperationLifecycleUnreachedEndErrorMatchesReachedEnd asserts that the
+// end of a callback or an invoke that did not succeed carries the same
+// Error whether the handler reaches the operation or returns before it:
+// the same error type, the same text, and the same sentinel.
+func TestOperationLifecycleUnreachedEndErrorMatchesReachedEnd(t *testing.T) {
+	failure := &wireError{ErrorType: "RemoteError", ErrorMessage: "remote failed"}
+	callback := func(status string, e *wireError) wireOperation {
+		return wireOperation{Status: status, Type: "CALLBACK", SubType: "Callback",
+			CallbackDetails: &wireCallbackDetails{CallbackId: "cb-1", Error: e}}
+	}
+	invoke := func(status string, details *wireChainedInvokeDetails) wireOperation {
+		return wireOperation{Status: status, Type: "CHAINED_INVOKE", SubType: "ChainedInvoke", ChainedInvokeDetails: details}
+	}
+	cases := []struct {
+		name string
+		op   wireOperation
+		// sentinel, when non-nil, is an error both ends must match.
+		sentinel error
+		// callback reports that both ends must match *CallbackError.
+		callback bool
+	}{
+		{name: "failed callback", op: callback("FAILED", failure), callback: true},
+		{name: "failed callback without details", op: callback("FAILED", nil), callback: true},
+		{name: "timed out callback", op: callback("TIMED_OUT", nil), sentinel: ErrCallbackTimedOut, callback: true},
+		{name: "failed invoke", op: invoke("FAILED", &wireChainedInvokeDetails{Error: failure})},
+		{name: "failed invoke without details", op: invoke("FAILED", nil)},
+		{name: "timed out invoke", op: invoke("TIMED_OUT", nil), sentinel: ErrInvokeTimedOut},
+		{name: "stopped invoke", op: invoke("STOPPED", nil), sentinel: ErrExecutionStopped},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			op := tc.op
+			op.Id = hashID("1")
+			op.Name = "op"
+			op.StartTimestamp = flexTimestamp{Time: lifecycleStart, Valid: true}
+			op.EndTimestamp = flexTimestamp{Time: lifecycleEnd, Valid: true}
+
+			// endError runs one invocation that lists op as updated and
+			// returns the Error of the single end it dispatches.
+			endError := func(reach bool) error {
+				t.Helper()
+				rec := &opRecorder{}
+				handler := Wrap(func(ctx Context, _ string) (string, error) {
+					if !reach {
+						return "early", nil
+					}
+					// The handler ignores the operation's failure, so both
+					// invocations succeed.
+					if tc.op.Type == "CALLBACK" {
+						_, _ = CreateCallback[string](ctx, "op")
+					} else {
+						_, _ = Invoke[string](ctx, "op", "fn", "in")
+					}
+					return "reached", nil
+				}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
+				resp, err := handler(makePluginContext(), makePluginPayloadWithUpdated(t, "arn:test:lifecycle", "tok1",
+					[]wireOperation{lifecycleExecOp(), op}, []string{op.Id}))
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertPluginResponseStatus(t, resp, invocationSucceeded)
+				evs := rec.take()
+				assertSequence(t, evs, "end:op:"+tc.op.Status+":false")
+				return evs[0].info.Error
+			}
+
+			reached, unreached := endError(true), endError(false)
+			if reached == nil || unreached == nil {
+				t.Fatalf("reached Error = %v, unreached Error = %v, want both non-nil", reached, unreached)
+			}
+			if gotType, wantType := fmt.Sprintf("%T", unreached), fmt.Sprintf("%T", reached); gotType != wantType {
+				t.Errorf("unreached Error type = %s, want the reached type %s", gotType, wantType)
+			}
+			if unreached.Error() != reached.Error() {
+				t.Errorf("unreached Error = %q, want the reached text %q", unreached, reached)
+			}
+			for path, err := range map[string]error{"reached": reached, "unreached": unreached} {
+				if tc.sentinel != nil && !errors.Is(err, tc.sentinel) {
+					t.Errorf("%s Error %v does not match the sentinel %v", path, err, tc.sentinel)
+				}
+				var cbErr *CallbackError
+				if tc.callback && !errors.As(err, &cbErr) {
+					t.Errorf("%s Error %T does not match *CallbackError", path, err)
+				}
 			}
 		})
 	}

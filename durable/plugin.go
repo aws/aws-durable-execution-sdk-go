@@ -1169,6 +1169,7 @@ func dispatchUnreachedEnds(d *pluginDispatcher, ctx context.Context, executionAr
 	for _, op := range ops {
 		info := checkpointedOperationInfo(executionArn, op)
 		info.IsReplay = false
+		info.Error = unreachedEndError(op, info.Error)
 		if bound != 0 {
 			depth := checkpointedOperationDepth(state, op, bound)
 			if depth >= bound {
@@ -1186,6 +1187,31 @@ func dispatchUnreachedEnds(d *pluginDispatcher, ctx context.Context, executionAr
 			notifyOperationEnd(d, ctx, info, info.Status)
 		}
 	}
+}
+
+// unreachedEndError returns the Error of the end dispatched for the
+// terminal operation op that the handler did not reach. An end the handler
+// reaches carries the error its operation builds: a callback error for a
+// failed or timed-out callback, and the cause of the [*InvokeError] for an
+// invoke that did not succeed. A plugin must receive the same Error for one
+// outcome on both paths, so this builds the error with the same
+// constructors. Any other record keeps checkpointed, the error read from
+// the checkpoint.
+func unreachedEndError(op *operation, checkpointed error) error {
+	switch OperationType(op.opType) {
+	case OperationTypeCallback:
+		if op.status == statusFailed || op.status == statusTimedOut {
+			_, err := callbackFailureError(op, op.name)
+			return err
+		}
+	case OperationTypeChainedInvoke:
+		if op.status != statusSucceeded {
+			// The cause does not depend on the function ID, which the
+			// checkpoint does not record.
+			return invokeErrorFromCheckpoint(op.name, "", op).Err
+		}
+	}
+	return checkpointed
 }
 
 // settlesOutsideInvocation reports whether an operation of the wire type
