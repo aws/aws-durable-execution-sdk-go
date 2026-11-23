@@ -529,8 +529,9 @@ func (stepResultEchoClient) Checkpoint(_ context.Context, in CheckpointInput) (C
 // the shared helper does not change them: a live step emits a STARTED
 // start and a SUCCEEDED or FAILED end with IsReplay false, and the end of
 // a succeeded step carries the result. A replayed terminal step emits no
-// hook, even when the invocation lists it as updated: the invocation that
-// ran its last attempt dispatched its end.
+// start. It emits no end when the invocation does not list it as updated,
+// and one end with IsReplay false and the checkpointed fields when the
+// invocation lists it as updated.
 func TestOperationLifecycleStepEventsPinned(t *testing.T) {
 	stepErr := errors.New("boom")
 	rec := &opRecorder{}
