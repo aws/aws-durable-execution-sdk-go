@@ -51,7 +51,11 @@ func TestHandler(t *testing.T) {
 	plugintest.ExpectCount(t, recs, succeeded, 1)
 	plugintest.ExpectCount(t, recs, map[string]any{"hook": "operation-change", "status": "FAILED"}, 0)
 
-	rec := recs[pluginlog.First(recs, succeeded)]
+	i := pluginlog.First(recs, succeeded)
+	if i < 0 {
+		t.Fatalf("no SUCCEEDED operation-change record for %s", step.ID)
+	}
+	rec := recs[i]
 	for _, key := range []string{"startTimestamp", "endTimestamp"} {
 		if v, _ := rec[key].(string); !iso8601.MatchString(v) {
 			t.Errorf("%s = %q, want an ISO-8601 timestamp", key, v)

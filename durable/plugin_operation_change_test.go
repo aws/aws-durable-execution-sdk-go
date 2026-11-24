@@ -285,6 +285,89 @@ func TestOperationChangeBeforeInvocationEndWhenCallInFlight(t *testing.T) {
 	}
 }
 
+// TestOperationChangeBeforeInvocationEndOnSuspension ends the invocation
+// with a PENDING response while the call that carries a step START is
+// still in flight. A branch is parked on a wait when the handler returns,
+// so the invocation suspends without waiting for the checkpointer. The
+// change that call's response reports is still dispatched before
+// OnInvocationEnd.
+func TestOperationChangeBeforeInvocationEndOnSuspension(t *testing.T) {
+	client := newHoldingEchoClient(func(u OperationUpdate) bool {
+		return u.Type == OperationTypeStep && u.Action == OperationActionStart
+	})
+	rec := &changeRecorder{}
+	p := rec.plugin()
+	ended := make(chan struct{})
+	p.OnInvocationEnd = func(context.Context, InvocationEndHookInfo) {
+		rec.mu.Lock()
+		rec.order = append(rec.order, "invocation-end")
+		rec.mu.Unlock()
+		close(ended)
+	}
+	bodyDone := make(chan struct{})
+	defer close(bodyDone)
+	handler := Wrap(func(ctx Context, _ string) (string, error) {
+		Go(ctx, "branch", func(child Context) (string, error) {
+			return "", Wait(child, "pause", time.Hour)
+		})
+		// The handler must return only after the branch is parked on the
+		// wait. Otherwise the invocation is not committed to PENDING.
+		ec, ok := ctx.(*execContext)
+		if !ok {
+			return "", fmt.Errorf("context is %T, want *execContext", ctx)
+		}
+		for deadline := time.Now().Add(5 * time.Second); !ec.suspend.committed(); {
+			if time.Now().After(deadline) {
+				return "", fmt.Errorf("the branch did not park on the wait")
+			}
+			time.Sleep(time.Millisecond)
+		}
+		StepAsync(ctx, "slow", func(StepContext) (string, error) {
+			<-bodyDone
+			return "", nil
+		})
+		// A suspending invocation discards a START that is queued and not
+		// yet sent. So the handler returns only once the call is in flight.
+		<-client.held
+		return "done", nil
+	}, withTestPlugins(p), withLambdaAPI(client))
+
+	type result struct {
+		resp []byte
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		resp, err := handler(makePluginContext(), makePluginPayload(t, "arn:test:change", "tok1", nil))
+		done <- result{resp, err}
+	}()
+	<-client.held
+	// The handler returns as soon as the call is in flight. So an
+	// OnInvocationEnd that does not wait for the call arrives within this
+	// period.
+	select {
+	case <-ended:
+		t.Error("OnInvocationEnd was dispatched while the call was in flight")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(client.release)
+	res := <-done
+	if res.err != nil {
+		t.Fatal(res.err)
+	}
+	assertPluginResponseStatus(t, res.resp, invocationPending)
+
+	if got := rec.reports("slow"); len(got) != 1 || got[0].Status != PluginOperationStarted {
+		t.Errorf("reports of the step = %+v, want one STARTED", got)
+	}
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if n := len(rec.order); n < 3 || rec.order[0] != "invocation-start" ||
+		rec.order[n-2] != "operation-change" || rec.order[n-1] != "invocation-end" {
+		t.Errorf("hook order = %v, want invocation-start first and operation-change, invocation-end last", rec.order)
+	}
+}
+
 // TestOperationChangeDepthBound asserts that both maps of
 // OperationChangeHookInfo omit the operations beyond the plugin depth
 // bound, and that no call is made with an empty UpdatedOperations.

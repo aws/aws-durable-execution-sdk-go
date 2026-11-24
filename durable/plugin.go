@@ -1598,37 +1598,52 @@ func checkpointedOperationDepth(state *executionState, op *operation, limit int)
 	return depth
 }
 
-// addCheckpointedOperationInfo adds the OperationHookInfo of the
-// checkpointed operation op to m, keyed by wire ID, when the plugin depth
-// bound reports it, with ChildrenOmitted set when op lies at the bound.
-// bound is the root context's hookDepthBound; 0 reports every operation
-// and skips the depth walk. Otherwise the walk stops at bound, the first
-// depth the bound omits.
-func addCheckpointedOperationInfo(m map[string]OperationHookInfo, executionArn string, state *executionState, bound int, op *operation) {
-	info := checkpointedOperationInfo(executionArn, op)
+// boundedCheckpointedOperationInfo returns the OperationHookInfo of the
+// checkpointed operation op, with ChildrenOmitted set when op lies at the
+// plugin depth bound. ok is false when the bound omits op. bound is the
+// root context's hookDepthBound; 0 reports every operation and skips the
+// depth walk. Otherwise the walk stops at bound, the first depth the bound
+// omits.
+func boundedCheckpointedOperationInfo(executionArn string, state *executionState, bound int, op *operation) (info OperationHookInfo, ok bool) {
+	info = checkpointedOperationInfo(executionArn, op)
 	if bound != 0 {
 		depth := checkpointedOperationDepth(state, op, bound)
 		if depth >= bound {
-			return
+			return OperationHookInfo{}, false
 		}
 		info.ChildrenOmitted = depth == bound-1
 	}
-	m[op.id] = info
+	return info, true
+}
+
+// addCheckpointedOperationInfo adds the OperationHookInfo of the
+// checkpointed operation op to m, keyed by wire ID, when the plugin depth
+// bound reports it, as boundedCheckpointedOperationInfo describes.
+func addCheckpointedOperationInfo(m map[string]OperationHookInfo, executionArn string, state *executionState, bound int, op *operation) {
+	if info, ok := boundedCheckpointedOperationInfo(executionArn, state, bound, op); ok {
+		m[op.id] = info
+	}
 }
 
 // operationChangeInfo returns the OperationChangeHookInfo for one
 // checkpoint response: changed are the operations whose status the
 // response changed, and state already holds the merged response. Both maps
-// apply the plugin depth bound, as addCheckpointedOperationInfo describes.
-// ok is false when the bound omits every changed operation, so there is
-// nothing to report.
+// apply the plugin depth bound, as boundedCheckpointedOperationInfo
+// describes. ok is false when the bound omits every changed operation, so
+// there is nothing to report.
 //
 // IsReplay is cleared on every entry: the info describes what a response
 // in this invocation reported, not a replayed operation.
 func operationChangeInfo(executionArn string, state *executionState, bound int, changed []*operation) (info OperationChangeHookInfo, ok bool) {
+	add := func(m map[string]OperationHookInfo, op *operation) {
+		if entry, ok := boundedCheckpointedOperationInfo(executionArn, state, bound, op); ok {
+			entry.IsReplay = false
+			m[op.id] = entry
+		}
+	}
 	updated := make(map[string]OperationHookInfo, len(changed))
 	for _, op := range changed {
-		addCheckpointedOperationInfo(updated, executionArn, state, bound, op)
+		add(updated, op)
 	}
 	if len(updated) == 0 {
 		return OperationChangeHookInfo{}, false
@@ -1638,13 +1653,7 @@ func operationChangeInfo(executionArn string, state *executionState, bound int, 
 	ops := state.snapshotOperations()
 	all := make(map[string]OperationHookInfo, len(ops))
 	for _, op := range ops {
-		addCheckpointedOperationInfo(all, executionArn, state, bound, op)
-	}
-	for _, m := range []map[string]OperationHookInfo{updated, all} {
-		for id, entry := range m {
-			entry.IsReplay = false
-			m[id] = entry
-		}
+		add(all, op)
 	}
 	return OperationChangeHookInfo{ExecutionArn: executionArn, UpdatedOperations: updated, Operations: all}, true
 }
