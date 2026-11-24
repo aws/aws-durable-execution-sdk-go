@@ -154,7 +154,8 @@ func TestResume_LocalRunnerCompletedChildContext(t *testing.T) {
 // because earlier invocations dispatched their ends. So the telemetry
 // record reads them from the invocation start snapshot. The final record
 // must hold every operation once, with its type, its terminal status, and
-// its result. The local runner records no operation timestamps, so the
+// its result. The local runner's invocation payload carries no operation
+// timestamps. So the operations in the final record have none, and the
 // test does not check them.
 func TestResume_LocalRunnerReplayedOperationsKeepRecordContents(t *testing.T) {
 	handler := func(ctx durable.Context, _ string) (string, error) {
