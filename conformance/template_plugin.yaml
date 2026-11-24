@@ -31,12 +31,8 @@ Resources:
     TestingMetadata:
       TestDescription: ["10-1"]
       NotImplemented:
-        - id: "10-8"
-          reason: "OnOperationChange fires only for operations updated between invocations; a step that completes inside the invocation that started it is not reported"
         - id: "10-19"
           reason: "no handler: InvocationEndHookInfo carries no first-invocation flag, request id, operations map, or execution start timestamp"
-        - id: "10-22"
-          reason: "no handler: OnOperationChange fires only for operations updated between invocations"
         - id: "10-23"
           reason: "no handler: the plugin API has no branch user-function start hook and no children-replay field"
     Metadata:
@@ -143,7 +139,7 @@ Resources:
   PluginOperationChange:
     Type: AWS::Serverless::Function
     TestingMetadata:
-      TestDescription: []
+      TestDescription: ["10-8"]
     Metadata:
       BuildMethod: makefile
     Properties:
@@ -335,6 +331,21 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
 
+  PluginChangeFieldShape:
+    Type: AWS::Serverless::Function
+    TestingMetadata:
+      TestDescription: ["10-22"]
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/plugin_change_field_shape/
+      Handler: bootstrap
+      Description: Operation-change hook info carries the full operation field set and the full operation map
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
   PluginInvocationLifecycleLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
@@ -453,4 +464,10 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub "/aws/lambda/${PluginAttemptInfoShape}"
+      RetentionInDays: 7
+
+  PluginChangeFieldShapeLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${PluginChangeFieldShape}"
       RetentionInDays: 7

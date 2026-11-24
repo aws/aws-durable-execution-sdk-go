@@ -460,29 +460,22 @@ func TestPluginChildOperationsDepthInvocationMaps(t *testing.T) {
 		return s
 	}
 	for _, tc := range []struct {
-		depth              int
-		wantAll, wantUpd   []string
-		wantOmitted        []string
-		wantChangeNotified bool
+		depth            int
+		wantAll, wantUpd []string
+		wantOmitted      []string
 	}{
-		{-1, []string{"", "mid", "outer", "pause", "top"}, []string{"pause", "top"}, nil, true},
-		{0, []string{"", "outer", "top"}, []string{"top"}, []string{"", "outer", "top"}, true},
-		{1, []string{"", "mid", "outer", "top"}, []string{"top"}, []string{"mid"}, true},
-		{2, []string{"", "mid", "outer", "pause", "top"}, []string{"pause", "top"}, []string{"pause"}, true},
+		{-1, []string{"", "mid", "outer", "pause", "top"}, []string{"pause", "top"}, nil},
+		{0, []string{"", "outer", "top"}, []string{"top"}, []string{"", "outer", "top"}},
+		{1, []string{"", "mid", "outer", "top"}, []string{"top"}, []string{"mid"}},
+		{2, []string{"", "mid", "outer", "pause", "top"}, []string{"pause", "top"}, []string{"pause"}},
 	} {
 		t.Run(fmt.Sprintf("depth=%d", tc.depth), func(t *testing.T) {
 			var mu sync.Mutex
-			var all, upd, change seen
-			changed := false
+			var all, upd seen
 			p := Plugin{
 				OnInvocationStart: func(_ context.Context, info InvocationHookInfo) {
 					mu.Lock()
 					all, upd = collect(info.Operations), collect(info.UpdatedOperations)
-					mu.Unlock()
-				},
-				OnOperationChange: func(_ context.Context, info OperationChangeHookInfo) {
-					mu.Lock()
-					changed, change = true, collect(info.UpdatedOperations)
 					mu.Unlock()
 				},
 			}
@@ -503,12 +496,6 @@ func TestPluginChildOperationsDepthInvocationMaps(t *testing.T) {
 			}
 			if !slices.Equal(upd.names, tc.wantUpd) {
 				t.Errorf("UpdatedOperations = %v, want %v", upd.names, tc.wantUpd)
-			}
-			if changed != tc.wantChangeNotified {
-				t.Errorf("OnOperationChange fired = %v, want %v", changed, tc.wantChangeNotified)
-			}
-			if changed && !slices.Equal(change.names, tc.wantUpd) {
-				t.Errorf("OnOperationChange UpdatedOperations = %v, want %v", change.names, tc.wantUpd)
 			}
 			for _, n := range all.names {
 				if got, want := all.omitted[n], slices.Contains(tc.wantOmitted, n); got != want {

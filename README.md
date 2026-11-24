@@ -1258,11 +1258,11 @@ invocation. A factory that returns an error, or panics, is logged and
 skipped, and the execution is unaffected.
 
 The hooks cover the invocation (`OnInvocationStart`, `OnInvocationEnd`,
-`OnOperationChange`, `WrapInvocation`), each operation (`OnOperationStart`,
-`OnOperationEnd`), each attempt of a retryable operation
-(`OnOperationAttemptStart`, `OnOperationAttemptEnd`,
-`WrapOperationAttemptFn`), child contexts (`WrapChildContextFn`), and log
-records (`EnrichLogContext`). The wrap hooks receive the wrapped work as a
+`WrapInvocation`), each operation (`OnOperationStart`, `OnOperationEnd`),
+each attempt of a retryable operation (`OnOperationAttemptStart`,
+`OnOperationAttemptEnd`, `WrapOperationAttemptFn`), child contexts
+(`WrapChildContextFn`), the status changes a checkpoint response reports
+(`OnOperationChange`), and log records (`EnrichLogContext`). The wrap hooks receive the wrapped work as a
 function and may pass it a derived context, which becomes the parent of the
 context the user code observes. `WithPluginChildOperationsDepth` bounds how
 deep in the operation tree hooks are reported.

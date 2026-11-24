@@ -325,15 +325,39 @@ func (s *executionState) hasChildOf(positionalID string) bool {
 // merge inserts or replaces operations in the map. Callers that hold
 // checkpointer.mu must call merge (not assign to the map directly) so that
 // the lock order checkpointer.mu → executionState.mu is respected.
-func (s *executionState) merge(ops []*operation) {
+//
+// merge returns the operations of ops whose status changed: an operation
+// the state held no record of, or held with another status. A change to any
+// other field does not count. The comparison and the insert happen under
+// one lock acquisition, so each status transition is returned exactly once.
+func (s *executionState) merge(ops []*operation) []*operation {
+	var changed []*operation
 	s.mu.Lock()
 	if s.childCount == nil {
 		s.childCount = make(map[string]int)
 	}
 	for _, op := range ops {
+		if prev, present := s.operations[op.id]; !present || prev.status != op.status {
+			changed = append(changed, op)
+		}
 		s.insert(op)
 	}
 	s.mu.Unlock()
+	return changed
+}
+
+// snapshotOperations returns every operation in the map, in no particular
+// order. The slice is the caller's own. The caller can therefore read other
+// operations through the state while it walks the slice, which a callback
+// running under rangeOperations must not do while a writer may be waiting.
+func (s *executionState) snapshotOperations() []*operation {
+	s.mu.RLock()
+	ops := make([]*operation, 0, len(s.operations))
+	for _, op := range s.operations {
+		ops = append(ops, op)
+	}
+	s.mu.RUnlock()
+	return ops
 }
 
 // numOperations returns the number of checkpointed operations.

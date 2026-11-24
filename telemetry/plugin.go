@@ -374,7 +374,11 @@ func (p *telemetryInvocation) onOperationEnd(ctx context.Context, info durable.O
 	p.scheduleOnChangeDispatch(ctx)
 }
 
-// onOperationChange folds externally-changed operations into the record.
+// onOperationChange records the operations whose status a checkpoint
+// response changed. An operation waits for the response that reports its
+// terminal status before its end hook is dispatched. So for an operation
+// that ends in this invocation, the end hook's info is the one the record
+// keeps.
 func (p *telemetryInvocation) onOperationChange(ctx context.Context, info durable.OperationChangeHookInfo) {
 	p.mu.Lock()
 	for id, opInfo := range info.UpdatedOperations {

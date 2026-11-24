@@ -61,6 +61,45 @@ The telemetry plugin builds its record from `InvocationHookInfo.Operations`
 at each invocation start. So record contents are unchanged. With
 `EmitOnChange`, a replay can emit fewer records, because fewer hooks fire.
 
+### Changed: OnOperationChange fires on checkpoint responses
+
+The plugin instrumentation API is experimental, and this is a change to it.
+
+Before, `OnOperationChange` was called at most once per invocation, at its
+start, with the operations whose status changed between the previous
+invocation and this one. A step that started and finished inside one
+invocation was never reported through the hook.
+
+`OnOperationChange` is now called when a checkpoint response changes the
+status of one or more operations.
+
+- `OperationChangeHookInfo.UpdatedOperations` holds the operations whose
+  status the response changed.
+- `OperationChangeHookInfo.Operations` is new. It holds every operation the
+  SDK knows after it merged the response. `UpdatedOperations` is a subset
+  of it.
+- Each entry of both maps carries the checkpointed status, timestamps,
+  attempt, result, and error. `IsReplay` is `false` on every entry.
+- The hook is no longer called at the start of an invocation. The
+  operations that changed between invocations are in
+  `InvocationHookInfo.UpdatedOperations`, as before. A plugin that read
+  them in `OnOperationChange` must read them in `OnInvocationStart` or in
+  its factory.
+- The hook is dispatched from the goroutine that sends checkpoints. One
+  plugin's calls never overlap one another. A call may run while that
+  plugin's `WrapInvocation` and operation-level hooks run, so a plugin
+  that shares state between them must guard it.
+- The SDK sends no further checkpoint until the hook returns. So a hook
+  that blocks delays the execution.
+- No call starts after `OnInvocationEnd` is dispatched. Before it
+  dispatches `OnInvocationEnd`, the SDK waits for the checkpoint calls
+  still in flight, until the invocation's context is done.
+- The entries of `InvocationHookInfo.Operations` and `UpdatedOperations`
+  for a step now carry `Attempt`.
+
+The telemetry plugin needs no change. It records the entries the hook
+reports.
+
 ### Added: pause the execution from a retry decision (experimental)
 
 The step pause API is experimental. It may be changed or removed in a

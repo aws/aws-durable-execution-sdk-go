@@ -138,6 +138,16 @@ type checkpointer struct {
 	// wiring to log the halt.
 	onTokenWithdrawn func()
 
+	// onStateChanged, when non-nil, is called after a checkpoint response
+	// was merged into state, with the operations of that response whose
+	// status changed (see executionState.merge). It is called only when
+	// at least one changed. It runs on the flusher goroutine, without mu
+	// held, before the goroutines parked on those operations are resumed
+	// and before the requests of the call learn their outcome. So the
+	// next checkpoint call is not sent until it returns. Set during
+	// invocation wiring to dispatch OnOperationChange.
+	onStateChanged func(changed []*operation)
+
 	// debugLog, when non-nil, writes the checkpoint enqueued and
 	// checkpoint flushed Debug records. ctx is the context of the request
 	// the record reports: the caller's for an enqueued request, the first
@@ -690,15 +700,21 @@ func (cp *checkpointer) send(batch []*pendingCheckpoint, token string) error {
 	// subsequent reads (e.g. reading CallbackId after START) see
 	// backend-assigned fields. Done under mu to keep the lock order
 	// checkpointer.mu → executionState.mu that merge documents.
-	var merged []*operation
+	var merged, changed []*operation
 	if cp.state != nil && out.NewExecutionState != nil {
 		merged = make([]*operation, 0, len(out.NewExecutionState))
 		for _, apiOp := range out.NewExecutionState {
 			merged = append(merged, operationFromAPI(apiOp))
 		}
-		cp.state.merge(merged)
+		changed = cp.state.merge(merged)
 	}
 	cp.mu.Unlock()
+	// The change is reported before any goroutine is resumed, so a plugin
+	// receives an operation's change before the hooks that goroutine
+	// dispatches next.
+	if cp.onStateChanged != nil && len(changed) > 0 {
+		cp.onStateChanged(changed)
+	}
 	// The records are matched against the watches after the merge,
 	// so a goroutine that starts awaiting an operation in between
 	// reads the merged record itself. A goroutine resumed here is
@@ -766,11 +782,12 @@ func (cp *checkpointer) currentToken() string {
 // internal record.
 func operationFromAPI(op Operation) *operation {
 	rec := &operation{
-		id:      aws.ToString(op.Id),
-		status:  operationStatus(op.Status),
-		opType:  string(op.Type),
-		subType: aws.ToString(op.SubType),
-		name:    aws.ToString(op.Name),
+		id:       aws.ToString(op.Id),
+		parentID: aws.ToString(op.ParentId),
+		status:   operationStatus(op.Status),
+		opType:   string(op.Type),
+		subType:  aws.ToString(op.SubType),
+		name:     aws.ToString(op.Name),
 	}
 	rec.setTimestamps(op.StartTimestamp, op.EndTimestamp)
 	if sd := op.StepDetails; sd != nil {

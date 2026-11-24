@@ -41,6 +41,11 @@ type hookCounter struct {
 // invocationScope is the scope key of the invocation-level hooks.
 const invocationScope = "invocation"
 
+// operationChangeScope is the scope key of OnOperationChange. The hook is
+// dispatched from the goroutine that sends checkpoints, so a call may run
+// during WrapInvocation; its calls must not overlap one another.
+const operationChangeScope = "operation-change"
+
 func newHookCounter() *hookCounter {
 	return &hookCounter{counts: map[string]int{}, replay: map[string]int{}, active: map[string]string{}}
 }
@@ -109,7 +114,7 @@ func (h *hookCounter) plugin() Plugin {
 			h.hitOp("OnOperationAttemptEnd", info.OperationHookInfo)
 		},
 		OnOperationChange: func(_ context.Context, _ OperationChangeHookInfo) {
-			defer h.enter("OnOperationChange", invocationScope)()
+			defer h.enter("OnOperationChange", operationChangeScope)()
 			h.hit("OnOperationChange")
 		},
 		WrapInvocation: func(ctx context.Context, _ InvocationHookInfo, fn func(context.Context) (any, error)) (any, error) {
@@ -161,12 +166,13 @@ var allHooks = []string{
 // one invocation or one operation never overlap one another.
 //
 // The first invocation suspends on a wait. The second invocation resumes
-// with the wait completed and listed as updated, so OnOperationChange
-// fires, then runs a four-item Map at concurrency four. Each item runs a
-// child context around a step that logs, so the item's goroutine dispatches
-// the child wrap hook, the attempt hooks, the attempt wrap hook, the
-// operation start and end hooks, and the log enrichment hook while the
-// other items do the same.
+// with the wait completed, then runs a four-item Map at concurrency four.
+// Each item runs a child context around a step that logs, so the item's
+// goroutine dispatches the child wrap hook, the attempt hooks, the attempt
+// wrap hook, the operation start and end hooks, and the log enrichment hook
+// while the other items do the same. The client returns the record of
+// every operation a checkpoint call updates, so OnOperationChange fires
+// from the goroutine that sends checkpoints while the items run.
 func TestPluginEveryHookFiresFromConcurrentBranches(t *testing.T) {
 	const items = 4
 
@@ -194,7 +200,7 @@ func TestPluginEveryHookFiresFromConcurrentBranches(t *testing.T) {
 	},
 		withTestPlugins(counters[0].plugin(), counters[1].plugin()),
 		WithLogHandler(slog.NewTextHandler(io.Discard, nil)),
-		withLambdaAPI(&fakePluginClient{}),
+		withLambdaAPI(&operationEchoClient{}),
 	)
 
 	resp, err := handler(makePluginContext(), makePluginPayload(t, "arn:test:all-hooks", "tok1", nil))
@@ -225,13 +231,11 @@ func TestPluginEveryHookFiresFromConcurrentBranches(t *testing.T) {
 			}
 		}
 		// Per-invocation hooks fire exactly once per invocation, twice
-		// over the two invocations. OnOperationChange fires only on the
-		// second invocation, the one with an updated operation.
+		// over the two invocations.
 		for hook, want := range map[string]int{
 			"OnInvocationStart": 2,
 			"OnInvocationEnd":   2,
 			"WrapInvocation":    2,
-			"OnOperationChange": 1,
 		} {
 			if got := c.count(hook); got != want {
 				t.Errorf("plugin %d: %s fired %d times, want %d", i, hook, got, want)

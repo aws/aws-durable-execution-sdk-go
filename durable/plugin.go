@@ -64,12 +64,13 @@ import (
 // fn. See the wrap-hook contract below.
 //
 // Hooks fire in this order within one invocation: OnInvocationStart, then
-// OnOperationChange when any operation changed externally since the
-// previous invocation, then WrapInvocation around the handler. The
-// operation-level hooks fire inside the handler as the operations run.
-// OnInvocationEnd fires last, once the invocation's outcome is decided and
-// recorded. Exactly one OnInvocationStart and exactly one OnInvocationEnd
-// fire per invocation. Every operation-level hook receives an
+// WrapInvocation around the handler. The operation-level hooks fire inside
+// the handler as the operations run. OnOperationChange fires whenever a
+// checkpoint response changes the status of an operation, at any point
+// after OnInvocationStart. OnInvocationEnd fires last, once the
+// invocation's outcome is decided and recorded. Exactly one
+// OnInvocationStart and exactly one OnInvocationEnd fire per invocation.
+// Every operation-level hook receives an
 // [OperationHookInfo] whose IsReplay reports whether the operation is
 // replayed from a checkpoint; each hook's documentation states when it
 // fires on replay. An operation beyond the depth set by
@@ -91,12 +92,16 @@ import (
 // package tests exercise every hook from concurrent branches under the race
 // detector.
 //
-// The invocation-level hooks (OnInvocationStart, OnOperationChange,
-// WrapInvocation, OnInvocationEnd) are dispatched in sequence from the
-// goroutine that received the invocation: each dispatch completes before
-// the next begins. So within one invocation, one plugin's invocation-level
-// hooks never overlap one another. The hooks of one operation are
-// dispatched in sequence from the goroutine that runs the operation, in
+// The invocation-level hooks (OnInvocationStart, WrapInvocation,
+// OnInvocationEnd) are dispatched in sequence from the goroutine that
+// received the invocation: each dispatch completes before the next begins.
+// So within one invocation, one plugin's invocation-level hooks never
+// overlap one another. OnOperationChange is dispatched from the goroutine
+// that sends checkpoints. One plugin's OnOperationChange calls never
+// overlap one another, but a call may run concurrently with that plugin's
+// WrapInvocation and with its operation-level hooks.
+//
+// The hooks of one operation are dispatched in sequence from the goroutine that runs the operation, in
 // the order start, attempt hooks, wrap hook, end, each completing before
 // the next is dispatched. So one plugin's hooks for one operation never
 // overlap one another either. Both guarantees hold per plugin: with
@@ -282,22 +287,31 @@ type Plugin struct {
 	// joins with several.
 	OnOperationAttemptEnd func(ctx context.Context, info AttemptEndHookInfo)
 
-	// OnOperationChange is called at most once per invocation, after
-	// OnInvocationStart and before WrapInvocation, when at least one
-	// operation changed status externally between the previous invocation
-	// and this one: a wait that elapsed, a callback that was resolved, a
-	// chained invoke that finished. It does not fire on an invocation
-	// with no such change, including the first. The info's
-	// UpdatedOperations is the same map [InvocationHookInfo] carries
-	// under that name; every entry has IsReplay set. It is dispatched
-	// from the goroutine that received the invocation: on that goroutine
-	// with one plugin registered, on a goroutine the dispatch joins with
-	// several.
+	// OnOperationChange is called when a checkpoint response changes the
+	// status of one or more operations. An operation counts as changed
+	// when the SDK held no record of it, or held one with another status.
+	// The info's UpdatedOperations holds the changed operations, and its
+	// Operations holds every operation the SDK knows; see
+	// [OperationChangeHookInfo].
+	//
+	// The operations that changed between the previous invocation and
+	// this one are not reported through this hook. They are in
+	// [InvocationHookInfo.UpdatedOperations].
+	//
+	// No call starts after OnInvocationEnd is dispatched. Before it
+	// dispatches OnInvocationEnd, the SDK waits for the checkpoint calls
+	// still in flight, until the invocation's context is done.
+	//
+	// It is dispatched from the goroutine that sends checkpoints: on that
+	// goroutine with one plugin registered, on a goroutine the dispatch
+	// joins with several. The SDK sends no further checkpoint, and
+	// resumes no operation that waits for the response, until the hook
+	// returns. So a hook that blocks delays the execution.
 	OnOperationChange func(ctx context.Context, info OperationChangeHookInfo)
 
 	// WrapInvocation wraps the user handler invocation. It fires once per
-	// invocation, after OnInvocationStart and OnOperationChange and
-	// before every operation-level hook; OnInvocationEnd fires after it
+	// invocation, after OnInvocationStart and before every
+	// operation-level hook; OnInvocationEnd fires after it
 	// returns. The outer plugin (index 0) wraps first. fn must be called
 	// exactly once; the context passed to fn is the parent of the
 	// handler's [Context]. fn returns the handler's result and error,
@@ -400,10 +414,10 @@ type InvocationHookInfo struct {
 	ExecutionStartTimestamp time.Time
 
 	// UpdatedOperations contains operations whose status changed
-	// externally between invocations, keyed by operation ID. This
-	// embeds the same data as OnOperationChange to allow plugins that
-	// need both to avoid state ordering dependencies. It is a subset of
-	// Operations.
+	// externally between the previous invocation and this one, keyed by
+	// operation ID: a wait that elapsed, a callback that was resolved, a
+	// chained invoke that finished. Empty on the first invocation. It is
+	// a subset of Operations.
 	UpdatedOperations map[string]OperationHookInfo
 
 	// Operations contains every operation known at the start of the
@@ -620,8 +634,24 @@ const (
 // EXPERIMENTAL: this type is experimental and may be changed or removed in
 // future releases.
 type OperationChangeHookInfo struct {
-	ExecutionArn      string
+	ExecutionArn string
+
+	// UpdatedOperations contains the operations whose status the
+	// checkpoint response changed, keyed by operation ID, in the state
+	// the response reports. It is a subset of Operations.
 	UpdatedOperations map[string]OperationHookInfo
+
+	// Operations contains every operation the SDK knows after it merged
+	// the response, keyed by operation ID, including the root execution
+	// operation.
+	//
+	// Each entry of both maps carries the checkpointed status,
+	// timestamps, attempt, result, and error. IsReplay is false on every
+	// entry. Both maps omit the operations beyond the depth set by
+	// [WithPluginChildOperationsDepth], and no call is made for a
+	// response that changed only such operations. The maps are built for
+	// the call and not modified afterwards.
+	Operations map[string]OperationHookInfo
 }
 
 // WithPlugins registers instrumentation plugin factories with the handler.
@@ -1512,9 +1542,9 @@ func (d *pluginDispatcher) hasLogEnricher() bool {
 
 // checkpointedOperationInfo returns the OperationHookInfo that describes the
 // checkpointed operation op of the execution executionArn, as the invocation
-// hooks report it: the wire ID, the checkpointed status, timestamps, result,
-// and error, with IsReplay set because the operation was recorded before
-// this invocation. ChildrenOmitted is left false; the caller sets it from
+// hooks report it: the wire ID, the checkpointed status, timestamps,
+// attempt, result, and error, with IsReplay set because the operation was
+// recorded before this invocation. ChildrenOmitted is left false; the caller sets it from
 // the operation's depth when a plugin depth bound is in effect.
 //
 // Attempt is the checkpointed attempt count of a step or a
@@ -1584,6 +1614,81 @@ func addCheckpointedOperationInfo(m map[string]OperationHookInfo, executionArn s
 		info.ChildrenOmitted = depth == bound-1
 	}
 	m[op.id] = info
+}
+
+// operationChangeInfo returns the OperationChangeHookInfo for one
+// checkpoint response: changed are the operations whose status the
+// response changed, and state already holds the merged response. Both maps
+// apply the plugin depth bound, as addCheckpointedOperationInfo describes.
+// ok is false when the bound omits every changed operation, so there is
+// nothing to report.
+//
+// IsReplay is cleared on every entry: the info describes what a response
+// in this invocation reported, not a replayed operation.
+func operationChangeInfo(executionArn string, state *executionState, bound int, changed []*operation) (info OperationChangeHookInfo, ok bool) {
+	updated := make(map[string]OperationHookInfo, len(changed))
+	for _, op := range changed {
+		addCheckpointedOperationInfo(updated, executionArn, state, bound, op)
+	}
+	if len(updated) == 0 {
+		return OperationChangeHookInfo{}, false
+	}
+	// The depth walk reads other operations through the state, so the
+	// full map is built from a snapshot rather than under the state lock.
+	ops := state.snapshotOperations()
+	all := make(map[string]OperationHookInfo, len(ops))
+	for _, op := range ops {
+		addCheckpointedOperationInfo(all, executionArn, state, bound, op)
+	}
+	for _, m := range []map[string]OperationHookInfo{updated, all} {
+		for id, entry := range m {
+			entry.IsReplay = false
+			m[id] = entry
+		}
+	}
+	return OperationChangeHookInfo{ExecutionArn: executionArn, UpdatedOperations: updated, Operations: all}, true
+}
+
+// operationChangeGate orders the OnOperationChange dispatches of one
+// invocation against its OnInvocationEnd. A checkpoint call can return
+// after the invocation's outcome is decided. Without the gate its change
+// would be dispatched during or after OnInvocationEnd. So every dispatch
+// runs through run, and the invocation calls close before it dispatches
+// OnInvocationEnd: close waits for a dispatch in progress, and no dispatch
+// starts after it returns.
+type operationChangeGate struct {
+	mu     sync.Mutex
+	closed bool
+}
+
+// run calls dispatch unless the gate is closed.
+func (g *operationChangeGate) run(dispatch func()) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closed {
+		return
+	}
+	dispatch()
+}
+
+func (g *operationChangeGate) close() {
+	g.mu.Lock()
+	g.closed = true
+	g.mu.Unlock()
+}
+
+// hasOperationChangeHook reports whether any plugin implements
+// OnOperationChange. False for a nil dispatcher.
+func (d *pluginDispatcher) hasOperationChangeHook() bool {
+	if d == nil {
+		return false
+	}
+	for i := range d.plugins {
+		if d.plugins[i].OnOperationChange != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // toPluginOperationStatus converts an internal operation status to the

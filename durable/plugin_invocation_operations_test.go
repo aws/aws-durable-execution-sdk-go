@@ -154,18 +154,13 @@ func TestInvocationHookInfoOperationsNotMutated(t *testing.T) {
 // contract makes explicit.
 func TestInvocationHookInfoOperationsBuiltForFactory(t *testing.T) {
 	var seen InvocationHookInfo
-	var changed OperationChangeHookInfo
 	var mu sync.Mutex
 	factory := PluginFactoryFunc(func(_ context.Context, info InvocationHookInfo) (*Plugin, error) {
 		mu.Lock()
 		seen = info
 		mu.Unlock()
 		// Operation-level hooks only: no OnInvocationStart, no WrapInvocation.
-		return &Plugin{OnOperationChange: func(_ context.Context, info OperationChangeHookInfo) {
-			mu.Lock()
-			changed = info
-			mu.Unlock()
-		}}, nil
+		return &Plugin{OnOperationStart: func(context.Context, OperationHookInfo) {}}, nil
 	})
 	handler := Wrap(func(ctx Context, _ string) (string, error) {
 		return Step(ctx, "s1", func(StepContext) (string, error) { return "one", nil })
@@ -187,8 +182,5 @@ func TestInvocationHookInfoOperationsBuiltForFactory(t *testing.T) {
 	}
 	if len(seen.UpdatedOperations) != 1 {
 		t.Errorf("factory saw UpdatedOperations = %v, want the changed step", seen.UpdatedOperations)
-	}
-	if len(changed.UpdatedOperations) != 1 {
-		t.Errorf("OnOperationChange UpdatedOperations = %v, want the changed step", changed.UpdatedOperations)
 	}
 }
