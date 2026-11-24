@@ -412,10 +412,11 @@ type InvocationHookInfo struct {
 	// invocation. UpdatedOperations is a subset of it. On the first
 	// invocation it holds the execution operation alone. Each entry
 	// carries the checkpointed status, timestamps, result, and error, with
-	// IsReplay set. An operation replayed from a terminal checkpoint
-	// dispatches no OnOperationEnd when its outcome is not new to the
-	// invocation, so this map is where a plugin reads that operation's
-	// outcome. See [Plugin].OnOperationEnd for the rule.
+	// IsReplay set. The entry of a step or a wait-for-condition also
+	// carries the checkpointed attempt count. An operation replayed from a
+	// terminal checkpoint dispatches no OnOperationEnd when its outcome is
+	// not new to the invocation, so this map is where a plugin reads that
+	// operation's outcome. See [Plugin].OnOperationEnd for the rule.
 	//
 	// The map is built before the plugin factories are called and is not
 	// modified afterwards, so a factory or a plugin may read it at any
@@ -1515,8 +1516,13 @@ func (d *pluginDispatcher) hasLogEnricher() bool {
 // and error, with IsReplay set because the operation was recorded before
 // this invocation. ChildrenOmitted is left false; the caller sets it from
 // the operation's depth when a plugin depth bound is in effect.
+//
+// Attempt is the checkpointed attempt count of a step or a
+// wait-for-condition, in any status. An operation replayed from a terminal
+// checkpoint can dispatch no hook in an invocation. So this info is then
+// the only place a plugin reads the attempt count from.
 func checkpointedOperationInfo(executionArn string, op *operation) OperationHookInfo {
-	return OperationHookInfo{
+	info := OperationHookInfo{
 		ExecutionArn:   executionArn,
 		ID:             op.id,
 		Name:           op.name,
@@ -1530,6 +1536,10 @@ func checkpointedOperationInfo(executionArn string, op *operation) OperationHook
 		Result:         op.operationResult(),
 		Error:          op.operationError(),
 	}
+	if op.step != nil {
+		info.Attempt = op.step.attempt
+	}
+	return info
 }
 
 // checkpointedOperationDepth returns the depth in the operation tree of the

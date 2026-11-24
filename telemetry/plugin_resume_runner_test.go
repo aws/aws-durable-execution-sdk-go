@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -224,6 +225,103 @@ func TestResume_LocalRunnerReplayedOperationsKeepRecordContents(t *testing.T) {
 	for _, name := range []string{"s1", "w1", "s2", "w2"} {
 		if names[name] != 1 {
 			t.Errorf("final record has operation %q %d times, want 1 (%v)", name, names[name], names)
+		}
+	}
+}
+
+// TestResume_LocalRunnerReplayedOperationsKeepAttempt runs a handler to
+// completion through the local runner. A step fails twice and then
+// succeeds. A wait-for-condition stops on its third check. Then a wait
+// suspends the invocation. The last invocation replays the step and the
+// wait-for-condition from terminal checkpoints. Earlier invocations
+// dispatched their ends, so the SDK dispatches no operation hook for them.
+// So the telemetry record reads them from the invocation start snapshot.
+// The final record must report, for both, the attempt count that the
+// checkpoint holds. The test reads that count from the runner's result, so
+// it does not depend on how the runner numbers attempts.
+func TestResume_LocalRunnerReplayedOperationsKeepAttempt(t *testing.T) {
+	var stepRuns atomic.Int32
+	handler := func(ctx durable.Context, _ string) (string, error) {
+		_, err := durable.Step(ctx, "s1", func(durable.StepContext) (string, error) {
+			if stepRuns.Add(1) <= 2 {
+				return "", errors.New("transient failure")
+			}
+			return "one", nil
+		})
+		if err != nil {
+			return "", err
+		}
+		_, err = durable.WaitForCondition(ctx, "c1", func(_ durable.StepContext, checks int) (int, error) {
+			return checks + 1, nil
+		}, durable.ConditionConfig[int]{
+			WaitStrategy: func(checks int, _ int) durable.WaitDecision {
+				return durable.WaitDecision{Continue: checks < 3, Delay: time.Second}
+			},
+		})
+		if err != nil {
+			return "", err
+		}
+		if err := durable.Wait(ctx, "w1", 5*time.Second); err != nil {
+			return "", err
+		}
+		return "done", nil
+	}
+
+	// The spy shows that the last invocation started after both
+	// operations were terminal, so that invocation replays them.
+	spy := &resumeSpy{starts: make(chan durable.InvocationHookInfo, 16)}
+	exp := &capturingExporter{}
+	factory := New(Config{
+		EmitMode:        EmitAlways,
+		OperationDetail: OperationDetailFullTree,
+		Exporters:       []Exporter{exp},
+	})
+	runner := durabletest.NewLocalRunner(handler, durable.WithPlugins(spy, factory))
+
+	res, err := runner.RunUntilComplete("event")
+	if err != nil {
+		t.Fatalf("RunUntilComplete: %v", err)
+	}
+	if res.Status != durabletest.Succeeded {
+		t.Fatalf("status = %s, want SUCCEEDED", res.Status)
+	}
+
+	close(spy.starts)
+	var last durable.InvocationHookInfo
+	for info := range spy.starts {
+		last = info
+	}
+	for _, op := range last.Operations {
+		if (op.Name == "s1" || op.Name == "c1") && op.Status != durable.PluginOperationSucceeded {
+			t.Fatalf("last invocation started with %q in status %s, want SUCCEEDED", op.Name, op.Status)
+		}
+	}
+
+	records := exp.snapshot()
+	if len(records) == 0 {
+		t.Fatal("no record was exported")
+	}
+	final := records[len(records)-1]
+	if final.Status != StatusSucceeded {
+		t.Fatalf("final status = %s, want SUCCEEDED", final.Status)
+	}
+	checkpointed := map[string]int{}
+	for _, op := range res.Operations {
+		if op.StepDetails != nil {
+			checkpointed[op.Name] = int(op.StepDetails.Attempt)
+		}
+	}
+	recorded := map[string]int{}
+	for _, op := range final.Operations {
+		recorded[op.Name] = op.Attempt
+	}
+	for _, name := range []string{"s1", "c1"} {
+		want := checkpointed[name]
+		if want == 0 {
+			t.Fatalf("operation %q has no checkpointed attempt count; the test needs one", name)
+		}
+		if got := recorded[name]; got != want {
+			t.Errorf("operation %q attempt = %d, want the checkpointed %d", name, got, want)
 		}
 	}
 }
