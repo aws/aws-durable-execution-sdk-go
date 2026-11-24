@@ -49,14 +49,9 @@ handler does not reach dispatches no end. A plugin reads its outcome from
 `InvocationHookInfo.Operations`, which holds every checkpointed operation
 with its status, timestamps, result, and error.
 
-The JavaScript SDK differs in three ways:
-
-1. It dispatches the end of a settled wait, callback, or invoke on every
-   invocation that replays it, with `isReplay` true.
-2. It reports `isReplay` true for an outcome that is delivered while the
-   invocation runs, before the handler reaches the operation.
-3. It dispatches no end for a context that it replays from a terminal
-   checkpoint.
+The end of a `Step` replayed from a failed checkpoint now reports the
+`*StepError` as `Error`, as the live end does. Before, it reported the
+cause.
 
 A child context under `WithChildVirtual` is unchanged. It has no
 checkpoint, so it dispatches a start and an end, with `IsReplay` true, on

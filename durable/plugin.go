@@ -246,13 +246,6 @@ type Plugin struct {
 	// replays it. It is the only operation whose end reports IsReplay
 	// true.
 	//
-	// The JavaScript SDK differs in three ways. It dispatches the end of
-	// a settled wait, callback, or invoke on every invocation that
-	// replays it, with isReplay true. It reports isReplay true for an
-	// outcome that is delivered while the invocation runs, before the
-	// handler reaches the operation. It dispatches no end for a context
-	// that it replays from a terminal checkpoint.
-	//
 	// It is dispatched from the goroutine that runs the operation: on
 	// that goroutine with one plugin registered, on a goroutine the
 	// dispatch joins with several. The end of an operation that the
