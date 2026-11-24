@@ -30,6 +30,9 @@ type RetryDecision struct {
 	// Pause asks the SDK to pause the durable execution after it records
 	// this retry. It is ignored when Retry is false.
 	//
+	// EXPERIMENTAL: this field is experimental and may be changed or
+	// removed in future releases.
+	//
 	// A [Step] pauses only when its function failed in the current
 	// invocation and the decision sets both Retry and Pause. The SDK first
 	// records the retry as usual. It then calls the Lambda
@@ -311,6 +314,9 @@ type RetryConfig struct {
 	// and the jitter of that retry are the same as without the option.
 	// See [RetryDecision.Pause] for what a pause does and the permission
 	// it needs.
+	//
+	// EXPERIMENTAL: this field is experimental and may be changed or
+	// removed in future releases.
 	//
 	// The zero value never pauses. The SDK does not validate PauseEvery:
 	// a negative value pauses on the multiples of its absolute value.
