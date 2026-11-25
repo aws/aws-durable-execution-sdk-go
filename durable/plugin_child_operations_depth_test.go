@@ -153,12 +153,19 @@ func runDepthHandler(t *testing.T, depth int, fn func(Context, string) (string, 
 	t.Helper()
 	rec := &depthRecorder{}
 	client := &recordingPluginClient{}
-	opts := []HandlerOption{WithPlugins(rec.plugin(t)), withLambdaAPI(client)}
+	opts := []HandlerOption{withTestPlugins(rec.plugin(t)), withLambdaAPI(client)}
 	if depth >= 0 {
 		opts = append(opts, WithPluginChildOperationsDepth(depth))
 	}
 	handler := Wrap(fn, opts...)
-	resp, err := handler(makePluginContext(), makePluginPayload(t, "arn:test:depth", "tok1", ops))
+	// Every operation in ops is listed as updated. So each replayed
+	// terminal operation dispatches its end, and the tests observe
+	// ChildrenOmitted on the replay paths too.
+	updated := make([]string, 0, len(ops))
+	for _, op := range ops {
+		updated = append(updated, op.Id)
+	}
+	resp, err := handler(makePluginContext(), makePluginPayloadWithUpdated(t, "arn:test:depth", "tok1", ops, updated))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -418,8 +425,10 @@ func TestPluginChildOperationsDepthBatchReplayed(t *testing.T) {
 		}
 		rec, _ := runDepthHandler(t, 0, fn, ops, invocationSucceeded)
 		rec.assertReported(t, []string{"batch"}, []string{"batch"})
+		// The abandoned items have no outcome, so a replay dispatches no
+		// hook for them.
 		rec, _ = runDepthHandler(t, 1, fn, ops, invocationSucceeded)
-		rec.assertReported(t, []string{"batch", "item-0", "item-1", "item-2"}, []string{"item-0", "item-1", "item-2"})
+		rec.assertReported(t, []string{"batch", "item-0"}, []string{"item-0"})
 	})
 }
 
@@ -477,7 +486,7 @@ func TestPluginChildOperationsDepthInvocationMaps(t *testing.T) {
 					mu.Unlock()
 				},
 			}
-			opts := []HandlerOption{WithPlugins(p), withLambdaAPI(&fakePluginClient{})}
+			opts := []HandlerOption{withTestPlugins(p), withLambdaAPI(&fakePluginClient{})}
 			if tc.depth >= 0 {
 				opts = append(opts, WithPluginChildOperationsDepth(tc.depth))
 			}
@@ -522,7 +531,7 @@ func TestPluginChildOperationsDepthOmitsChangeNotification(t *testing.T) {
 	fired := false
 	p := Plugin{OnOperationChange: func(context.Context, OperationChangeHookInfo) { fired = true }}
 	handler := Wrap(func(ctx Context, _ string) (string, error) { return "done", nil },
-		WithPlugins(p), withLambdaAPI(&fakePluginClient{}), WithPluginChildOperationsDepth(0))
+		withTestPlugins(p), withLambdaAPI(&fakePluginClient{}), WithPluginChildOperationsDepth(0))
 	resp, err := handler(makePluginContext(), makePluginPayloadWithUpdated(t, "arn:test:depth", "tok1", ops, []string{hashID("1-1")}))
 	if err != nil {
 		t.Fatal(err)

@@ -200,6 +200,16 @@ type executionState struct {
 	// needs no lock. An operation that is absent from it settled during
 	// this invocation, or has not settled.
 	settledAtStart map[string]struct{}
+
+	// endMu guards endDispatched.
+	endMu sync.Mutex
+
+	// endDispatched holds the wire IDs of the operations whose end this
+	// invocation dispatched to the plugins. A branch goroutine can still
+	// replay an operation while the invocation dispatches the ends of the
+	// operations the handler did not reach. Both read and write this set,
+	// so each operation dispatches at most one end per invocation.
+	endDispatched map[string]struct{}
 }
 
 func newExecutionState(ops []*operation) *executionState {
@@ -240,13 +250,6 @@ func (s *executionState) setUpdatedOperationIDs(wireIDs []string) {
 	}
 }
 
-// updatedSinceLastInvocation reports whether the operation with the
-// positional ID changed between the previous invocation and this one.
-func (s *executionState) updatedSinceLastInvocation(positionalID string) bool {
-	_, ok := s.updated[hashID(positionalID)]
-	return ok
-}
-
 // newOutcome reports whether the outcome of the operation with the
 // positional ID is one the previous invocation did not have. That holds
 // in two cases:
@@ -259,12 +262,34 @@ func (s *executionState) updatedSinceLastInvocation(positionalID string) bool {
 // Code that receives a new outcome runs for the first time; see
 // execContext.observeOutcome.
 func (s *executionState) newOutcome(positionalID string) bool {
-	wireID := hashID(positionalID)
+	return s.newOutcomeByWireID(hashID(positionalID))
+}
+
+// newOutcomeByWireID is newOutcome for an operation already identified by
+// its wire ID.
+func (s *executionState) newOutcomeByWireID(wireID string) bool {
 	if _, ok := s.updated[wireID]; ok {
 		return true
 	}
 	_, settled := s.settledAtStart[wireID]
 	return !settled
+}
+
+// claimEnd records that this invocation dispatches the end of the
+// operation with the wire ID. It reports true to the first caller for an
+// ID and false to every later caller, so the caller dispatches the end
+// only when it reports true.
+func (s *executionState) claimEnd(wireID string) bool {
+	s.endMu.Lock()
+	defer s.endMu.Unlock()
+	if _, ok := s.endDispatched[wireID]; ok {
+		return false
+	}
+	if s.endDispatched == nil {
+		s.endDispatched = make(map[string]struct{})
+	}
+	s.endDispatched[wireID] = struct{}{}
+	return true
 }
 
 // get returns the checkpointed operation for the positional ID, or nil if

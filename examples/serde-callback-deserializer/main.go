@@ -41,10 +41,17 @@ type Output struct {
 	Second string `json:"second"`
 }
 
+// sendCallback completes a callback with value. The local test replaces
+// it, because it has no Lambda API to call.
+var sendCallback = completeCallback
+
+// options configures the handler-level callback deserializer.
+var options = []durable.HandlerOption{durable.WithCallbackDeserializer(uppercaseDeserializer{})}
+
 func handler(ctx durable.Context, _ any) (Output, error) {
 	first, err := durable.WaitForCallback[string](ctx, "approval-1",
 		func(sctx durable.StepContext, callbackID string) error {
-			return completeCallback(sctx, callbackID, "hello first")
+			return sendCallback(sctx, callbackID, "hello first")
 		},
 		durable.WithCallbackTimeout(30*time.Second),
 	)
@@ -54,7 +61,7 @@ func handler(ctx durable.Context, _ any) (Output, error) {
 
 	second, err := durable.WaitForCallback[string](ctx, "approval-2",
 		func(sctx durable.StepContext, callbackID string) error {
-			return completeCallback(sctx, callbackID, "hello second")
+			return sendCallback(sctx, callbackID, "hello second")
 		},
 		durable.WithCallbackTimeout(30*time.Second),
 	)
@@ -80,4 +87,4 @@ func completeCallback(ctx context.Context, callbackID, value string) error {
 	return err
 }
 
-func main() { durable.Start(handler, durable.WithCallbackDeserializer(uppercaseDeserializer{})) }
+func main() { durable.Start(handler, options...) }

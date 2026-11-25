@@ -113,7 +113,7 @@ func TestOperationSubTypeConstantsMatchEmittedValues(t *testing.T) {
 		t.Run(c.subType, func(t *testing.T) {
 			fake := &fakeLambda{}
 			rec := &opRecorder{}
-			h := Wrap(c.handler, withLambdaAPI(fake), WithPlugins(rec.plugin()))
+			h := Wrap(c.handler, withLambdaAPI(fake), withTestPlugins(rec.plugin()))
 			if _, err := h(context.Background(), stepPayload(`"hello"`)); err != nil {
 				t.Fatalf("Invoke() error: %v", err)
 			}

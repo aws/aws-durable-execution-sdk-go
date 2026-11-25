@@ -52,4 +52,4 @@ func handler(ctx durable.Context, input map[string]any) (Output, error) {
 	return Output{Message: msg, OrderID: orderID}, nil
 }
 
-func main() { durable.Start(handler, durable.WithPlugins(telemetryPlugin.Plugin())) }
+func main() { durable.Start(handler, durable.WithPlugins(telemetryPlugin)) }

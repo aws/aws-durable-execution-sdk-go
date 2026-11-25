@@ -1,22 +1,31 @@
 package durable
 
 import (
+	"cmp"
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"reflect"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 )
 
-// Plugin configures an EXPERIMENTAL instrumentation plugin that observes
-// durable execution lifecycle events. Plugins implement only the hooks they need by
-// setting non-nil function fields; nil fields are skipped with zero
-// overhead. Register plugins with [WithPlugins]. Construct a Plugin with
-// keyed fields: a minor release may add hook fields.
+// Plugin is an EXPERIMENTAL instrumentation plugin that observes the
+// lifecycle events of one durable execution invocation. Plugins implement
+// only the hooks they need by setting non-nil function fields; nil fields
+// are skipped with zero overhead. A Plugin is not registered directly: a
+// [PluginFactory] registered with [WithPlugins] returns one Plugin per
+// invocation, and that Plugin serves that invocation alone. Construct a
+// Plugin with keyed fields: a minor release may add hook fields.
 //
 // # Experimental
 //
-// The plugin API is experimental. It comprises this type, [WithPlugins],
+// The plugin API is experimental. It comprises this type, [PluginFactory],
+// [PluginFactoryFunc], [PluginRegistration], [RegisteredPluginFactory],
+// [WithPlugins],
 // [WithPluginChildOperationsDepth], the hook info types
 // ([InvocationHookInfo], [InvocationEndHookInfo], [OperationHookInfo],
 // [AttemptHookInfo], [AttemptEndHookInfo], [OperationChangeHookInfo]), and
@@ -177,40 +186,71 @@ type Plugin struct {
 	// operation dispatches at most one start per invocation. An
 	// operation that runs live reports [PluginOperationStarted] with
 	// IsReplay false. An operation that is re-entered before it settled
-	// reports its checkpointed status with IsReplay true. A [Step]
-	// replayed from a terminal checkpoint reports that status with
-	// IsReplay true and then dispatches OnOperationEnd with no hook in
-	// between. For a succeeded Step the SDK decodes the checkpointed
-	// result between the two; if decoding fails, the Step returns the
-	// decoding error to its caller and dispatches no end. Every other
-	// operation replayed from a terminal checkpoint dispatches only the
-	// end, because its start was dispatched by the invocation that
-	// recorded it. A Step whose retry is scheduled and not yet due
-	// dispatches no hook until the attempt runs. Each operation's own
-	// documentation states any further detail of its replayed events. It
-	// is dispatched from the goroutine that runs the operation: on that
-	// goroutine with one plugin registered, on a goroutine the dispatch
-	// joins with several. Starts of concurrent operations may run in
-	// parallel.
+	// reports its checkpointed status with IsReplay true. An operation
+	// replayed from a terminal checkpoint dispatches no start, because
+	// the invocation that started it dispatched the start. A Step whose
+	// retry is scheduled and not yet due dispatches no hook until the
+	// attempt runs. A child context under [WithChildVirtual] has no
+	// checkpoint, so it dispatches a start, with IsReplay true, on every
+	// invocation that replays it. Each operation's own documentation
+	// states any further detail of its replayed events. It is dispatched
+	// from the goroutine that runs the operation: on that goroutine with
+	// one plugin registered, on a goroutine the dispatch joins with
+	// several. Starts of concurrent operations may run in parallel.
 	OnOperationStart func(ctx context.Context, info OperationHookInfo)
 
 	// OnOperationEnd is called when a durable operation reaches a
 	// terminal status: Succeeded, Failed, TimedOut, Stopped, or
 	// Cancelled. Each operation dispatches at most one end per
 	// invocation, after OnOperationAttemptEnd of its final attempt and,
-	// for a context operation, after its body has returned. A live operation
-	// dispatches its end after its terminal checkpoint is recorded, with
-	// IsReplay false. An operation that suspends the invocation has no
-	// outcome yet and dispatches no end; the later invocation that
-	// observes its terminal checkpoint dispatches the end with IsReplay
-	// true and the checkpointed timestamps, result, and error. An
-	// operation replayed from a terminal checkpoint dispatches the end
-	// with IsReplay true on every invocation that replays it, with one
-	// exception: a succeeded [Step] whose checkpointed result fails to
-	// decode dispatches no end on that invocation (see OnOperationStart).
+	// for a context operation, after its body has returned.
+	//
+	// One rule decides which invocation dispatches the end. It applies
+	// to every operation type. An invocation dispatches the end of an
+	// operation when the outcome is new to that invocation. An outcome
+	// is new in two cases:
+	//
+	//   - The outcome was recorded or delivered while the invocation
+	//     ran. A live operation records its outcome with its terminal
+	//     checkpoint. A checkpoint response or a poll can deliver the
+	//     outcome of a [Wait], a callback, or an [Invoke].
+	//   - The invocation lists the operation in
+	//     [InvocationHookInfo].UpdatedOperations. The outcome was
+	//     recorded while no invocation ran: a [Wait] elapsed, a
+	//     callback was resolved, or an [Invoke] finished.
+	//
+	// Such an end reports IsReplay false, with the checkpointed
+	// timestamps, result, and error. An invocation that replays an
+	// operation whose outcome is not new dispatches no end for it.
+	//
+	// The end is dispatched when the handler reaches the operation. The
+	// handler can also end the invocation without reaching an operation
+	// whose outcome is new. Then the end of a [Wait], a callback, or an
+	// [Invoke] is dispatched after the handler returns and before
+	// OnInvocationEnd. These ends are ordered by EndTimestamp, and they
+	// obey [WithPluginChildOperationsDepth]. They are not dispatched
+	// when the invocation ends with [PluginInvocationRetrying], because
+	// the retry observes the same outcomes again. An operation of any
+	// other type that the handler does not reach dispatches no end. A
+	// plugin reads its outcome from [InvocationHookInfo].Operations.
+	//
+	// An end can repeat. When an invocation fails and is retried, the
+	// retry can list in UpdatedOperations an operation whose end the
+	// failed invocation dispatched. The retry then dispatches that end
+	// again, with IsReplay false and the same timestamps, result, and
+	// error. So a plugin that must act once per operation deduplicates
+	// on [OperationHookInfo].ID.
+	//
+	// A child context under [WithChildVirtual] has no checkpoint, so it
+	// dispatches an end, with IsReplay true, on every invocation that
+	// replays it. It is the only operation whose end reports IsReplay
+	// true.
+	//
 	// It is dispatched from the goroutine that runs the operation: on
 	// that goroutine with one plugin registered, on a goroutine the
-	// dispatch joins with several.
+	// dispatch joins with several. The end of an operation that the
+	// handler did not reach is dispatched from the goroutine that ends
+	// the invocation, and its ctx is the invocation's context.
 	OnOperationEnd func(ctx context.Context, info OperationHookInfo)
 
 	// OnOperationAttemptStart is called before each attempt of a
@@ -226,7 +266,8 @@ type Plugin struct {
 	OnOperationAttemptStart func(ctx context.Context, info AttemptHookInfo)
 
 	// OnOperationAttemptEnd is called after each attempt of a retryable
-	// operation has an outcome. With [PluginAttemptSucceeded] it fires
+	// operation has an outcome. The info carries the attempt's
+	// StartTimestamp and EndTimestamp. With [PluginAttemptSucceeded] it fires
 	// after the attempt's result is checkpointed and before
 	// OnOperationEnd. With [PluginAttemptFailed] it fires when the body
 	// returns an error, or when the result cannot be serialized or is
@@ -283,12 +324,11 @@ type Plugin struct {
 	// IsReplay false for a live child and IsReplay true for a child
 	// re-entered before it settled or a virtual child replaying the
 	// operations inside it. A child replayed from a terminal checkpoint
-	// dispatches only its end and, in general, does not run its body, so
-	// the hook does not fire. One such child does run its body: a
-	// succeeded child whose result was too large to checkpoint runs its
-	// body again to rebuild the result. That run is not wrapped, so the
-	// hook does not fire for it either; its OnOperationEnd, with the
-	// checkpointed timestamps, is dispatched before the body runs. [Map]
+	// dispatches no start and, in general, does not run its body, so the
+	// hook does not fire. One such child does run its body: a succeeded
+	// child whose result was too large to checkpoint runs its body again
+	// to rebuild the result. That run is not wrapped, so the hook does not
+	// fire for it either. [Map]
 	// and [Parallel] items and [WaitForCallback] are context operations
 	// too but do not fire it. fn must be called exactly once; the
 	// context passed to fn is the parent of the child [Context]. See the
@@ -344,6 +384,12 @@ type InvocationHookInfo struct {
 	ExecutionArn      string
 	IsFirstInvocation bool
 
+	// RequestID is the Lambda request ID of this invocation, as the
+	// runtime reports it. It identifies one invocation, where
+	// ExecutionArn identifies the execution that spans many. Empty
+	// outside a Lambda invocation, such as in local tests.
+	RequestID string
+
 	// ExecutionInput is the deserialized customer event for the execution.
 	// It is the raw unmarshaled value (typically a map or struct).
 	ExecutionInput any
@@ -366,12 +412,17 @@ type InvocationHookInfo struct {
 	// invocation. UpdatedOperations is a subset of it. On the first
 	// invocation it holds the execution operation alone. Each entry
 	// carries the checkpointed status, timestamps, result, and error, with
-	// IsReplay set, as an OnOperationEnd hook would report the operation.
+	// IsReplay set. The entry of a step or a wait-for-condition also
+	// carries the checkpointed attempt count. An operation replayed from a
+	// terminal checkpoint dispatches no OnOperationEnd when its outcome is
+	// not new to the invocation, so this map is where a plugin reads that
+	// operation's outcome. See [Plugin].OnOperationEnd for the rule.
 	//
-	// The map is built before the invocation hooks run and is not
-	// modified afterwards, so a plugin may read it at any time. It is nil
-	// when no registered plugin implements OnInvocationStart or
-	// WrapInvocation, the hooks that receive it.
+	// The map is built before the plugin factories are called and is not
+	// modified afterwards, so a factory or a plugin may read it at any
+	// time. It is built whenever at least one factory is registered, so
+	// its cost is proportional to the number of checkpointed operations
+	// and is paid once per invocation.
 	Operations map[string]OperationHookInfo
 }
 
@@ -445,13 +496,20 @@ const (
 // future releases.
 type OperationHookInfo struct {
 	ExecutionArn string
-	ID           string
-	Name         string
-	Type         string
-	SubType      string
-	Status       PluginOperationStatus
-	Attempt      int
-	IsReplay     bool
+
+	// ID is the operation's wire ID: the ID the checkpoint carries, the key
+	// of [InvocationHookInfo.Operations] and UpdatedOperations, and the
+	// ParentID that the operations nested inside this one report. Every
+	// hook for one operation reports the same ID, so a consumer can key its
+	// own state on it.
+	ID string
+
+	Name     string
+	Type     string
+	SubType  string
+	Status   PluginOperationStatus
+	Attempt  int
+	IsReplay bool
 
 	// ParentID is the ID of the parent context operation, if any. Empty
 	// for top-level (root context) operations. A consumer that builds the
@@ -475,11 +533,15 @@ type OperationHookInfo struct {
 	ChildrenOmitted bool
 
 	// StartTimestamp is when this operation began. Set on OnOperationStart
-	// and OnOperationEnd; zero on hooks where not yet known.
+	// and OnOperationEnd; zero on hooks where not yet known. On the attempt
+	// hooks it is when the attempt began, before WrapOperationAttemptFn.
 	StartTimestamp time.Time
 
 	// EndTimestamp is when this operation reached a terminal state. Set on
-	// OnOperationEnd; zero on OnOperationStart.
+	// OnOperationEnd; zero on OnOperationStart. On OnOperationAttemptEnd it
+	// is when the attempt body and the WrapOperationAttemptFn hooks around
+	// it returned, for every outcome, read from the SDK's clock. Zero on
+	// OnOperationAttemptStart.
 	EndTimestamp time.Time
 
 	// Result is the operation's serialized result (raw wire form), if any.
@@ -562,17 +624,156 @@ type OperationChangeHookInfo struct {
 	UpdatedOperations map[string]OperationHookInfo
 }
 
-// WithPlugins registers instrumentation plugins with the handler. Plugins
-// are appended in call order, and the order decides how the wrap hooks
-// compose: the first registered plugin is outermost. See [Plugin] for the
-// dispatch and concurrency contract.
+// WithPlugins registers instrumentation plugin factories with the handler.
+// Factories are appended in call order. On every invocation the handler
+// calls each factory in that order, and the order decides how the wrap
+// hooks of the returned plugins compose: the first registered factory's
+// Plugin is outermost. See [PluginFactory] for the lifetime contract and
+// [Plugin] for the dispatch and concurrency contract.
+//
+// A nil factory panics in [Wrap] and [Start], because handler options are
+// read once at program start. Factories may implement
+// [RegisteredPluginFactory] to declare diagnostic names and exclusive groups.
+// Invalid registration metadata also panics at construction.
 //
 // EXPERIMENTAL: this function is experimental and may be changed or removed
 // in future releases.
-func WithPlugins(plugins ...Plugin) HandlerOption {
+func WithPlugins(factories ...PluginFactory) HandlerOption {
 	return handlerOptionFunc(func(o *handlerOptions) {
-		o.plugins = append(o.plugins, plugins...)
+		o.pluginFactories = append(o.pluginFactories, factories...)
 	})
+}
+
+// PluginFactory creates the [Plugin] that serves one invocation.
+//
+// # Lifetime
+//
+// The handler calls CreatePlugin once per invocation, before any hook
+// fires, with the same [InvocationHookInfo] it then passes to the returned
+// Plugin's OnInvocationStart and WrapInvocation hooks. So a factory can
+// read the invocation's identity and its checkpointed operations when it
+// constructs the Plugin. The returned Plugin serves that invocation and no
+// other; the handler drops it when the invocation returns. So a Plugin may
+// hold the state of its invocation in the variables its hook closures
+// capture, without keying that state by execution ARN.
+//
+// ctx is the invocation context, the one the Lambda runtime passed to the
+// handler and the one OnInvocationStart then receives. Its deadline is the
+// invocation deadline, and it carries the values the runtime sets, such as
+// the lambdacontext value. A factory may use it to bound its own setup or
+// to parent a span. The factory must not retain ctx after returning: every
+// hook receives its own ctx, and the Lambda runtime cancels the invocation
+// context when the invocation returns.
+//
+// State that outlives an invocation (an exporter, a tracer provider, a
+// connection pool) belongs on the factory. State that belongs to one
+// invocation (spans, operation buffers, counters) belongs to the Plugin
+// the factory returns. Do not return a prepared Plugin value from more
+// than one CreatePlugin call: a Plugin that looks stateless may hold
+// closures over mutable state, and two invocations would then share it.
+//
+// # Concurrency
+//
+// Within one invocation the factories are called in registration order,
+// one after another, on the goroutine that received the invocation.
+// Across invocations the calls may overlap: when the Lambda runtime
+// delivers several invocations to one process at once, each invocation
+// calls every factory. So a factory's own state and the resources it
+// shares with the Plugins it returns must be safe for concurrent use.
+//
+// # Results
+//
+// CreatePlugin is expected to be infallible. Its results are handled as
+// follows, and none of them affects the outcome of the execution:
+//
+//   - A non-nil Plugin with at least one hook set is registered for the
+//     invocation.
+//   - A nil Plugin and a nil error skip instrumentation for the invocation.
+//     Nothing is logged: this is the intended way to opt one invocation
+//     out, for example for sampling.
+//   - A non-nil error skips instrumentation for the invocation and is
+//     logged through the handler's log handler.
+//   - A non-nil Plugin with no hook set is a programming mistake. It is
+//     logged and skipped.
+//   - A panic is a programming defect. It is recovered, logged, and
+//     skipped. Recovery contains the defect; it is not a way to signal
+//     failure.
+//
+// # Example
+//
+//	type auditFactory struct{ exporter *Exporter } // environment lifetime
+//
+//	func (f auditFactory) CreatePlugin(_ context.Context, info durable.InvocationHookInfo) (*durable.Plugin, error) {
+//		a := &audit{exporter: f.exporter, executionArn: info.ExecutionArn} // invocation lifetime
+//		return &durable.Plugin{
+//			OnOperationEnd:  a.onOperationEnd,
+//			OnInvocationEnd: a.onInvocationEnd,
+//		}, nil
+//	}
+//
+//	func main() { durable.Start(handler, durable.WithPlugins(auditFactory{exporter: newExporter()})) }
+//
+// EXPERIMENTAL: this type is experimental and may be changed or removed in
+// future releases.
+type PluginFactory interface {
+	CreatePlugin(ctx context.Context, info InvocationHookInfo) (*Plugin, error)
+}
+
+// PluginRegistration is optional metadata a factory declares through
+// [RegisteredPluginFactory]. Construct it with keyed fields: a minor release
+// may add fields.
+//
+// EXPERIMENTAL: this type is experimental and may be changed or removed in
+// future releases.
+type PluginRegistration struct {
+	_ [0]func()
+
+	// Name identifies the factory in diagnostics. When empty, diagnostics
+	// use the factory's fmt.Stringer output, or its dynamic type. A panic
+	// in String falls back to the dynamic type. The SDK resolves and caches
+	// the name at handler construction.
+	Name string
+
+	// ExclusiveGroups names groups of which at most one registration entry
+	// may be a member. Wrap and Start panic when two entries share a group.
+	// Repeated groups within one entry count once. A nil or empty slice
+	// declares no constraint. An element that is empty after strings.TrimSpace
+	// is a configuration error; Wrap and Start panic on it. Other identifiers
+	// are compared exactly and case-sensitively, without trimming or normalization.
+	ExclusiveGroups []string
+}
+
+// RegisteredPluginFactory is implemented by a factory that declares
+// registration metadata. The SDK discovers it by type assertion, so a
+// factory that does not implement it needs no metadata.
+//
+// EXPERIMENTAL: this type is experimental and may be changed or removed in
+// future releases.
+type RegisteredPluginFactory interface {
+	PluginFactory
+
+	// Registration returns the metadata for this registration entry. Wrap
+	// calls it once per entry, after rejecting all nil factories. Start goes
+	// through Wrap. A panic fails handler construction as a configuration
+	// error. The SDK never calls Registration during an invocation.
+	Registration() PluginRegistration
+}
+
+// PluginFactoryFunc adapts a function to [PluginFactory], as
+// http.HandlerFunc adapts a function to http.Handler. It suits a factory
+// that holds no environment-lifetime state:
+//
+//	durable.WithPlugins(durable.PluginFactoryFunc(func(_ context.Context, info durable.InvocationHookInfo) (*durable.Plugin, error) {
+//		return &durable.Plugin{OnInvocationEnd: logOutcome}, nil
+//	}))
+//
+// EXPERIMENTAL: this type is experimental and may be changed or removed in
+// future releases.
+type PluginFactoryFunc func(ctx context.Context, info InvocationHookInfo) (*Plugin, error)
+
+// CreatePlugin calls f(ctx, info).
+func (f PluginFactoryFunc) CreatePlugin(ctx context.Context, info InvocationHookInfo) (*Plugin, error) {
+	return f(ctx, info)
 }
 
 // WithPluginChildOperationsDepth bounds the depth in the operation tree of
@@ -614,8 +815,9 @@ func WithPluginChildOperationsDepth(depth int) HandlerOption {
 	})
 }
 
-// pluginDispatcher dispatches lifecycle hooks to registered plugins
-// concurrently. It implements the 7-point dispatch contract from the spec.
+// pluginDispatcher dispatches lifecycle hooks to the plugins of one
+// invocation concurrently. It implements the 7-point dispatch contract
+// from the spec.
 //
 // When no plugins are registered, all methods are no-ops with zero
 // allocation.
@@ -623,14 +825,97 @@ type pluginDispatcher struct {
 	plugins []Plugin
 }
 
-// newPluginDispatcher creates a dispatcher from the handler's registered
-// plugins. Returns nil when no plugins are registered; callers should use
+// newPluginDispatcher creates a dispatcher from the plugins created for
+// one invocation. Returns nil when the slice is empty; callers should use
 // the package-level dispatch functions which handle nil.
 func newPluginDispatcher(plugins []Plugin) *pluginDispatcher {
 	if len(plugins) == 0 {
 		return nil
 	}
 	return &pluginDispatcher{plugins: plugins}
+}
+
+// newInvocationPlugins calls every registered factory for one invocation,
+// in registration order, and returns the plugins that will serve it. This
+// call is what bounds a plugin's lifetime: the slice lives in a local of
+// the invocation, so the plugins become garbage when the invocation
+// returns. Each factory receives the same info the plugins'
+// OnInvocationStart hooks then receive.
+//
+// A factory result is handled per the [PluginFactory] contract. A nil
+// Plugin with a nil error skips silently. An error, a Plugin with no
+// hooks, and a recovered panic each skip and log one error record
+// through logger. The remaining factories keep their relative order, so a
+// skipped factory does not change how the other plugins' wrap hooks
+// compose. Returns nil when no factory is registered, so the handler pays
+// nothing for the plugin path. names holds the diagnostic strings resolved
+// for factories at handler construction, in the same order.
+func newInvocationPlugins(ctx context.Context, logger *slog.Logger, factories []PluginFactory, names []string, info InvocationHookInfo) []Plugin {
+	if len(factories) == 0 {
+		return nil
+	}
+	plugins := make([]Plugin, 0, len(factories))
+	for i, f := range factories {
+		p, err := createPluginSafely(ctx, f, info)
+		switch {
+		case err != nil:
+			logger.ErrorContext(ctx, "Plugin factory failed; plugin ignored for this invocation",
+				slog.Int("factoryIndex", i), slog.String("factory", names[i]),
+				slog.String(logKeyErrorType, errorTypeName(err)),
+				slog.String(logKeyErrorMessage, factoryErrorMessage(err)))
+		case p == nil:
+			// Intentional skip.
+		case !pluginHasHooks(*p):
+			logger.ErrorContext(ctx, "Plugin factory returned a Plugin with no hook functions set; plugin ignored for this invocation",
+				slog.Int("factoryIndex", i), slog.String("factory", names[i]))
+		default:
+			plugins = append(plugins, *p)
+		}
+	}
+	return plugins
+}
+
+// createPluginSafely calls f.CreatePlugin(ctx, info) and converts a panic
+// into an error, so a factory defect is contained the way a hook panic is.
+func createPluginSafely(ctx context.Context, f PluginFactory, info InvocationHookInfo) (p *Plugin, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			p = nil
+			err = fmt.Errorf("panic: %v", r)
+		}
+	}()
+	return f.CreatePlugin(ctx, info)
+}
+
+// pluginFactoryName resolves the fallback diagnostic name at handler
+// construction. String is plugin-author code, so a panic falls back to the
+// dynamic type. Invocation diagnostics use the cached name instead.
+func pluginFactoryName(f PluginFactory) (name string) {
+	defer func() {
+		if recover() != nil {
+			name = fmt.Sprintf("%T", f)
+		}
+	}()
+	if s, ok := f.(fmt.Stringer); ok {
+		return s.String()
+	}
+	return fmt.Sprintf("%T", f)
+}
+
+// factoryErrorMessage renders err.Error() for the errorMessage attribute.
+// Passed as an error value, the default handler would call err.Error()
+// itself inside its ReplaceAttr expansion, outside any recover. Error() is
+// plugin-author code: a typed nil pointer returned as an error is the
+// common way it panics. So the text is produced here under recover. The
+// errorType attribute beside it comes from errorTypeName, which reads
+// only the dynamic type and so cannot run author code.
+func factoryErrorMessage(err error) (text string) {
+	defer func() {
+		if r := recover(); r != nil {
+			text = fmt.Sprintf("Error() panicked: %v", r)
+		}
+	}()
+	return err.Error()
 }
 
 // dispatchNotification calls call for every registered plugin and returns
@@ -677,10 +962,16 @@ func invokePluginSafely(p *Plugin, call func(*Plugin)) {
 // sets the timestamps and, where they apply, Attempt, Result, and Error
 // before passing the info to dispatchOperationStart or
 // dispatchOperationEnd.
+//
+// id is the positional ID the operation was claimed under. The info
+// reports its wire ID, as the checkpoint, ParentID, and the Operations
+// map of the invocation hooks do, so a plugin can key every report of one
+// operation on a single ID. Internal code that needs the positional ID
+// back keeps it alongside the info; see dispatchContextEnd.
 func (c *execContext) operationHookInfo(id, name, opType, subType string, isReplay bool) OperationHookInfo {
 	return OperationHookInfo{
 		ExecutionArn:    c.executionArn,
-		ID:              id,
+		ID:              hashID(id),
 		Name:            name,
 		Type:            opType,
 		SubType:         subType,
@@ -729,8 +1020,8 @@ func dispatchOperationStartTo(d *pluginDispatcher, ctx context.Context, info Ope
 //
 // Each operation dispatches at most one end per invocation, and only once
 // it has a terminal outcome. An operation that suspends the invocation has
-// no outcome yet, so it dispatches no end; the invocation that observes
-// its terminal checkpoint dispatches the end, with info.IsReplay set.
+// no outcome yet, so it dispatches no end. The invocation to which the
+// outcome is new dispatches the end; see dispatchReplayedEnd.
 func dispatchOperationEnd(ec *execContext, info OperationHookInfo, status PluginOperationStatus) {
 	dispatchOperationEndTo(ec.operationHooks(), ec, info, status)
 }
@@ -742,10 +1033,19 @@ func dispatchOperationEnd(ec *execContext, info OperationHookInfo, status Plugin
 // terminal and ctx is the context the operation was claimed on. The record
 // is replayed when info.IsReplay is set, and it does not depend on the
 // plugin depth bound.
+//
+// The hooks are notified only when executionState.claimEnd reports that
+// this invocation has not dispatched the operation's end yet. The
+// invocation can dispatch the end of an operation the handler did not
+// reach while a branch goroutine replays the same operation; see
+// dispatchUnreachedEnds. The claim lets exactly one of the two notify.
 func dispatchOperationEndTo(d *pluginDispatcher, ctx context.Context, info OperationHookInfo, status PluginOperationStatus) {
 	if ec, ok := ctx.(*execContext); ok {
 		replayed := info.IsReplay
 		ec.logOperationCompleted(func() bool { return replayed }, info, status)
+		if !ec.state.claimEnd(info.ID) {
+			return
+		}
 	}
 	notifyOperationEnd(d, ctx, info, status)
 }
@@ -759,6 +1059,165 @@ func notifyOperationEnd(d *pluginDispatcher, ctx context.Context, info Operation
 			p.OnOperationEnd(ctx, info)
 		}
 	})
+}
+
+// dispatchReplayedEnd handles the end of the operation id, claimed on ec,
+// which ec replays from a terminal checkpoint. info describes the
+// operation with its checkpointed timestamps, result, and error.
+//
+// One rule covers every operation type: an invocation dispatches the end
+// of an operation when the outcome is new to that invocation.
+// executionState.newOutcome reports whether it is:
+//
+//   - The invocation payload lists the operation among the operations
+//     updated since the previous invocation. So the outcome was recorded
+//     while no invocation observed it, for example while the previous
+//     invocation was suspended.
+//   - The operation was not terminal when this invocation started. So a
+//     checkpoint response or a poll of this invocation delivered the
+//     outcome before the handler reached the operation.
+//
+// In either case the end is dispatched with IsReplay false. Otherwise an
+// earlier invocation observed the outcome and dispatched the end. So no end
+// is dispatched. The operation completed Debug record is still written, as
+// a replayed record.
+//
+// The SDK keeps no record across invocations of the ends it dispatched.
+// So when the retry of a failed invocation lists an operation as updated
+// again, the retry dispatches its end again. OnOperationEnd documents
+// this repeat.
+//
+// The handler can end the invocation before it reaches an operation whose
+// outcome is new. dispatchUnreachedEnds dispatches the end of such a
+// wait, callback, or invoke.
+func dispatchReplayedEnd(ec *execContext, id string, info OperationHookInfo, status PluginOperationStatus) {
+	dispatchReplayedEndTo(ec.operationHooks(), ec, id, info, status)
+}
+
+// dispatchReplayedEndTo is dispatchReplayedEnd with the dispatcher chosen by
+// the caller; see dispatchOperationStartTo.
+func dispatchReplayedEndTo(d *pluginDispatcher, ec *execContext, id string, info OperationHookInfo, status PluginOperationStatus) {
+	if ec.state.newOutcome(id) {
+		info.IsReplay = false
+		dispatchOperationEndTo(d, ec, info, status)
+		return
+	}
+	logReplayedOperationCompleted(ec, info, status)
+}
+
+// logReplayedOperationCompleted writes the replayed operation completed
+// Debug record of an operation whose end an earlier invocation dispatched.
+func logReplayedOperationCompleted(ec *execContext, info OperationHookInfo, status PluginOperationStatus) {
+	ec.logOperationCompleted(func() bool { return true }, info, status)
+}
+
+// dispatchUnreachedEnds dispatches the ends that the handler did not reach
+// in this invocation. The handler calls it after the user handler has
+// returned and before OnInvocationEnd. d is the invocation's dispatcher
+// and ctx is the context the hooks receive.
+//
+// A wait, a callback, and an invoke settle outside the invocation that
+// started them. dispatchReplayedEnd dispatches the end of such an
+// operation only when the handler reaches it. A handler can end the
+// invocation first: it branches on an input, returns early, or suspends on
+// another operation. The next invocation does not see the outcome as new.
+// So without this function no invocation would dispatch that end.
+//
+// It dispatches an end for each operation that meets every condition:
+//
+//   - The type is WAIT, CALLBACK, or CHAINED_INVOKE. A step, a
+//     wait-for-condition, and a context settle through code the handler
+//     runs, so the invocation that settles them reaches them.
+//   - The status is terminal.
+//   - The outcome is new to this invocation; see
+//     executionState.newOutcomeByWireID.
+//   - The plugin depth bound reports the operation. The depth is found
+//     from the checkpointed parent chain, as for
+//     InvocationHookInfo.Operations.
+//   - No end was dispatched for the operation in this invocation; see
+//     executionState.claimEnd.
+//
+// The info is built from the checkpoint, with IsReplay false. The ends are
+// dispatched in order of end time, then of ID, so the order does not
+// depend on map iteration. No operation completed Debug record is written:
+// that record belongs to the context that claims the operation, and no
+// context claimed these.
+//
+// The caller skips this function when the invocation ends as Retrying. The
+// retry starts from the same state or lists the operations as updated
+// again, so the retry dispatches these ends.
+func dispatchUnreachedEnds(d *pluginDispatcher, ctx context.Context, executionArn string, state *executionState, bound int) {
+	if d == nil {
+		return
+	}
+	// The operations are collected first. checkpointedOperationDepth reads
+	// the state, and rangeOperations holds the state's read lock.
+	var ops []*operation
+	state.rangeOperations(func(op *operation) bool {
+		if op.status.terminal() && settlesOutsideInvocation(op.opType) && state.newOutcomeByWireID(op.id) {
+			ops = append(ops, op)
+		}
+		return true
+	})
+	ends := make([]OperationHookInfo, 0, len(ops))
+	for _, op := range ops {
+		info := checkpointedOperationInfo(executionArn, op)
+		info.IsReplay = false
+		info.Error = unreachedEndError(op, info.Error)
+		if bound != 0 {
+			depth := checkpointedOperationDepth(state, op, bound)
+			if depth >= bound {
+				continue
+			}
+			info.ChildrenOmitted = depth == bound-1
+		}
+		ends = append(ends, info)
+	}
+	slices.SortFunc(ends, func(a, b OperationHookInfo) int {
+		return cmp.Or(a.EndTimestamp.Compare(b.EndTimestamp), strings.Compare(a.ID, b.ID))
+	})
+	for _, info := range ends {
+		if state.claimEnd(info.ID) {
+			notifyOperationEnd(d, ctx, info, info.Status)
+		}
+	}
+}
+
+// unreachedEndError returns the Error of the end dispatched for the
+// terminal operation op that the handler did not reach. An end the handler
+// reaches carries the error its operation builds: a callback error for a
+// failed or timed-out callback, and the cause of the [*InvokeError] for an
+// invoke that did not succeed. A plugin must receive the same Error for one
+// outcome on both paths, so this builds the error with the same
+// constructors. Any other record keeps checkpointed, the error read from
+// the checkpoint.
+func unreachedEndError(op *operation, checkpointed error) error {
+	switch OperationType(op.opType) {
+	case OperationTypeCallback:
+		if op.status == statusFailed || op.status == statusTimedOut {
+			_, err := callbackFailureError(op, op.name)
+			return err
+		}
+	case OperationTypeChainedInvoke:
+		if op.status != statusSucceeded {
+			// The cause does not depend on the function ID, which the
+			// checkpoint does not record.
+			return invokeErrorFromCheckpoint(op.name, "", op).Err
+		}
+	}
+	return checkpointed
+}
+
+// settlesOutsideInvocation reports whether an operation of the wire type
+// opType settles without the handler running: a wait, a callback, or an
+// invoke.
+func settlesOutsideInvocation(opType string) bool {
+	switch OperationType(opType) {
+	case OperationTypeWait, OperationTypeCallback, OperationTypeChainedInvoke:
+		return true
+	default:
+		return false
+	}
 }
 
 // wrapBody is the wrapped work a wrap hook receives: it runs the body with
@@ -1051,30 +1510,19 @@ func (d *pluginDispatcher) hasLogEnricher() bool {
 	return false
 }
 
-// hasInvocationInfoConsumer reports whether at least one registered plugin
-// implements a hook that receives an InvocationHookInfo: OnInvocationStart
-// or WrapInvocation. False for a nil dispatcher. The handler builds
-// InvocationHookInfo.Operations only when this is true.
-func (d *pluginDispatcher) hasInvocationInfoConsumer() bool {
-	if d == nil {
-		return false
-	}
-	for i := range d.plugins {
-		if d.plugins[i].OnInvocationStart != nil || d.plugins[i].WrapInvocation != nil {
-			return true
-		}
-	}
-	return false
-}
-
 // checkpointedOperationInfo returns the OperationHookInfo that describes the
 // checkpointed operation op of the execution executionArn, as the invocation
 // hooks report it: the wire ID, the checkpointed status, timestamps, result,
 // and error, with IsReplay set because the operation was recorded before
 // this invocation. ChildrenOmitted is left false; the caller sets it from
 // the operation's depth when a plugin depth bound is in effect.
+//
+// Attempt is the checkpointed attempt count of a step or a
+// wait-for-condition, in any status. An operation replayed from a terminal
+// checkpoint can dispatch no hook in an invocation. So this info is then
+// the only place a plugin reads the attempt count from.
 func checkpointedOperationInfo(executionArn string, op *operation) OperationHookInfo {
-	return OperationHookInfo{
+	info := OperationHookInfo{
 		ExecutionArn:   executionArn,
 		ID:             op.id,
 		Name:           op.name,
@@ -1088,6 +1536,10 @@ func checkpointedOperationInfo(executionArn string, op *operation) OperationHook
 		Result:         op.operationResult(),
 		Error:          op.operationError(),
 	}
+	if op.step != nil {
+		info.Attempt = op.step.attempt
+	}
+	return info
 }
 
 // checkpointedOperationDepth returns the depth in the operation tree of the

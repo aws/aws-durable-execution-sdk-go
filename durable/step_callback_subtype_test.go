@@ -85,7 +85,8 @@ func stepReturnsV(StepContext) (string, error) { return "v", nil }
 // TestStepSubTypeRecordedInCheckpointAndPlugin asserts that the subtype a
 // caller supplies, and the default without the option, is written to the
 // step's START and SUCCEED checkpoints and reported in every operation and
-// attempt hook live, and in the replayed operation hooks.
+// attempt hook live. A replay of the step returns the stored result and
+// dispatches no hook.
 func TestStepSubTypeRecordedInCheckpointAndPlugin(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -103,7 +104,7 @@ func TestStepSubTypeRecordedInCheckpointAndPlugin(t *testing.T) {
 				rec := &opRecorder{}
 				attempts := &attemptRecorder{}
 				fake := &fakeLambda{}
-				h := Wrap(handler, WithPlugins(rec.plugin(), attempts.plugin()), withLambdaAPI(fake))
+				h := Wrap(handler, withTestPlugins(rec.plugin(), attempts.plugin()), withLambdaAPI(fake))
 
 				resp, err := h(context.Background(), stepPayload(`"x"`))
 				if err != nil {
@@ -117,19 +118,19 @@ func TestStepSubTypeRecordedInCheckpointAndPlugin(t *testing.T) {
 				live := eventsForName(rec.take(), "s")
 				assertSequence(t, live, "start:s:STARTED:false", "end:s:SUCCEEDED:false")
 				for _, ev := range live {
-					assertIdentity(t, ev, "1", "s", string(OperationTypeStep), tc.subType, "")
+					assertIdentity(t, ev, hashID("1"), "s", string(OperationTypeStep), tc.subType, "")
 				}
 				if got, want := strings.Join(attempts.take(), ","), "start:"+tc.subType+",end:"+tc.subType; got != want {
 					t.Errorf("attempt hooks = %s, want %s", got, want)
 				}
 
 				// Replay from a checkpoint with the same subtype: the
-				// stored result is returned and the replayed end reports
-				// the recorded subtype.
+				// stored result is returned and no hook is dispatched,
+				// because the first run dispatched the step's end.
 				op := checkpointedStep("1", "SUCCEEDED", &wireStepDetails{Attempt: 1, Result: `"v"`})
 				op.Type, op.SubType, op.Name = "STEP", tc.subType, "s"
 				replayFake := &fakeLambda{}
-				h = Wrap(handler, WithPlugins(rec.plugin()), withLambdaAPI(replayFake))
+				h = Wrap(handler, withTestPlugins(rec.plugin()), withLambdaAPI(replayFake))
 				resp, err = h(context.Background(), stepPayload(`"x"`, op))
 				if err != nil {
 					t.Fatal(err)
@@ -140,11 +141,7 @@ func TestStepSubTypeRecordedInCheckpointAndPlugin(t *testing.T) {
 				if updates := updatesOfType(t, replayFake, OperationTypeStep); len(updates) != 0 {
 					t.Fatalf("replay wrote step updates: %+v", updates)
 				}
-				replayed := eventsForName(rec.take(), "s")
-				assertSequence(t, replayed, "start:s:SUCCEEDED:true", "end:s:SUCCEEDED:true")
-				for _, ev := range replayed {
-					assertIdentity(t, ev, "1", "s", string(OperationTypeStep), tc.subType, "")
-				}
+				assertSequence(t, eventsForName(rec.take(), "s"))
 			})
 		}
 	}
@@ -267,8 +264,8 @@ func TestStepSubTypeMismatchOnReplay(t *testing.T) {
 // TestCallbackSubTypeRecordedInCheckpointAndPlugin asserts that the
 // subtype a caller supplies, and the default without the option, is
 // written to the callback's START checkpoint and reported in its start
-// hook, and that on replay a callback recorded with that subtype returns
-// its result and reports the subtype in its end hook.
+// hook, and that a replay that lists a callback recorded with that subtype
+// as updated returns its result and reports the subtype in its end hook.
 func TestCallbackSubTypeRecordedInCheckpointAndPlugin(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -290,7 +287,7 @@ func TestCallbackSubTypeRecordedInCheckpointAndPlugin(t *testing.T) {
 			}
 			rec := &opRecorder{}
 			fake := &fakeLambda{}
-			h := Wrap(handler, WithPlugins(rec.plugin()), withLambdaAPI(fake))
+			h := Wrap(handler, withTestPlugins(rec.plugin()), withLambdaAPI(fake))
 			resp, err := h(context.Background(), callbackPayload(`"x"`))
 			if err != nil {
 				t.Fatal(err)
@@ -301,11 +298,11 @@ func TestCallbackSubTypeRecordedInCheckpointAndPlugin(t *testing.T) {
 			assertUpdates(t, updatesOfType(t, fake, OperationTypeCallback), tc.subType, OperationActionStart)
 			live := eventsForName(rec.take(), "cb")
 			assertSequence(t, live, "start:cb:STARTED:false")
-			assertIdentity(t, live[0], "1", "cb", string(OperationTypeCallback), tc.subType, "")
+			assertIdentity(t, live[0], hashID("1"), "cb", string(OperationTypeCallback), tc.subType, "")
 
 			op := checkpointedCallback("1", "SUCCEEDED", &wireCallbackDetails{CallbackId: "cb-1", Result: "approved"})
 			op.Type, op.SubType, op.Name = "CALLBACK", tc.subType, "cb"
-			resp, err = h(context.Background(), callbackPayload(`"x"`, op))
+			resp, err = h(context.Background(), withUpdatedOperationIDs(t, callbackPayload(`"x"`, op), hashID("1")))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -313,8 +310,8 @@ func TestCallbackSubTypeRecordedInCheckpointAndPlugin(t *testing.T) {
 				t.Fatalf("replay response = %s, want %s", resp, want)
 			}
 			ends := eventsForName(rec.take(), "cb")
-			assertSequence(t, ends, "end:cb:SUCCEEDED:true")
-			assertIdentity(t, ends[0], "1", "cb", string(OperationTypeCallback), tc.subType, "")
+			assertSequence(t, ends, "end:cb:SUCCEEDED:false")
+			assertIdentity(t, ends[0], hashID("1"), "cb", string(OperationTypeCallback), tc.subType, "")
 		})
 	}
 }
@@ -377,7 +374,7 @@ func TestWaitForCallbackSubTypeAppliesToItsCallback(t *testing.T) {
 	h := Wrap(func(ctx Context, _ string) (string, error) {
 		return WaitForCallback[string](ctx, "approval", func(StepContext, string) error { return nil },
 			WithCallbackSubType("ManagerApproval"))
-	}, WithPlugins(rec.plugin()), withLambdaAPI(fake))
+	}, withTestPlugins(rec.plugin()), withLambdaAPI(fake))
 	resp, err := h(context.Background(), callbackPayload(`"x"`))
 	if err != nil {
 		t.Fatal(err)

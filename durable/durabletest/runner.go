@@ -5,6 +5,7 @@ package durabletest
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
@@ -151,8 +152,12 @@ func (r *LocalRunner[I, O]) Reset() {
 // result is then nil. The outcome of the handler is never an error: a
 // handler that returns an error produces a [Failed] result with the
 // recorded error in [TestResult.Error], and an invocation that suspends
-// produces a [Pending] result.
+// produces a [Pending] result. Run also returns [ErrExecutionPaused] when
+// the execution is paused; see [LocalRunner.ResumeExecution].
 func (r *LocalRunner[I, O]) Run(event I) (*TestResult, error) {
+	if paused, _ := r.client.isPaused(); paused {
+		return nil, ErrExecutionPaused
+	}
 	eventJSON, err := json.Marshal(event)
 	if err != nil {
 		return nil, fmt.Errorf("durabletest: marshal event: %w", err)
@@ -200,7 +205,17 @@ func (r *LocalRunner[I, O]) Run(event I) (*TestResult, error) {
 // failed handler, a run blocked on a callback or invoke, and a run that
 // reaches the invocation cap all return a nil error and a result whose
 // [TestResult.Status] and [TestResult.CapReached] describe the outcome.
+// RunUntilComplete also returns [ErrExecutionPaused] when the execution is
+// paused before it starts.
+//
+// A step whose retry decision sets [durable.RetryDecision.Pause] pauses
+// the execution. RunUntilComplete then returns the [Pending] result of
+// that invocation, and [LocalRunner.Paused] reports true. Call
+// [LocalRunner.ResumeExecution] and RunUntilComplete again to continue.
 func (r *LocalRunner[I, O]) RunUntilComplete(event I, opts ...RunnerOption) (*TestResult, error) {
+	if paused, _ := r.client.isPaused(); paused {
+		return nil, ErrExecutionPaused
+	}
 	cfg := r.cfg
 	for _, o := range opts {
 		o(&cfg)
@@ -410,6 +425,39 @@ func (r *LocalRunner[I, O]) OmitTokenOnCheckpoint(n int) {
 		panic("durabletest: OmitTokenOnCheckpoint: n must be at least 1")
 	}
 	r.client.omitTokenOnCheckpoint(n)
+}
+
+// ErrExecutionPaused is returned by [LocalRunner.Run] and
+// [LocalRunner.RunUntilComplete] when the execution is paused. Lambda does
+// not invoke a paused execution either. Call [LocalRunner.ResumeExecution]
+// first.
+//
+// EXPERIMENTAL: this variable is experimental and may be changed or
+// removed in future releases.
+var ErrExecutionPaused = errors.New("durabletest: the execution is paused; call ResumeExecution first")
+
+// Paused reports whether the execution is paused, and the reason the
+// pause request gave. A step pauses the execution when its retry decision
+// sets [durable.RetryDecision.Pause].
+//
+// EXPERIMENTAL: this method is experimental and may be changed or
+// removed in future releases.
+func (r *LocalRunner[I, O]) Paused() (bool, string) {
+	return r.client.isPaused()
+}
+
+// ResumeExecution resumes a paused execution, as the
+// ResumeDurableExecution API does. The next [LocalRunner.Run] or
+// [LocalRunner.RunUntilComplete] invokes the handler again, and the step
+// that paused the execution runs its next attempt. ResumeExecution returns
+// an error with the code ResourceConflictException when the execution is
+// not paused. It resumes only the runner's own execution, not a paused
+// execution of a durable target registered with [LocalRunner.RegisterFunction].
+//
+// EXPERIMENTAL: this method is experimental and may be changed or
+// removed in future releases.
+func (r *LocalRunner[I, O]) ResumeExecution() error {
+	return r.client.resume()
 }
 
 // snapshotLocked returns all stored operations except execution operations,

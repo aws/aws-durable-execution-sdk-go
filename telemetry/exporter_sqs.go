@@ -10,9 +10,6 @@ import (
 	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 )
 
-// rfc3339Milli is the time format used for SQS deduplication IDs.
-const rfc3339Milli = "2006-01-02T15:04:05.000Z07:00"
-
 // SQSAPI is the subset of *sqs.Client this package depends on, exposed
 // as an interface so tests can substitute a fake without needing real
 // AWS credentials or network access.
@@ -25,7 +22,9 @@ type SQSAPI interface {
 //
 // FIFO mode is auto-detected from a ".fifo" suffix on QueueURL. In FIFO
 // mode, MessageGroupID defaults to the record's ExecutionArn and
-// MessageDeduplicationId is set to "{ExecutionArn}:{EmittedAt}".
+// MessageDeduplicationId is set to "{ExecutionArn}:{EmittedAt}", with
+// EmittedAt in the record's own timestamp format (UTC, millisecond
+// precision, Z suffix).
 //
 // Message attributes "status" and "functionName" are always set,
 // enabling SQS message filtering without body parsing.
@@ -81,7 +80,7 @@ func (e *SQSExporter) Export(ctx context.Context, record Record) error {
 			groupID = record.ExecutionArn
 		}
 		input.MessageGroupId = aws.String(groupID)
-		input.MessageDeduplicationId = aws.String(fmt.Sprintf("%s:%s", record.ExecutionArn, record.EmittedAt.Format(rfc3339Milli)))
+		input.MessageDeduplicationId = aws.String(fmt.Sprintf("%s:%s", record.ExecutionArn, formatTimestamp(record.EmittedAt)))
 	}
 
 	if _, err := e.API.SendMessage(ctx, input); err != nil {

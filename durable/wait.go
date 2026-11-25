@@ -141,9 +141,10 @@ func validateWaitDuration(op, name string, d time.Duration) error {
 // checkpoint. A wait replayed while still STARTED dispatches a replayed
 // start. Either then dispatches a live end in the invocation that observes
 // the wait SUCCEEDED, or no end when the invocation suspends first. A wait
-// replayed as SUCCEEDED dispatches only a replayed end with the
-// checkpointed timestamps: its start was dispatched by the invocation that
-// recorded it.
+// replayed as SUCCEEDED dispatches no start: its start was dispatched by
+// the invocation that recorded it. It dispatches its end, with the
+// checkpointed timestamps, only when this invocation is the first to
+// observe the outcome; see dispatchReplayedEnd.
 //
 // start, when non-nil, is the START that WaitAsync queued for a wait with
 // no record. The wait then sends no START of its own: it waits for the call
@@ -169,7 +170,7 @@ func runWait(ec *execContext, id, name string, d time.Duration, start *queuedSta
 			info := ec.operationHookInfo(id, name, string(OperationTypeWait), OperationSubTypeWait, true)
 			info.StartTimestamp = op.startTimestamp
 			info.EndTimestamp = op.endTimestamp
-			dispatchOperationEnd(ec, info, PluginOperationSucceeded)
+			dispatchReplayedEnd(ec, id, info, PluginOperationSucceeded)
 			return nil
 		case statusStarted:
 			// The timer has not fired. The start is replayed; the end

@@ -18,6 +18,7 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [named-step](named-step/main.go) | Step (named) | SUCCEEDED |
 | [step-with-retry](step-with-retry/main.go) | Step, RetryStrategy | SUCCEEDED |
 | [steps-with-retry](steps-with-retry/main.go) | Step (multiple), RetryStrategy | SUCCEEDED |
+| [step-pause-every](step-pause-every/main.go) | Step, RetryConfig.PauseEvery, pause and resume (experimental) | SUCCEEDED (local only) |
 | [attempt-fallback](attempt-fallback/main.go) | Step (sequential fallback) | SUCCEEDED |
 | [interrupted-no-retry](interrupted-no-retry/main.go) | Step, AtMostOnce semantics | SUCCEEDED |
 | [step-error-determinism](step-error-determinism/main.go) | Step, error replay determinism | SUCCEEDED |
@@ -26,6 +27,8 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [retry-invoke](retry-invoke/main.go) | Invoke, retry loop | SUCCEEDED |
 | [retry-invoke-target](retry-invoke-target/main.go) | (target function for retry-invoke) | — |
 | [retry-callback](retry-callback/main.go) | WaitForCallback, retry loop | FAILED |
+| [retry-group](retry-group/main.go) | Retry (per-attempt child context), NewRetryStrategy, ErrorTypeIs, ErrorContains, ErrorMatches, WithAttemptChildOptions, WithChildErrorMapper | SUCCEEDED |
+| [retry-group-inline](retry-group-inline/main.go) | Retry, WithAttemptChildContext(false), MustNewRetryStrategy, ErrorAs, ErrorIs, JitterHalf | SUCCEEDED |
 
 ### Wait & WaitForCondition
 
@@ -36,6 +39,7 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [wait-configurable](wait-configurable/main.go) | Wait (input-driven duration) | SUCCEEDED |
 | [wait-unawaited](wait-unawaited/main.go) | WaitAsync never awaited | SUCCEEDED |
 | [wait-for-condition](wait-for-condition/main.go) | WaitForCondition | SUCCEEDED |
+| [wait-for-condition-backoff](wait-for-condition-backoff/main.go) | WaitForCondition, MustNewWaitStrategy, NewWaitStrategy (delays 1 s, 2 s, 4 s) | SUCCEEDED |
 | [multiple-waits](multiple-waits/main.go) | Wait (multiple sequential) | SUCCEEDED |
 
 ### Invoke & Child Context
@@ -47,6 +51,9 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [invoke-tenant-id](invoke-tenant-id/main.go) | Invoke, WithTenantID | SUCCEEDED |
 | [invoke-tenant-target](invoke-tenant-target/main.go) | (target function for invoke-tenant-id) | — |
 | [chained-invoke](chained-invoke/main.go) | Invoke (sequential chain) | SUCCEEDED |
+| [invoke-async](invoke-async/main.go) | InvokeAsync (concurrent invokes awaited through futures) | SUCCEEDED |
+| [invoke-serdes](invoke-serdes/main.go) | Invoke, WithInvokePayloadSerdes, WithInvokeResultSerdes, SerdesOf | SUCCEEDED |
+| [invoke-error-sentinels](invoke-error-sentinels/main.go) | Invoke, InvokeError, ErrInvokeTimedOut, ErrExecutionStopped, ErrExecutionCancelled | SUCCEEDED |
 | [child-context-basic](child-context-basic/main.go) | RunInChildContext | SUCCEEDED |
 | [child-context-virtual](child-context-virtual/main.go) | RunInChildContext, WithChildVirtual (no CONTEXT events for the wrapper) | SUCCEEDED |
 | [child-context-serdes](child-context-serdes/main.go) | RunInChildContext, WithChildSerdes | SUCCEEDED |
@@ -61,6 +68,9 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [block-example](block-example/main.go) | RunInChildContext (nested), Step, Wait, struct result | SUCCEEDED |
 | [child-ops-preservation](child-ops-preservation/main.go) | RunInChildContext, operation ordering | SUCCEEDED |
 | [child-ops-invalid-depth](child-ops-invalid-depth/main.go) | RunInChildContext, depth validation | FAILED |
+| [child-context-error-mapper](child-context-error-mapper/main.go) | RunInChildContext, WithChildErrorMapper (handler-owned error type, mapped again on replay) | SUCCEEDED |
+| [child-context-summary](child-context-summary/main.go) | RunInChildContext, WithChildSummary (>256KB result, ReplayChildren) | SUCCEEDED |
+| [child-context-subtype](child-context-subtype/main.go) | RunInChildContext, WithChildSubType | SUCCEEDED |
 
 ### Callbacks
 
@@ -112,6 +122,8 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [map-virtual-context](map-virtual-context/main.go) | Map, WithNesting (NestingFlat) | SUCCEEDED |
 | [map-custom-summary-generator-replay](map-custom-summary-generator-replay/main.go) | Map, WithBatchSummary (>256KB, replay across suspension) | SUCCEEDED |
 | [map-flat-summarized-replay](map-flat-summarized-replay/main.go) | Map, WithNesting (NestingFlat), >256KB replay across suspension | SUCCEEDED |
+| [map-serdes](map-serdes/main.go) | Map, WithBatchSerdes (per item), WithBatchResultSerdes (whole BatchResult, replay across suspension), SerdesOf | SUCCEEDED |
+| [map-completion-policy](map-completion-policy/main.go) | Map, WithCompletion (ShouldComplete composed from rules), CompletionDecision.Complete, CompletionDecision.Outcome | SUCCEEDED |
 | [parallel-basic](parallel-basic/main.go) | Parallel, WithMaxConcurrency | SUCCEEDED |
 | [parallel-empty](parallel-empty/main.go) | Parallel (no branches) | SUCCEEDED |
 | [parallel-invoke](parallel-invoke/main.go) | Parallel, Invoke | SUCCEEDED |
@@ -178,6 +190,8 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [logger-exactly-once](logger-exactly-once/main.go) | Context.Logger after every kind of awaited outcome, Result(ctx) in a Go branch, a crashed invocation | SUCCEEDED |
 | [logger-log-levels](logger-log-levels/main.go) | Context.Logger, all log levels | SUCCEEDED |
 | [logger-slog-handler](logger-slog-handler/main.go) | WithLogHandler, application slog.Handler | SUCCEEDED |
+| [logger-replay-mode](logger-replay-mode/main.go) | WithReplayLogMode, ConfigureLogging, ReplayLogModeEmit / ReplayLogModeSuppress | SUCCEEDED |
+| [error-stack-traces](error-stack-traces/main.go) | Step, WithStackTraces(false), StepError.StackTrace, MaxStackTraceFrames | SUCCEEDED |
 | [plugin-lifecycle](plugin-lifecycle/main.go) | WithPlugins, hook lifecycle ordering | SUCCEEDED |
 | [telemetry-exporter](telemetry-exporter/main.go) | WithPlugins, telemetry.New (Durable Execution Telemetry plugin) | SUCCEEDED |
 

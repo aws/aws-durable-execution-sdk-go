@@ -241,7 +241,7 @@ func TestPluginLogContextCannotOverwriteReplayAttribute(t *testing.T) {
 		}
 		ctx.Logger().Info("live")
 		return "ok", nil
-	}, withLambdaAPI(fake), WithLogHandler(rec), WithPlugins(plugin), WithReplayLogMode(ReplayLogModeEmit))
+	}, withLambdaAPI(fake), WithLogHandler(rec), withTestPlugins(plugin), WithReplayLogMode(ReplayLogModeEmit))
 	if _, err := h(t.Context(), replayedStepPayload()); err != nil {
 		t.Fatalf("Invoke() error: %v", err)
 	}
@@ -500,7 +500,7 @@ func TestConfigureLoggingHandlerKeepsPluginFieldsAndReplaySuppression(t *testing
 		}
 		ctx.Logger().Info("live")
 		return "ok", nil
-	}, withLambdaAPI(fake), WithLogHandler(slog.DiscardHandler), WithPlugins(plugin))
+	}, withLambdaAPI(fake), WithLogHandler(slog.DiscardHandler), withTestPlugins(plugin))
 	if _, err := h(t.Context(), replayedStepPayload()); err != nil {
 		t.Fatalf("Invoke() error: %v", err)
 	}

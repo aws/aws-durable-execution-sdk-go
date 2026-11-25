@@ -113,6 +113,7 @@ step/attempt-fallback/step-attempt-fallback                                     
 step/basic/step-basic                                                              simple-step
 step/interrupted-no-retry/step-interrupted-no-retry                                interrupted-no-retry
 step/named/step-named                                                              named-step
+step/pause-every/step-pause-every                                                  step-pause-every
 step/step-error-determinism/step-error-determinism                                 step-error-determinism
 step/steps-with-retry/steps-with-retry                                             steps-with-retry
 step/with-retry/step-with-retry                                                    step-with-retry

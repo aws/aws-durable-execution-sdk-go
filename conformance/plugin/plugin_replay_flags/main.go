@@ -2,27 +2,18 @@
 // non-terminal step observed during replay reports replay=true, and a
 // step that is already terminal is not re-emitted.
 //
-// The Go SDK reports a step replayed from a terminal checkpoint on every
-// invocation that replays it: OnOperationStart with IsReplay true and the
-// checkpointed terminal status, then OnOperationEnd with IsReplay true. The
-// plugin below recognizes that pair from the start hook's own info
-// (IsReplay set and a terminal status) and emits neither record, so each
-// step's live start and terminal end appear exactly once. A step re-entered
-// before it settled, such as one whose retry is due, reports its
-// checkpointed non-terminal status with IsReplay true and is emitted.
-//
-// The op field of each record is OperationHookInfo.ID. The Go SDK fills it
-// with the operation's positional id (for example 1 or 1-1), while the
-// execution history and the ParentID field carry the checkpointed
-// operation id. The runner compares op against the history id, so the
-// requirement is registered as not implemented in template_plugin.yaml
-// until the two ids agree.
+// The Go SDK dispatches no start for a step replayed from a terminal
+// checkpoint. It dispatches the step's end only when the invocation lists
+// the step as updated. Otherwise the invocation that ran the step's last
+// attempt dispatched its start and its end, and the replay dispatches no
+// hook. A step re-entered before it settled, such as one
+// whose retry is due, reports its checkpointed non-terminal status with
+// IsReplay true. So the plugin below emits every step hook it receives.
 package main
 
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/aws/aws-durable-execution-sdk-go/conformance/internal/pluginlog"
@@ -31,59 +22,33 @@ import (
 
 var out = pluginlog.New(nil)
 
-// replayFlagsPlugin reports the operation lifecycle of step operations.
-// replayedTerminal holds, for the current invocation, the ids of steps
-// whose start reported a replayed terminal checkpoint; their end is the
-// second half of that replay and is skipped too.
-type replayFlagsPlugin struct {
-	mu               sync.Mutex
-	replayedTerminal map[string]bool
-}
-
-func (p *replayFlagsPlugin) plugin() durable.Plugin {
-	return durable.Plugin{
-		OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
-			out.Capture(info.ExecutionArn)
-			p.mu.Lock()
-			p.replayedTerminal = map[string]bool{}
-			p.mu.Unlock()
-		},
+// newReplayFlagsPlugin is a durable.PluginFactory. It reports the
+// operation lifecycle of step operations.
+func newReplayFlagsPlugin(_ context.Context, inv durable.InvocationHookInfo) (*durable.Plugin, error) {
+	return &durable.Plugin{
 		OnOperationStart: func(_ context.Context, info durable.OperationHookInfo) {
 			if info.SubType != durable.OperationSubTypeStep {
 				return
 			}
-			if info.IsReplay && pluginlog.OperationTerminal(info.Status) {
-				p.mu.Lock()
-				p.replayedTerminal[info.ID] = true
-				p.mu.Unlock()
-				return
-			}
-			out.Emit(map[string]any{
+			out.EmitWithArn(map[string]any{
 				"plugin": "CONFPLUGIN",
 				"hook":   "operation-start",
 				"op":     info.ID,
 				"replay": info.IsReplay,
-			})
+			}, inv.ExecutionArn)
 		},
 		OnOperationEnd: func(_ context.Context, info durable.OperationHookInfo) {
 			if info.SubType != durable.OperationSubTypeStep {
 				return
 			}
-			p.mu.Lock()
-			skip := p.replayedTerminal[info.ID]
-			delete(p.replayedTerminal, info.ID)
-			p.mu.Unlock()
-			if skip {
-				return
-			}
-			out.Emit(map[string]any{
+			out.EmitWithArn(map[string]any{
 				"plugin": "CONFPLUGIN",
 				"hook":   "operation-end",
 				"op":     info.ID,
 				"status": string(info.Status),
-			})
+			}, inv.ExecutionArn)
 		},
-	}
+	}, nil
 }
 
 func handler(ctx durable.Context, _ any) (string, error) {
@@ -110,5 +75,5 @@ func handler(ctx durable.Context, _ any) (string, error) {
 }
 
 func main() {
-	durable.Start(handler, durable.WithPlugins((&replayFlagsPlugin{}).plugin()))
+	durable.Start(handler, durable.WithPlugins(durable.PluginFactoryFunc(newReplayFlagsPlugin)))
 }

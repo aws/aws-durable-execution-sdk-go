@@ -6,8 +6,8 @@
 // executionArn) field names the execution under test. It then matches each
 // expectation against the top-level fields of those records. So a plugin
 // writes each record as one raw JSON object per line, and stamps every
-// record with the execution ARN it captured from the invocation-start
-// hook. The Lambda runtime forwards a line that is already a JSON object
+// record with the execution ARN its factory received in the invocation
+// info. The Lambda runtime forwards a line that is already a JSON object
 // unchanged, so the fields stay top-level. Records go to standard error,
 // the stream the SDK logger writes to, so a plugin record and an SDK log
 // record keep their relative order in the log group.
@@ -21,6 +21,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
 )
@@ -29,11 +30,13 @@ import (
 const None = "NONE"
 
 // Emitter writes plugin records. It is safe for concurrent use: plugin
-// hooks of concurrent branches run on different goroutines.
+// hooks of concurrent branches run on different goroutines. The Emitter
+// holds no execution state. Each record carries its own ARN, passed to
+// EmitWithArn by the plugin whose factory received it, so overlapping
+// invocations that share one Emitter cannot stamp each other's records.
 type Emitter struct {
-	mu  sync.Mutex
-	w   io.Writer
-	arn string
+	mu sync.Mutex
+	w  io.Writer
 }
 
 // New returns an Emitter that writes to w, or to standard error when w is
@@ -53,26 +56,8 @@ func (e *Emitter) SetWriter(w io.Writer) {
 	e.w = w
 }
 
-// Capture stores the execution ARN that later records are stamped with.
-// Call it from OnInvocationStart with the ARN the hook info carries.
-func (e *Emitter) Capture(arn string) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.arn = arn
-}
-
-// Emit writes record as one JSON line, adding durableExecutionArn when an
-// ARN has been captured. The field is omitted when no ARN is known; the
-// Emitter never invents a value.
-func (e *Emitter) Emit(record map[string]any) {
-	e.mu.Lock()
-	arn := e.arn
-	e.mu.Unlock()
-	e.EmitWithArn(record, arn)
-}
-
 // EmitWithArn writes record as one JSON line stamped with arn. An empty arn
-// omits the field.
+// omits the field; the Emitter never invents a value.
 func (e *Emitter) EmitWithArn(record map[string]any, arn string) {
 	line := make(map[string]any, len(record)+1)
 	for k, v := range record {
@@ -141,4 +126,52 @@ func Outcome(status durable.PluginOperationStatus) string {
 		return string(durable.PluginAttemptSucceeded)
 	}
 	return string(durable.PluginAttemptFailed)
+}
+
+// InfoRecord returns the canonical dump of info that the field-shape
+// requirements (10-20 and later) assert on: every field of
+// OperationHookInfo under its camelCase name, with hook as the record's
+// hook. A field the SDK left unset is omitted rather than written as a
+// zero value, because the requirements assert the presence of each key:
+// an absent key is the signal that the info lacks the field. A string
+// field is written when non-empty, a time when non-zero, the attempt when
+// positive, the error when non-nil. Type and status tokens are written as
+// the SDK reports them; the suite upper-cases both, and the Go tokens are
+// already upper case. Timestamps are RFC 3339 in UTC.
+func InfoRecord(hook string, info durable.OperationHookInfo) map[string]any {
+	rec := map[string]any{
+		"plugin":   "CONFPLUGIN",
+		"hook":     hook,
+		"id":       info.ID,
+		"type":     Upper(info.Type),
+		"isReplay": info.IsReplay,
+	}
+	if info.Name != "" {
+		rec["name"] = info.Name
+	}
+	if info.SubType != "" {
+		rec["subType"] = info.SubType
+	}
+	if info.ParentID != "" {
+		rec["parentId"] = info.ParentID
+	}
+	if info.Status != "" {
+		rec["status"] = string(info.Status)
+	}
+	if !info.StartTimestamp.IsZero() {
+		rec["startTimestamp"] = info.StartTimestamp.UTC().Format(time.RFC3339Nano)
+	}
+	if !info.EndTimestamp.IsZero() {
+		rec["endTimestamp"] = info.EndTimestamp.UTC().Format(time.RFC3339Nano)
+	}
+	if info.Result != "" {
+		rec["result"] = info.Result
+	}
+	if info.Error != nil {
+		rec["error"] = ErrorMessage(info.Error)
+	}
+	if info.Attempt > 0 {
+		rec["attempt"] = info.Attempt
+	}
+	return rec
 }

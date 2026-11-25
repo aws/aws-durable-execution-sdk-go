@@ -221,7 +221,7 @@ func TestOrphanBranchRefusedBeforeInvocationPostProcessing(t *testing.T) {
 					return "orphan", err
 				})
 				return exit.finish()
-			}, withLambdaAPI(fake), WithPlugins(plugin))
+			}, withLambdaAPI(fake), withTestPlugins(plugin))
 
 			raw, err := h(context.Background(), stepPayload(`""`))
 			if err != nil {

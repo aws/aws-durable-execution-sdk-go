@@ -1,11 +1,12 @@
 package telemetry
 
 import (
+	"cmp"
 	"context"
-	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -52,7 +53,7 @@ type Config struct {
 }
 
 // TelemetryPlugin is the Durable Execution Telemetry plugin
-// implementation. Construct via New; do not construct the zero value
+// factory. Construct via New; do not construct the zero value
 // directly.
 type TelemetryPlugin struct {
 	emitMode        EmitMode
@@ -60,22 +61,32 @@ type TelemetryPlugin struct {
 	samplingRate    float64
 	exporters       []Exporter
 	content         ContentConfig
+}
+
+// telemetryInvocation owns the mutable state of one invocation.
+// Operation hooks and log enrichment can overlap within that invocation.
+// So mu protects the record, operation index, and dispatch bookkeeping.
+type telemetryInvocation struct {
+	env *TelemetryPlugin
 
 	mu     sync.Mutex
 	record *Record
 	byOpID map[string]int // operation ID -> index in record.Operations
 
-	// sampledIn is this invocation's sampling decision, computed once
-	// per OnInvocationStart. Deterministic per execution via
-	// ExecutionArn hash.
+	// resultText maps an operation ID to the checkpointed result text
+	// that produced the operation's current Result. Several hooks report
+	// the same unchanged result for one operation. So upsertOperationLocked
+	// reuses the stored Result when the text matches, and the Result
+	// transform runs only when the text changes.
+	resultText map[string]string
+
+	// sampledIn is computed in CreatePlugin from the execution ARN.
+	// The same execution has the same decision across invocations.
 	sampledIn bool
 
-	// countArn and invocationCount track how many invocations of the
-	// current execution this plugin instance has observed. countArn is
-	// the execution identity (see executionIdentity); the counter
-	// resets when a different execution's invocation arrives.
-	countArn        string
-	invocationCount int
+	// ended prevents new on-change dispatches once invocation finalization starts.
+	// Protected by mu, so every WaitGroup Add precedes the final Wait.
+	ended bool
 
 	// onChangeDispatching/onChangeDirty implement EmitOnChange's
 	// coalescing behavior: at most one dispatch goroutine runs at a
@@ -86,6 +97,10 @@ type TelemetryPlugin struct {
 	// onChangeWG lets OnInvocationEnd wait for any in-flight on-change
 	// dispatch to finish before sending the final terminal record.
 	onChangeWG sync.WaitGroup
+
+	// lastEmittedMs is the Unix millisecond of the last emitted record.
+	// See nextEmittedAtLocked.
+	lastEmittedMs int64
 }
 
 // New constructs a Durable Execution Telemetry plugin from cfg. A
@@ -117,37 +132,48 @@ func New(cfg Config) *TelemetryPlugin {
 		operationDetail: operationDetail,
 		samplingRate:    samplingRate,
 		exporters:       exporters,
-		content:         defaultContent(cfg.Content),
+		content:         cfg.Content,
 	}
 }
 
-// defaultContent applies defaults for a zero-value ContentConfig: all
-// content is included. This matches the documented default behavior.
-//
-// Note: the zero-value detection is all-or-nothing. If ANY Include* field
-// is set to true, the others are NOT defaulted. Users who partially
-// configure ContentConfig should set all Include* fields explicitly.
-func defaultContent(c ContentConfig) ContentConfig {
-	// If all Include* fields are false (the zero value), it means the
-	// caller did not configure content — default to everything included.
-	if !c.IncludeInput && !c.IncludeOutput && !c.IncludeOperationResults &&
-		!c.IncludeOperationErrors && !c.IncludeExecutionError {
-		return DefaultContentConfig()
-	}
-	return c
-}
+// TelemetryPlugin implements durable.PluginFactory, so pass it to
+// durable.WithPlugins directly.
+var _ durable.PluginFactory = (*TelemetryPlugin)(nil)
 
-// Plugin returns a durable.Plugin struct wired to this TelemetryPlugin's
-// lifecycle hooks. Pass the result to durable.WithPlugins().
-func (p *TelemetryPlugin) Plugin() durable.Plugin {
-	return durable.Plugin{
-		OnInvocationStart: p.onInvocationStart,
-		OnInvocationEnd:   p.onInvocationEnd,
-		OnOperationStart:  p.onOperationStart,
-		OnOperationEnd:    p.onOperationEnd,
-		OnOperationChange: p.onOperationChange,
-		EnrichLogContext:  p.enrichLogContext,
+// CreatePlugin returns hooks bound to fresh invocation-local state.
+// Configuration and exporters remain shared on the factory. The record,
+// sampling decision, mutex, and on-change dispatch state belong to the
+// returned plugin alone.
+func (p *TelemetryPlugin) CreatePlugin(_ context.Context, info durable.InvocationHookInfo) (*durable.Plugin, error) {
+	region, accountID, functionName, qualifier := parseFunctionARN(info.ExecutionArn)
+	inv := &telemetryInvocation{
+		env:        p,
+		record:     NewRecord(info.ExecutionArn),
+		byOpID:     make(map[string]int),
+		resultText: make(map[string]string),
+		sampledIn:  sampledIn(info.ExecutionArn, p.samplingRate),
 	}
+	inv.record.FunctionName = functionName
+	inv.record.FunctionQualifier = qualifier
+	inv.record.Region = region
+	inv.record.AccountID = accountID
+	inv.record.Status = StatusRunning
+	start := resolveExecutionStart(info)
+	inv.record.StartTimestamp = &start
+	// A sampled-out invocation emits nothing. So its transforms are
+	// skipped: their results would be discarded.
+	if inv.sampledIn {
+		inv.record.Input = p.content.inputValue(info.ExecutionInput)
+	}
+
+	return &durable.Plugin{
+		OnInvocationStart: inv.onInvocationStart,
+		OnInvocationEnd:   inv.onInvocationEnd,
+		OnOperationStart:  inv.onOperationStart,
+		OnOperationEnd:    inv.onOperationEnd,
+		OnOperationChange: inv.onOperationChange,
+		EnrichLogContext:  inv.enrichLogContext,
+	}, nil
 }
 
 // arnPattern extracts region, account ID, function name, and qualifier
@@ -164,21 +190,47 @@ func parseFunctionARN(arn string) (region, accountID, functionName, qualifier st
 	return m[1], m[2], m[3], m[4]
 }
 
-// executionIdentity returns the portion of a durable execution ARN that
-// identifies the execution, excluding any trailing per-invocation segment.
-// For an ARN without the durable-execution marker, the whole ARN is the
-// identity.
-func executionIdentity(arn string) string {
-	const marker = "/durable-execution/"
-	idx := strings.Index(arn, marker)
-	if idx < 0 {
-		return arn
+// resolveExecutionStart returns the execution start for a record. The
+// wire payload normally reports it as ExecutionStartTimestamp. When it
+// does not, the oldest operation start in the invocation snapshot is the
+// next best replay-stable instant: on a resumed execution it predates this
+// invocation, where time.Now would yield a duration covering only the
+// final invocation. time.Now is the last resort, so the record always
+// has a start and a terminal record always has a duration.
+func resolveExecutionStart(info durable.InvocationHookInfo) time.Time {
+	if !info.ExecutionStartTimestamp.IsZero() {
+		return info.ExecutionStartTimestamp
 	}
-	rest := arn[idx+len(marker):]
-	if slash := strings.Index(rest, "/"); slash >= 0 {
-		return arn[:idx+len(marker)+slash]
+	var oldest time.Time
+	for _, op := range info.Operations {
+		if op.StartTimestamp.IsZero() {
+			continue
+		}
+		if oldest.IsZero() || op.StartTimestamp.Before(oldest) {
+			oldest = op.StartTimestamp
+		}
 	}
-	return arn
+	if !oldest.IsZero() {
+		return oldest
+	}
+	return time.Now()
+}
+
+// nextEmittedAtLocked returns the EmittedAt value for the next emitted
+// record. Records serialize emittedAt at millisecond precision. The SQS
+// FIFO deduplication ID and the default DynamoDB sort key are
+// executionArn plus emittedAt. Two records of one invocation in the same
+// millisecond, such as an on-change snapshot and the terminal record,
+// would then make SQS drop the second message and DynamoDB overwrite the
+// first item. So the returned value is at least one millisecond after the
+// previous one. Called with p.mu held.
+func (p *telemetryInvocation) nextEmittedAtLocked() time.Time {
+	ms := time.Now().UnixMilli()
+	if ms <= p.lastEmittedMs {
+		ms = p.lastEmittedMs + 1
+	}
+	p.lastEmittedMs = ms
+	return time.UnixMilli(ms).UTC()
 }
 
 // sampledIn reports whether executionArn's deterministic sampling
@@ -199,50 +251,39 @@ func sampledIn(executionArn string, rate float64) bool {
 	return bucket < threshold
 }
 
-// onInvocationStart initializes this invocation's cumulative record.
-func (p *TelemetryPlugin) onInvocationStart(_ context.Context, info durable.InvocationHookInfo) {
-	_, _, functionName, _ := parseFunctionARN(info.ExecutionArn)
-
+// onInvocationStart restores the full checkpointed operation snapshot.
+// Completed child contexts can return without executing their bodies again.
+// So their unchanged nested operations must come from this snapshot.
+func (p *telemetryInvocation) onInvocationStart(_ context.Context, info durable.InvocationHookInfo) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-
-	p.sampledIn = sampledIn(info.ExecutionArn, p.samplingRate)
-
-	// NewRecord sets EmittedAt and extracts ExecutionName.
-	p.record = NewRecord(info.ExecutionArn)
-	p.record.FunctionName = functionName
-	p.record.Status = StatusRunning
-
-	// Count the invocations of this execution observed by this plugin
-	// instance. The comparison uses the execution identity, since the
-	// ARN can carry a per-invocation trailing segment. A
-	// first-invocation signal restarts the count even when the same
-	// execution identity is seen again.
-	identity := executionIdentity(info.ExecutionArn)
-	if identity != p.countArn || info.IsFirstInvocation {
-		p.countArn = identity
-		p.invocationCount = 0
+	for _, id := range orderedOperationIDs(info.Operations) {
+		p.upsertOperationLocked(id, info.Operations[id])
 	}
-	p.invocationCount++
-	p.record.InvocationCount = p.invocationCount
-	if !info.ExecutionStartTimestamp.IsZero() {
-		t := info.ExecutionStartTimestamp
-		p.record.StartTimestamp = &t
-	}
+}
 
-	// Store execution input as a content field.
-	if info.ExecutionInput != nil {
-		if raw, err := marshalInput(info.ExecutionInput); err == nil && raw != "" {
-			p.record.Input = p.content.BuildContentField(raw)
+// orderedOperationIDs orders a checkpoint snapshot for oldest-first truncation.
+// Snapshot maps have no iteration order, but Truncate removes a slice prefix.
+// Missing timestamps come last because those operations may not have started.
+func orderedOperationIDs(ops map[string]durable.OperationHookInfo) []string {
+	ids := make([]string, 0, len(ops))
+	for id := range ops {
+		ids = append(ids, id)
+	}
+	slices.SortFunc(ids, func(a, b string) int {
+		ta, tb := ops[a].StartTimestamp, ops[b].StartTimestamp
+		switch {
+		case ta.IsZero() && !tb.IsZero():
+			return 1
+		case !ta.IsZero() && tb.IsZero():
+			return -1
 		}
-	}
-
-	p.byOpID = make(map[string]int)
-
-	// Backfill operations that changed externally between invocations.
-	for id, opInfo := range info.UpdatedOperations {
-		p.upsertOperationLocked(id, opInfo)
-	}
+		if order := ta.Compare(tb); order != 0 {
+			return order
+		}
+		return cmp.Compare(a, b)
+	})
+	return ids
 }
 
 // onInvocationEnd finalizes the record with the terminal outcome and
@@ -250,40 +291,36 @@ func (p *TelemetryPlugin) onInvocationStart(_ context.Context, info durable.Invo
 // or retrying outcome means the execution continues in a later invocation,
 // so it leaves the record running; EmitAlways still emits a snapshot for
 // it, since that mode reports every invocation regardless of outcome.
-func (p *TelemetryPlugin) onInvocationEnd(ctx context.Context, info durable.InvocationEndHookInfo) {
+func (p *telemetryInvocation) onInvocationEnd(ctx context.Context, info durable.InvocationEndHookInfo) {
+	p.mu.Lock()
+	p.ended = true
+	p.mu.Unlock()
+
 	if info.Status == durable.PluginInvocationPending || info.Status == durable.PluginInvocationRetrying {
-		if p.emitMode == EmitOnChange {
-			// Drain any in-flight on-change dispatch so records are not
-			// orphaned or contaminate the next invocation.
+		if p.env.emitMode == EmitOnChange {
+			// Finish this invocation's on-change dispatches before its
+			// final running snapshot and before the end hook returns.
 			p.onChangeWG.Wait()
 		}
-		if p.emitMode != EmitAlways && p.emitMode != EmitOnChange {
+		if p.env.emitMode != EmitAlways && p.env.emitMode != EmitOnChange {
 			return
 		}
 		p.mu.Lock()
-		if p.record == nil {
-			p.mu.Unlock()
-			return
-		}
 		// The execution continues after this invocation: keep the
 		// running status and leave the end timestamp unset.
 		record := p.snapshotRecordLocked()
-		record.EmittedAt = time.Now()
+		record.EmittedAt = p.nextEmittedAtLocked()
 		sampledIn := p.sampledIn
 		p.mu.Unlock()
 
 		if !sampledIn {
 			return
 		}
-		p.dispatch(ctx, record)
+		p.env.dispatch(ctx, record)
 		return
 	}
 
 	p.mu.Lock()
-	if p.record == nil {
-		p.mu.Unlock()
-		return
-	}
 
 	now := time.Now()
 	p.record.EndTimestamp = &now
@@ -292,14 +329,12 @@ func (p *TelemetryPlugin) onInvocationEnd(ctx context.Context, info durable.Invo
 		p.record.DurationMs = &d
 	}
 	// Refresh EmittedAt to the actual emission time.
-	p.record.EmittedAt = now
+	p.record.EmittedAt = p.nextEmittedAtLocked()
 
 	if info.Status == durable.PluginInvocationSucceeded {
 		p.record.Status = StatusSucceeded
-		if info.ExecutionResult != nil {
-			if raw, err := marshalInput(info.ExecutionResult); err == nil && raw != "" {
-				p.record.Output = p.content.BuildContentField(raw)
-			}
+		if p.sampledIn {
+			p.record.Output = p.env.content.outputValue(info.ExecutionResult)
 		}
 	} else {
 		p.record.Status = StatusFailed
@@ -313,18 +348,18 @@ func (p *TelemetryPlugin) onInvocationEnd(ctx context.Context, info durable.Invo
 	sampledIn := p.sampledIn
 	p.mu.Unlock()
 
-	if !sampledIn || !p.shouldEmit(record.Status) {
+	if !sampledIn || !p.env.shouldEmit(record.Status) {
 		return
 	}
 
 	// Wait for any in-flight on-change dispatch to finish before
 	// sending the terminal record (ordering guarantee).
 	p.onChangeWG.Wait()
-	p.dispatch(ctx, record)
+	p.env.dispatch(ctx, record)
 }
 
 // onOperationStart records the operation's start into the cumulative record.
-func (p *TelemetryPlugin) onOperationStart(ctx context.Context, info durable.OperationHookInfo) {
+func (p *telemetryInvocation) onOperationStart(ctx context.Context, info durable.OperationHookInfo) {
 	p.mu.Lock()
 	p.upsertOperationLocked(info.ID, info)
 	p.mu.Unlock()
@@ -332,7 +367,7 @@ func (p *TelemetryPlugin) onOperationStart(ctx context.Context, info durable.Ope
 }
 
 // onOperationEnd records the operation's completion.
-func (p *TelemetryPlugin) onOperationEnd(ctx context.Context, info durable.OperationHookInfo) {
+func (p *telemetryInvocation) onOperationEnd(ctx context.Context, info durable.OperationHookInfo) {
 	p.mu.Lock()
 	p.upsertOperationLocked(info.ID, info)
 	p.mu.Unlock()
@@ -340,7 +375,7 @@ func (p *TelemetryPlugin) onOperationEnd(ctx context.Context, info durable.Opera
 }
 
 // onOperationChange folds externally-changed operations into the record.
-func (p *TelemetryPlugin) onOperationChange(ctx context.Context, info durable.OperationChangeHookInfo) {
+func (p *telemetryInvocation) onOperationChange(ctx context.Context, info durable.OperationChangeHookInfo) {
 	p.mu.Lock()
 	for id, opInfo := range info.UpdatedOperations {
 		p.upsertOperationLocked(id, opInfo)
@@ -350,20 +385,14 @@ func (p *TelemetryPlugin) onOperationChange(ctx context.Context, info durable.Op
 }
 
 // enrichLogContext adds execution metadata to the log context.
-func (p *TelemetryPlugin) enrichLogContext(_ context.Context) map[string]any {
+func (p *telemetryInvocation) enrichLogContext(_ context.Context) map[string]any {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.record == nil {
-		return nil
-	}
 	m := map[string]any{
 		"execution_arn": p.record.ExecutionArn,
 	}
 	if p.record.FunctionName != "" {
 		m["function_name"] = p.record.FunctionName
-	}
-	if p.record.InvocationCount > 0 {
-		m["invocation_count"] = p.record.InvocationCount
 	}
 	return m
 }
@@ -371,30 +400,48 @@ func (p *TelemetryPlugin) enrichLogContext(_ context.Context) map[string]any {
 // snapshotRecordLocked returns an emission-ready copy of the current
 // record: operations are filtered per the configured detail level (or
 // copied so in-place content filtering cannot corrupt the live record)
-// and content redaction is applied. Called with p.mu held; p.record must
-// be non-nil.
-func (p *TelemetryPlugin) snapshotRecordLocked() Record {
+// and content redaction is applied. Called with p.mu held.
+func (p *telemetryInvocation) snapshotRecordLocked() Record {
 	record := *p.record
-	if p.operationDetail != OperationDetailFullTree {
+	if p.env.operationDetail != OperationDetailFullTree {
 		record.Operations = filterTopLevel(record.Operations)
 	} else {
 		ops := make([]OperationRecord, len(record.Operations))
 		copy(ops, record.Operations)
 		record.Operations = ops
 	}
-	p.content.ApplyToRecord(&record)
+	p.env.content.applyOperations(&record)
 	return record
 }
 
 // upsertOperationLocked inserts or updates in place the OperationRecord
 // for the given operation ID. Skips the root EXECUTION operation (already
 // covered by the record's top-level fields). Called with p.mu held.
-func (p *TelemetryPlugin) upsertOperationLocked(id string, info durable.OperationHookInfo) {
+//
+// The Result field is set in one of three ways:
+//   - The invocation is sampled out: Result stays nil and no transform
+//     runs, because the record is never emitted.
+//   - The result text and operation name equal those that produced the
+//     stored Result: the stored Result is reused and no transform runs.
+//   - Otherwise: resultValue runs the transform, and the text is stored.
+func (p *telemetryInvocation) upsertOperationLocked(id string, info durable.OperationHookInfo) {
 	if info.Type == "EXECUTION" || info.Type == "Execution" {
 		return
 	}
 	rec := toOperationRecord(id, info)
-	if idx, ok := p.byOpID[id]; ok {
+	idx, exists := p.byOpID[id]
+	if p.sampledIn {
+		// The name check keeps the reuse correct if a hook reports a
+		// different name, because overrides are matched by name.
+		if text, seen := p.resultText[id]; exists && seen && text == info.Result &&
+			p.record.Operations[idx].Name == info.Name {
+			rec.Result = p.record.Operations[idx].Result
+		} else {
+			rec.Result = p.env.content.resultValue(info.Name, info.Result)
+			p.resultText[id] = info.Result
+		}
+	}
+	if exists {
 		p.record.Operations[idx] = rec
 		return
 	}
@@ -404,6 +451,8 @@ func (p *TelemetryPlugin) upsertOperationLocked(id string, info durable.Operatio
 
 // toOperationRecord converts a durable.OperationHookInfo into an
 // OperationRecord, computing DurationMs when both timestamps are present.
+// It leaves Result unset. upsertOperationLocked sets Result, so that it
+// can skip the transform when the result text has not changed.
 func toOperationRecord(id string, info durable.OperationHookInfo) OperationRecord {
 	rec := OperationRecord{
 		ID:      id,
@@ -427,9 +476,6 @@ func toOperationRecord(id string, info durable.OperationHookInfo) OperationRecor
 	if rec.StartTimestamp != nil && rec.EndTimestamp != nil {
 		d := rec.EndTimestamp.Sub(*rec.StartTimestamp).Milliseconds()
 		rec.DurationMs = &d
-	}
-	if info.Result != "" {
-		rec.Result = &ContentField{Value: info.Result}
 	}
 	if info.Error != nil {
 		rec.Error = errorRecordFromErr(info.Error)
@@ -498,13 +544,13 @@ func (p *TelemetryPlugin) shouldEmit(status Status) bool {
 // scheduleOnChangeDispatch implements EmitOnChange's coalescing: at most
 // one dispatch goroutine runs at a time. No-op when EmitMode is not
 // EmitOnChange or the invocation is sampled out.
-func (p *TelemetryPlugin) scheduleOnChangeDispatch(ctx context.Context) {
-	if p.emitMode != EmitOnChange {
+func (p *telemetryInvocation) scheduleOnChangeDispatch(ctx context.Context) {
+	if p.env.emitMode != EmitOnChange {
 		return
 	}
 
 	p.mu.Lock()
-	if !p.sampledIn {
+	if !p.sampledIn || p.ended {
 		p.mu.Unlock()
 		return
 	}
@@ -514,26 +560,21 @@ func (p *TelemetryPlugin) scheduleOnChangeDispatch(ctx context.Context) {
 		return
 	}
 	p.onChangeDispatching = true
+	// Add while holding mu, before onInvocationEnd can set ended and
+	// begin waiting. Once ended is set, no new dispatch can be added.
+	p.onChangeWG.Add(1)
 	p.mu.Unlock()
 
-	p.onChangeWG.Add(1)
 	go func() {
 		defer p.onChangeWG.Done()
 		for {
 			p.mu.Lock()
 			p.onChangeDirty = false
-			var record Record
-			hasRecord := p.record != nil
-			if hasRecord {
-				record = p.snapshotRecordLocked()
-				// Refresh EmittedAt for this snapshot.
-				record.EmittedAt = time.Now()
-			}
+			record := p.snapshotRecordLocked()
+			record.EmittedAt = p.nextEmittedAtLocked()
 			p.mu.Unlock()
 
-			if hasRecord {
-				p.dispatch(ctx, record)
-			}
+			p.env.dispatch(ctx, record)
 
 			p.mu.Lock()
 			stillDirty := p.onChangeDirty
@@ -578,20 +619,4 @@ func (p *TelemetryPlugin) dispatch(ctx context.Context, record Record) {
 			}()
 		}
 	}
-}
-
-// marshalInput serializes an arbitrary value to JSON string for storage
-// in a ContentField. Returns empty string on marshal failure.
-func marshalInput(v any) (string, error) {
-	if v == nil {
-		return "", nil
-	}
-	if s, ok := v.(string); ok {
-		return s, nil
-	}
-	b, err := json.Marshal(v)
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil
 }

@@ -31,6 +31,47 @@ type ExecutionClient interface {
 	Checkpoint(ctx context.Context, in CheckpointInput) (CheckpointOutput, error)
 }
 
+// ExecutionPauser is implemented by an [ExecutionClient] that can pause a
+// durable execution. A step pauses the execution through it when a retry
+// decision sets [RetryDecision.Pause]. The SDK checks for it at run time,
+// so an ExecutionClient without it still compiles, and its steps retry
+// without pausing. The default client implements it with the Lambda
+// PauseDurableExecution API.
+//
+// EXPERIMENTAL: this interface is experimental and may be changed or
+// removed in future releases.
+type ExecutionPauser interface {
+	// PauseExecution asks the backend to pause the execution. The pause
+	// takes effect asynchronously: a nil error means the backend accepted
+	// the request.
+	PauseExecution(ctx context.Context, in PauseExecutionInput) (PauseExecutionOutput, error)
+}
+
+// PauseExecutionInput requests a pause of a durable execution.
+//
+// EXPERIMENTAL: this type is experimental and may be changed or
+// removed in future releases.
+type PauseExecutionInput struct {
+	// ExecutionArn identifies the durable execution.
+	ExecutionArn string
+
+	// ClientToken makes the request idempotent. The SDK derives it from
+	// the execution ARN, the step, and the attempt, so a repeated request
+	// for the same attempt does not pause the execution again.
+	ClientToken string
+
+	// Reason describes why the execution is paused. The backend records
+	// it in the execution history.
+	Reason string
+}
+
+// PauseExecutionOutput is the result of a successful pause request. It
+// has no fields.
+//
+// EXPERIMENTAL: this type is experimental and may be changed or
+// removed in future releases.
+type PauseExecutionOutput struct{}
+
 // GetExecutionStateInput requests one page of an execution's checkpointed
 // operation log.
 type GetExecutionStateInput struct {

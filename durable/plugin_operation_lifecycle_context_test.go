@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -12,7 +13,8 @@ import (
 )
 
 // summarizeByID renders events as "hook:id:status:replay" strings, for
-// sequences that include unnamed operations.
+// sequences that include unnamed operations. id is the wire ID the hook
+// reported.
 func summarizeByID(evs []opEvent) []string {
 	out := make([]string, 0, len(evs))
 	for _, ev := range evs {
@@ -21,9 +23,23 @@ func summarizeByID(evs []opEvent) []string {
 	return out
 }
 
+// wireKey returns key, a "hook:id" or "hook:id:..." string whose id is a
+// positional ID, with the id replaced by its wire ID, as the hooks report
+// it. Expectations are written with positional IDs for readability.
+func wireKey(key string) string {
+	parts := strings.Split(key, ":")
+	parts[1] = hashID(parts[1])
+	return strings.Join(parts, ":")
+}
+
+// assertSequenceByID asserts that got, summarized by summarizeByID, equals
+// want. The want strings name operations by positional ID; see wireKey.
 func assertSequenceByID(t *testing.T, got []opEvent, want ...string) {
 	t.Helper()
 	g := summarizeByID(got)
+	for i := range want {
+		want[i] = wireKey(want[i])
+	}
 	if len(g) != len(want) {
 		t.Fatalf("event sequence = %v, want %v", g, want)
 	}
@@ -120,14 +136,14 @@ func nestedChildHandlers(rec *opRecorder) map[string]func(context.Context, []byt
 					return RunInChildContext(c, "inner", leaf)
 				})
 			})
-		}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
+		}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
 		"RunInChildContextAsync": Wrap(func(ctx Context, _ string) (string, error) {
 			return RunInChildContextAsync(ctx, "outer", func(c Context) (string, error) {
 				return RunInChildContextAsync(c, "mid", func(c Context) (string, error) {
 					return RunInChildContextAsync(c, "inner", leaf).Result(c)
 				}).Result(c)
 			}).Result(ctx)
-		}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
+		}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
 	}
 }
 
@@ -140,13 +156,16 @@ func nestedChildHandlers(rec *opRecorder) map[string]func(context.Context, []byt
 // checkpoint, innermost first. Every event's ParentID is the wire ID of the
 // enclosing context, so the tree is reconstructable from the events alone.
 //
-// Replay of the settled tree: the outer context is SUCCEEDED, so only its
-// replayed end is dispatched; the inner levels are not visited.
+// Replay of the settled tree: the outer context is SUCCEEDED and the inner
+// levels are not visited. The first invocation dispatched the outer end, so
+// the replay dispatches no hook. A payload that lists the outer context as
+// updated makes the replay the first to observe the outcome, so the outer
+// context dispatches one end with IsReplay false.
 //
 // Replay of a partially settled tree: the outer and middle contexts are
 // STARTED and the inner context is SUCCEEDED. The outer and middle
-// contexts re-enter with replayed starts, the inner context dispatches a
-// replayed end, and the outer and middle contexts complete live.
+// contexts re-enter with replayed starts and complete live. The settled
+// inner context dispatches no hook.
 func TestOperationLifecycleChildContextThreeLevelTree(t *testing.T) {
 	for variant := range nestedChildHandlers(&opRecorder{}) {
 		t.Run(variant, func(t *testing.T) {
@@ -174,13 +193,13 @@ func TestOperationLifecycleChildContextThreeLevelTree(t *testing.T) {
 				assertLiveTimestamps(t, ev)
 				switch ev.info.Name {
 				case "outer":
-					assertIdentity(t, ev, "1", "outer", ctxType, ctxSub, "")
+					assertIdentity(t, ev, hashID("1"), "outer", ctxType, ctxSub, "")
 				case "mid":
-					assertIdentity(t, ev, "1-1", "mid", ctxType, ctxSub, hashID("1"))
+					assertIdentity(t, ev, hashID("1-1"), "mid", ctxType, ctxSub, hashID("1"))
 				case "inner":
-					assertIdentity(t, ev, "1-1-1", "inner", ctxType, ctxSub, hashID("1-1"))
+					assertIdentity(t, ev, hashID("1-1-1"), "inner", ctxType, ctxSub, hashID("1-1"))
 				case "leaf":
-					assertIdentity(t, ev, "1-1-1-1", "leaf", string(OperationTypeStep), OperationSubTypeStep, hashID("1-1-1"))
+					assertIdentity(t, ev, hashID("1-1-1-1"), "leaf", string(OperationTypeStep), OperationSubTypeStep, hashID("1-1-1"))
 				}
 				if ev.hook == "end" && ev.info.Type == ctxType {
 					if ev.info.Result != `"v"` {
@@ -204,9 +223,16 @@ func TestOperationLifecycleChildContextThreeLevelTree(t *testing.T) {
 				t.Fatal(err)
 			}
 			assertPluginResponseStatus(t, resp, invocationSucceeded)
+			assertSequence(t, rec.take())
+
+			resp, err = handler(makePluginContext(), makePluginPayloadWithUpdated(t, "arn:test:lifecycle", "tok2", ops, []string{hashID("1")}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertPluginResponseStatus(t, resp, invocationSucceeded)
 			settled := rec.take()
-			assertSequence(t, settled, "end:outer:SUCCEEDED:true")
-			assertIdentity(t, settled[0], "1", "outer", ctxType, ctxSub, "")
+			assertSequence(t, settled, "end:outer:SUCCEEDED:false")
+			assertIdentity(t, settled[0], hashID("1"), "outer", ctxType, ctxSub, "")
 			assertReplayedTimestamps(t, settled[0], true)
 			if settled[0].info.Result != `"v"` {
 				t.Errorf("replayed end Result = %q, want %q", settled[0].info.Result, `"v"`)
@@ -228,19 +254,16 @@ func TestOperationLifecycleChildContextThreeLevelTree(t *testing.T) {
 			assertSequence(t, partial,
 				"start:outer:STARTED:true",
 				"start:mid:STARTED:true",
-				"end:inner:SUCCEEDED:true",
 				"end:mid:SUCCEEDED:false",
 				"end:outer:SUCCEEDED:false",
 			)
-			assertIdentity(t, partial[0], "1", "outer", ctxType, ctxSub, "")
-			assertIdentity(t, partial[1], "1-1", "mid", ctxType, ctxSub, hashID("1"))
-			assertIdentity(t, partial[2], "1-1-1", "inner", ctxType, ctxSub, hashID("1-1"))
-			assertIdentity(t, partial[3], "1-1", "mid", ctxType, ctxSub, hashID("1"))
-			assertIdentity(t, partial[4], "1", "outer", ctxType, ctxSub, "")
+			assertIdentity(t, partial[0], hashID("1"), "outer", ctxType, ctxSub, "")
+			assertIdentity(t, partial[1], hashID("1-1"), "mid", ctxType, ctxSub, hashID("1"))
+			assertIdentity(t, partial[2], hashID("1-1"), "mid", ctxType, ctxSub, hashID("1"))
+			assertIdentity(t, partial[3], hashID("1"), "outer", ctxType, ctxSub, "")
 			assertReplayedTimestamps(t, partial[0], false)
 			assertReplayedTimestamps(t, partial[1], false)
-			assertReplayedTimestamps(t, partial[2], true)
-			for _, ev := range partial[3:] {
+			for _, ev := range partial[2:] {
 				// A re-entered context keeps its checkpointed start
 				// and completes now.
 				if !ev.info.StartTimestamp.Equal(lifecycleStart) {
@@ -266,12 +289,12 @@ func failingChildHandlers(rec *opRecorder, got *errBox) map[string]func(context.
 			_, err := RunInChildContext(ctx, "child", body)
 			got.set(err)
 			return "", err
-		}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
+		}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
 		"RunInChildContextAsync": Wrap(func(ctx Context, _ string) (string, error) {
 			_, err := RunInChildContextAsync(ctx, "child", body).Result(ctx)
 			got.set(err)
 			return "", err
-		}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
+		}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
 	}
 }
 
@@ -289,7 +312,7 @@ func TestOperationLifecycleChildContextFailure(t *testing.T) {
 
 			assertFailedEnd := func(t *testing.T, ev opEvent) {
 				t.Helper()
-				assertIdentity(t, ev, "1", "child", ctxType, ctxSub, "")
+				assertIdentity(t, ev, hashID("1"), "child", ctxType, ctxSub, "")
 				if ev.info.Error == nil {
 					t.Fatal("failed end Error is nil")
 				}
@@ -312,7 +335,7 @@ func TestOperationLifecycleChildContextFailure(t *testing.T) {
 			assertPluginResponseStatus(t, resp, invocationFailed)
 			live := rec.take()
 			assertSequence(t, live, "start:child:STARTED:false", "end:child:FAILED:false")
-			assertIdentity(t, live[0], "1", "child", ctxType, ctxSub, "")
+			assertIdentity(t, live[0], hashID("1"), "child", ctxType, ctxSub, "")
 			assertLiveTimestamps(t, live[0])
 			assertLiveTimestamps(t, live[1])
 			assertFailedEnd(t, live[1])
@@ -328,8 +351,15 @@ func TestOperationLifecycleChildContextFailure(t *testing.T) {
 				t.Fatal(err)
 			}
 			assertPluginResponseStatus(t, resp, invocationFailed)
+			assertSequence(t, rec.take())
+
+			resp, err = handler(makePluginContext(), makePluginPayloadWithUpdated(t, "arn:test:lifecycle", "tok2", ops, []string{hashID("1")}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertPluginResponseStatus(t, resp, invocationFailed)
 			replay := rec.take()
-			assertSequence(t, replay, "end:child:FAILED:true")
+			assertSequence(t, replay, "end:child:FAILED:false")
 			assertReplayedTimestamps(t, replay[0], true)
 			assertFailedEnd(t, replay[0])
 		})
@@ -365,7 +395,7 @@ func TestOperationLifecycleChildContextStartBeforeWrap(t *testing.T) {
 		return RunInChildContext(ctx, "child", func(c Context) (string, error) {
 			return Step(c, "s", func(StepContext) (string, error) { return "v", nil })
 		})
-	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
 
 	resp, err := handler(makePluginContext(), makePluginPayload(t, "arn:test:lifecycle", "tok1", nil))
 	if err != nil {
@@ -381,7 +411,7 @@ func TestOperationLifecycleChildContextStartBeforeWrap(t *testing.T) {
 	if wrapInfo != startInfo {
 		t.Errorf("wrap info = %+v, want the start info %+v", wrapInfo, startInfo)
 	}
-	if startInfo.ID != "1" || startInfo.Status != PluginOperationStarted || startInfo.IsReplay || startInfo.StartTimestamp.IsZero() {
+	if startInfo.ID != hashID("1") || startInfo.Status != PluginOperationStarted || startInfo.IsReplay || startInfo.StartTimestamp.IsZero() {
 		t.Errorf("start info = %+v", startInfo)
 	}
 }
@@ -397,7 +427,7 @@ func callbackLifecycleHandler(rec *opRecorder, got *errBox) func(context.Context
 		out, err := cb.Result(ctx)
 		got.set(err)
 		return out, err
-	}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
 }
 
 // TestOperationLifecycleCreateCallbackSuspendResume asserts the event
@@ -406,12 +436,12 @@ func callbackLifecycleHandler(rec *opRecorder, got *errBox) func(context.Context
 //
 // Invocation 1 creates the callback live: one STARTED start, no end, then
 // the invocation suspends on Result. Invocation 2 observes the settled
-// callback: no start and one end with the checkpointed timestamps and
-// outcome. The end is live (IsReplay false) when the invocation payload
-// lists the callback among the operations updated since the previous
-// invocation, because this invocation is the first to observe the outcome;
-// it is replayed (IsReplay true) otherwise. A succeeded, an externally
-// failed, and a timed-out outcome are covered in both cases.
+// callback: no start. When the invocation payload lists the callback among
+// the operations updated since the previous invocation, this invocation is
+// the first to observe the outcome. So it dispatches one end with IsReplay
+// false and the checkpointed timestamps and outcome. Otherwise an earlier
+// invocation dispatched the end, so no hook is dispatched. A succeeded, an
+// externally failed, and a timed-out outcome are covered in both cases.
 func TestOperationLifecycleCreateCallbackSuspendResume(t *testing.T) {
 	failure := &wireFullError{ErrorType: "Error", ErrorMessage: "external system said no"}
 	outcomes := []struct {
@@ -449,10 +479,10 @@ func TestOperationLifecycleCreateCallbackSuspendResume(t *testing.T) {
 	settled := []struct {
 		name       string
 		updatedIDs []string
-		wantReplay bool
+		wantEnd    bool
 	}{
-		{name: "replayed", updatedIDs: nil, wantReplay: true},
-		{name: "updated between invocations", updatedIDs: []string{hashID("1")}, wantReplay: false},
+		{name: "replayed", updatedIDs: nil, wantEnd: false},
+		{name: "updated between invocations", updatedIDs: []string{hashID("1")}, wantEnd: true},
 	}
 	for _, s := range settled {
 		for _, tc := range outcomes {
@@ -469,12 +499,16 @@ func TestOperationLifecycleCreateCallbackSuspendResume(t *testing.T) {
 				first, second := runSuspendResumeUpdated(t, handler, rec, []wireOperation{op}, s.updatedIDs, tc.wantFinal)
 
 				assertSequence(t, first, "start:cb:STARTED:false")
-				assertIdentity(t, first[0], "1", "cb", string(OperationTypeCallback), OperationSubTypeCallback, "")
+				assertIdentity(t, first[0], hashID("1"), "cb", string(OperationTypeCallback), OperationSubTypeCallback, "")
 				assertLiveTimestamps(t, first[0])
 
-				assertSequence(t, second, fmt.Sprintf("end:cb:%s:%v", tc.wantStatus, s.wantReplay))
+				if !s.wantEnd {
+					assertSequence(t, second)
+					return
+				}
+				assertSequence(t, second, fmt.Sprintf("end:cb:%s:false", tc.wantStatus))
 				ev := second[0]
-				assertIdentity(t, ev, "1", "cb", string(OperationTypeCallback), OperationSubTypeCallback, "")
+				assertIdentity(t, ev, hashID("1"), "cb", string(OperationTypeCallback), OperationSubTypeCallback, "")
 				assertReplayedTimestamps(t, ev, true)
 				if tc.wantErr == nil {
 					if ev.info.Result != `"ok"` || ev.info.Error != nil {
@@ -532,7 +566,7 @@ func waitForCallbackHandler(rec *opRecorder, submitErr error, got *errBox) func(
 		}, WithSubmitterRetry(NoRetry()), WithCallbackSerdes(JSONSerdes))
 		got.set(err)
 		return out, err
-	}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
 }
 
 // assertWaitForCallbackHierarchy checks the identity of every event of a
@@ -542,12 +576,12 @@ func assertWaitForCallbackHierarchy(t *testing.T, evs []opEvent) {
 	t.Helper()
 	for _, ev := range evs {
 		switch ev.info.ID {
-		case "1":
-			assertIdentity(t, ev, "1", "wfcb", string(OperationTypeContext), OperationSubTypeWaitForCallback, "")
-		case "1-1":
-			assertIdentity(t, ev, "1-1", "", string(OperationTypeCallback), OperationSubTypeCallback, hashID("1"))
-		case "1-2":
-			assertIdentity(t, ev, "1-2", "", string(OperationTypeStep), OperationSubTypeStep, hashID("1"))
+		case hashID("1"):
+			assertIdentity(t, ev, hashID("1"), "wfcb", string(OperationTypeContext), OperationSubTypeWaitForCallback, "")
+		case hashID("1-1"):
+			assertIdentity(t, ev, hashID("1-1"), "", string(OperationTypeCallback), OperationSubTypeCallback, hashID("1"))
+		case hashID("1-2"):
+			assertIdentity(t, ev, hashID("1-2"), "", string(OperationTypeStep), OperationSubTypeStep, hashID("1"))
 		default:
 			t.Errorf("unexpected event %s for operation %q", ev.hook, ev.info.ID)
 		}
@@ -609,9 +643,11 @@ func wfcbResumeOps(status string, details *wireCallbackDetails) []wireOperation 
 // callback as updated since invocation 1. It re-enters the STARTED context
 // with a replayed start, dispatches the callback's end live (IsReplay
 // false, since this invocation is the first to observe the outcome),
-// replays the settled step as a start and an end, then completes the
-// context live with a SUCCEEDED end carrying the result. Invocation 3
-// replays the SUCCEEDED context: only its replayed end is dispatched.
+// replays the settled step with no hook, then completes the context live
+// with a SUCCEEDED end carrying the result. Invocation 3 replays the
+// SUCCEEDED context. Invocation 2 dispatched its end, so invocation 3
+// dispatches no hook. When the payload lists the context as updated, the
+// replay dispatches one end with IsReplay false.
 func TestOperationLifecycleWaitForCallbackSucceeded(t *testing.T) {
 	rec := &opRecorder{}
 	got := &errBox{}
@@ -628,8 +664,6 @@ func TestOperationLifecycleWaitForCallbackSucceeded(t *testing.T) {
 	assertSequenceByID(t, second,
 		"start:1:STARTED:true",
 		"end:1-1:SUCCEEDED:false",
-		"start:1-2:SUCCEEDED:true",
-		"end:1-2:SUCCEEDED:true",
 		"end:1:SUCCEEDED:false",
 	)
 	assertWaitForCallbackHierarchy(t, second)
@@ -638,7 +672,7 @@ func TestOperationLifecycleWaitForCallbackSucceeded(t *testing.T) {
 	if second[1].info.Result != `"ok"` {
 		t.Errorf("callback end Result = %q, want %q", second[1].info.Result, `"ok"`)
 	}
-	ctxEnd := second[4]
+	ctxEnd := second[2]
 	if ctxEnd.info.Result != `"ok"` || ctxEnd.info.Error != nil {
 		t.Errorf("context end Result = %q Error = %v, want %q and nil", ctxEnd.info.Result, ctxEnd.info.Error, `"ok"`)
 	}
@@ -655,8 +689,15 @@ func TestOperationLifecycleWaitForCallbackSucceeded(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertPluginResponseStatus(t, resp, invocationSucceeded)
+	assertSequenceByID(t, rec.take())
+
+	resp, err = handler(makePluginContext(), makePluginPayloadWithUpdated(t, "arn:test:lifecycle", "tok3", ops, []string{hashID("1")}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPluginResponseStatus(t, resp, invocationSucceeded)
 	third := rec.take()
-	assertSequenceByID(t, third, "end:1:SUCCEEDED:true")
+	assertSequenceByID(t, third, "end:1:SUCCEEDED:false")
 	assertWaitForCallbackHierarchy(t, third)
 	assertReplayedTimestamps(t, third[0], true)
 	if third[0].info.Result != `"ok"` {
@@ -668,9 +709,9 @@ func TestOperationLifecycleWaitForCallbackSucceeded(t *testing.T) {
 // of a WaitForCallback whose callback times out on a later invocation that
 // lists it as updated: the callback's live end reports TIMED_OUT and the
 // context's live end reports FAILED with the [*CallbackTimeoutError] the
-// operation returns. A
-// third invocation replays the FAILED context as one replayed end carrying
-// the same error.
+// operation returns. A third invocation replays the FAILED context with no
+// hook. When its payload lists the context as updated, it dispatches one
+// end carrying the same error.
 func TestOperationLifecycleWaitForCallbackTimedOut(t *testing.T) {
 	rec := &opRecorder{}
 	got := &errBox{}
@@ -688,8 +729,6 @@ func TestOperationLifecycleWaitForCallbackTimedOut(t *testing.T) {
 	assertSequenceByID(t, second,
 		"start:1:STARTED:true",
 		"end:1-1:TIMED_OUT:false",
-		"start:1-2:SUCCEEDED:true",
-		"end:1-2:SUCCEEDED:true",
 		"end:1:FAILED:false",
 	)
 	assertWaitForCallbackHierarchy(t, second)
@@ -697,7 +736,7 @@ func TestOperationLifecycleWaitForCallbackTimedOut(t *testing.T) {
 	if second[1].info.Error == nil || !errors.As(second[1].info.Error, &cbTimeout) {
 		t.Errorf("callback end Error = %#v, want *CallbackTimeoutError", second[1].info.Error)
 	}
-	ctxEnd := second[4]
+	ctxEnd := second[2]
 	if ctxEnd.info.Error == nil || ctxEnd.info.Error != got.get() {
 		t.Fatalf("context end Error = %v, want the error WaitForCallback returned %v", ctxEnd.info.Error, got.get())
 	}
@@ -705,16 +744,23 @@ func TestOperationLifecycleWaitForCallbackTimedOut(t *testing.T) {
 		t.Errorf("context end Error = %#v, want *CallbackTimeoutError named wfcb", ctxEnd.info.Error)
 	}
 
-	// The context's own FAILED record replays as one end; the child
-	// records stay so the same error is rebuilt.
+	// The context's own FAILED record replays; the child records stay so
+	// the same error is rebuilt.
 	ops[1] = contextOp("1", "", OperationSubTypeWaitForCallback, "wfcb", "FAILED", &wireContextDetails{Error: timeout})
 	resp, err = handler(makePluginContext(), makePluginPayload(t, "arn:test:lifecycle", "tok3", ops))
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertPluginResponseStatus(t, resp, invocationFailed)
+	assertSequenceByID(t, rec.take())
+
+	resp, err = handler(makePluginContext(), makePluginPayloadWithUpdated(t, "arn:test:lifecycle", "tok3", ops, []string{hashID("1")}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPluginResponseStatus(t, resp, invocationFailed)
 	third := rec.take()
-	assertSequenceByID(t, third, "end:1:FAILED:true")
+	assertSequenceByID(t, third, "end:1:FAILED:false")
 	assertReplayedTimestamps(t, third[0], true)
 	if third[0].info.Error == nil || third[0].info.Error != got.get() || !errors.As(third[0].info.Error, &cbTimeout) {
 		t.Errorf("replayed context end Error = %#v, want the *CallbackTimeoutError WaitForCallback returned", third[0].info.Error)
@@ -726,7 +772,8 @@ func TestOperationLifecycleWaitForCallbackTimedOut(t *testing.T) {
 // callback, and step start; the step ends FAILED; the context ends FAILED
 // with the [*CallbackSubmitterError] the operation returns; the callback,
 // which never settles, dispatches no end. A second invocation replays the
-// FAILED context as one replayed end carrying the same error.
+// FAILED context with no hook. When its payload lists the context as
+// updated, it dispatches one end carrying the same error.
 func TestOperationLifecycleWaitForCallbackFailedSubmitter(t *testing.T) {
 	rec := &opRecorder{}
 	got := &errBox{}
@@ -781,8 +828,15 @@ func TestOperationLifecycleWaitForCallbackFailedSubmitter(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertPluginResponseStatus(t, resp, invocationFailed)
+	assertSequenceByID(t, rec.take())
+
+	resp, err = handler(makePluginContext(), makePluginPayloadWithUpdated(t, "arn:test:lifecycle", "tok2", ops, []string{hashID("1")}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPluginResponseStatus(t, resp, invocationFailed)
 	replay := rec.take()
-	assertSequenceByID(t, replay, "end:1:FAILED:true")
+	assertSequenceByID(t, replay, "end:1:FAILED:false")
 	assertReplayedTimestamps(t, replay[0], true)
 	if replay[0].info.Error == nil || replay[0].info.Error != got.get() || !errors.As(replay[0].info.Error, &submitter) {
 		t.Errorf("replayed context end Error = %#v, want the *CallbackSubmitterError WaitForCallback returned", replay[0].info.Error)
@@ -803,7 +857,7 @@ func TestOperationLifecycleContextAtMostOnePerInvocation(t *testing.T) {
 			return "", err
 		}
 		return WaitForCallback[string](ctx, "wfcb", func(StepContext, string) error { return nil })
-	}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
 
 	resp, err := handler(makePluginContext(), makePluginPayload(t, "arn:test:lifecycle", "tok1", nil))
 	if err != nil {
@@ -820,11 +874,13 @@ func TestOperationLifecycleContextAtMostOnePerInvocation(t *testing.T) {
 		}
 	}
 	for _, k := range []string{"start:1", "start:1-1", "end:1-1", "end:1", "start:2", "start:2-1", "start:2-2", "end:2-2"} {
+		k = wireKey(k)
 		if count[k] != 1 {
 			t.Errorf("%s dispatched %d times, want 1; counts %v", k, count[k], count)
 		}
 	}
 	for _, k := range []string{"end:2", "end:2-1"} {
+		k = wireKey(k)
 		if count[k] != 0 {
 			t.Errorf("%s dispatched %d times, want 0: the operation has not settled", k, count[k])
 		}
@@ -833,9 +889,10 @@ func TestOperationLifecycleContextAtMostOnePerInvocation(t *testing.T) {
 
 // TestOperationLifecycleChildContextReplayedSucceededSerdesFailure asserts
 // that a SUCCEEDED child context whose result cannot be deserialized still
-// dispatches one replayed end, for RunInChildContext and
-// RunInChildContextAsync: the context settled when the checkpoint recorded
-// it, so the result Serdes failure belongs to the caller.
+// dispatches its end in an invocation that lists it as updated, for
+// RunInChildContext and RunInChildContextAsync: the context settled when
+// the checkpoint recorded it, so the result Serdes failure belongs to the
+// caller.
 func TestOperationLifecycleChildContextReplayedSucceededSerdesFailure(t *testing.T) {
 	cause := errors.New("unmarshal exploded")
 	serdes := WithChildSerdes(failingSerdes{failUnmarshal: true, cause: cause})
@@ -846,12 +903,12 @@ func TestOperationLifecycleChildContextReplayedSucceededSerdesFailure(t *testing
 				_, err := RunInChildContext(ctx, "child", body, serdes)
 				got.set(err)
 				return "", nil
-			}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
+			}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
 			"RunInChildContextAsync": Wrap(func(ctx Context, _ string) (string, error) {
 				_, err := RunInChildContextAsync(ctx, "child", body, serdes).Result(ctx)
 				got.set(err)
 				return "", nil
-			}, WithPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
+			}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{})),
 		}
 	}
 	for variant := range handlers(&opRecorder{}, &errBox{}) {
@@ -863,14 +920,14 @@ func TestOperationLifecycleChildContextReplayedSucceededSerdesFailure(t *testing
 				lifecycleExecOp(),
 				contextOp("1", "", OperationSubTypeRunInChildContext, "child", "SUCCEEDED", &wireContextDetails{Result: `"v"`}),
 			}
-			resp, err := handler(makePluginContext(), makePluginPayload(t, "arn:test:lifecycle", "tok1", ops))
+			resp, err := handler(makePluginContext(), makePluginPayloadWithUpdated(t, "arn:test:lifecycle", "tok1", ops, []string{hashID("1")}))
 			if err != nil {
 				t.Fatal(err)
 			}
 			assertPluginResponseStatus(t, resp, invocationSucceeded)
 			assertSerdesError(t, got.get(), "child", "unmarshal", cause)
 			evs := rec.take()
-			assertSequence(t, evs, "end:child:SUCCEEDED:true")
+			assertSequence(t, evs, "end:child:SUCCEEDED:false")
 			assertReplayedTimestamps(t, evs[0], true)
 			if evs[0].info.Result != `"v"` {
 				t.Errorf("replayed end Result = %q, want %q", evs[0].info.Result, `"v"`)
@@ -890,7 +947,7 @@ func TestOperationLifecycleChildContextLiveEndUsesCheckpointTimestamp(t *testing
 	client := &fakePluginClient{}
 	handler := Wrap(func(ctx Context, _ string) (string, error) {
 		return RunInChildContext(ctx, "child", func(Context) (string, error) { return "v", nil })
-	}, WithPlugins(rec.plugin()), withLambdaAPI(client))
+	}, withTestPlugins(rec.plugin()), withLambdaAPI(client))
 
 	// Every checkpoint response carries the child's record as SUCCEEDED
 	// with both timestamps.

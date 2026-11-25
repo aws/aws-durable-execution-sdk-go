@@ -90,7 +90,7 @@ func TestWrapHookContextReachesUserCode(t *testing.T) {
 		}
 		seen["check"] = cond
 		return "ok", nil
-	}, WithPlugins(valueHooks(key, "attached")), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(valueHooks(key, "attached")), withLambdaAPI(&fakePluginClient{}))
 
 	resp, err := handler(makePluginContext(), makePluginPayload(t, "arn:test:wrap-ctx", "tok1", nil))
 	if err != nil {
@@ -125,7 +125,7 @@ func TestWrapHookContextNestsAcrossPlugins(t *testing.T) {
 			seenOuter, seenInner = valueOf(sc, outer), valueOf(sc, inner)
 			return "", nil
 		})
-	}, WithPlugins(p1, p2), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(p1, p2), withLambdaAPI(&fakePluginClient{}))
 
 	if _, err := handler(makePluginContext(), makePluginPayload(t, "arn:test:wrap-nest", "tok1", nil)); err != nil {
 		t.Fatal(err)
@@ -155,7 +155,7 @@ func TestWrapHookUnchangedContextIsSameContext(t *testing.T) {
 			inBody = parentOf(t, sc)
 			return "", nil
 		})
-	}, WithPlugins(passthrough), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(passthrough), withLambdaAPI(&fakePluginClient{}))
 
 	if _, err := handler(makePluginContext(), makePluginPayload(t, "arn:test:wrap-same", "tok1", nil)); err != nil {
 		t.Fatal(err)
@@ -212,7 +212,7 @@ func TestWrapHookCannotDetachFromInvocationContext(t *testing.T) {
 			}
 			return "", nil
 		})
-	}, WithPlugins(detach), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(detach), withLambdaAPI(&fakePluginClient{}))
 
 	_, _ = handler(invCtx, makePluginPayload(t, "arn:test:wrap-detach", "tok1", nil))
 	if !checked {

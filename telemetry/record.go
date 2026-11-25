@@ -9,6 +9,7 @@
 package telemetry
 
 import (
+	"encoding/json"
 	"strings"
 	"time"
 )
@@ -55,13 +56,6 @@ type ErrorRecord struct {
 	StackTrace string `json:"stackTrace,omitempty"`
 }
 
-// ContentField holds a content value that may have been truncated to fit
-// size constraints.
-type ContentField struct {
-	Value     string `json:"value"`
-	Truncated bool   `json:"truncated,omitempty"`
-}
-
 // OperationRecord describes a single durable operation within a Record.
 type OperationRecord struct {
 	ID       string `json:"id"`
@@ -71,15 +65,23 @@ type OperationRecord struct {
 	Status   string `json:"status"`
 	ParentID string `json:"parentId,omitempty"`
 
-	StartTimestamp *time.Time `json:"startTimestamp,omitempty"`
-	EndTimestamp   *time.Time `json:"endTimestamp,omitempty"`
+	// StartTimestamp and EndTimestamp serialize as the JSON keys
+	// startTime and endTime. See Record.MarshalJSON for the format.
+	StartTimestamp *time.Time `json:"startTime,omitempty"`
+	EndTimestamp   *time.Time `json:"endTime,omitempty"`
 	DurationMs     *int64     `json:"durationMs,omitempty"`
 
 	Attempt int `json:"attempt,omitempty"`
 
-	Result *ContentField `json:"result,omitempty"`
-	Error  *ErrorRecord  `json:"error,omitempty"`
-	Input  *ContentField `json:"input,omitempty"`
+	// Result is the operation's result as a JSON value. A result is
+	// recorded only through an OperationOverride.Result transform. The
+	// transform receives the checkpointed wire text decoded as JSON, or
+	// the text as a string when it is not valid JSON. Its return value is
+	// marshaled again. So the recorded text has no whitespace and has
+	// sorted object keys, even when the transform returns its argument.
+	// See ContentConfig.
+	Result json.RawMessage `json:"result,omitempty"`
+	Error  *ErrorRecord    `json:"error,omitempty"`
 
 	// Truncated indicates this operation's result was dropped due to
 	// size constraints (see Truncate).
@@ -94,14 +96,22 @@ type Record struct {
 
 	ExecutionArn  string `json:"executionArn"`
 	ExecutionName string `json:"executionName,omitempty"`
-	FunctionName  string `json:"functionName,omitempty"`
 
-	Status         Status     `json:"status"`
-	StartTimestamp *time.Time `json:"startTimestamp,omitempty"`
-	EndTimestamp   *time.Time `json:"endTimestamp,omitempty"`
+	// FunctionName, FunctionQualifier, Region, and AccountID are parsed
+	// from the execution ARN. They are always emitted, empty when the ARN
+	// does not carry them, so every record has the same identity keys.
+	FunctionName      string `json:"functionName"`
+	FunctionQualifier string `json:"functionQualifier"`
+	Region            string `json:"region"`
+	AccountID         string `json:"accountId"`
+
+	Status Status `json:"status"`
+
+	// StartTimestamp and EndTimestamp serialize as the JSON keys
+	// startTime and endTime. See MarshalJSON for the format.
+	StartTimestamp *time.Time `json:"startTime,omitempty"`
+	EndTimestamp   *time.Time `json:"endTime,omitempty"`
 	DurationMs     *int64     `json:"durationMs,omitempty"`
-
-	InvocationCount int `json:"invocationCount,omitempty"`
 
 	// EmittedAt is the time this record was created, refreshed to the
 	// emission time when a snapshot is sent.
@@ -109,9 +119,13 @@ type Record struct {
 
 	Operations []OperationRecord `json:"operations"`
 
-	Error  *ErrorRecord  `json:"error,omitempty"`
-	Input  *ContentField `json:"input,omitempty"`
-	Output *ContentField `json:"output,omitempty"`
+	Error *ErrorRecord `json:"error,omitempty"`
+
+	// Input and Output are the execution input and result as JSON values,
+	// marshaled once from the handler's typed values. A Go string is a
+	// JSON string. See ContentConfig.
+	Input  json.RawMessage `json:"input,omitempty"`
+	Output json.RawMessage `json:"output,omitempty"`
 
 	Custom map[string]any `json:"custom,omitempty"`
 
@@ -121,6 +135,71 @@ type Record struct {
 	DroppedOperations int  `json:"droppedOperations,omitempty"`
 	DroppedInput      bool `json:"droppedInput,omitempty"`
 	DroppedOutput     bool `json:"droppedOutput,omitempty"`
+}
+
+// timestampLayout is the serialized form of every timestamp in a record:
+// UTC, exactly three fraction digits, and a literal Z. time.RFC3339Nano
+// trims trailing zeros, so its digit count varies; this layout does not.
+const timestampLayout = "2006-01-02T15:04:05.000Z"
+
+// formatTimestamp renders t in timestampLayout. Non-UTC times are
+// converted to UTC first, so the Z suffix is always correct.
+func formatTimestamp(t time.Time) string {
+	return t.UTC().Format(timestampLayout)
+}
+
+// formatOptionalTimestamp renders t, or returns nil when t is nil, so
+// omitempty drops the key.
+func formatOptionalTimestamp(t *time.Time) *string {
+	if t == nil {
+		return nil
+	}
+	s := formatTimestamp(*t)
+	return &s
+}
+
+// MarshalJSON writes every timestamp in timestampLayout. encoding/json
+// would otherwise call time.Time.MarshalJSON, which uses RFC3339Nano.
+//
+// The method marshals an alias of Record with shadow string fields that
+// carry the same JSON keys as the time.Time fields. encoding/json keeps
+// the shallower field when two fields share a key, so the shadow strings
+// replace the time values in the output. The Go field types stay
+// time.Time, and json.Unmarshal into Record still works because time.Time
+// parses the three-digit form.
+//
+// The method writes <, > and & literally. A caller's own json.Marshal
+// call on a Record escapes them as \u003c, \u003e and \u0026, because
+// json.Marshal escapes the bytes a json.Marshaler returns. To keep them
+// literal, use RenderRecord or a json.Encoder with SetEscapeHTML(false).
+func (r Record) MarshalJSON() ([]byte, error) {
+	type alias Record
+	return marshalNoHTMLEscape(struct {
+		alias
+		StartTime *string `json:"startTime,omitempty"`
+		EndTime   *string `json:"endTime,omitempty"`
+		EmittedAt string  `json:"emittedAt"`
+	}{
+		alias:     alias(r),
+		StartTime: formatOptionalTimestamp(r.StartTimestamp),
+		EndTime:   formatOptionalTimestamp(r.EndTimestamp),
+		EmittedAt: formatTimestamp(r.EmittedAt),
+	})
+}
+
+// MarshalJSON writes the operation timestamps in timestampLayout. See
+// Record.MarshalJSON for the mechanism.
+func (o OperationRecord) MarshalJSON() ([]byte, error) {
+	type alias OperationRecord
+	return marshalNoHTMLEscape(struct {
+		alias
+		StartTime *string `json:"startTime,omitempty"`
+		EndTime   *string `json:"endTime,omitempty"`
+	}{
+		alias:     alias(o),
+		StartTime: formatOptionalTimestamp(o.StartTimestamp),
+		EndTime:   formatOptionalTimestamp(o.EndTimestamp),
+	})
 }
 
 // NewRecord creates a Record with standard metadata pre-populated.
@@ -139,8 +218,8 @@ func NewRecord(executionArn string) *Record {
 
 // extractExecutionName extracts the execution name from an ARN. For a
 // durable-execution ARN like
-// "arn:aws:lambda:us-east-1:123456789012:function:my-fn:5/durable-execution/exec-id/inv-id",
-// it returns "exec-id". For simpler ARNs it returns the last segment
+// "arn:aws:lambda:us-east-1:123456789012:function:my-fn:5/durable-execution/execution-name/execution-id",
+// it returns "execution-name". For simpler ARNs it returns the last segment
 // after '/'.
 func extractExecutionName(arn string) string {
 	// Look for /durable-execution/{name}/ pattern first.

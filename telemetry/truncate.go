@@ -1,7 +1,7 @@
 package telemetry
 
 import (
-	"encoding/json"
+	"slices"
 	"sort"
 )
 
@@ -10,9 +10,9 @@ import (
 // their own Renderer so truncation sizes against what is actually sent.
 type Renderer func(Record) ([]byte, error)
 
-// defaultRenderer is the canonical JSON shape via json.Marshal.
+// defaultRenderer is the canonical JSON shape. See marshalNoHTMLEscape.
 func defaultRenderer(record Record) ([]byte, error) {
-	return json.Marshal(record)
+	return marshalNoHTMLEscape(record)
 }
 
 // Truncate returns a copy of record, best-effort truncated to fit within
@@ -33,17 +33,67 @@ func Truncate(record Record, maxBytes int, render Renderer) Record {
 		return record
 	}
 
-	// Steps 1 and 2 drop content oldest-first. Both have the same monotonic
-	// property: dropping more only shrinks the rendered record. So instead of
-	// re-rendering the whole record once per dropped item (O(n) full renders of
-	// a multi-megabyte record for a large invocation, which can stall for
-	// minutes), binary-search for the smallest number to drop — O(log n)
-	// renders. Each candidate is sized with the final truncation metadata
-	// already set, so the returned record accounts for those extra bytes and
-	// cannot creep back over the cap after the metadata is written.
+	// Steps 1 and 2 drop content oldest-first. They choose how much to drop
+	// in different ways.
+	//
+	// Step 1 clears operation results. It binary-searches for the smallest
+	// number of results to clear, so it renders the record O(log n) times
+	// instead of once per operation. A binary search is correct only when
+	// clearing more results never makes the rendered record larger.
+	//
+	// The array rendering does not always meet that condition. Clearing a
+	// Result also sets the operation's Truncated flag. The flag renders as
+	// `,"truncated":true`, which is 17 bytes. The cleared Result frees 10
+	// bytes for `,"result":` plus the length of its value. So clearing a
+	// Result whose value is shorter than 7 bytes makes the operation up to
+	// 6 bytes larger. Step 1 can then clear more results than the limit
+	// required. The by-name rendering has no per-operation Truncated key,
+	// so it always meets the condition.
+	//
+	// Step 2 removes whole operations. Removing an operation can make the
+	// rendered record larger. The by-name rendering shows a name's Error
+	// and Result only when the name occurs once (see GroupOperationsByName).
+	// So removing one of two operations that share a name makes the other
+	// operation's Error and Result appear. A count of removed operations at
+	// which this can happen is a reveal count (see revealCounts).
+	//
+	// A segment is a range of counts that starts at a reveal count and ends
+	// just before the next one. Inside a segment, one more removal does not
+	// make the record larger. So the last count of a segment renders the
+	// smallest record in that segment. A smaller count that fits can exist
+	// only in an earlier segment. So a binary search alone can return a
+	// count that is not the smallest. Step 2 therefore runs in three parts:
+	//
+	//  1. A binary search finds a count k that fits, where k-1 does not.
+	//  2. Step 2 renders the last count of every segment below k. It keeps
+	//     the lowest of these counts that fits.
+	//  3. If one fits, a binary search inside its segment finds the first
+	//     count that fits. If none fits, the result is k.
+	//
+	// The cost is two binary searches plus one render per reveal count
+	// below k. A record with unique names has no reveal count. The worst
+	// case is a record in which every name occurs exactly twice and the
+	// newer operation has an Error. It has n/2 reveal counts. So for that
+	// shape the total cost still grows quadratically.
+	//
+	// The result is the smallest count that fits, with one exception. A
+	// removal inside a segment can add a few bytes. DroppedOperations gains
+	// a digit at 10, 100, and so on. A name's minDurationMs can gain digits
+	// when its shortest operation is removed. So when the record is within
+	// a few bytes of the limit, Step 2 can remove more operations than
+	// needed.
+	//
+	// Each candidate is sized with the final truncation metadata already
+	// set. So the returned record accounts for those extra bytes.
 
 	ops := record.Operations
 	n := len(ops)
+
+	// The content fields are json.RawMessage with omitempty. An empty
+	// non-nil RawMessage is never rendered, so dropping it frees no bytes.
+	// So every presence check below is len > 0, not != nil; otherwise an
+	// empty value would set Truncated and the Dropped* flags for content
+	// that was never in the output.
 
 	// Step 1: drop each operation's Result field, oldest first.
 	// applyResultDrops returns a copy of ops with the oldest j operations'
@@ -52,7 +102,7 @@ func Truncate(record Record, maxBytes int, render Renderer) Record {
 		dropped = make([]OperationRecord, n)
 		copy(dropped, ops)
 		for i := 0; i < j; i++ {
-			if dropped[i].Result != nil {
+			if len(dropped[i].Result) > 0 {
 				dropped[i].Result = nil
 				dropped[i].Truncated = true
 				any = true
@@ -82,32 +132,57 @@ func Truncate(record Record, maxBytes int, render Renderer) Record {
 		return record
 	}
 
-	// Step 2: drop whole operations, oldest first.
+	// Step 2: drop whole operations, oldest first. If even dropping every
+	// operation does not fit, all are dropped and Step 3 runs.
 	ops = record.Operations
-	n = len(ops)
-	k := sort.Search(n+1, func(k int) bool {
-		candidate := record
-		candidate.Operations = ops[k:]
-		if k > 0 {
+	if n > 0 {
+		dropOldest := func(k int) Record {
+			candidate := record
+			candidate.Operations = ops[k:]
 			candidate.Truncated = true
 			candidate.DroppedOperations = k
+			return candidate
 		}
-		return fits(candidate, maxBytes, render)
-	})
-	if k > n {
-		k = n // even dropping every operation does not fit; drop all, then Step 3.
-	}
-	record.Operations = ops[k:]
-	if k > 0 {
-		record.Truncated = true
-		record.DroppedOperations = k
-	}
-	if fits(record, maxBytes, render) {
-		return record
+		fitsAfter := func(k int) bool {
+			return fits(dropOldest(k), maxBytes, render)
+		}
+
+		// Part 1. sort.Search keeps the invariant that k-1 does not fit.
+		k := 1 + sort.Search(n, func(i int) bool { return fitsAfter(i + 1) })
+		if k <= n {
+			// Part 2. The last count of a segment is one less than the next
+			// reveal count. Count 0 was checked before Step 2, and k-1 was
+			// checked by part 1. So only ends from 1 to k-2 are rendered.
+			var ends []int
+			for _, r := range revealCounts(ops) {
+				if end := r - 1; end >= 1 && end <= k-2 {
+					ends = append(ends, end)
+				}
+			}
+			lowest := -1
+			for i := len(ends) - 1; i >= 0; i-- {
+				if fitsAfter(ends[i]) {
+					lowest = i
+				}
+			}
+
+			// Part 3. Every segment end below ends[lowest] does not fit. So
+			// the first count that fits lies in ends[lowest]'s segment.
+			if lowest >= 0 {
+				lo := 1
+				if lowest > 0 {
+					lo = ends[lowest-1] + 1
+				}
+				hi := ends[lowest]
+				k = lo + sort.Search(hi-lo, func(i int) bool { return fitsAfter(lo + i) })
+			}
+			return dropOldest(k)
+		}
+		record = dropOldest(n)
 	}
 
 	// Step 3: Input, then Output, as a last resort.
-	if record.Input != nil {
+	if len(record.Input) > 0 {
 		record.Input = nil
 		record.Truncated = true
 		record.DroppedInput = true
@@ -115,7 +190,7 @@ func Truncate(record Record, maxBytes int, render Renderer) Record {
 			return record
 		}
 	}
-	if record.Output != nil {
+	if len(record.Output) > 0 {
 		record.Output = nil
 		record.Truncated = true
 		record.DroppedOutput = true
@@ -132,100 +207,38 @@ func fits(record Record, maxBytes int, render Renderer) bool {
 	return len(b) <= maxBytes
 }
 
-// truncateContent truncates value to maxLen, returning a ContentField
-// with Truncated=true if the value was shortened. Uses JSON-aware
-// truncation when the value appears to be JSON, otherwise truncates at
-// the byte boundary.
-func truncateContent(value string, maxLen int) ContentField {
-	if maxLen <= 0 || len(value) <= maxLen {
-		return ContentField{Value: value}
-	}
-
-	truncated := truncateJSON(value, maxLen)
-	return ContentField{Value: truncated, Truncated: true}
-}
-
-// truncateJSON performs JSON-aware truncation that tries to cut at a
-// safe boundary (after a complete key-value pair) rather than mid-token.
-// If the value doesn't look like JSON, it falls back to a simple byte
-// truncation.
-func truncateJSON(value string, maxLen int) string {
-	if maxLen <= 0 {
-		return ""
-	}
-	if len(value) <= maxLen {
-		return value
-	}
-
-	// If it doesn't look like JSON, do a simple truncation.
-	if len(value) == 0 || (value[0] != '{' && value[0] != '[') {
-		return value[:maxLen]
-	}
-
-	// Try to find a good cut point by looking for the last complete
-	// JSON boundary character (comma, closing brace/bracket) within
-	// the allowed length.
-	cutPoint := findJSONCutPoint(value, maxLen)
-	if cutPoint > 0 {
-		return value[:cutPoint]
-	}
-
-	return value[:maxLen]
-}
-
-// findJSONCutPoint scans backwards from maxLen to find the last position
-// that ends a complete JSON value (after a comma, or at a closing
-// brace/bracket). Returns 0 if no good cut point is found within a
-// reasonable distance from maxLen.
-func findJSONCutPoint(value string, maxLen int) int {
-	// Don't search too far back — if we can't find a boundary within
-	// 25% of maxLen, just cut at maxLen.
-	minPos := maxLen - maxLen/4
-	if minPos < 1 {
-		minPos = 1
-	}
-
-	inString := false
-	escaped := false
-	lastGoodPos := 0
-
-	for i := 0; i < maxLen && i < len(value); i++ {
-		ch := value[i]
-
-		if escaped {
-			escaped = false
+// revealCounts returns, in ascending order, every count of removed oldest
+// operations at which the by-name rendering can grow.
+//
+// Removing the oldest r operations can remove the second-newest operation
+// with some name. That name then occurs once. So GroupOperationsByName
+// copies the newest operation's Error and Result into the name's summary.
+// If that operation has an Error or a non-empty Result, the rendering can
+// grow at r. So r is a reveal count. Each name has at most one reveal
+// count. An operation without a name has none, because
+// GroupOperationsByName excludes it.
+//
+// The scan runs newest to oldest. The second operation it sees with a
+// name is that name's second-newest operation.
+func revealCounts(ops []OperationRecord) []int {
+	seen := make(map[string]int)
+	newest := make(map[string]int)
+	var counts []int // descending
+	for i := len(ops) - 1; i >= 0; i-- {
+		name := ops[i].Name
+		if name == "" {
 			continue
 		}
-
-		if ch == '\\' && inString {
-			escaped = true
-			continue
-		}
-
-		if ch == '"' {
-			inString = !inString
-			continue
-		}
-
-		if inString {
-			continue
-		}
-
-		// Track positions after commas or closing delimiters as good
-		// cut points.
-		switch ch {
-		case ',':
-			pos := i + 1
-			if pos >= minPos && pos <= maxLen {
-				lastGoodPos = pos
-			}
-		case '}', ']':
-			pos := i + 1
-			if pos >= minPos && pos <= maxLen {
-				lastGoodPos = pos
+		seen[name]++
+		switch seen[name] {
+		case 1:
+			newest[name] = i
+		case 2:
+			if op := ops[newest[name]]; op.Error != nil || len(op.Result) > 0 {
+				counts = append(counts, i+1)
 			}
 		}
 	}
-
-	return lastGoodPos
+	slices.Reverse(counts)
+	return counts
 }

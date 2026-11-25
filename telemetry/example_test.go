@@ -1,8 +1,10 @@
 package telemetry_test
 
 import (
+	"context"
 	"fmt"
 
+	"github.com/aws/aws-durable-execution-sdk-go/durable"
 	"github.com/aws/aws-durable-execution-sdk-go/telemetry"
 )
 
@@ -12,9 +14,10 @@ import (
 func ExampleNew() {
 	plugin := telemetry.New(telemetry.Config{})
 
-	// Register with durable.Start via durable.WithPlugins(plugin.Plugin())
-	p := plugin.Plugin()
-	fmt.Println(p.OnInvocationStart != nil)
+	// Register with durable.Start via durable.WithPlugins(plugin). The
+	// handler calls CreatePlugin once per invocation.
+	p, err := plugin.CreatePlugin(context.Background(), durable.InvocationHookInfo{})
+	fmt.Println(err == nil && p.OnInvocationStart != nil)
 	// Output:
 	// true
 }
@@ -36,7 +39,7 @@ func ExampleNew_withS3Exporter() {
 		Exporters: []telemetry.Exporter{exporter},
 	})
 
-	p := plugin.Plugin()
+	p, _ := plugin.CreatePlugin(context.Background(), durable.InvocationHookInfo{})
 	fmt.Println(p.OnInvocationEnd != nil)
 	// Output:
 	// true
@@ -58,7 +61,7 @@ func ExampleNew_withMultipleExporters() {
 		Exporters: []telemetry.Exporter{fileExp, s3Exp},
 	})
 
-	p := plugin.Plugin()
+	p, _ := plugin.CreatePlugin(context.Background(), durable.InvocationHookInfo{})
 	fmt.Println(p.OnOperationStart != nil)
 	// Output:
 	// true
@@ -73,31 +76,35 @@ func ExampleNew_withSampling() {
 		EmitMode:     telemetry.EmitOnComplete,
 	})
 
-	p := plugin.Plugin()
+	p, _ := plugin.CreatePlugin(context.Background(), durable.InvocationHookInfo{})
 	fmt.Println(p.OnInvocationStart != nil)
 	// Output:
 	// true
 }
 
-// ExampleNew_withContentConfig demonstrates filtering record content to
-// exclude operation results and apply a custom redactor.
+// ExampleNew_withContentConfig demonstrates shaping record content: a
+// sensitive input field is removed, the output is omitted, one operation
+// opts its result in, and another is dropped from the record.
 func ExampleNew_withContentConfig() {
 	plugin := telemetry.New(telemetry.Config{
 		Content: telemetry.ContentConfig{
-			IncludeInput:            true,
-			IncludeOutput:           true,
-			IncludeOperationResults: false, // omit operation results
-			IncludeOperationErrors:  true,
-			IncludeExecutionError:   true,
-			MaxContentLength:        4096, // 4 KB max per content field
-			Redactor: func(s string) string {
-				// Replace sensitive patterns before storing
-				return s
+			InputTransform: func(v any) any {
+				if m, ok := v.(map[string]any); ok {
+					delete(m, "password")
+				}
+				return v
+			},
+			ExcludeOutput: true,
+			Operations: telemetry.ContentOperations{
+				Overrides: []telemetry.OperationOverride{
+					{OperationName: "fetch-user", Result: func(v any) any { return v }},
+					{OperationName: "debug-dump", Exclude: true},
+				},
 			},
 		},
 	})
 
-	p := plugin.Plugin()
+	p, _ := plugin.CreatePlugin(context.Background(), durable.InvocationHookInfo{})
 	fmt.Println(p.OnOperationEnd != nil)
 	// Output:
 	// true

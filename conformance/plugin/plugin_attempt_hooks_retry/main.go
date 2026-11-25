@@ -1,13 +1,6 @@
 // Command plugin_attempt_hooks_retry implements conformance requirement
 // 10-3: a plugin reports each attempt of a retried step with its attempt
 // number and outcome.
-//
-// The op field of each record is OperationHookInfo.ID. The Go SDK fills it
-// with the operation's positional id (for example 1 or 1-1), while the
-// execution history and the ParentID field carry the checkpointed
-// operation id. The runner compares op against the history id, so the
-// requirement is registered as not implemented in template_plugin.yaml
-// until the two ids agree.
 package main
 
 import (
@@ -25,33 +18,34 @@ var out = pluginlog.New(nil)
 // numbered from 1 and the numbering continues across invocations. The
 // attempt hooks run on the goroutine that runs the step body, so their
 // order is deterministic.
-var plugin = durable.Plugin{
-	OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
-		out.Capture(info.ExecutionArn)
-	},
-	OnOperationAttemptStart: func(_ context.Context, info durable.AttemptHookInfo) {
-		if info.SubType != durable.OperationSubTypeStep {
-			return
-		}
-		out.Emit(map[string]any{
-			"plugin": "CONFPLUGIN",
-			"hook":   "attempt-start",
-			"n":      info.Attempt,
-			"op":     info.ID,
-		})
-	},
-	OnOperationAttemptEnd: func(_ context.Context, info durable.AttemptEndHookInfo) {
-		if info.SubType != durable.OperationSubTypeStep {
-			return
-		}
-		out.Emit(map[string]any{
-			"plugin":  "CONFPLUGIN",
-			"hook":    "attempt-end",
-			"n":       info.Attempt,
-			"outcome": string(info.Outcome),
-			"op":      info.ID,
-		})
-	},
+// newPlugin is a durable.PluginFactory: the handler calls it once per
+// invocation and the returned Plugin serves that invocation alone.
+func newPlugin(_ context.Context, inv durable.InvocationHookInfo) (*durable.Plugin, error) {
+	return &durable.Plugin{
+		OnOperationAttemptStart: func(_ context.Context, info durable.AttemptHookInfo) {
+			if info.SubType != durable.OperationSubTypeStep {
+				return
+			}
+			out.EmitWithArn(map[string]any{
+				"plugin": "CONFPLUGIN",
+				"hook":   "attempt-start",
+				"n":      info.Attempt,
+				"op":     info.ID,
+			}, inv.ExecutionArn)
+		},
+		OnOperationAttemptEnd: func(_ context.Context, info durable.AttemptEndHookInfo) {
+			if info.SubType != durable.OperationSubTypeStep {
+				return
+			}
+			out.EmitWithArn(map[string]any{
+				"plugin":  "CONFPLUGIN",
+				"hook":    "attempt-end",
+				"n":       info.Attempt,
+				"outcome": string(info.Outcome),
+				"op":      info.ID,
+			}, inv.ExecutionArn)
+		},
+	}, nil
 }
 
 func handler(ctx durable.Context, _ any) (string, error) {
@@ -70,5 +64,5 @@ func handler(ctx durable.Context, _ any) (string, error) {
 }
 
 func main() {
-	durable.Start(handler, durable.WithPlugins(plugin))
+	durable.Start(handler, durable.WithPlugins(durable.PluginFactoryFunc(newPlugin)))
 }

@@ -270,7 +270,7 @@ func TestClientErrorInvocationScopeFromPluginFailsInvocation(t *testing.T) {
 	}
 	h := Wrap(func(Context, string) (string, error) {
 		return "ok", nil
-	}, withLambdaAPI(fake), WithPlugins(plugin))
+	}, withLambdaAPI(fake), withTestPlugins(plugin))
 	raw, err := h(context.Background(), stepPayload(`"evt"`))
 	if err == nil {
 		t.Fatalf("Invoke returned response %s, want an error", raw)

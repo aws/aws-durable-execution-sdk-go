@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -235,62 +236,55 @@ func TestPluginZeroPluginsZeroOverhead(t *testing.T) {
 	}
 }
 
-// TestPluginIsReplayOnSecondRun verifies that hooks fire with IsReplay=true
-// for replayed operations using the durabletest LocalRunner.
-func TestPluginIsReplayOnSecondRun(t *testing.T) {
-	var isReplayValues []bool
+// TestPluginReplayedStepStartsOnlyNewOperations verifies the second run of
+// a handler. The first step is checkpointed as SUCCEEDED, so its replay
+// dispatches no OnOperationStart. The second step runs live, so it starts
+// with IsReplay false.
+func TestPluginReplayedStepStartsOnlyNewOperations(t *testing.T) {
+	type start struct {
+		name     string
+		isReplay bool
+	}
+	var starts []start
 	var mu sync.Mutex
 
 	plugin := Plugin{
 		OnOperationStart: func(_ context.Context, info OperationHookInfo) {
 			mu.Lock()
-			isReplayValues = append(isReplayValues, info.IsReplay)
+			starts = append(starts, start{info.Name, info.IsReplay})
 			mu.Unlock()
 		},
 	}
 
 	handler := Wrap(func(ctx Context, event string) (string, error) {
-		result, err := Step(ctx, "step1", func(sc StepContext) (string, error) {
+		if _, err := Step(ctx, "step1", func(sc StepContext) (string, error) {
+			return "done", nil
+		}); err != nil {
+			return "", err
+		}
+		return Step(ctx, "step2", func(sc StepContext) (string, error) {
 			return "done", nil
 		})
-		return result, err
-	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
 
-	// First invocation: live execution.
-	payload := makePluginPayload(t, "arn:test:exec", "tok1", nil)
-	resp1, err := handler(makePluginContext(), payload)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertPluginResponseStatus(t, resp1, invocationSucceeded)
-
-	// Verify first run: IsReplay=false.
-	mu.Lock()
-	if len(isReplayValues) != 1 || isReplayValues[0] != false {
-		t.Fatalf("first run: expected [false], got %v", isReplayValues)
-	}
-	isReplayValues = nil
-	mu.Unlock()
-
-	// Second invocation: replay (the step is already checkpointed).
-	// Build the state with the step's checkpoint.
+	// The second invocation's state holds the first step's checkpoint.
 	ops := []wireOperation{
 		{Id: "exec", Status: "STARTED", Type: "EXECUTION", ExecutionDetails: &wireExecutionDetails{InputPayload: `"hello"`}},
 		{Id: hashID("1"), Status: "SUCCEEDED", Type: "STEP", SubType: "Step", Name: "step1", StepDetails: &wireStepDetails{Attempt: 1, Result: `"done"`}},
 	}
-	payload2 := makePluginPayload(t, "arn:test:exec", "tok2", ops)
-	resp2, err := handler(makePluginContext(), payload2)
+	payload := makePluginPayload(t, "arn:test:exec", "tok2", ops)
+	resp, err := handler(makePluginContext(), payload)
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertPluginResponseStatus(t, resp2, invocationSucceeded)
+	assertPluginResponseStatus(t, resp, invocationSucceeded)
 
-	// Verify second run: IsReplay=true.
 	mu.Lock()
-	if len(isReplayValues) != 1 || isReplayValues[0] != true {
-		t.Fatalf("second run: expected [true], got %v", isReplayValues)
+	defer mu.Unlock()
+	want := []start{{"step2", false}}
+	if !reflect.DeepEqual(starts, want) {
+		t.Fatalf("starts = %+v, want %+v", starts, want)
 	}
-	mu.Unlock()
 }
 
 // TestPluginPendingOnInvocationEnd verifies that OnInvocationEnd fires with
@@ -306,7 +300,7 @@ func TestPluginPendingOnInvocationEnd(t *testing.T) {
 	handler := Wrap(func(ctx Context, event string) (string, error) {
 		// Wait suspends immediately.
 		return "", Wait(ctx, "", 5*time.Second)
-	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
 
 	payload := makePluginPayload(t, "arn:test:suspend", "tok1", nil)
 	resp, err := handler(makePluginContext(), payload)
@@ -427,7 +421,7 @@ func TestPluginOperationHooksNotFiredForPendingOps(t *testing.T) {
 		// Wait: if STARTED status is already checkpointed, it suspends
 		// again (the timer has not fired).
 		return "", Wait(ctx, "", 60*time.Second)
-	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
 
 	// Pre-checkpointed as STARTED (backend is waiting for timer to fire).
 	ops := []wireOperation{
@@ -501,7 +495,7 @@ func TestPluginWrapChildContextFn(t *testing.T) {
 			return "child-result", nil
 		})
 		return result, err
-	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
 
 	payload := makePluginPayload(t, "arn:test:wrap-child", "tok1", nil)
 	_, err := handler(makePluginContext(), payload)
@@ -546,7 +540,7 @@ func TestPluginAttemptHooksFire(t *testing.T) {
 		return Step(ctx, "attempt-step", func(sc StepContext) (string, error) {
 			return "ok", nil
 		})
-	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
 
 	payload := makePluginPayload(t, "arn:test:attempt", "tok1", nil)
 	_, err := handler(makePluginContext(), payload)
@@ -590,7 +584,7 @@ func TestPluginInvocationStartBeforeOperationChange(t *testing.T) {
 		return Step(ctx, "s1", func(StepContext) (string, error) {
 			return "ok", nil
 		})
-	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
 
 	ops := []wireOperation{
 		{Id: "exec", Status: "STARTED", Type: "EXECUTION", ExecutionDetails: &wireExecutionDetails{InputPayload: `"hello"`}},
@@ -633,7 +627,7 @@ func TestPluginUpdatedOperationsMapKeyedByID(t *testing.T) {
 		return Step(ctx, "s1", func(StepContext) (string, error) {
 			return "ok", nil
 		})
-	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
 
 	stepID := hashID("1")
 	ops := []wireOperation{
@@ -695,7 +689,7 @@ func TestPluginInvocationInfoFieldsPopulated(t *testing.T) {
 
 	handler := Wrap(func(ctx Context, event string) (string, error) {
 		return "result-" + event, nil
-	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
 
 	ops := []wireOperation{
 		{
@@ -745,7 +739,7 @@ func TestPluginInvocationEndErrorPopulated(t *testing.T) {
 	handlerErr := errors.New("handler failed")
 	handler := Wrap(func(ctx Context, event string) (string, error) {
 		return "", handlerErr
-	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
 
 	payload := makePluginPayload(t, "arn:test:fail", "tok1", nil)
 	if _, err := handler(makePluginContext(), payload); err != nil {
@@ -787,7 +781,7 @@ func TestPluginInvocationEndRetrying(t *testing.T) {
 	handlerErr := &ClientError{Scope: ErrorScopeInvocation, Err: errors.New("transient")}
 	handler := Wrap(func(ctx Context, event string) (string, error) {
 		return "", handlerErr
-	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
 
 	payload := makePluginPayload(t, "arn:test:retry", "tok1", nil)
 	_, err := handler(makePluginContext(), payload)
@@ -827,7 +821,7 @@ func TestPluginContextThreadedToHooks(t *testing.T) {
 
 	handler := Wrap(func(ctx Context, event string) (string, error) {
 		return "ok", nil
-	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
 
 	ctx := context.WithValue(context.Background(), ctxKey{}, "threaded")
 	payload := makePluginPayload(t, "arn:test:ctx", "tok1", nil)
@@ -858,7 +852,7 @@ func TestPluginOperationHookParentIDAndTimestamps(t *testing.T) {
 		return Step(ctx, "root-step", func(StepContext) (string, error) {
 			return "ok", nil
 		})
-	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
+	}, withTestPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
 
 	payload := makePluginPayload(t, "arn:test:parent", "tok1", nil)
 	if _, err := handler(makePluginContext(), payload); err != nil {
@@ -883,22 +877,23 @@ func TestPluginOperationHookParentIDAndTimestamps(t *testing.T) {
 // operation whose state arrived via a checkpoint response rather than the
 // invocation payload.
 //
-// The first step runs live. Its checkpoint response carries the record of
-// the second step as already SUCCEEDED, with timestamps. The second step is
-// then replayed from that merged record, so its hooks must show the
-// timestamps the response contained.
+// The step runs live. Its checkpoint response carries the record of the
+// wait as already SUCCEEDED, with timestamps. The wait is then replayed
+// from that merged record. The wait was not terminal when the invocation
+// started, so this invocation is the first to observe its outcome. So the
+// wait's end is dispatched with IsReplay false and with the timestamps the
+// response contained.
 func TestPluginOperationHookTimestampsFromCheckpointResponse(t *testing.T) {
 	start := time.Date(2026, 7, 24, 0, 0, 1, 0, time.UTC)
 	end := time.Date(2026, 7, 24, 0, 0, 2, 0, time.UTC)
 	merged := Operation{
 		Id:             aws.String(hashID("2")),
 		Status:         OperationStatusSucceeded,
-		Type:           OperationTypeStep,
-		SubType:        aws.String(OperationSubTypeStep),
+		Type:           OperationTypeWait,
+		SubType:        aws.String(OperationSubTypeWait),
 		Name:           aws.String("second"),
 		StartTimestamp: &start,
 		EndTimestamp:   &end,
-		StepDetails:    &StepDetails{Attempt: 1, Result: aws.String(`"from-response"`)},
 	}
 
 	var ends []OperationHookInfo
@@ -917,10 +912,11 @@ func TestPluginOperationHookTimestampsFromCheckpointResponse(t *testing.T) {
 		}); err != nil {
 			return "", err
 		}
-		return Step(ctx, "second", func(StepContext) (string, error) {
-			return "must-not-run", nil
-		})
-	}, WithPlugins(plugin), withLambdaAPI(&fakePluginClient{newState: []Operation{merged}}))
+		if err := Wait(ctx, "second", time.Hour); err != nil {
+			return "", err
+		}
+		return "done", nil
+	}, withTestPlugins(plugin), withLambdaAPI(&fakePluginClient{newState: []Operation{merged}}))
 
 	payload := makePluginPayload(t, "arn:test:exec", "tok1", nil)
 	resp, err := handler(makePluginContext(), payload)
@@ -938,10 +934,10 @@ func TestPluginOperationHookTimestampsFromCheckpointResponse(t *testing.T) {
 		}
 	}
 	if second == nil {
-		t.Fatalf("no OnOperationEnd for step %q; got %+v", "second", ends)
+		t.Fatalf("no OnOperationEnd for wait %q; got %+v", "second", ends)
 	}
-	if !second.IsReplay {
-		t.Fatal("expected step \"second\" to be replayed from the merged record")
+	if second.IsReplay {
+		t.Fatal("expected IsReplay false for the first observation of wait \"second\"")
 	}
 	if !second.StartTimestamp.Equal(start) {
 		t.Errorf("StartTimestamp = %v, want %v", second.StartTimestamp, start)
@@ -975,6 +971,23 @@ func makePluginPayloadWithUpdated(t *testing.T, arn, token string, ops []wireOpe
 		UpdatedOperationIds:   updatedIDs,
 		InitialExecutionState: initialExecutionState{Operations: ops},
 	}
+	b, err := json.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// withUpdatedOperationIDs returns the invocation payload with ids set as its
+// UpdatedOperationIds, so the invocation is the first to observe the
+// outcome of each listed operation.
+func withUpdatedOperationIDs(t *testing.T, payload []byte, ids ...string) []byte {
+	t.Helper()
+	var in invocationInput
+	if err := json.Unmarshal(payload, &in); err != nil {
+		t.Fatal(err)
+	}
+	in.UpdatedOperationIds = ids
 	b, err := json.Marshal(in)
 	if err != nil {
 		t.Fatal(err)

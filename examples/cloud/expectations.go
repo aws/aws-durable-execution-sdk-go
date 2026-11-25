@@ -253,6 +253,7 @@ var expectations = map[string]expectation{
 	"child-context-error-data-propagation": {
 		result: `{"found":true,"errorData":"{\"reason\":\"operator-cancelled\"}","errorType":"ChildContextError"}`,
 	},
+	"child-context-error-mapper": {result: `{"status":"declined","declineCode":"insufficient_funds"}`},
 	"child-context-error-propagation": {
 		result: `{"found":true,"errMsg":"durable: child context \"outer-child\" failed: ChildContextError: durable: child context \"inner-child\" failed: StepError: durable: step \"throw-error\" failed after 1 attempts: Error: intentional nested failure","depth":2,"isOpErr":true,"isChild":true}`,
 	},
@@ -262,6 +263,8 @@ var expectations = map[string]expectation{
 	"child-context-serdes":               {result: `"HELLO"`},
 	"child-context-serdes-large-payload": {result: `{"payloadLength":307200,"payloadHash":"c10a028e3fa345bba74b4603acfef02aacd68568aa8396fa95287df1a27c5bdc"}`},
 	"child-context-serdes-virtual":       {result: `"HELLO FROM VIRTUAL"`},
+	"child-context-subtype":              {result: `{"order":"order confirmed","audit":"audit recorded"}`},
+	"child-context-summary":              {result: `{"rowCount":4000,"firstId":0,"lastId":3999}`},
 	"child-context-virtual":              {result: `"virtual child step completed"`},
 	"child-ops-invalid-depth":            {failed: true, errorType: "ChildContextError"},
 	"child-ops-preservation":             {result: `{"branchFailed":true}`},
@@ -292,6 +295,7 @@ var expectations = map[string]expectation{
 
 	"error-determinism":       {result: `{"isDeterministic":true,"errorPropsBeforeReplay":{"isStepError":true,"causeName":"Error"},"errorPropsAfterReplay":{"isStepError":true,"causeName":"Error"}}`},
 	"error-handling-taxonomy": {result: `{"stepErrorInfo":{"matched":true,"typeName":"StepError","operationName":"failing-step","attempts":1,"isOpError":true,"opErrorName":"failing-step","errorType":"Error"},"invokeErrorInfo":{"matched":true,"typeName":"InvokeError","operationName":"failing-invoke","isOpError":true,"opErrorName":"failing-invoke","errorType":"Error"},"callbackErrorInfo":{"matched":true,"typeName":"CallbackExternalError","operationName":"failing-callback","isOpError":true,"opErrorName":"failing-callback","errorType":"CallbackError"}}`},
+	"error-stack-traces":      {result: `{"message":"charge 4111-xxxx: card declined","stackFrames":0}`},
 
 	"execution-client-custom": {result: `{"orderId":"ORD-12345","paidBy":"invoice"}`},
 
@@ -326,12 +330,15 @@ var expectations = map[string]expectation{
 	"future-select":          {result: `{"winner":"fallback","quote":106.59,"note":"fallback quote with 2% surcharge"}`},
 	"future-unhandled-error": {result: `{"successStep":"Success","scenariosTested":["basic-all-catch","immediate-combinator-usage","combinator-after-wait-replay","combinator-after-extended-wait"]}`},
 
-	"handler-error":        {failed: true, errorType: "Error"},
-	"hello-world":          {result: `"Hello World!"`},
-	"interrupted-no-retry": {result: `{"status":"failed","errorName":"StepError","message":"durable: step \"long-running-step\" failed after 1 attempts: StepInterruptedError: durable: step \"long-running-step\" interrupted before completing an attempt","causeName":"StepInterruptedError"}`},
-	"invoke-simple":        {result: `{"status":"completed","input":{}}`},
-	"invoke-tenant-id":     {result: `"wait finished"`},
-	"large-payload":        {result: `{"success":true,"totalSize":307200,"chunkCount":6}`},
+	"handler-error":          {failed: true, errorType: "Error"},
+	"hello-world":            {result: `"Hello World!"`},
+	"interrupted-no-retry":   {result: `{"status":"failed","errorName":"StepError","message":"durable: step \"long-running-step\" failed after 1 attempts: StepInterruptedError: durable: step \"long-running-step\" interrupted before completing an attempt","causeName":"StepInterruptedError"}`},
+	"invoke-async":           {result: `{"orderId":"ORD-12345","stages":[{"orderId":"ORD-12345","stage":"reserve-stock","status":"completed"},{"orderId":"ORD-12345","stage":"authorize-payment","status":"completed"},{"orderId":"ORD-12345","stage":"notify-customer","status":"completed"}]}`},
+	"invoke-error-sentinels": {result: `{"outcome":"completed","result":{"orderId":"ORD-12345","stage":"quote","status":"completed"}}`},
+	"invoke-serdes":          {result: `{"orderId":"ORD-12345","stage":"validate","status":"COMPLETED","input":{"orderId":"ORD-12345","stage":"validate","message":"encoded by requestSerdes"}}`},
+	"invoke-simple":          {result: `{"status":"completed","input":{}}`},
+	"invoke-tenant-id":       {result: `"wait finished"`},
+	"large-payload":          {result: `{"success":true,"totalSize":307200,"chunkCount":6}`},
 
 	"logger-after-callback": {result: `{"message":"done","callbackId":"self-resolved","result":"callback-resolved"}`},
 	"logger-after-wait":     {result: `"done"`},
@@ -347,6 +354,7 @@ var expectations = map[string]expectation{
 		},
 	},
 	"logger-log-levels":   {result: `"done"`},
+	"logger-replay-mode":  {result: `"done"`},
 	"logger-slog-handler": {result: `"done"`},
 
 	"map-basic": {result: `[2,4,6,8,10]`},
@@ -359,6 +367,7 @@ var expectations = map[string]expectation{
 			})
 		},
 	},
+	"map-completion-policy": {result: `{"committed":true,"reason":"CUSTOM_COMPLETION_SUCCEEDED","acknowledged":["replica-0","replica-1","replica-2"],"failed":[],"notAttempted":2}`},
 	"map-custom-summary-generator-replay": {
 		nondeterministic: "startedCount depends on whether the slow item has started when MinSuccessful is reached",
 		check: func(t testing.TB, result string) {
@@ -397,6 +406,7 @@ var expectations = map[string]expectation{
 			assertResultsAmong(t, obj, 2, "Item 1 processed", "Item 2 processed", "Item 3 processed", "Item 4 processed", "Item 5 processed")
 		},
 	},
+	"map-serdes":                       {result: `{"orderId":"ORD-12345","lines":[{"sku":"WIDGET-A","quantity":2,"totalCents":5998},{"sku":"GADGET-B","quantity":1,"totalCents":4999}],"rejected":[],"totalCents":10997}`},
 	"map-tolerated-failure-count":      {result: `{"successCount":3,"failureCount":2,"totalCount":5,"completionReason":"ALL_COMPLETED","hasFailure":true}`},
 	"map-tolerated-failure-percentage": {result: `{"successCount":6,"failureCount":3,"totalCount":9,"completionReason":"FAILURE_TOLERANCE_EXCEEDED","hasFailure":true,"results":["Item 0 processed","Item 1 processed","Item 3 processed","Item 4 processed","Item 6 processed","Item 7 processed"]}`},
 	"map-virtual-context":              {result: `{"processedItems":[2,4,6,8,10],"totalCount":5,"successCount":5}`},
@@ -499,10 +509,12 @@ var expectations = map[string]expectation{
 	"parallel-wait":            {result: `"Completed waits"`},
 	"plugin-lifecycle":         {result: `{"message":"plugin lifecycle complete","hooks":[{"hook":"OnInvocationStart"},{"hook":"OnOperationStart","operationName":"compute"},{"hook":"OnOperationAttemptStart","operationName":"compute","attempt":1},{"hook":"OnOperationAttemptEnd","operationName":"compute","attempt":1},{"hook":"OnOperationEnd","operationName":"compute"}]}`},
 
-	"retry-callback":   {failed: true, errorType: "CallbackTimeoutError"},
-	"retry-exhaustion": {failed: true, errorType: "StepError"},
-	"retry-linear":     {result: `{"message":"request confirmed on attempt 4","attempts":4}`},
-	"retry-invoke":     {result: `{"response":{"message":"success on attempt 3","attempt":3},"attempts":3}`},
+	"retry-callback":     {failed: true, errorType: "CallbackTimeoutError"},
+	"retry-group":        {result: `{"status":"confirmed","priceCents":4250,"attempts":4}`},
+	"retry-group-inline": {result: `{"priceCents":4250,"attempts":3}`},
+	"retry-exhaustion":   {failed: true, errorType: "StepError"},
+	"retry-linear":       {result: `{"message":"request confirmed on attempt 4","attempts":4}`},
+	"retry-invoke":       {result: `{"response":{"message":"success on attempt 3","attempt":3},"attempts":3}`},
 
 	"serde-basic":                   {result: `{"user":{"firstName":"","lastName":"","email":""},"greeting":"Hello, I'm  . My email is "}`},
 	"serde-callback-deserializer":   {result: `{"first":"HELLO FIRST","second":"HELLO SECOND"}`},
@@ -551,6 +563,7 @@ var expectations = map[string]expectation{
 	"wait-callback-timeout":                  {result: `{"timedOut":true,"error":"durable: callback \"timeout-callback\" failed: Callback.Timeout: Callback timed out"}`},
 	"wait-configurable":                      {result: `"wait finished"`},
 	"wait-for-condition":                     {result: `3`},
+	"wait-for-condition-backoff":             {result: `{"checks":4,"ready":true}`},
 	"wait-named":                             {result: `"wait finished"`},
 	"wait-unawaited":                         {result: `"result"`},
 }

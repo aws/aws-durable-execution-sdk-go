@@ -79,8 +79,10 @@ func WaitForCondition[S any](ctx Context, name string, check func(StepContext, S
 // invocation that runs a further attempt dispatches no start. The end is
 // dispatched when polling stops: live, with SUCCEEDED and the final state
 // as Result or FAILED and the returned error, and Attempt set to the final
-// attempt count; or replayed from a terminal checkpoint, with the
-// checkpointed timestamps and attempt count. An invocation that suspends
+// attempt count. An operation replayed from a terminal checkpoint
+// dispatches its end, with the checkpointed timestamps and attempt count,
+// only when the invocation is the first to observe the outcome; see
+// dispatchReplayedEnd. An invocation that suspends
 // on a scheduled poll, or whose checkpoint the service refused because the
 // invocation has terminated, dispatches no end.
 //
@@ -115,14 +117,15 @@ func runWaitForCondition[S any](ec *execContext, id, name string, check func(Ste
 			switch op.status {
 			case statusSucceeded:
 				// Terminal success: deserialize the final state without
-				// re-executing the check function. The replayed end is
-				// dispatched first, so a failing Serdes does not suppress it.
+				// re-executing the check function. The end, when this
+				// invocation dispatches one, is dispatched first, so a
+				// failing Serdes does not suppress it.
 				if op.step == nil {
 					return zero, fmt.Errorf("durable: WaitForCondition %q: checkpointed %s operation has no step details", name, op.status)
 				}
 				info := waitForConditionReplayedInfo(ec, id, name, op)
 				info.Result = op.step.result
-				dispatchOperationEnd(ec, info, PluginOperationSucceeded)
+				dispatchReplayedEnd(ec, id, info, PluginOperationSucceeded)
 				var out S
 				if err := serdes.Unmarshal(ec.Context, ec.serdesCtx(id), []byte(op.step.result), &out); err != nil {
 					return zero, ec.serdesFailure(name, serdesDirectionUnmarshal, err)
@@ -138,7 +141,7 @@ func runWaitForCondition[S any](ec *execContext, id, name string, check func(Ste
 				wfcErr := newWaitForConditionError(name, op.step.attempt, op.step.record())
 				info := waitForConditionReplayedInfo(ec, id, name, op)
 				info.Error = wfcErr
-				dispatchOperationEnd(ec, info, PluginOperationFailed)
+				dispatchReplayedEnd(ec, id, info, PluginOperationFailed)
 				return zero, wfcErr
 
 			case statusPending:
@@ -236,7 +239,7 @@ func withConditionState(next, prev *operation) *operation {
 	return &merged
 }
 
-// waitForConditionReplayedInfo returns the info of the replayed end of the
+// waitForConditionReplayedInfo returns the end info of the replayed
 // wait-for-condition operation id, whose checkpoint op is terminal: the
 // checkpointed timestamps and the attempt count recorded with the outcome.
 func waitForConditionReplayedInfo(ec *execContext, id, name string, op *operation) OperationHookInfo {
@@ -283,7 +286,7 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 	attemptInfo := AttemptHookInfo{
 		OperationHookInfo: OperationHookInfo{
 			ExecutionArn:    ec.executionArn,
-			ID:              id,
+			ID:              hashID(id),
 			Name:            name,
 			Type:            string(OperationTypeStep),
 			SubType:         OperationSubTypeWaitForCondition,
@@ -326,6 +329,10 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 			return s, e
 		},
 	)
+	// The attempt ends when the check and the wrap hooks around it return;
+	// see the same stamp in executeStepAttempt.
+	attemptEnd := attemptInfo.OperationHookInfo
+	attemptEnd.EndTimestamp = time.Now()
 	if wrappedErr != nil {
 		checkErr = wrappedErr
 	} else if wrappedResult != nil {
@@ -338,7 +345,7 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 		dispatchNotification(ec.operationHooks(), func(p *Plugin) {
 			if p.OnOperationAttemptEnd != nil {
 				p.OnOperationAttemptEnd(ec, AttemptEndHookInfo{
-					OperationHookInfo: attemptInfo.OperationHookInfo,
+					OperationHookInfo: attemptEnd,
 					Attempt:           attempt,
 					Outcome:           PluginAttemptFailed,
 					Error:             checkErr,
@@ -367,7 +374,7 @@ func executeWaitForConditionAttempt[S any](ec *execContext, id, name string, che
 	dispatchNotification(ec.operationHooks(), func(p *Plugin) {
 		if p.OnOperationAttemptEnd != nil {
 			p.OnOperationAttemptEnd(ec, AttemptEndHookInfo{
-				OperationHookInfo: attemptInfo.OperationHookInfo,
+				OperationHookInfo: attemptEnd,
 				Attempt:           attempt,
 				Outcome:           PluginAttemptSucceeded,
 			})

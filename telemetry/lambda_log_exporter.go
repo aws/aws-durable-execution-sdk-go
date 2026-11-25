@@ -2,7 +2,6 @@ package telemetry
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +10,12 @@ import (
 // LambdaLogExporter writes records as a single JSON line to stdout.
 // Since Lambda captures stdout to the function's CloudWatch log group
 // automatically, this requires zero IAM permissions and zero setup.
+//
+// Each line carries the record with its operations rendered as
+// operationsByName (see OperationsFormatByName), never as the operations
+// array. The line lands in CloudWatch Logs, where Logs Insights can read a
+// field by a dotted path but cannot select an array element by its name.
+// So the format is fixed and has no option, as for CloudWatchLogsExporter.
 type LambdaLogExporter struct {
 	// Writer overrides the default destination (os.Stdout). Primarily
 	// for tests.
@@ -27,17 +32,16 @@ func NewLambdaLogExporter() *LambdaLogExporter {
 }
 
 // Export writes record as a single line of JSON to the configured Writer
-// (os.Stdout if unset).
+// (os.Stdout if unset). It writes exactly Render's output.
 func (e *LambdaLogExporter) Export(_ context.Context, record Record) error {
 	w := e.Writer
 	if w == nil {
 		w = os.Stdout
 	}
-	b, err := json.Marshal(record)
+	b, err := e.Render(record)
 	if err != nil {
 		return fmt.Errorf("telemetry.LambdaLogExporter: marshaling record: %w", err)
 	}
-	b = append(b, '\n')
 	if _, err := w.Write(b); err != nil {
 		return fmt.Errorf("telemetry.LambdaLogExporter: writing record: %w", err)
 	}
@@ -51,4 +55,15 @@ func (e *LambdaLogExporter) MaxRecordSizeBytes() int {
 		return e.MaxSizeBytes
 	}
 	return DefaultMaxRecordSizeBytesLog
+}
+
+// Render implements RenderingSizeLimiter. It returns the exact bytes Export
+// writes: the record rendered with OperationsFormatByName, then one newline.
+// Truncation sizes Render's output. So the size limit includes the newline.
+func (e *LambdaLogExporter) Render(record Record) ([]byte, error) {
+	b, err := RenderRecord(record, OperationsFormatByName)
+	if err != nil {
+		return nil, err
+	}
+	return append(b, '\n'), nil
 }

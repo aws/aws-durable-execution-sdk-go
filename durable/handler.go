@@ -161,9 +161,15 @@ type handlerOptions struct {
 	// [WithExecutionClient].
 	client ExecutionClient
 
-	// plugins holds registered instrumentation plugins. Set via
-	// [WithPlugins].
-	plugins []Plugin
+	// pluginFactories holds the registered instrumentation plugin
+	// factories. Set via [WithPlugins]. Each invocation calls every
+	// factory once; see newInvocationPlugins.
+	pluginFactories []PluginFactory
+
+	// pluginFactoryNames caches one diagnostic name per factory, in the
+	// same order. Validation resolves the names before any invocation so
+	// diagnostics never call plugin-author Registration or String methods.
+	pluginFactoryNames []string
 
 	// pluginChildDepth is the deepest operation depth reported to plugins,
 	// meaningful when pluginChildDepthSet is true. Set via
@@ -316,8 +322,9 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 
 	invMeta := invocationInfoFromContext(ctx)
 
-	// Plugin dispatcher: nil when no plugins are registered (zero overhead).
-	pd := newPluginDispatcher(h.options.plugins)
+	// The plugin path costs nothing when no factory is registered: the
+	// maps below stay nil and the dispatcher is nil.
+	hasPlugins := len(h.options.pluginFactories) > 0
 
 	isFirstInvocation := state.numOperations() <= 1
 
@@ -328,7 +335,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	// Build updated operations map for both InvocationHookInfo and
 	// OnOperationChange (Item 11: map[string]OperationHookInfo keyed by ID).
 	var updatedOpsMap map[string]OperationHookInfo
-	if pd != nil && len(in.UpdatedOperationIds) > 0 {
+	if hasPlugins && len(in.UpdatedOperationIds) > 0 {
 		updatedOpsMap = make(map[string]OperationHookInfo, len(in.UpdatedOperationIds))
 		for _, uid := range in.UpdatedOperationIds {
 			// UpdatedOperationIds carry wire IDs (already hashed), so look
@@ -341,12 +348,13 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		}
 	}
 
-	// The full operation set is built only for a plugin that receives an
-	// InvocationHookInfo. It is a snapshot of the state before the handler
-	// runs: checkpoints the handler records later go to the state's own
-	// map, never to this one, so a plugin may keep reading it.
+	// The full operation set is built whenever a factory is registered,
+	// because the factories receive it before any plugin exists that could
+	// say whether it reads it. It is a snapshot of the state before the
+	// handler runs: checkpoints the handler records later go to the
+	// state's own map, never to this one, so a plugin may keep reading it.
 	var allOpsMap map[string]OperationHookInfo
-	if pd.hasInvocationInfoConsumer() {
+	if hasPlugins {
 		allOpsMap = make(map[string]OperationHookInfo, state.numOperations())
 		state.rangeOperations(func(op *operation) bool {
 			addCheckpointedOperationInfo(allOpsMap, in.DurableExecutionArn, state, depthBound, op)
@@ -374,10 +382,28 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	invInfo := InvocationHookInfo{
 		ExecutionArn:            in.DurableExecutionArn,
 		IsFirstInvocation:       isFirstInvocation,
+		RequestID:               invMeta.requestID,
 		ExecutionInput:          execInput,
 		ExecutionStartTimestamp: execStartTimestamp,
 		UpdatedOperations:       updatedOpsMap,
 		Operations:              allOpsMap,
+	}
+
+	// The factories run now, with the completed invInfo, so each plugin
+	// is created before its first hook fires and receives the same info
+	// its OnInvocationStart then receives. The dispatcher is nil when no
+	// factory is registered or every factory skipped.
+	//
+	// The execution context, which carries the enriched log handler, does
+	// not exist yet. So the factory logger attaches the execution
+	// attributes itself; otherwise a factory failure record would lack the
+	// requestId, executionArn, and tenantId every other record carries.
+	// The logger is built only when a factory is registered: building it
+	// allocates, and with no factory nothing would ever write through it.
+	var pd *pluginDispatcher
+	if hasPlugins {
+		factoryLogger := slog.New(h.options.logHandler.WithAttrs(executionLogAttrs(in.DurableExecutionArn, invMeta)))
+		pd = newPluginDispatcher(newInvocationPlugins(ctx, factoryLogger, h.options.pluginFactories, h.options.pluginFactoryNames, invInfo))
 	}
 
 	// Item 12: OnInvocationStart fires BEFORE OnOperationChange.
@@ -617,6 +643,14 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		runHandler,
 	)
 
+	// unreachedEnds dispatches the ends of the settled waits, callbacks,
+	// and invokes that the handler did not reach. Every path below calls
+	// it before OnInvocationEnd, except a path that ends the invocation
+	// as Retrying; see dispatchUnreachedEnds.
+	unreachedEnds := func() {
+		dispatchUnreachedEnds(pd, ctx, in.DurableExecutionArn, state, depthBound)
+	}
+
 	// Translate the wrapped outcome to the wire response.
 	var resp []byte
 	var respErr error
@@ -628,6 +662,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		if cp.haltCause() == nil {
 			ec.invocationDebugLog(ctx, debugMsgInvocationSuspending, slog.String(logKeyReason, ec.suspend.suspendReason()))
 		}
+		unreachedEnds()
 		dispatchNotification(pd, func(p *Plugin) {
 			if p.OnInvocationEnd != nil {
 				p.OnInvocationEnd(ctx, InvocationEndHookInfo{
@@ -651,6 +686,8 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		status := PluginInvocationFailed
 		if retrying {
 			status = PluginInvocationRetrying
+		} else {
+			unreachedEnds()
 		}
 		dispatchNotification(pd, func(p *Plugin) {
 			if p.OnInvocationEnd != nil {
@@ -681,6 +718,9 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		// Lambda, so the service invokes the execution again, and Failed
 		// when the invocation responds that the execution has failed.
 		failInvocationEnd := func(status PluginInvocationStatus, err error) {
+			if status != PluginInvocationRetrying {
+				unreachedEnds()
+			}
 			dispatchNotification(pd, func(p *Plugin) {
 				if p.OnInvocationEnd != nil {
 					p.OnInvocationEnd(ctx, InvocationEndHookInfo{
@@ -735,6 +775,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 					// not an error: it means the execution finished.
 					// Respond PENDING, as for any suspension; the next
 					// invocation replays and reports the result.
+					unreachedEnds()
 					dispatchNotification(pd, func(p *Plugin) {
 						if p.OnInvocationEnd != nil {
 							p.OnInvocationEnd(ctx, InvocationEndHookInfo{
@@ -767,6 +808,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 			resp, respErr = respond(wire.InvocationResponse{Status: wire.StatusSucceeded, Result: &s})
 		}
 		// OnInvocationEnd fires only after result durability is guaranteed.
+		unreachedEnds()
 		dispatchNotification(pd, func(p *Plugin) {
 			if p.OnInvocationEnd != nil {
 				p.OnInvocationEnd(ctx, InvocationEndHookInfo{

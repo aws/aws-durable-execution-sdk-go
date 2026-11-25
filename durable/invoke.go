@@ -164,8 +164,10 @@ func InvokeAsync[O, I any](ctx Context, name, functionID string, input I, opts .
 // unsettled dispatches a replayed start. Either then dispatches a live end
 // in the invocation that observes the terminal record, or no end when the
 // invocation suspends first. An invoke replayed with a terminal status
-// dispatches only a replayed end with the checkpointed timestamps and
-// outcome: its start was dispatched by the invocation that recorded it.
+// dispatches no start: its start was dispatched by the invocation that
+// recorded it. It dispatches its end, with the checkpointed timestamps and
+// outcome, only when this invocation is the first to observe the outcome;
+// see dispatchReplayedEnd.
 //
 // start, when non-nil, is the START that InvokeAsync queued for an invoke
 // with no record. The invoke then sends no START of its own: it waits for
@@ -190,7 +192,9 @@ func runInvoke[O, I any](ec *execContext, id, name, functionID string, input I, 
 		info.StartTimestamp = op.startTimestamp
 		switch op.status {
 		case statusSucceeded, statusFailed, statusTimedOut, statusStopped, statusCancelled:
-			return invokeOutcome[O](ec, op, id, name, functionID, options, info)
+			return invokeOutcome[O](ec, op, id, name, functionID, options, info, func(info OperationHookInfo, status PluginOperationStatus) {
+				dispatchReplayedEnd(ec, id, info, status)
+			})
 
 		case statusStarted, statusPending, statusReady:
 			// The invoked execution has not settled: the start is
@@ -272,14 +276,18 @@ func awaitInvoke[O any](ec *execContext, id, name, functionID string, options in
 	}
 	info.IsReplay = false
 	info.EndTimestamp = checkpointedEndTime(op)
-	return invokeOutcome[O](ec, op, id, name, functionID, options, info)
+	return invokeOutcome[O](ec, op, id, name, functionID, options, info, func(info OperationHookInfo, status PluginOperationStatus) {
+		dispatchOperationEnd(ec, info, status)
+	})
 }
 
 // invokeOutcome returns the outcome of the invoke whose record op is
-// terminal and dispatches its end with info. The end is dispatched before
-// the result is deserialized, so a failing result Serdes does not suppress
-// it.
-func invokeOutcome[O any](ec *execContext, op *operation, id, name, functionID string, options invokeOptions, info OperationHookInfo) (O, error) {
+// terminal and passes info, completed with the outcome, to dispatchEnd.
+// dispatchEnd is dispatchOperationEnd for an outcome this invocation
+// observed live, and dispatchReplayedEnd for a replayed record. The end is
+// dispatched before the result is deserialized, so a failing result Serdes
+// does not suppress it.
+func invokeOutcome[O any](ec *execContext, op *operation, id, name, functionID string, options invokeOptions, info OperationHookInfo, dispatchEnd func(OperationHookInfo, PluginOperationStatus)) (O, error) {
 	var zero O
 	if info.EndTimestamp.IsZero() {
 		info.EndTimestamp = op.endTimestamp
@@ -287,14 +295,14 @@ func invokeOutcome[O any](ec *execContext, op *operation, id, name, functionID s
 	if op.status != statusSucceeded {
 		invErr := invokeErrorFromCheckpoint(name, functionID, op)
 		info.Error = invErr.Err
-		dispatchOperationEnd(ec, info, toPluginOperationStatus(op.status))
+		dispatchEnd(info, toPluginOperationStatus(op.status))
 		return zero, invErr
 	}
 	if op.invoke == nil {
 		return zero, fmt.Errorf("durable: invoke %q: checkpointed %s operation has no invoke details", name, op.status)
 	}
 	info.Result = op.invoke.result
-	dispatchOperationEnd(ec, info, PluginOperationSucceeded)
+	dispatchEnd(info, PluginOperationSucceeded)
 	var out O
 	if err := options.resultSerdes.Unmarshal(ec.Context, ec.serdesCtx(id), []byte(op.invoke.result), &out); err != nil {
 		return zero, ec.serdesFailure(name, serdesDirectionUnmarshal, err)

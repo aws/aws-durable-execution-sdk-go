@@ -313,7 +313,7 @@ func TestRootResultOversizedCheckpointBeforePlugin(t *testing.T) {
 
 	h := Wrap(func(_ Context, _ string) (string, error) {
 		return large, nil
-	}, withLambdaAPI(fake), WithPlugins(plugin))
+	}, withLambdaAPI(fake), withTestPlugins(plugin))
 
 	_, err := h(context.Background(), stepPayload(`""`))
 	if err != nil {
@@ -357,7 +357,7 @@ func TestRootResultCheckpointFailureNoSuccessPlugin(t *testing.T) {
 
 	h := Wrap(func(_ Context, _ string) (string, error) {
 		return large, nil
-	}, withLambdaAPI(fake), WithPlugins(plugin))
+	}, withLambdaAPI(fake), withTestPlugins(plugin))
 
 	_, err := h(context.Background(), stepPayload(`""`))
 	if err == nil {
@@ -397,7 +397,7 @@ func TestRootResultCheckpointExecutionScopeFiresFailedHookOnce(t *testing.T) {
 
 	h := Wrap(func(_ Context, _ string) (string, error) {
 		return large, nil
-	}, withLambdaAPI(fake), WithPlugins(plugin))
+	}, withLambdaAPI(fake), withTestPlugins(plugin))
 
 	raw, err := h(context.Background(), stepPayload(`""`))
 	if err != nil {
@@ -435,7 +435,7 @@ func TestRootResultSerializationFailureFiresFailedHook(t *testing.T) {
 
 	h := Wrap(func(_ Context, _ string) (chan int, error) {
 		return make(chan int), nil // json.Marshal fails on channels
-	}, withLambdaAPI(fake), WithPlugins(plugin))
+	}, withLambdaAPI(fake), withTestPlugins(plugin))
 
 	out, err := h(context.Background(), stepPayload(`""`))
 	if err != nil {
@@ -492,7 +492,7 @@ func TestRootResultOversizedNoExecutionOpFiresRetryingHook(t *testing.T) {
 
 	h := Wrap(func(_ Context, _ string) (string, error) {
 		return large, nil
-	}, withLambdaAPI(fake), WithPlugins(plugin))
+	}, withLambdaAPI(fake), withTestPlugins(plugin))
 
 	_, err := h(context.Background(), payload)
 	if err == nil {

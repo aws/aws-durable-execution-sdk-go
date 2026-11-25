@@ -10,7 +10,7 @@ import (
 
 func TestHandler(t *testing.T) {
 	records := plugintest.RecordTo(t, out)
-	runner := durabletest.NewLocalRunner(handler, durable.WithPlugins(plugin))
+	runner := durabletest.NewLocalRunner(handler, durable.WithPlugins(durable.PluginFactoryFunc(newPlugin)))
 	result, err := runner.RunUntilComplete(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -21,6 +21,7 @@ func TestHandler(t *testing.T) {
 
 	recs := records()
 	plugintest.ExpectAllStamped(t, recs)
+	plugintest.ExpectCheckpointedIDs(t, recs, result, "op", "parent")
 	s1 := map[string]any{"plugin": "CONFPLUGIN", "hook": "attempt-start", "n": 1}
 	e1 := map[string]any{"plugin": "CONFPLUGIN", "hook": "attempt-end", "n": 1, "outcome": "FAILED"}
 	s2 := map[string]any{"plugin": "CONFPLUGIN", "hook": "attempt-start", "n": 2}

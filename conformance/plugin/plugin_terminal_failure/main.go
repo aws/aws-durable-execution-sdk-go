@@ -14,22 +14,25 @@ import (
 var out = pluginlog.New(nil)
 
 // plugin reports the invocation lifecycle.
-var plugin = durable.Plugin{
-	OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
-		out.Capture(info.ExecutionArn)
-		out.EmitWithArn(map[string]any{
-			"plugin": "CONFPLUGIN",
-			"hook":   "invocation-start",
-			"first":  info.IsFirstInvocation,
-		}, info.ExecutionArn)
-	},
-	OnInvocationEnd: func(_ context.Context, info durable.InvocationEndHookInfo) {
-		out.EmitWithArn(map[string]any{
-			"plugin": "CONFPLUGIN",
-			"hook":   "invocation-end",
-			"status": string(info.Status),
-		}, info.ExecutionArn)
-	},
+// newPlugin is a durable.PluginFactory: the handler calls it once per
+// invocation and the returned Plugin serves that invocation alone.
+func newPlugin(_ context.Context, inv durable.InvocationHookInfo) (*durable.Plugin, error) {
+	return &durable.Plugin{
+		OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
+			out.EmitWithArn(map[string]any{
+				"plugin": "CONFPLUGIN",
+				"hook":   "invocation-start",
+				"first":  info.IsFirstInvocation,
+			}, info.ExecutionArn)
+		},
+		OnInvocationEnd: func(_ context.Context, info durable.InvocationEndHookInfo) {
+			out.EmitWithArn(map[string]any{
+				"plugin": "CONFPLUGIN",
+				"hook":   "invocation-end",
+				"status": string(info.Status),
+			}, info.ExecutionArn)
+		},
+	}, nil
 }
 
 func handler(ctx durable.Context, _ any) (string, error) {
@@ -39,5 +42,5 @@ func handler(ctx durable.Context, _ any) (string, error) {
 }
 
 func main() {
-	durable.Start(handler, durable.WithPlugins(plugin))
+	durable.Start(handler, durable.WithPlugins(durable.PluginFactoryFunc(newPlugin)))
 }

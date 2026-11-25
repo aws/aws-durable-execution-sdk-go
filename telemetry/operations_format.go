@@ -28,12 +28,12 @@ func RenderRecord(record Record, format OperationsFormat) ([]byte, error) {
 	}
 
 	if format == OperationsFormatArray {
-		return json.Marshal(record)
+		return marshalNoHTMLEscape(record)
 	}
 
 	// Marshal once to get the base fields, then manipulate the operations
 	// representation.
-	base, err := json.Marshal(record)
+	base, err := marshalNoHTMLEscape(record)
 	if err != nil {
 		return nil, err
 	}
@@ -46,18 +46,18 @@ func RenderRecord(record Record, format OperationsFormat) ([]byte, error) {
 	switch format {
 	case OperationsFormatByName:
 		delete(fields, "operations")
-		byName, err := json.Marshal(GroupOperationsByName(record.Operations))
+		byName, err := marshalNoHTMLEscape(GroupOperationsByName(record.Operations))
 		if err != nil {
 			return nil, err
 		}
 		fields["operationsByName"] = byName
 	case OperationsFormatBoth:
-		byName, err := json.Marshal(GroupOperationsByName(record.Operations))
+		byName, err := marshalNoHTMLEscape(GroupOperationsByName(record.Operations))
 		if err != nil {
 			return nil, err
 		}
 		fields["operationsByName"] = byName
 	}
 
-	return json.Marshal(fields)
+	return marshalNoHTMLEscape(fields)
 }

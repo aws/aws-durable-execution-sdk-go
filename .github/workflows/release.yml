@@ -35,7 +35,7 @@ jobs:
     steps:
       # For a release event, checkout checks out the release's tag at the
       # commit the event names.
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # The release tool checks that the tag is on main, so it needs
           # the history of main.
@@ -46,7 +46,7 @@ jobs:
       # directive. The release tool fetches modules into an empty module
       # cache, so a dependency cache would go unused.
       - name: Set up Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v6.0.0
         with:
           go-version: stable
           cache: false

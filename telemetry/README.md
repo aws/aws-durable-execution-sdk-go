@@ -6,10 +6,10 @@ or fail. Records capture execution metadata, timing, operation details, and
 content fields (inputs, outputs, errors) for diagnostics and monitoring.
 
 > This module is built on the experimental plugin API (`durable.Plugin`,
-> `durable.WithPlugins`), so its versions stay below v1. Any release may
-> change the `telemetry` package API and the record schema. Upgrade this
-> module together with the SDK. See Versioning in the
-> [root README](../README.md#versioning).
+> `durable.PluginFactory`, `durable.WithPlugins`), so its versions stay
+> below v1. Any release may change the `telemetry` package API and the
+> record schema. Upgrade this module together with the SDK. See Versioning
+> in the [root README](../README.md#versioning).
 
 ## Installation
 
@@ -33,8 +33,9 @@ func handler(ctx durable.Context, event any) (any, error) {
 }
 
 func main() {
-    plugin := telemetry.New(telemetry.Config{})
-    durable.Start(handler, durable.WithPlugins(plugin.Plugin()))
+    // TelemetryPlugin is a durable.PluginFactory: the handler calls its
+    // CreatePlugin once per invocation.
+    durable.Start(handler, durable.WithPlugins(telemetry.New(telemetry.Config{})))
 }
 ```
 
@@ -42,6 +43,47 @@ With a zero-value `Config`, the plugin emits a single JSON record to stdout when
 the execution completes (succeeded or failed). Lambda captures stdout to the
 function's CloudWatch log group automatically, so this requires zero additional
 IAM permissions.
+
+## Invocation lifetime and concurrency
+
+`TelemetryPlugin` is a factory shared by the execution environment. Each
+`CreatePlugin` call creates a separate record, operation index, sampling decision,
+mutex, and on-change dispatch state. Hooks and log enrichment for one invocation
+use only that invocation's state. Concurrent operation hooks within an invocation
+remain synchronized.
+
+The factory initializes execution metadata, input, and sampling before returning
+the hooks. A resumed invocation retains the execution ARN and original execution
+start timestamp. Its request ID identifies the new invocation. Sampling uses the
+execution ARN, so the decision stays the same across resumes.
+
+At invocation start, the plugin initializes its operation buffer from the full
+checkpointed snapshot. This includes unchanged nested operations in completed
+child contexts whose bodies do not run again. The root execution operation is
+excluded from the operations array. `OperationDetail` and the SDK's
+`durable.WithPluginChildOperationsDepth` still limit the operations reported.
+Subsequent hooks update the buffer by operation ID.
+
+Exporters and content transforms remain shared. `InputTransform`,
+`OutputTransform`, and each `OperationOverride.Result` may be called concurrently
+by different invocations. Callers must make these functions and their captured
+state safe for concurrent use. Within one invocation, content transforms remain
+serialized.
+
+Transforms run only for sampled-in invocations. `InputTransform` and
+`OutputTransform` run at most once per invocation. A `Result` transform runs once
+for an operation's result in an invocation, and again only if that result text
+changes. Each new invocation replays checkpointed results, so it calls the
+`Result` transform again. Transforms run while the plugin holds its
+per-invocation lock. So a transform should return quickly and must not block.
+
+Each invocation waits for its own in-flight on-change dispatches before its final
+emission. It does not wait for another invocation's dispatches. Shared exporters
+can receive overlapping `Export` and `Flush` calls from different invocations.
+This change does not add a shared scheduler or establish a complete exporter
+concurrency contract. Invocation-local records alone do not make an exporter or
+its dependencies concurrency-safe. Exporter concurrency and scheduling remain
+separate follow-up work.
 
 ## Configuration
 
@@ -90,26 +132,110 @@ plugin := telemetry.New(telemetry.Config{
 
 ### ContentConfig
 
-Controls what data is included in emitted records and how it is formatted.
+Controls what content appears in emitted records.
 
 ```go
 type ContentConfig struct {
-    IncludeInput            bool
-    IncludeOutput           bool
-    IncludeOperationResults bool
-    IncludeOperationErrors  bool
-    IncludeExecutionError   bool
-    MaxContentLength        int
-    OperationFilter         func(OperationRecord) bool
-    Redactor                func(string) string
+    ExcludeInput    bool
+    InputTransform  func(any) any
+    ExcludeOutput   bool
+    OutputTransform func(any) any
+    Operations      ContentOperations
+}
+
+type ContentOperations struct {
+    Overrides     []OperationOverride
+    ExcludeErrors bool
+}
+
+type OperationOverride struct {
+    OperationName string
+    Exclude       bool
+    Result        func(any) any
 }
 ```
 
-All `Include*` fields default to true when the entire struct is left at its zero
-value. `MaxContentLength` defaults to 10 KB. Content exceeding that length is
-truncated and the resulting `ContentField` has `Truncated: true`.
+The zero value includes the execution input and output unchanged, omits
+operation results, and includes operation and execution errors. Each field
+changes one thing, so set only the fields you need.
 
-`DefaultContentConfig()` returns the default configuration explicitly.
+```go
+telemetry.New(telemetry.Config{
+    Content: telemetry.ContentConfig{
+        // Remove a sensitive field from the recorded input.
+        InputTransform: func(v any) any {
+            if m, ok := v.(map[string]any); ok {
+                delete(m, "password")
+            }
+            return v
+        },
+        // Do not record the output at all.
+        ExcludeOutput: true,
+        Operations: telemetry.ContentOperations{
+            Overrides: []telemetry.OperationOverride{
+                // Record this operation's result, masking one field.
+                {OperationName: "fetch-user", Result: func(v any) any {
+                    if m, ok := v.(map[string]any); ok {
+                        m["email"] = "***"
+                    }
+                    return v
+                }},
+                // Drop this operation from the record.
+                {OperationName: "debug-dump", Exclude: true},
+            },
+        },
+    },
+})
+```
+
+Content fields are JSON values (`json.RawMessage`):
+
+- `Record.Input` and `Record.Output` are the handler's typed input and result,
+  marshaled once. A Go `string` becomes a JSON string. A nil pointer, map, or
+  slice becomes `null`, the same text the SDK checkpoints for that value.
+- `OperationRecord.Result` is the checkpointed result. It is recorded only for
+  operations named by an override that sets `Result`.
+
+A transform receives the content decoded as a JSON value: `map[string]any`,
+`[]any`, `string`, `json.Number`, `bool`, or `nil`. A struct arrives as a
+`map[string]any`, so a field can be deleted or overwritten by key. Numbers
+arrive as `json.Number` rather than `float64`. A `float64` holds 53 bits of
+mantissa, so an integer above 2^53 would be rounded by the decode alone.
+`json.Number` keeps the exact digits; call `Int64()` or `Float64()` on it to do
+arithmetic. The return value is what the record carries. `InputTransform` and `OutputTransform` are
+not called when the matching `Exclude*` field is true.
+
+`OperationOverride.Result` receives the checkpointed text decoded as a JSON
+value, or the text itself as a `string` when it is not valid JSON. The plugin
+does not run the operation's own serializer, so an operation with a custom
+Serdes delivers its serialized form. To record a result unchanged, return the
+argument.
+
+The value a transform returns is marshaled again. Marshaling writes no
+whitespace and sorts the keys of every object. So a recorded result can differ
+from the checkpointed text in key order, even when the transform returns its
+argument.
+
+Every exporter and `RenderRecord` write `<`, `>` and `&` literally, as the SDK
+does in checkpoints. So a text search for one of these characters matches the
+record. Calling `json.Marshal` on a `Record` yourself escapes them as
+`\u003c`, `\u003e` and `\u0026`; use `RenderRecord`, or a `json.Encoder` with
+`SetEscapeHTML(false)`.
+
+If a transform panics, or returns a value that cannot be marshaled, the field
+is omitted. The untransformed value is never recorded in its place.
+
+`Overrides` are matched by `OperationName`. When several entries share a name,
+the last one wins. `ExcludeErrors` omits the `error` field from operation
+entries; the execution-level `error` on the record is always included.
+
+There is no per-field length cap. An exporter that implements `SizeLimiter`
+bounds the whole record instead; see [Size Limits](#size-limits).
+
+Transforms may run concurrently across invocations. Their functions and
+captured state must support concurrent use. They run only for sampled-in
+invocations, and must not block. For how often each transform runs, see
+[Invocation lifetime and concurrency](#invocation-lifetime-and-concurrency).
 
 ### OperationsFormat
 
@@ -123,6 +249,10 @@ are rendered in the serialized JSON body:
 | `OperationsFormatBoth` | Both the array and the by-name aggregation. |
 
 Exporters that support this: File, HTTP, SQS, EventBridge, Firehose.
+
+The LambdaLog and CloudWatch Logs exporters have no `OperationsFormat` field.
+They always render `OperationsFormatByName`. See
+[LambdaLog](#lambdalog-default) and [CloudWatch Logs](#cloudwatch-logs).
 
 ## Exporters
 
@@ -140,7 +270,13 @@ function's CloudWatch log group automatically.
 exporter := telemetry.NewLambdaLogExporter()
 ```
 
-Size limit: 256 KB (configurable via `MaxSizeBytes`).
+Each line carries `operationsByName` and no `operations` array. The format is
+fixed. CloudWatch Logs Insights selects a field by a dotted path such as
+`operationsByName.increment.count`. A query cannot select an element of the
+`operations` array by its name.
+
+Size limit: 256 KB (configurable via `MaxSizeBytes`). The limit applies to the
+written line: the `operationsByName` rendering and the newline that ends it.
 
 ### File
 
@@ -207,7 +343,11 @@ exporter := &telemetry.CloudWatchLogsExporter{
 Log streams are named `{prefix}{YYYY}/{MM}/{DD}` (one per UTC calendar day,
 auto-created on first write).
 
-Size limit: 256 KB (configurable via `MaxSizeBytes`).
+Each log event carries `operationsByName` and no `operations` array, for the
+same reason as [LambdaLog](#lambdalog-default). The format is fixed.
+
+Size limit: 256 KB (configurable via `MaxSizeBytes`). The limit applies to the
+`operationsByName` rendering.
 
 ### SQS
 
@@ -367,18 +507,20 @@ Each emitted `Record` contains:
 | `RecordType` | string | Always `"DurableExecutionTelemetry"`. |
 | `SchemaVersion` | string | Always `"1.0"`. |
 | `ExecutionArn` | string | The durable execution's full ARN. |
-| `ExecutionName` | string | Extracted from the ARN (the execution ID segment). |
-| `FunctionName` | string | Extracted from the function ARN. |
+| `ExecutionName` | string | Extracted from the execution-name segment of the ARN. |
+| `FunctionName` | string | Function name parsed from the execution ARN. Always emitted. |
+| `FunctionQualifier` | string | Function qualifier parsed from the execution ARN (`$LATEST`, a version, or an alias). JSON key `functionQualifier`. Always emitted. |
+| `Region` | string | Region parsed from the execution ARN. Always emitted. |
+| `AccountID` | string | Account ID parsed from the execution ARN. JSON key `accountId`. Always emitted. |
 | `Status` | Status | `RUNNING`, `SUCCEEDED`, or `FAILED`. |
-| `StartTimestamp` | *time.Time | When the execution started. |
-| `EndTimestamp` | *time.Time | When the execution ended (terminal records only). |
+| `StartTimestamp` | *time.Time | When the execution started. JSON key `startTime`. Falls back to the oldest operation start, then the invocation time, when the payload omits it. |
+| `EndTimestamp` | *time.Time | When the execution ended (terminal records only). JSON key `endTime`. |
 | `DurationMs` | *int64 | End minus start in milliseconds. |
-| `InvocationCount` | int | Number of invocations of this execution observed by this function instance. |
-| `EmittedAt` | time.Time | When this record was emitted. |
+| `EmittedAt` | time.Time | When this record was emitted. Strictly increases across the records of one invocation. |
 | `Operations` | []OperationRecord | Operation snapshots (filtered by OperationDetail). |
 | `Error` | *ErrorRecord | Execution-level error (failed executions only). |
-| `Input` | *ContentField | Execution input (if ContentConfig allows). |
-| `Output` | *ContentField | Execution output (if ContentConfig allows). |
+| `Input` | json.RawMessage | Execution input as a JSON value (if ContentConfig allows). |
+| `Output` | json.RawMessage | Execution output as a JSON value (if ContentConfig allows). |
 | `Custom` | map[string]any | User-defined metadata. |
 | `Truncated` | bool | True if the record was truncated for size. |
 | `DroppedOperations` | int | Number of operations dropped during truncation. |
@@ -386,14 +528,42 @@ Each emitted `Record` contains:
 | `DroppedOutput` | bool | True if output was dropped during truncation. |
 
 Each `OperationRecord` contains ID, Name, Type, SubType, Status, ParentID,
-timestamps, DurationMs, Attempt count, Result, Error, and Input content fields.
+timestamps (JSON keys `startTime` and `endTime`), DurationMs, Attempt count,
+Result (a JSON value), and Error.
+
+Every timestamp in the JSON output (`emittedAt`, `startTime`, `endTime`, at
+both the record and operation level) is UTC with exactly three fraction digits
+and a `Z` suffix, for example `2026-10-24T02:22:35.088Z`. The Go fields stay
+`time.Time`; `Record.MarshalJSON` and `OperationRecord.MarshalJSON` apply the
+format. `json.Unmarshal` into `Record` parses it back. The DynamoDB sort key,
+the SQS FIFO deduplication ID, and the RDS/Redshift `emitted_at` column use the
+same format.
 
 ## Size Limits
 
 Exporters that implement `SizeLimiter` trigger automatic record truncation when
-the serialized record exceeds their limit. Truncation drops operation results
-first (largest to smallest), then input/output fields, and sets the `Truncated`
-metadata fields.
+the record exceeds their limit. The size is measured on the `json.Marshal` form
+of the record. An exporter that also implements `RenderingSizeLimiter` is
+measured on its own `Render` output instead, which is the form it sends.
+
+Truncation removes content in this order. Each step runs only when the record
+is still over the limit after the previous step:
+
+1. Operation results, oldest operation first. Each operation that loses its
+   result is marked `Truncated`. This step can clear more results than the
+   limit requires. That happens only when the rendering carries the
+   `operations` array and a cleared result is shorter than 7 bytes.
+2. Whole operations, oldest first. A binary search finds a count that fits.
+   This step then checks the count just below each point where a name's
+   `error` or `result` would appear in `operationsByName`, and keeps the
+   smallest count that fits. Near the limit it can drop more operations
+   than needed, because `DroppedOperations` or a name's `minDurationMs` can
+   gain a digit. `DroppedOperations` counts the dropped operations.
+3. The execution input. `DroppedInput` is set.
+4. The execution output. `DroppedOutput` is set.
+
+"Oldest" is the order of the `Operations` slice. The record's `Truncated`
+field is set when anything was removed.
 
 | Exporter | Default Limit |
 | --- | --- |
