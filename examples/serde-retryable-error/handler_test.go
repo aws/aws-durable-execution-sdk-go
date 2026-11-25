@@ -96,6 +96,8 @@ func TestHandler(t *testing.T) {
 func TestHandlerArchiveUnavailable(t *testing.T) {
 	a := &testArchive{fail: []error{errArchiveUnavailable}}
 	useArchive(t, a)
+	reserveRuns.Store(0)
+	t.Cleanup(func() { reserveRuns.Store(0) })
 
 	runner := durabletest.NewLocalRunner(handler)
 
@@ -120,6 +122,13 @@ func TestHandlerArchiveUnavailable(t *testing.T) {
 	}
 	if a.puts != 2 || len(a.accepted) != 1 {
 		t.Errorf("expected 2 archive writes and 1 archived record, got %d writes and %d records", a.puts, len(a.accepted))
+	}
+	// Count body executions across both invocations: the second one
+	// replays reserve from its checkpoint instead of running it again.
+	// stepStarts on result alone cannot prove this, because a reset
+	// runner would still show one StepStarted event in the second run.
+	if got := reserveRuns.Load(); got != 1 {
+		t.Errorf("reserve body ran %d times across both invocations, want 1: the second one must replay it from its checkpoint", got)
 	}
 	if got := stepStarts(result, "reserve"); got != 1 {
 		t.Errorf("reserve started %d times, want 1: it was checkpointed before the failure", got)

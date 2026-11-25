@@ -28,6 +28,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
 )
@@ -60,6 +61,14 @@ func (logArchive) Put(_ context.Context, key string, data []byte) error {
 
 // store is the archive archiveSerdes writes to.
 var store archive = logArchive{}
+
+// reserveRuns counts how many times the reserve step's body executes
+// across every invocation in this process. It is a test hook: a test
+// resets it, runs the handler twice with a transient failure between
+// the two invocations, and asserts that the body ran once, proving that
+// the second invocation replayed reserve from its checkpoint instead of
+// running it again.
+var reserveRuns atomic.Int64
 
 // Receipt is the result of the "charge" step.
 type Receipt struct {
@@ -101,6 +110,7 @@ type Input struct {
 
 func handler(ctx durable.Context, in Input) (Receipt, error) {
 	reserved, err := durable.Step(ctx, "reserve", func(_ durable.StepContext) (string, error) {
+		reserveRuns.Add(1)
 		return "reserved " + in.OrderID, nil
 	})
 	if err != nil {

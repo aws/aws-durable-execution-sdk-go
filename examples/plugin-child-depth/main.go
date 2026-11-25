@@ -14,10 +14,17 @@
 // subtree was not reported rather than empty. The withheld steps run and
 // checkpoint exactly as reported ones do; only the notifications are
 // omitted.
+//
+// The factory creates one recorder per invocation. The WrapInvocation
+// hook attaches that recorder to the context it passes to the handler,
+// and the handler reads it back from its [durable.Context]. So two
+// invocations running at the same time in one process never share a
+// recorder.
 package main
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
@@ -29,20 +36,12 @@ type reportedOp struct {
 	ChildrenOmitted bool   `json:"childrenOmitted,omitempty"`
 }
 
-// recorder collects the reported operations of the current invocation. It
-// is safe for concurrent use because the plugin dispatch contract permits
+// recorder collects the reported operations of one invocation. It is
+// safe for concurrent use because the plugin dispatch contract permits
 // hooks to fire from several goroutines.
 type recorder struct {
 	mu  sync.Mutex
 	ops []reportedOp
-}
-
-// reset discards the operations of earlier invocations. A warm Lambda
-// container keeps package-level state between invocations.
-func (r *recorder) reset() {
-	r.mu.Lock()
-	r.ops = nil
-	r.mu.Unlock()
 }
 
 func (r *recorder) record(op reportedOp) {
@@ -57,30 +56,37 @@ func (r *recorder) snapshot() []reportedOp {
 	return append([]reportedOp(nil), r.ops...)
 }
 
-// rec is shared by the plugin and the handler.
-var rec = &recorder{}
+// recorderKey is the context key under which WrapInvocation passes the
+// invocation's recorder to the handler.
+type recorderKey struct{}
 
-// plugin records each operation that ends, with its ChildrenOmitted flag.
-var plugin = durable.Plugin{
-	OnInvocationStart: func(_ context.Context, _ durable.InvocationHookInfo) {
-		rec.reset()
-	},
-	OnOperationEnd: func(_ context.Context, info durable.OperationHookInfo) {
-		rec.record(reportedOp{Name: info.Name, ChildrenOmitted: info.ChildrenOmitted})
-	},
+// newPlugin is a durable.PluginFactory: the handler calls it once per
+// invocation and the returned Plugin serves that invocation alone. Each
+// call creates a new recorder, so the operations of one invocation never
+// land in the events of another.
+func newPlugin(context.Context, durable.InvocationHookInfo) (*durable.Plugin, error) {
+	return pluginFor(&recorder{}), nil
 }
 
-// pluginFactory serves the same plugin for every invocation; the plugin's
-// recorder resets at the start of each, so one instance is enough.
-var pluginFactory = durable.PluginFactoryFunc(func(_ context.Context, _ durable.InvocationHookInfo) (*durable.Plugin, error) {
-	return &plugin, nil
-})
+// pluginFor returns the Plugin whose hooks record into rec.
+// WrapInvocation runs the handler with rec attached to the context, so
+// the handler can read the same recorder its plugin writes to.
+func pluginFor(rec *recorder) *durable.Plugin {
+	return &durable.Plugin{
+		WrapInvocation: func(ctx context.Context, _ durable.InvocationHookInfo, fn func(context.Context) (any, error)) (any, error) {
+			return fn(context.WithValue(ctx, recorderKey{}, rec))
+		},
+		OnOperationEnd: func(_ context.Context, info durable.OperationHookInfo) {
+			rec.record(reportedOp{Name: info.Name, ChildrenOmitted: info.ChildrenOmitted})
+		},
+	}
+}
 
 // options registers the plugin and reports operations down to depth 0:
 // those claimed on the handler's Context. The steps inside the child
 // context have depth 1 and are omitted.
 var options = []durable.HandlerOption{
-	durable.WithPlugins(pluginFactory),
+	durable.WithPlugins(durable.PluginFactoryFunc(newPlugin)),
 	durable.WithPluginChildOperationsDepth(0),
 }
 
@@ -98,6 +104,11 @@ func step(ctx durable.Context, name string) error {
 }
 
 func handler(ctx durable.Context, _ any) (Output, error) {
+	rec, ok := ctx.Value(recorderKey{}).(*recorder)
+	if !ok {
+		return Output{}, errors.New("no recorder in context: register the plugin with durable.WithPlugins")
+	}
+
 	if err := step(ctx, "load-order"); err != nil {
 		return Output{}, err
 	}
