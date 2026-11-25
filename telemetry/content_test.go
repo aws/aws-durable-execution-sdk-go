@@ -841,10 +841,10 @@ func TestPlugin_Content_ResultTransformRunsOncePerResultText(t *testing.T) {
 		t.Fatalf("after three hooks with the same result, transform called %d times, want 1", calls)
 	}
 
+	// The record keeps the end hook's info for an ended operation, so the
+	// changed result is reported through the end hook.
 	op.Result = `"second"`
-	plugin.OnOperationChange(ctx, durable.OperationChangeHookInfo{
-		UpdatedOperations: map[string]durable.OperationHookInfo{op.ID: op},
-	})
+	plugin.OnOperationEnd(ctx, op)
 	if calls != 2 {
 		t.Fatalf("after a changed result, transform called %d times, want 2", calls)
 	}

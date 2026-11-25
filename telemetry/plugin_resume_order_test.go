@@ -191,3 +191,49 @@ func TestOperationChange_AppendsNewOperationsOldestFirst(t *testing.T) {
 		t.Errorf("operation order = %v, want %v", got, want)
 	}
 }
+
+// TestOperationChange_KeepsEndHookInfo reports one operation through
+// OnOperationEnd and then through OnOperationChange with another status.
+// The order of the two hooks for one operation is not guaranteed. The
+// record keeps the end hook's info in either order.
+func TestOperationChange_KeepsEndHookInfo(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	ended := resumeOp("op-1", "", "STEP", durable.PluginOperationSucceeded, start)
+	ended.EndTimestamp = start.Add(time.Second)
+	changed := resumeOp("op-1", "", "STEP", durable.PluginOperationStarted, start)
+	for _, endFirst := range []bool{true, false} {
+		t.Run(fmt.Sprintf("endFirst=%v", endFirst), func(t *testing.T) {
+			exp := &capturingExporter{}
+			pl := resumeInvocation(t, New(Config{EmitMode: EmitAlways, Exporters: []Exporter{exp}}), durable.InvocationHookInfo{
+				ExecutionArn:            resumeTestARN,
+				ExecutionStartTimestamp: start,
+			})
+			change := func() {
+				pl.OnOperationChange(t.Context(), durable.OperationChangeHookInfo{
+					ExecutionArn:      resumeTestARN,
+					UpdatedOperations: map[string]durable.OperationHookInfo{"op-1": changed},
+				})
+			}
+			if endFirst {
+				pl.OnOperationEnd(t.Context(), ended)
+				change()
+			} else {
+				change()
+				pl.OnOperationEnd(t.Context(), ended)
+			}
+			pl.OnInvocationEnd(t.Context(), durable.InvocationEndHookInfo{
+				ExecutionArn: resumeTestARN,
+				Status:       durable.PluginInvocationPending,
+			})
+			records := exp.snapshot()
+			if len(records) == 0 {
+				t.Fatal("exported no record")
+			}
+			ops := records[len(records)-1].Operations
+			want := toOperationRecord("op-1", ended)
+			if len(ops) != 1 || ops[0].Status != want.Status || ops[0].EndTimestamp == nil {
+				t.Errorf("operations = %+v, want one with status %v and an end timestamp", ops, want.Status)
+			}
+		})
+	}
+}

@@ -80,6 +80,10 @@ type telemetryInvocation struct {
 	// transform runs only when the text changes.
 	resultText map[string]string
 
+	// endedOps holds the ID of every operation whose end hook this
+	// invocation received. Protected by mu. See onOperationChange.
+	endedOps map[string]struct{}
+
 	// sampledIn is computed in CreatePlugin from the execution ARN.
 	// The same execution has the same decision across invocations.
 	sampledIn bool
@@ -370,15 +374,22 @@ func (p *telemetryInvocation) onOperationStart(ctx context.Context, info durable
 func (p *telemetryInvocation) onOperationEnd(ctx context.Context, info durable.OperationHookInfo) {
 	p.mu.Lock()
 	p.upsertOperationLocked(info.ID, info)
+	if p.endedOps == nil {
+		p.endedOps = make(map[string]struct{})
+	}
+	p.endedOps[info.ID] = struct{}{}
 	p.mu.Unlock()
 	p.scheduleOnChangeDispatch(ctx)
 }
 
 // onOperationChange records the operations whose status a checkpoint
-// response changed. An operation waits for the response that reports its
-// terminal status before its end hook is dispatched. So for an operation
-// that ends in this invocation, the end hook's info is the one the record
-// keeps.
+// response changed.
+//
+// The end hook's info is the one the record keeps for an operation that
+// ends in this invocation. The order of this hook and the end hook for one
+// operation is not guaranteed. So an entry for an operation whose end hook
+// was already received is skipped. An entry received before the end hook is
+// recorded, and the end hook replaces it.
 //
 // This hook can be the first to report an operation, and a new operation is
 // appended to the record. Truncate removes a prefix of the record's
@@ -387,6 +398,9 @@ func (p *telemetryInvocation) onOperationEnd(ctx context.Context, info durable.O
 func (p *telemetryInvocation) onOperationChange(ctx context.Context, info durable.OperationChangeHookInfo) {
 	p.mu.Lock()
 	for _, id := range orderedOperationIDs(info.UpdatedOperations) {
+		if _, ended := p.endedOps[id]; ended {
+			continue
+		}
 		p.upsertOperationLocked(id, info.UpdatedOperations[id])
 	}
 	p.mu.Unlock()
