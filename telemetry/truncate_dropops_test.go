@@ -1,9 +1,12 @@
 package telemetry
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -174,10 +177,13 @@ func TestTruncate_DropOperations_RenderCountIsLogarithmic(t *testing.T) {
 //   - 0: over the limit, because the Error of "big" is rendered.
 //   - 1: exactly the limit. "repeated" occurs twice, so its Error is not
 //     rendered.
-//   - 2 up to n-1: over the limit until enough small operations are gone.
-//     "repeated" occurs once, so its Error is rendered.
+//   - 2 to 18: over the limit. "repeated" occurs once, so its Error is
+//     rendered.
+//   - 19 and above: under the limit, because enough small operations are
+//     gone.
 //
-// So the fewest drops that fit is 1, and the binary search returns more.
+// So the fewest drops that fit is 1, and a plain binary search returns
+// more. Truncate must drop at least the fewest, and the result must fit.
 func TestTruncate_DropOperations_ByNameCanDropMoreThanNeeded(t *testing.T) {
 	failed := func(id, name string, messageLen int) OperationRecord {
 		return OperationRecord{
@@ -212,8 +218,8 @@ func TestTruncate_DropOperations_ByNameCanDropMoreThanNeeded(t *testing.T) {
 
 	out := Truncate(record, limit, exp.Render)
 
-	if out.DroppedOperations != plain {
-		t.Fatalf("DroppedOperations = %d, want the binary search result %d", out.DroppedOperations, plain)
+	if out.DroppedOperations < 1 {
+		t.Fatalf("DroppedOperations = %d, below the fewest 1", out.DroppedOperations)
 	}
 	if !fits(out, limit, exp.Render) {
 		t.Fatalf("result does not fit the %d-byte limit", limit)
@@ -291,26 +297,105 @@ func TestTruncate_DropOperations_MatchesLinearScan(t *testing.T) {
 	}
 }
 
+// compactLen returns the length of result as the JSON encoder renders it.
+func compactLen(t *testing.T, result json.RawMessage) int {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, result); err != nil {
+		t.Fatalf("Compact(%s): %v", result, err)
+	}
+	return buf.Len()
+}
+
+// isCandidate reports whether Truncate may clear result. Clearing replaces
+// `"result":<result>` (9 bytes plus the result) with `"truncated":true`
+// (16 bytes). So only a result longer than 7 bytes makes the record
+// smaller when cleared.
+func isCandidate(t *testing.T, result json.RawMessage) bool {
+	t.Helper()
+	return len(result) > 0 && compactLen(t, result) > 7
+}
+
+// oneAtATimeTruncate is the reference result for Truncate. It renders after
+// every single change. It clears results oldest first, then removes
+// operations oldest first, then drops the input, then the output. It stops
+// at the first record that fits. When clearSmall is false, it clears only
+// results longer than 7 bytes, as Truncate does for the array rendering.
+// When clearSmall is true, it clears every result, as Truncate does for
+// the by-name rendering.
+func oneAtATimeTruncate(t *testing.T, record Record, maxBytes int, render Renderer, clearSmall bool) Record {
+	t.Helper()
+	if fits(record, maxBytes, render) {
+		return record
+	}
+	ops := slices.Clone(record.Operations)
+	record.Operations = ops
+	for i := range ops {
+		if len(ops[i].Result) == 0 || !clearSmall && !isCandidate(t, ops[i].Result) {
+			continue
+		}
+		ops[i].Result = nil
+		ops[i].Truncated = true
+		record.Truncated = true
+		if fits(record, maxBytes, render) {
+			return record
+		}
+	}
+	for k := 1; k <= len(ops); k++ {
+		if candidate := dropOldestForTest(record, k); fits(candidate, maxBytes, render) {
+			return candidate
+		}
+	}
+	if len(ops) > 0 {
+		record = dropOldestForTest(record, len(ops))
+	}
+	if len(record.Input) > 0 {
+		record.Input = nil
+		record.Truncated = true
+		record.DroppedInput = true
+		if fits(record, maxBytes, render) {
+			return record
+		}
+	}
+	if len(record.Output) > 0 {
+		record.Output = nil
+		record.Truncated = true
+		record.DroppedOutput = true
+	}
+	return record
+}
+
+// smallResults are results of 7 bytes or less as rendered. Clearing one of
+// them makes the array rendering larger. `[ 1 , 2 ]` is 9 bytes as given
+// and 5 bytes as rendered.
+var smallResults = []string{`true`, `1`, `"ok"`, `null`, `""`, `{}`, `[ 1 , 2 ]`}
+
 // For random records and limits, Truncate must return a record that fits
 // whenever dropping every operation, the input and the output fits. It
-// must remove only the oldest operations, and it must clear results only
-// from the oldest operations. The records use quotes, backslashes,
-// non-ASCII text, repeated and empty names, results, errors, input and
-// output.
+// must remove only the oldest operations, and it must clear results longer
+// than 7 bytes oldest first. The records use quotes, backslashes, non-ASCII
+// text, repeated and empty names, short and long results, errors, input
+// and output.
+//
+// The canonical and array renderings write a per-operation truncated
+// marker. So there Truncate must keep every result of 7 bytes or less, and
+// it must return the same record as oneAtATimeTruncate.
 func TestTruncate_RandomRecordsFitAndDropOldestFirst(t *testing.T) {
 	texts := []string{`"q"`, `\b\`, "é✓", "日本", "", "plain"}
 	names := []string{"a", "a\\", `"b"`, "ü", ""}
 	renderers := []struct {
 		name   string
 		render Renderer
+		exact  bool
 	}{
-		{"canonical", defaultRenderer},
-		{"LambdaLogExporter", (&LambdaLogExporter{}).Render},
-		{"both", func(r Record) ([]byte, error) { return RenderRecord(r, OperationsFormatBoth) }},
+		{"canonical", defaultRenderer, true},
+		{"array", func(r Record) ([]byte, error) { return RenderRecord(r, OperationsFormatArray) }, true},
+		{"LambdaLogExporter", (&LambdaLogExporter{}).Render, false},
+		{"both", func(r Record) ([]byte, error) { return RenderRecord(r, OperationsFormatBoth) }, false},
 	}
 	for _, r := range renderers {
 		t.Run(r.name, func(t *testing.T) {
-			for seed := int64(0); seed < 200; seed++ {
+			for seed := int64(0); seed < 300; seed++ {
 				rng := rand.New(rand.NewSource(seed))
 				text := func() string {
 					return strings.Repeat(texts[rng.Intn(len(texts))], 1+rng.Intn(40))
@@ -320,7 +405,10 @@ func TestTruncate_RandomRecordsFitAndDropOldestFirst(t *testing.T) {
 					ops[i] = OperationRecord{
 						ID: strconv.Itoa(i), Name: names[rng.Intn(len(names))], Type: "STEP", Status: "SUCCEEDED",
 					}
-					if rng.Intn(2) == 0 {
+					switch rng.Intn(3) {
+					case 1:
+						ops[i].Result = json.RawMessage(smallResults[rng.Intn(len(smallResults))])
+					case 2:
 						ops[i].Result, _ = json.Marshal(text())
 					}
 					if rng.Intn(3) == 0 {
@@ -357,10 +445,17 @@ func TestTruncate_RandomRecordsFitAndDropOldestFirst(t *testing.T) {
 				}
 				kept := false
 				for i, op := range out.Operations {
-					if op.ID != ops[k+i].ID {
-						t.Fatalf("seed %d: kept operation %d has ID %q, want %q", seed, i, op.ID, ops[k+i].ID)
+					orig := ops[k+i]
+					if op.ID != orig.ID {
+						t.Fatalf("seed %d: kept operation %d has ID %q, want %q", seed, i, op.ID, orig.ID)
 					}
-					if len(ops[k+i].Result) == 0 {
+					if len(orig.Result) == 0 {
+						continue
+					}
+					if !isCandidate(t, orig.Result) {
+						if r.exact && (string(op.Result) != string(orig.Result) || op.Truncated) {
+							t.Fatalf("seed %d: operation %s lost its %d-byte result %s", seed, op.ID, compactLen(t, orig.Result), orig.Result)
+						}
 						continue
 					}
 					if len(op.Result) > 0 {
@@ -369,8 +464,158 @@ func TestTruncate_RandomRecordsFitAndDropOldestFirst(t *testing.T) {
 						t.Fatalf("seed %d: operation %s lost its result, but an older one kept its result", seed, op.ID)
 					}
 				}
+				if r.exact {
+					if want := oneAtATimeTruncate(t, record, limit, r.render, false); !reflect.DeepEqual(out, want) {
+						t.Fatalf("seed %d, limit %d: Truncate = %+v, want the one-at-a-time result %+v", seed, limit, out, want)
+					}
+				}
 			}
 		})
+	}
+}
+
+// One large old result is followed by many results of 7 bytes or less.
+// The limit is one byte below the full size. Clearing the large result is
+// enough. Clearing a small result makes the array rendering larger, so a
+// search that also cleared the small results would find that clearing
+// half or all of them does not fit, and would drop operations. Truncate
+// must clear only the large result and drop no operation, as the
+// one-at-a-time reference does.
+func TestTruncate_Results_SkipsSmallResults(t *testing.T) {
+	small := []string{`true`, `1`, `"ok"`, `null`}
+	ops := []OperationRecord{{
+		ID: "op-0", Type: "STEP", Status: "SUCCEEDED",
+		Result: json.RawMessage(`"` + strings.Repeat("x", 1000) + `"`),
+	}}
+	for i := 1; i < 2000; i++ {
+		ops = append(ops, OperationRecord{
+			ID: "op-" + strconv.Itoa(i), Type: "STEP", Status: "SUCCEEDED",
+			Result: json.RawMessage(small[i%len(small)]),
+		})
+	}
+	record := Record{RecordType: "DurableExecutionTelemetry", ExecutionArn: "arn:test", Operations: ops}
+	render := func(r Record) ([]byte, error) { return RenderRecord(r, OperationsFormatArray) }
+	full, err := render(record)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	limit := len(full) - 1
+
+	out := Truncate(record, limit, render)
+
+	if want := oneAtATimeTruncate(t, record, limit, render, false); !reflect.DeepEqual(out, want) {
+		t.Fatalf("Truncate differs from the one-at-a-time result: dropped %d, want %d",
+			out.DroppedOperations, want.DroppedOperations)
+	}
+	if out.DroppedOperations != 0 || len(out.Operations) != len(ops) {
+		t.Fatalf("DroppedOperations = %d, want 0", out.DroppedOperations)
+	}
+	if out.Operations[0].Result != nil || !out.Operations[0].Truncated {
+		t.Fatalf("the large result was not cleared")
+	}
+	for _, op := range out.Operations[1:] {
+		if op.Result == nil || op.Truncated {
+			t.Fatalf("operation %s lost its small result", op.ID)
+		}
+	}
+}
+
+// The by-name rendering writes no per-operation truncated marker. So
+// there clearing a small result makes the record smaller. One large old
+// result is followed by many small results, each under a unique name. The
+// limit is the size after the large result and the oldest 500 small
+// results are cleared. Truncate must clear small results too and drop no
+// operation, as the one-at-a-time reference that clears every result does.
+func TestTruncate_Results_ByNameClearsSmallResults(t *testing.T) {
+	small := []string{`true`, `1`, `"ok"`, `null`}
+	ops := []OperationRecord{{
+		ID: "op-0", Name: "s-0", Type: "STEP", Status: "SUCCEEDED",
+		Result: json.RawMessage(`"` + strings.Repeat("x", 1000) + `"`),
+	}}
+	for i := 1; i < 2000; i++ {
+		ops = append(ops, OperationRecord{
+			ID: "op-" + strconv.Itoa(i), Name: "s-" + strconv.Itoa(i), Type: "STEP", Status: "SUCCEEDED",
+			Result: json.RawMessage(small[i%len(small)]),
+		})
+	}
+	record := Record{RecordType: "DurableExecutionTelemetry", ExecutionArn: "arn:test", Operations: ops}
+	render := (&LambdaLogExporter{}).Render
+	cleared := record
+	cleared.Operations = slices.Clone(ops)
+	for i := 0; i <= 500; i++ {
+		cleared.Operations[i].Result = nil
+		cleared.Operations[i].Truncated = true
+	}
+	cleared.Truncated = true
+	b, err := render(cleared)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	limit := len(b)
+
+	out := Truncate(record, limit, render)
+
+	want := oneAtATimeTruncate(t, record, limit, render, true)
+	if want.DroppedOperations != 0 {
+		t.Fatalf("the one-at-a-time reference dropped %d operations, want 0", want.DroppedOperations)
+	}
+	if !reflect.DeepEqual(out, want) {
+		t.Fatalf("Truncate differs from the one-at-a-time result: dropped %d, want %d",
+			out.DroppedOperations, want.DroppedOperations)
+	}
+}
+
+// The record fits only when every candidate result is cleared. Truncate
+// must clear all of them and drop no operation. The small results stay.
+func TestTruncate_Results_ClearingEveryCandidateFits(t *testing.T) {
+	var ops []OperationRecord
+	for i := 0; i < 10; i++ {
+		ops = append(ops, OperationRecord{
+			ID: "op-" + strconv.Itoa(i), Type: "STEP", Status: "SUCCEEDED",
+			Result: json.RawMessage(`"` + strings.Repeat("y", 64) + `"`),
+		})
+		ops = append(ops, OperationRecord{
+			ID: "small-" + strconv.Itoa(i), Type: "STEP", Status: "SUCCEEDED", Result: json.RawMessage(`true`),
+		})
+	}
+	record := Record{RecordType: "DurableExecutionTelemetry", ExecutionArn: "arn:test", Operations: ops}
+	cleared := record
+	cleared.Operations = slices.Clone(ops)
+	for i := 0; i < len(ops); i += 2 {
+		cleared.Operations[i].Result = nil
+		cleared.Operations[i].Truncated = true
+	}
+	cleared.Truncated = true
+	b, err := marshalNoHTMLEscape(cleared)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	out := Truncate(record, len(b), nil)
+
+	if !reflect.DeepEqual(out, cleared) {
+		t.Fatalf("Truncate = %+v, want every candidate result cleared and no operation dropped", out)
+	}
+}
+
+// The record fits only when every operation is dropped. Truncate must drop
+// all of them and keep the input.
+func TestTruncate_DropOperations_DroppingEveryOperationFits(t *testing.T) {
+	record := buildFailedRecord(20)
+	record.Input = json.RawMessage(`"` + strings.Repeat("i", 100) + `"`)
+	allDropped := dropOldestForTest(record, len(record.Operations))
+	b, err := marshalNoHTMLEscape(allDropped)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	out := Truncate(record, len(b), nil)
+
+	if out.DroppedOperations != 20 || len(out.Operations) != 0 {
+		t.Fatalf("DroppedOperations = %d with %d kept, want 20 dropped", out.DroppedOperations, len(out.Operations))
+	}
+	if out.DroppedInput || len(out.Input) == 0 {
+		t.Fatalf("the input was dropped, but the record fits with it")
 	}
 }
 

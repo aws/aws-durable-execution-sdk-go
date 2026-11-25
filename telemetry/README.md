@@ -550,18 +550,26 @@ Truncation removes content in this order. Each step runs only when the record
 is still over the limit after the previous step:
 
 1. Operation results, oldest operation first. Each operation that loses its
-   result is marked `Truncated`. This step can clear more results than the
-   limit requires. That happens only when the rendering carries the
-   `operations` array and a cleared result is shorter than 7 bytes.
+   result is marked `Truncated`. A small result is one whose JSON is 7
+   bytes or shorter, such as `true`, `1`, `null` or `"ok"`. In the
+   `operations` array, `"truncated":true` replaces `"result":<value>`. So
+   there clearing a small result makes the record larger.
+   `operationsByName` has no per-operation marker. So there clearing a
+   small result makes the record smaller. So truncation renders the record
+   once with every small result cleared. If that render is smaller,
+   small results are cleared like the others. Otherwise they stay in the
+   record. A binary search finds the fewest results to clear.
 2. Whole operations, oldest first. A binary search finds the count to drop.
    So truncation renders the record about log2(n) times for n operations,
    for every exporter. The search returns the fewest drops only when each
-   dropped operation makes the rendered record smaller. In
-   `operationsByName` that is not always true: dropping one of two
-   operations that share a name makes the other one's `error` and
-   `result` appear. So this step can drop more operations than the limit
-   requires. The result still fits, because the chosen count was rendered
-   and fit. `DroppedOperations` counts the dropped operations.
+   dropped operation makes the rendered record smaller. That is true for
+   the `operations` array. It is not always true for `operationsByName`:
+   dropping one of two operations that share a name makes the other one's
+   `error` and `result` appear. So only the `operationsByName` rendering,
+   alone or as part of `OperationsFormatBoth`, can drop more operations
+   than the limit requires. The result still fits, because the chosen
+   count was rendered and fit. `DroppedOperations` counts the dropped
+   operations.
 3. The execution input. `DroppedInput` is set.
 4. The execution output. `DroppedOutput` is set.
 

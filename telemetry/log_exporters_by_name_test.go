@@ -288,9 +288,9 @@ func TestLogExporters_TruncatesOverLimitByNameRendering(t *testing.T) {
 //   - 3 dropped: under the limit.
 //
 // So the size does not shrink with every dropped operation. The fewest
-// drops that fit is 1. The binary search checks 2 first, which does not
-// fit, so it moves up and returns 3. Truncate accepts this: it drops more
-// than needed, and the result still fits.
+// drops that fit is 1. A binary search checks 2 first, which does not fit,
+// so it moves up and returns 3. Truncate accepts this. So the test checks
+// only that Truncate drops at least the fewest and that the result fits.
 func TestLogExporters_TruncateByNameCanDropMoreThanNeeded(t *testing.T) {
 	for _, tc := range logExporterCases() {
 		t.Run(tc.name, func(t *testing.T) {
@@ -322,11 +322,16 @@ func TestLogExporters_TruncateByNameCanDropMoreThanNeeded(t *testing.T) {
 			}
 			limit := len(want)
 
+			fewest := linearDropCount(rec, limit, exp.Render)
+			if fewest != 1 {
+				t.Fatalf("fewest drops that fit = %d, want 1", fewest)
+			}
+
 			out := Truncate(rec, limit, exp.Render)
 
-			if out.DroppedOperations != 3 || len(out.Operations) != 0 {
-				t.Fatalf("DroppedOperations = %d with %d operations kept, want 3 dropped and 0 kept",
-					out.DroppedOperations, len(out.Operations))
+			if out.DroppedOperations < fewest || out.DroppedOperations+len(out.Operations) != 3 {
+				t.Fatalf("DroppedOperations = %d with %d operations kept, want at least %d dropped of 3",
+					out.DroppedOperations, len(out.Operations), fewest)
 			}
 			got, err := exp.Render(out)
 			if err != nil {
