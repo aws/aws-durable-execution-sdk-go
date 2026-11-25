@@ -71,7 +71,7 @@ func TestHandler(t *testing.T) {
 // nothing carries ChildrenOmitted. The operations are the same, so the
 // default golden applies.
 func TestHandlerEveryDepth(t *testing.T) {
-	result, reported := run(t, durable.WithPlugins(plugin))
+	result, reported := run(t, durable.WithPlugins(pluginFactory))
 
 	want := []reportedOp{
 		{Name: "load-order"},

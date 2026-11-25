@@ -70,11 +70,17 @@ var plugin = durable.Plugin{
 	},
 }
 
+// pluginFactory serves the same plugin for every invocation; the plugin's
+// recorder resets at the start of each, so one instance is enough.
+var pluginFactory = durable.PluginFactoryFunc(func(_ context.Context, _ durable.InvocationHookInfo) (*durable.Plugin, error) {
+	return &plugin, nil
+})
+
 // options registers the plugin and reports operations down to depth 0:
 // those claimed on the handler's Context. The steps inside the child
 // context have depth 1 and are omitted.
 var options = []durable.HandlerOption{
-	durable.WithPlugins(plugin),
+	durable.WithPlugins(pluginFactory),
 	durable.WithPluginChildOperationsDepth(0),
 }
 
