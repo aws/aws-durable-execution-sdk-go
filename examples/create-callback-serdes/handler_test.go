@@ -4,6 +4,8 @@
 package main
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable/durabletest"
@@ -11,28 +13,41 @@ import (
 )
 
 func TestHandler(t *testing.T) {
-	// Set dummy credentials so config.LoadDefaultConfig resolves quickly
-	// and the Lambda API call fails fast with an auth error rather than
-	// timing out searching for real credentials.
-	t.Setenv("AWS_ACCESS_KEY_ID", "test")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
-	t.Setenv("AWS_REGION", "us-east-1")
-
 	runner := durabletest.NewLocalRunner(handler)
+
+	// Replace the callback sender so the step resolves the callback
+	// through the local runner instead of the real Lambda API. Send a
+	// lowercase Message so an uppercased result shows the per-callback
+	// serdes decoded the payload before the handler saw it.
+	orig := sendCallback
+	t.Cleanup(func() { sendCallback = orig })
+	sendCallback = func(_ context.Context, callbackID string, data CustomData) error {
+		sent := data
+		sent.Message = strings.ToLower(sent.Message)
+		return runner.SendCallbackSuccess(callbackID, sent)
+	}
+
 	result, err := runner.RunUntilComplete(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	// The handler's "send-custom-data" Step calls the real Lambda API
-	// (SendDurableExecutionCallbackSuccess) which is unavailable in local
-	// testing. The step exhausts retries and the execution fails.
-	if result.Status != durabletest.Failed {
-		t.Fatalf("expected Failed (no real AWS endpoint for send-custom-data step), got %s", result.Status)
+	if result.Status != durabletest.Succeeded {
+		t.Fatalf("expected Succeeded, got %s", result.Status)
 	}
 
-	if result.Error == nil {
-		t.Fatal("expected error details")
+	out, err := durabletest.ResultAs[Result](result)
+	if err != nil {
+		t.Fatalf("deserialize result: %v", err)
+	}
+
+	// JSONSerdes alone would return the Message unchanged.
+	want := Result{ReceivedData: CustomData{
+		ID:        99,
+		Message:   "CUSTOM SERIALIZED DATA",
+		Timestamp: "2026-07-01T12:00:00Z",
+	}}
+	if out != want {
+		t.Errorf("expected %+v, got %+v", want, out)
 	}
 
 	extest.AssertSignature(t, result, extest.Ordered)
