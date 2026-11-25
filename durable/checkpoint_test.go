@@ -194,6 +194,16 @@ func TestOperationFromAPIAbsentTimestamps(t *testing.T) {
 	}
 }
 
+// TestOperationFromAPIParentID verifies that an API record keeps its
+// parent ID, which the plugin depth bound and the child-context replay
+// probe read.
+func TestOperationFromAPIParentID(t *testing.T) {
+	op := operationFromAPI(Operation{Id: aws.String("x"), ParentId: aws.String("p"), Status: OperationStatusStarted})
+	if op.parentID != "p" {
+		t.Fatalf("parentID = %q, want p", op.parentID)
+	}
+}
+
 func TestCheckpointErrorKeepsToken(t *testing.T) {
 	wantErr := errors.New("throttled")
 	cp := newCheckpointer(&fakeLambda{checkpointErr: wantErr}, "arn:test", "token-0")

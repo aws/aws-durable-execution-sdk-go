@@ -460,29 +460,22 @@ func TestPluginChildOperationsDepthInvocationMaps(t *testing.T) {
 		return s
 	}
 	for _, tc := range []struct {
-		depth              int
-		wantAll, wantUpd   []string
-		wantOmitted        []string
-		wantChangeNotified bool
+		depth            int
+		wantAll, wantUpd []string
+		wantOmitted      []string
 	}{
-		{-1, []string{"", "mid", "outer", "pause", "top"}, []string{"pause", "top"}, nil, true},
-		{0, []string{"", "outer", "top"}, []string{"top"}, []string{"", "outer", "top"}, true},
-		{1, []string{"", "mid", "outer", "top"}, []string{"top"}, []string{"mid"}, true},
-		{2, []string{"", "mid", "outer", "pause", "top"}, []string{"pause", "top"}, []string{"pause"}, true},
+		{-1, []string{"", "mid", "outer", "pause", "top"}, []string{"pause", "top"}, nil},
+		{0, []string{"", "outer", "top"}, []string{"top"}, []string{"", "outer", "top"}},
+		{1, []string{"", "mid", "outer", "top"}, []string{"top"}, []string{"mid"}},
+		{2, []string{"", "mid", "outer", "pause", "top"}, []string{"pause", "top"}, []string{"pause"}},
 	} {
 		t.Run(fmt.Sprintf("depth=%d", tc.depth), func(t *testing.T) {
 			var mu sync.Mutex
-			var all, upd, change seen
-			changed := false
+			var all, upd seen
 			p := Plugin{
 				OnInvocationStart: func(_ context.Context, info InvocationHookInfo) {
 					mu.Lock()
 					all, upd = collect(info.Operations), collect(info.UpdatedOperations)
-					mu.Unlock()
-				},
-				OnOperationChange: func(_ context.Context, info OperationChangeHookInfo) {
-					mu.Lock()
-					changed, change = true, collect(info.UpdatedOperations)
 					mu.Unlock()
 				},
 			}
@@ -504,12 +497,6 @@ func TestPluginChildOperationsDepthInvocationMaps(t *testing.T) {
 			if !slices.Equal(upd.names, tc.wantUpd) {
 				t.Errorf("UpdatedOperations = %v, want %v", upd.names, tc.wantUpd)
 			}
-			if changed != tc.wantChangeNotified {
-				t.Errorf("OnOperationChange fired = %v, want %v", changed, tc.wantChangeNotified)
-			}
-			if changed && !slices.Equal(change.names, tc.wantUpd) {
-				t.Errorf("OnOperationChange UpdatedOperations = %v, want %v", change.names, tc.wantUpd)
-			}
 			for _, n := range all.names {
 				if got, want := all.omitted[n], slices.Contains(tc.wantOmitted, n); got != want {
 					t.Errorf("Operations[%q].ChildrenOmitted = %v, want %v", n, got, want)
@@ -519,26 +506,48 @@ func TestPluginChildOperationsDepthInvocationMaps(t *testing.T) {
 	}
 }
 
-// TestPluginChildOperationsDepthOmitsChangeNotification asserts that
-// OnOperationChange does not fire when every updated operation lies beyond
-// the bound.
-func TestPluginChildOperationsDepthOmitsChangeNotification(t *testing.T) {
-	ops := []wireOperation{
-		lifecycleExecOp(),
-		contextOp("1", "", OperationSubTypeRunInChildContext, "outer", "STARTED", nil),
-		{Id: hashID("1-1"), ParentId: hashID("1"), Status: "SUCCEEDED", Type: "WAIT", SubType: "Wait", Name: "pause"},
-	}
-	fired := false
-	p := Plugin{OnOperationChange: func(context.Context, OperationChangeHookInfo) { fired = true }}
-	handler := Wrap(func(ctx Context, _ string) (string, error) { return "done", nil },
-		withTestPlugins(p), withLambdaAPI(&fakePluginClient{}), WithPluginChildOperationsDepth(0))
-	resp, err := handler(makePluginContext(), makePluginPayloadWithUpdated(t, "arn:test:depth", "tok1", ops, []string{hashID("1-1")}))
+// TestPluginChildOperationsDepthChangeMaps asserts that the maps of
+// OnOperationChange obey the bound. The handler runs a step inside a child
+// context and a step at the top level, and the client returns each step in
+// its checkpoint response. With depth 0 the nested step is omitted from
+// both maps, and a response that changes the nested step alone dispatches
+// no call.
+func TestPluginChildOperationsDepthChangeMaps(t *testing.T) {
+	rec := &changeRecorder{}
+	handler := Wrap(func(ctx Context, _ string) (string, error) {
+		if _, err := RunInChildContext(ctx, "outer", func(c Context) (string, error) {
+			return Step(c, "nested", func(StepContext) (string, error) { return "n", nil })
+		}); err != nil {
+			return "", err
+		}
+		return Step(ctx, "top", func(StepContext) (string, error) { return "t", nil })
+	}, withTestPlugins(rec.plugin()), withLambdaAPI(stepEchoClient{}), WithPluginChildOperationsDepth(0))
+
+	resp, err := handler(makePluginContext(), makePluginPayload(t, "arn:test:depth", "tok1", nil))
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertPluginResponseStatus(t, resp, invocationSucceeded)
-	if fired {
-		t.Error("OnOperationChange fired for an operation beyond the bound")
+
+	nested, top := hashID("1-1"), hashID("2")
+	if got := rec.succeededCalls(top); got != 1 {
+		t.Errorf("top-level step reported SUCCEEDED %d times, want 1", got)
+	}
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	for i, info := range rec.calls {
+		if len(info.UpdatedOperations) == 0 {
+			t.Errorf("call %d: dispatched with no reported operation", i)
+		}
+		if _, ok := info.UpdatedOperations[nested]; ok {
+			t.Errorf("call %d: UpdatedOperations holds the nested step beyond the bound", i)
+		}
+		if _, ok := info.Operations[nested]; ok {
+			t.Errorf("call %d: Operations holds the nested step beyond the bound", i)
+		}
+		if op, ok := info.UpdatedOperations[top]; ok && !op.ChildrenOmitted {
+			t.Errorf("call %d: top-level step at the bound has ChildrenOmitted unset", i)
+		}
 	}
 }
 

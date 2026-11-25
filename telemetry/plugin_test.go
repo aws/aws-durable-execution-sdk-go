@@ -461,7 +461,8 @@ func TestPlugin_OnOperationChange_BackfillsOps(t *testing.T) {
 		ExecutionStartTimestamp: now,
 	})
 
-	// Simulate operations that changed externally between invocations.
+	// A checkpoint response reports an operation that no operation hook
+	// reported in this invocation.
 	plugin.OnOperationChange(ctx, durable.OperationChangeHookInfo{
 		ExecutionArn: arn,
 		UpdatedOperations: map[string]durable.OperationHookInfo{
@@ -492,6 +493,53 @@ func TestPlugin_OnOperationChange_BackfillsOps(t *testing.T) {
 	}
 	if records[0].Operations[0].Name != "previous-step" {
 		t.Errorf("expected backfilled op name=previous-step, got %q", records[0].Operations[0].Name)
+	}
+}
+
+// TestPlugin_OnOperationChange_KeepsOperationHookRecord asserts that a
+// change dispatched after the operation hooks of the same operation does
+// not replace their record. The step ends as SUCCEEDED with attempt 2, and
+// a late change then reports it as STARTED. The emitted record keeps the
+// outcome OnOperationEnd reported.
+func TestPlugin_OnOperationChange_KeepsOperationHookRecord(t *testing.T) {
+	exp := &capturingExporter{}
+	ip := New(Config{Exporters: []Exporter{exp}})
+
+	ctx := context.Background()
+	arn := "arn:aws:lambda:us-east-1:123456789012:function:fn:1"
+	now := time.Now()
+
+	plugin := startTestPlugin(t, ctx, ip, durable.InvocationHookInfo{
+		ExecutionArn:            arn,
+		ExecutionStartTimestamp: now,
+	})
+
+	step := durable.OperationHookInfo{ExecutionArn: arn, ID: "op-1", Name: "step", Type: "STEP", Status: durable.PluginOperationStarted, StartTimestamp: now}
+	plugin.OnOperationStart(ctx, step)
+	ended := step
+	ended.Status = durable.PluginOperationSucceeded
+	ended.Attempt = 2
+	ended.EndTimestamp = now.Add(time.Millisecond)
+	plugin.OnOperationEnd(ctx, ended)
+
+	plugin.OnOperationChange(ctx, durable.OperationChangeHookInfo{
+		ExecutionArn:      arn,
+		UpdatedOperations: map[string]durable.OperationHookInfo{"op-1": step},
+		Operations:        map[string]durable.OperationHookInfo{"op-1": step},
+	})
+
+	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
+		ExecutionArn:    arn,
+		Status:          durable.PluginInvocationSucceeded,
+		ExecutionResult: "done",
+	})
+
+	records := exp.snapshot()
+	if len(records) != 1 || len(records[0].Operations) != 1 {
+		t.Fatalf("records = %+v, want 1 record with 1 operation", records)
+	}
+	if op := records[0].Operations[0]; op.Status != string(durable.PluginOperationSucceeded) || op.Attempt != 2 || op.EndTimestamp == nil {
+		t.Errorf("operation = %+v, want the SUCCEEDED record with attempt 2 and an end timestamp", op)
 	}
 }
 
