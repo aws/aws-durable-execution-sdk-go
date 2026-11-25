@@ -3,6 +3,7 @@ package durable
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -304,7 +305,8 @@ func (c *slowStepStartClient) Checkpoint(ctx context.Context, in CheckpointInput
 func TestOperationChangeReportsCallInFlightWhenInvocationPends(t *testing.T) {
 	rec := &changeRecorder{}
 	client := &slowStepStartClient{
-		hold:     200 * time.Millisecond,
+		// hold must exceed the handler's sleep below by a wide margin.
+		hold:     time.Second,
 		waitSeen: make(chan struct{}),
 		stepSent: make(chan struct{}),
 	}
@@ -322,8 +324,10 @@ func TestOperationChangeReportsCallInFlightWhenInvocationPends(t *testing.T) {
 			})
 		})
 		<-client.stepSent
-		// Give the waiter branch time to block on its wait.
-		time.Sleep(50 * time.Millisecond)
+		// The waiter branch must be blocked on its wait before the
+		// handler returns, or the invocation does not end as pending.
+		// The package exposes no signal for that, so the handler sleeps.
+		time.Sleep(200 * time.Millisecond)
 		return "ignored", nil
 	}, withTestPlugins(rec.plugin()), withLambdaAPI(client))
 
@@ -409,9 +413,18 @@ func TestExecutionStateMergeReportsStatusChanges(t *testing.T) {
 	if len(got) != 1 || got[0].id != "a" {
 		t.Errorf("merge returned %v, want the operation a whose status changed", got)
 	}
-	_, changed := s.snapshot()
-	if _, ok := changed["a"]; !ok || len(changed) != 2 {
-		t.Errorf("changed IDs = %v, want a and b", changed)
+	// The first merge changed b, the second changed a.
+	_, seq := s.snapshot()
+	if seq != 2 {
+		t.Errorf("merge sequence = %d, want 2", seq)
+	}
+	for through, want := range map[uint64][]string{1: {"b"}, 2: {"a", "b"}} {
+		var ids []string
+		s.rangeChangedThrough(through, func(id string) { ids = append(ids, id) })
+		slices.Sort(ids)
+		if !slices.Equal(ids, want) {
+			t.Errorf("changed through merge %d = %v, want %v", through, ids, want)
+		}
 	}
 }
 
@@ -425,7 +438,12 @@ func TestOperationChangeQueueClose(t *testing.T) {
 	release := make(chan struct{})
 	d := newPluginDispatcher([]Plugin{{OnOperationChange: func(context.Context, OperationChangeHookInfo) {
 		calls.Add(1)
-		started <- struct{}{}
+		// Non-blocking, so a regression that runs more calls fails the
+		// count below instead of blocking here.
+		select {
+		case started <- struct{}{}:
+		default:
+		}
 		<-release
 	}}})
 	q := newOperationChangeQueue(context.Background(), d, "arn:test:change", newExecutionState(nil), -1)
@@ -443,10 +461,52 @@ func TestOperationChangeQueueClose(t *testing.T) {
 	q.close(ended)
 	q.enqueue(nil)
 	close(release)
-	<-idle
+	select {
+	case <-idle:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the queue goroutine did not exit")
+	}
 
 	if got := calls.Load(); got != 1 {
 		t.Errorf("hook ran %d times, want 1: the call in progress when the context ended", got)
+	}
+}
+
+// TestOperationChangeQueueCloseAbandonsReportBeingBuilt asserts that no
+// hook starts after close returned because its context ended. The queue
+// goroutine has taken a change off the queue and is building its report
+// when close returns. The hook is not called for that change.
+func TestOperationChangeQueueCloseAbandonsReportBeingBuilt(t *testing.T) {
+	var calls atomic.Int32
+	d := newPluginDispatcher([]Plugin{{OnOperationChange: func(context.Context, OperationChangeHookInfo) {
+		calls.Add(1)
+	}}})
+	q := newOperationChangeQueue(context.Background(), d, "arn:test:change", newExecutionState(nil), -1)
+	building := make(chan struct{})
+	release := make(chan struct{})
+	q.report = func(operationChange) (OperationChangeHookInfo, bool) {
+		close(building)
+		<-release
+		return OperationChangeHookInfo{}, true
+	}
+	q.enqueue(nil)
+	<-building
+	q.mu.Lock()
+	idle := q.idle
+	q.mu.Unlock()
+
+	ended, cancel := context.WithCancel(context.Background())
+	cancel()
+	q.close(ended)
+	close(release)
+	select {
+	case <-idle:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the queue goroutine did not exit")
+	}
+
+	if got := calls.Load(); got != 0 {
+		t.Errorf("hook ran %d times, want 0: close returned before the report was built", got)
 	}
 }
 

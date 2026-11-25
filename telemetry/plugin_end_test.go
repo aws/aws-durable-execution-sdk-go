@@ -68,3 +68,31 @@ func TestPlugin_ConcurrentHooksAndInvocationEnd(t *testing.T) {
 		}
 	}
 }
+
+// TestPlugin_OnOperationChange_SkippedChangeEmitsNothing asserts that in
+// EmitOnChange mode a change which records nothing emits no record. The
+// step's end is reported first, so the later change for it is skipped.
+func TestPlugin_OnOperationChange_SkippedChangeEmitsNothing(t *testing.T) {
+	exp := &capturingExporter{}
+	p := &telemetryInvocation{
+		env:    New(Config{EmitMode: EmitOnChange, Exporters: []Exporter{exp}}),
+		record: &Record{Status: StatusRunning, ExecutionArn: "test-execution"},
+		byOpID: make(map[string]int), resultText: make(map[string]string), endReported: make(map[string]struct{}), sampledIn: true,
+	}
+	ctx := context.Background()
+	step := durable.OperationHookInfo{ID: "op-1", Name: "step", Type: "STEP", Status: durable.PluginOperationSucceeded}
+	p.onOperationEnd(ctx, step)
+	p.onChangeWG.Wait()
+	before := len(exp.snapshot())
+
+	started := step
+	started.Status = durable.PluginOperationStarted
+	p.onOperationChange(ctx, durable.OperationChangeHookInfo{
+		UpdatedOperations: map[string]durable.OperationHookInfo{"op-1": started},
+		Operations:        map[string]durable.OperationHookInfo{"op-1": started},
+	})
+	p.onChangeWG.Wait()
+	if after := len(exp.snapshot()); after != before {
+		t.Errorf("the skipped change emitted %d records, want 0", after-before)
+	}
+}

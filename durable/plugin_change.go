@@ -6,19 +6,20 @@ import (
 )
 
 // operationChange is what the checkpoint response path records for one
-// response that changed an operation's status. The records are shared with
-// the state, not copied: a record is never modified after it enters the
-// state.
+// response that changed an operation's status. The operation records are
+// shared with the state, not copied: a record is never modified after it
+// enters the state.
 type operationChange struct {
 	// changed holds the operations whose status the response changed.
 	changed []*operation
 	// operations holds every operation in the state once the response was
 	// merged.
 	operations []*operation
-	// changedIDs holds the wire IDs of the operations whose status a
-	// response changed during this invocation, up to and including this
-	// response.
-	changedIDs map[string]struct{}
+	// seq is the state's merge sequence number once the response was
+	// merged. The operations that a merge numbered seq or lower changed
+	// are those whose status changed during this invocation, up to and
+	// including this response.
+	seq uint64
 }
 
 // operationChangeQueue delivers OnOperationChange reports for one
@@ -53,6 +54,9 @@ type operationChangeQueue struct {
 	idle chan struct{}
 	// closed is set by close. A closed queue accepts no report.
 	closed bool
+	// abandoned is set by close when its context ended before the queue
+	// was empty. The dispatch goroutine then starts no further hook call.
+	abandoned bool
 }
 
 // newOperationChangeQueue returns the queue for one invocation, or nil
@@ -88,7 +92,7 @@ func (q *operationChangeQueue) enqueue(changed []*operation) {
 	}
 	c := operationChange{changed: changed}
 	if q.state != nil {
-		c.operations, c.changedIDs = q.state.snapshot()
+		c.operations, c.seq = q.state.snapshot()
 	}
 	q.pending = append(q.pending, c)
 	if q.idle == nil {
@@ -117,6 +121,18 @@ func (q *operationChangeQueue) run(idle chan struct{}) {
 
 		info, ok := q.report(c)
 		if !ok {
+			continue
+		}
+		// close clears pending when its context ends, but this change
+		// was already taken off the queue. Building its report takes
+		// time, so close can return in between. Without this check the
+		// hook would then start after OnInvocationEnd. A call that
+		// passes the check before close sets abandoned counts as
+		// already running.
+		q.mu.Lock()
+		abandoned := q.abandoned
+		q.mu.Unlock()
+		if abandoned {
 			continue
 		}
 		dispatchNotification(q.d, func(p *Plugin) {
@@ -152,6 +168,7 @@ func (q *operationChangeQueue) close(ctx context.Context) {
 	case <-ctx.Done():
 		q.mu.Lock()
 		q.pending = nil
+		q.abandoned = true
 		q.mu.Unlock()
 	}
 }
@@ -196,12 +213,12 @@ func operationChangeInfo(executionArn string, state *executionState, bound int, 
 	for _, op := range c.operations {
 		addCheckpointedOperationInfo(all, executionArn, state, bound, op)
 	}
-	for id, opInfo := range all {
-		if _, live := c.changedIDs[id]; live {
+	state.rangeChangedThrough(c.seq, func(id string) {
+		if opInfo, present := all[id]; present {
 			opInfo.IsReplay = false
 			all[id] = opInfo
 		}
-	}
+	})
 	for id, opInfo := range updated {
 		opInfo.IsReplay = false
 		updated[id] = opInfo

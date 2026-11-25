@@ -398,15 +398,21 @@ func (p *telemetryInvocation) onOperationEnd(ctx context.Context, info durable.O
 // OnOperationEnd when the invocation suspends, and the change reports its
 // PENDING status.
 func (p *telemetryInvocation) onOperationChange(ctx context.Context, info durable.OperationChangeHookInfo) {
+	recorded := false
 	p.mu.Lock()
 	for id, opInfo := range info.UpdatedOperations {
 		if _, ended := p.endReported[id]; ended {
 			continue
 		}
 		p.upsertOperationLocked(id, opInfo)
+		recorded = true
 	}
 	p.mu.Unlock()
-	p.scheduleOnChangeDispatch(ctx)
+	// A change whose every operation was skipped leaves the record as it
+	// was, so it schedules no on-change emission.
+	if recorded {
+		p.scheduleOnChangeDispatch(ctx)
+	}
 }
 
 // enrichLogContext adds execution metadata to the log context.

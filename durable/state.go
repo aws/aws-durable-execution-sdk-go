@@ -207,11 +207,16 @@ type executionState struct {
 	// plugin pays nothing for the comparison.
 	trackChanges bool
 
-	// changed holds the wire IDs of the operations whose status a merge
-	// changed during this invocation. Guarded by mu. An operation in this
-	// set is reported to OnOperationChange with IsReplay false, because
-	// its current record was produced during this invocation.
-	changed map[string]struct{}
+	// changed maps the wire ID of each operation whose status a merge
+	// changed during this invocation to the sequence number of the first
+	// merge that changed it. Guarded by mu. An operation in this map is
+	// reported to OnOperationChange with IsReplay false, because its
+	// current record was produced during this invocation.
+	changed map[string]uint64
+
+	// mergeSeq counts the merges that changed a status while trackChanges
+	// is set. Guarded by mu. See changed.
+	mergeSeq uint64
 
 	// endMu guards endDispatched.
 	endMu sync.Mutex
@@ -352,9 +357,14 @@ func (s *executionState) merge(ops []*operation) []*operation {
 		if s.trackChanges {
 			if prev, present := s.operations[op.id]; !present || prev.status != op.status {
 				if s.changed == nil {
-					s.changed = make(map[string]struct{})
+					s.changed = make(map[string]uint64)
 				}
-				s.changed[op.id] = struct{}{}
+				if len(changed) == 0 {
+					s.mergeSeq++
+				}
+				if _, seen := s.changed[op.id]; !seen {
+					s.changed[op.id] = s.mergeSeq
+				}
 				changed = append(changed, op)
 			}
 		}
@@ -365,22 +375,32 @@ func (s *executionState) merge(ops []*operation) []*operation {
 }
 
 // snapshot returns every operation in the map, in no defined order, and
-// the wire IDs of the operations whose status a merge changed during this
-// invocation. Both are copies taken under one lock, so they describe the
-// same moment. The operation records are shared, not copied: a record is
-// never modified after it enters the map.
-func (s *executionState) snapshot() (ops []*operation, changed map[string]struct{}) {
+// the sequence number of the latest merge that changed a status. Both are
+// read under one lock, so they describe the same moment. The operation
+// records are shared, not copied: a record is never modified after it
+// enters the map.
+func (s *executionState) snapshot() (ops []*operation, seq uint64) {
 	s.mu.RLock()
 	ops = make([]*operation, 0, len(s.operations))
 	for _, op := range s.operations {
 		ops = append(ops, op)
 	}
-	changed = make(map[string]struct{}, len(s.changed))
-	for id := range s.changed {
-		changed[id] = struct{}{}
-	}
+	seq = s.mergeSeq
 	s.mu.RUnlock()
-	return ops, changed
+	return ops, seq
+}
+
+// rangeChangedThrough calls fn with the wire ID of each operation whose
+// status a merge changed during this invocation, counting only the merges
+// up to and including the one numbered seq.
+func (s *executionState) rangeChangedThrough(seq uint64, fn func(id string)) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for id, first := range s.changed {
+		if first <= seq {
+			fn(id)
+		}
+	}
 }
 
 // numOperations returns the number of checkpointed operations.

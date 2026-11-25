@@ -716,7 +716,7 @@ func (cp *checkpointer) send(batch []*pendingCheckpoint, token string) error {
 	}
 	// The plugins learn of the status changes after the waiters are
 	// resumed, as in the JavaScript SDK. The callback copies the
-	// operation pointers and queues them. The report is built and the
+	// pointers of the operations in the state and queues them. The report is built and the
 	// hooks run on another goroutine, so a slow OnOperationChange hook
 	// never delays this call.
 	if cp.onOperationsChanged != nil && len(changed) > 0 {
