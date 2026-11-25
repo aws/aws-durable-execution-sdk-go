@@ -3,6 +3,7 @@ package durable
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"sync"
@@ -16,11 +17,13 @@ import (
 // attempt 1 and, once succeeded, its result.
 //
 // When hold is set, the first call that carries an update hold accepts
-// closes held and returns only after release is closed.
+// closes held and returns only after release is closed. The response to
+// that call also carries the records in extra.
 type operationEchoClient struct {
 	hold    func(OperationUpdate) bool
 	held    chan struct{}
 	release chan struct{}
+	extra   []Operation
 
 	mu     sync.Mutex
 	isHeld bool
@@ -75,8 +78,99 @@ func (c *operationEchoClient) Checkpoint(_ context.Context, in CheckpointInput) 
 	if hold {
 		close(c.held)
 		<-c.release
+		out.NewExecutionState = append(out.NewExecutionState, c.extra...)
 	}
 	return out, nil
+}
+
+// testWaitTimeout bounds every wait of a test on another goroutine, so a
+// regression fails the test instead of blocking it until the package
+// timeout.
+const testWaitTimeout = 5 * time.Second
+
+// receiveWithin returns the next value of ch. It fails the test when none
+// arrives, and ch is not closed, within testWaitTimeout.
+func receiveWithin[T any](t *testing.T, ch <-chan T, what string) T {
+	t.Helper()
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(testWaitTimeout):
+		t.Fatalf("timed out after %v waiting for %s", testWaitTimeout, what)
+		panic("unreachable")
+	}
+}
+
+// invocationResult is what one call of a wrapped handler returns.
+type invocationResult struct {
+	resp []byte
+	err  error
+}
+
+// runSuspendingWithCallInFlight runs one invocation that ends with a
+// PENDING response while the call that carries a step START is in flight.
+// client must hold that call. A branch is parked on a wait when the
+// handler returns, so the invocation suspends without waiting for the
+// checkpointer.
+//
+// ended must be closed by the OnInvocationEnd of one of plugins. The
+// function fails the test when OnInvocationEnd is dispatched while the
+// call is in flight. It then releases the call and returns the response.
+func runSuspendingWithCallInFlight(t *testing.T, client *operationEchoClient, payload []byte, ended <-chan struct{}, plugins ...Plugin) []byte {
+	t.Helper()
+	bodyDone := make(chan struct{})
+	defer close(bodyDone)
+	handler := Wrap(func(ctx Context, _ string) (string, error) {
+		Go(ctx, "branch", func(child Context) (string, error) {
+			return "", Wait(child, "pause", time.Hour)
+		})
+		// The handler must return only after the branch is parked on the
+		// wait. Otherwise the invocation is not committed to PENDING.
+		ec, ok := ctx.(*execContext)
+		if !ok {
+			return "", fmt.Errorf("context is %T, want *execContext", ctx)
+		}
+		for deadline := time.Now().Add(testWaitTimeout); !ec.suspend.committed(); {
+			if time.Now().After(deadline) {
+				return "", fmt.Errorf("the branch did not park on the wait")
+			}
+			time.Sleep(time.Millisecond)
+		}
+		StepAsync(ctx, "slow", func(StepContext) (string, error) {
+			<-bodyDone
+			return "", nil
+		})
+		// A suspending invocation discards a START that is queued and not
+		// yet sent. So the handler returns only once the call is in flight.
+		select {
+		case <-client.held:
+		case <-time.After(testWaitTimeout):
+			return "", fmt.Errorf("the call that carries the step START was not sent")
+		}
+		return "done", nil
+	}, withTestPlugins(plugins...), withLambdaAPI(client))
+
+	done := make(chan invocationResult, 1)
+	go func() {
+		resp, err := handler(makePluginContext(), payload)
+		done <- invocationResult{resp, err}
+	}()
+	receiveWithin(t, client.held, "the call that carries the step START")
+	// The handler returns as soon as the call is in flight. So an
+	// OnInvocationEnd that does not wait for the call arrives within this
+	// period.
+	select {
+	case <-ended:
+		t.Error("OnInvocationEnd was dispatched while the call was in flight")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(client.release)
+	res := receiveWithin(t, done, "the invocation to return")
+	if res.err != nil {
+		t.Fatal(res.err)
+	}
+	assertPluginResponseStatus(t, res.resp, invocationPending)
+	return res.resp
 }
 
 // changeRecorder records, in dispatch order, the invocation-level hooks
@@ -252,16 +346,12 @@ func TestOperationChangeBeforeInvocationEndWhenCallInFlight(t *testing.T) {
 		return "done", nil
 	}, withTestPlugins(rec.plugin()), withLambdaAPI(client))
 
-	type result struct {
-		resp []byte
-		err  error
-	}
-	done := make(chan result, 1)
+	done := make(chan invocationResult, 1)
 	go func() {
 		resp, err := handler(makePluginContext(), makePluginPayload(t, "arn:test:change", "tok1", nil))
-		done <- result{resp, err}
+		done <- invocationResult{resp, err}
 	}()
-	<-client.held
+	receiveWithin(t, client.held, "the call that carries the step START")
 	rec.mu.Lock()
 	early := slices.Clone(rec.order)
 	rec.mu.Unlock()
@@ -269,7 +359,7 @@ func TestOperationChangeBeforeInvocationEndWhenCallInFlight(t *testing.T) {
 		t.Errorf("hook order while the call is in flight = %v, want no invocation-end", early)
 	}
 	close(client.release)
-	res := <-done
+	res := receiveWithin(t, done, "the invocation to return")
 	if res.err != nil {
 		t.Fatal(res.err)
 	}
@@ -287,10 +377,8 @@ func TestOperationChangeBeforeInvocationEndWhenCallInFlight(t *testing.T) {
 
 // TestOperationChangeBeforeInvocationEndOnSuspension ends the invocation
 // with a PENDING response while the call that carries a step START is
-// still in flight. A branch is parked on a wait when the handler returns,
-// so the invocation suspends without waiting for the checkpointer. The
-// change that call's response reports is still dispatched before
-// OnInvocationEnd.
+// still in flight. The change that call's response reports is still
+// dispatched before OnInvocationEnd.
 func TestOperationChangeBeforeInvocationEndOnSuspension(t *testing.T) {
 	client := newHoldingEchoClient(func(u OperationUpdate) bool {
 		return u.Type == OperationTypeStep && u.Action == OperationActionStart
@@ -304,58 +392,7 @@ func TestOperationChangeBeforeInvocationEndOnSuspension(t *testing.T) {
 		rec.mu.Unlock()
 		close(ended)
 	}
-	bodyDone := make(chan struct{})
-	defer close(bodyDone)
-	handler := Wrap(func(ctx Context, _ string) (string, error) {
-		Go(ctx, "branch", func(child Context) (string, error) {
-			return "", Wait(child, "pause", time.Hour)
-		})
-		// The handler must return only after the branch is parked on the
-		// wait. Otherwise the invocation is not committed to PENDING.
-		ec, ok := ctx.(*execContext)
-		if !ok {
-			return "", fmt.Errorf("context is %T, want *execContext", ctx)
-		}
-		for deadline := time.Now().Add(5 * time.Second); !ec.suspend.committed(); {
-			if time.Now().After(deadline) {
-				return "", fmt.Errorf("the branch did not park on the wait")
-			}
-			time.Sleep(time.Millisecond)
-		}
-		StepAsync(ctx, "slow", func(StepContext) (string, error) {
-			<-bodyDone
-			return "", nil
-		})
-		// A suspending invocation discards a START that is queued and not
-		// yet sent. So the handler returns only once the call is in flight.
-		<-client.held
-		return "done", nil
-	}, withTestPlugins(p), withLambdaAPI(client))
-
-	type result struct {
-		resp []byte
-		err  error
-	}
-	done := make(chan result, 1)
-	go func() {
-		resp, err := handler(makePluginContext(), makePluginPayload(t, "arn:test:change", "tok1", nil))
-		done <- result{resp, err}
-	}()
-	<-client.held
-	// The handler returns as soon as the call is in flight. So an
-	// OnInvocationEnd that does not wait for the call arrives within this
-	// period.
-	select {
-	case <-ended:
-		t.Error("OnInvocationEnd was dispatched while the call was in flight")
-	case <-time.After(100 * time.Millisecond):
-	}
-	close(client.release)
-	res := <-done
-	if res.err != nil {
-		t.Fatal(res.err)
-	}
-	assertPluginResponseStatus(t, res.resp, invocationPending)
+	runSuspendingWithCallInFlight(t, client, makePluginPayload(t, "arn:test:change", "tok1", nil), ended, p)
 
 	if got := rec.reports("slow"); len(got) != 1 || got[0].Status != PluginOperationStarted {
 		t.Errorf("reports of the step = %+v, want one STARTED", got)
@@ -365,6 +402,130 @@ func TestOperationChangeBeforeInvocationEndOnSuspension(t *testing.T) {
 	if n := len(rec.order); n < 3 || rec.order[0] != "invocation-start" ||
 		rec.order[n-2] != "operation-change" || rec.order[n-1] != "invocation-end" {
 		t.Errorf("hook order = %v, want invocation-start first and operation-change, invocation-end last", rec.order)
+	}
+}
+
+// TestUnreachedEndFromCallInFlightOnSuspension ends the invocation with a
+// PENDING response while a checkpoint call is still in flight. The
+// response of that call reports a callback the handler does not reach as
+// SUCCEEDED. OnOperationEnd for the callback is dispatched in this
+// invocation, before OnInvocationEnd. This holds whether or not the plugin
+// implements OnOperationChange.
+func TestUnreachedEndFromCallInFlightOnSuspension(t *testing.T) {
+	for _, withChangeHook := range []bool{false, true} {
+		t.Run(fmt.Sprintf("OnOperationChange=%v", withChangeHook), func(t *testing.T) {
+			// No operation of the handler has position 9.
+			callbackID := hashID("9")
+			now := time.Now()
+			subType, name, result := "Callback", "approval", `"yes"`
+			client := newHoldingEchoClient(func(u OperationUpdate) bool {
+				return u.Type == OperationTypeStep && u.Action == OperationActionStart
+			})
+			client.extra = []Operation{{
+				Id: &callbackID, Type: OperationTypeCallback, SubType: &subType, Name: &name,
+				Status: OperationStatusSucceeded, StartTimestamp: &now, EndTimestamp: &now,
+				CallbackDetails: &CallbackDetails{CallbackId: &name, Result: &result},
+			}}
+
+			var mu sync.Mutex
+			var order []string
+			record := func(s string) {
+				mu.Lock()
+				order = append(order, s)
+				mu.Unlock()
+			}
+			ended := make(chan struct{})
+			p := Plugin{
+				OnOperationEnd: func(_ context.Context, info OperationHookInfo) {
+					if info.ID == callbackID {
+						record("callback-end:" + string(info.Status))
+					}
+				},
+				OnInvocationEnd: func(context.Context, InvocationEndHookInfo) {
+					record("invocation-end")
+					close(ended)
+				},
+			}
+			if withChangeHook {
+				p.OnOperationChange = func(_ context.Context, info OperationChangeHookInfo) {
+					if _, ok := info.UpdatedOperations[callbackID]; ok {
+						record("callback-change")
+					}
+				}
+			}
+			payload := makePluginPayload(t, "arn:test:change", "tok1", []wireOperation{
+				lifecycleExecOp(),
+				{
+					Id: callbackID, Status: "STARTED", Type: "CALLBACK", SubType: subType, Name: name,
+					CallbackDetails: &wireCallbackDetails{CallbackId: name},
+				},
+			})
+			runSuspendingWithCallInFlight(t, client, payload, ended, p)
+
+			want := []string{"callback-end:" + string(PluginOperationSucceeded), "invocation-end"}
+			if withChangeHook {
+				want = append([]string{"callback-change"}, want...)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if !slices.Equal(order, want) {
+				t.Errorf("hook order = %v, want %v", order, want)
+			}
+		})
+	}
+}
+
+// TestOperationChangeOperationsAcrossCalls runs two steps, so the plugin
+// receives several OnOperationChange calls. The Operations of each call
+// holds every operation checkpointed so far, in its status at that call.
+// The plugin modifies the map of each call it receives. A later call is
+// not affected.
+func TestOperationChangeOperationsAcrossCalls(t *testing.T) {
+	type seen struct {
+		updated    map[string]OperationHookInfo
+		operations map[string]OperationHookInfo
+	}
+	var calls []seen
+	p := Plugin{OnOperationChange: func(_ context.Context, info OperationChangeHookInfo) {
+		calls = append(calls, seen{maps.Clone(info.UpdatedOperations), maps.Clone(info.Operations)})
+		clear(info.Operations)
+	}}
+	handler := Wrap(func(ctx Context, _ string) (string, error) {
+		if _, err := Step(ctx, "first", func(StepContext) (string, error) { return "a", nil }); err != nil {
+			return "", err
+		}
+		return Step(ctx, "second", func(StepContext) (string, error) { return "b", nil })
+	}, withTestPlugins(p), withLambdaAPI(&operationEchoClient{}))
+
+	resp, err := handler(makePluginContext(), makePluginPayload(t, "arn:test:change", "tok1", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPluginResponseStatus(t, resp, invocationSucceeded)
+
+	if len(calls) < 2 {
+		t.Fatalf("OnOperationChange calls = %d, want at least 2", len(calls))
+	}
+	// want is the status each operation must have in Operations. It
+	// starts as the execution operation alone and follows every call.
+	want := map[string]PluginOperationStatus{"exec": PluginOperationStarted}
+	for i, c := range calls {
+		for id, op := range c.updated {
+			want[id] = op.Status
+		}
+		got := make(map[string]PluginOperationStatus, len(c.operations))
+		for id, op := range c.operations {
+			got[id] = op.Status
+		}
+		if !maps.Equal(got, want) {
+			t.Errorf("call %d: Operations statuses = %v, want %v", i, got, want)
+		}
+	}
+	last := calls[len(calls)-1].operations
+	for _, id := range []string{hashID("1"), hashID("2")} {
+		if last[id].Status != PluginOperationSucceeded {
+			t.Errorf("last call: Operations[%q].Status = %s, want SUCCEEDED", id, last[id].Status)
+		}
 	}
 }
 
@@ -472,7 +633,7 @@ func TestOperationChangeGate(t *testing.T) {
 		<-release
 		finished = true
 	})
-	<-entered
+	receiveWithin(t, entered, "the dispatch to start")
 	closed := make(chan bool, 1)
 	go func() {
 		g.close()
@@ -485,7 +646,7 @@ func TestOperationChangeGate(t *testing.T) {
 	case <-time.After(20 * time.Millisecond):
 	}
 	close(release)
-	if !<-closed {
+	if !receiveWithin(t, closed, "close to return") {
 		t.Error("close returned before the dispatch finished")
 	}
 	g.run(func() { t.Error("run dispatched after close") })

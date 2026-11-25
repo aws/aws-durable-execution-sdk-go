@@ -379,10 +379,15 @@ func (p *telemetryInvocation) onOperationEnd(ctx context.Context, info durable.O
 // terminal status before its end hook is dispatched. So for an operation
 // that ends in this invocation, the end hook's info is the one the record
 // keeps.
+//
+// This hook can be the first to report an operation, and a new operation is
+// appended to the record. Truncate removes a prefix of the record's
+// operations. So the entries are applied in the order of
+// orderedOperationIDs, not in map iteration order.
 func (p *telemetryInvocation) onOperationChange(ctx context.Context, info durable.OperationChangeHookInfo) {
 	p.mu.Lock()
-	for id, opInfo := range info.UpdatedOperations {
-		p.upsertOperationLocked(id, opInfo)
+	for _, id := range orderedOperationIDs(info.UpdatedOperations) {
+		p.upsertOperationLocked(id, info.UpdatedOperations[id])
 	}
 	p.mu.Unlock()
 	p.scheduleOnChangeDispatch(ctx)

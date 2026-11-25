@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -67,8 +68,10 @@ import (
 // WrapInvocation around the handler. The operation-level hooks fire inside
 // the handler as the operations run. OnOperationChange fires whenever a
 // checkpoint response changes the status of an operation, at any point
-// after OnInvocationStart. OnInvocationEnd fires last, once the
-// invocation's outcome is decided and recorded. Exactly one
+// after OnInvocationStart. It has no guaranteed order against the
+// OnOperationEnd of the same operation. OnInvocationEnd fires last, once
+// the invocation's outcome is decided and recorded, and after the
+// checkpoint calls still in flight have returned. Exactly one
 // OnInvocationStart and exactly one OnInvocationEnd fire per invocation.
 // Every operation-level hook receives an
 // [OperationHookInfo] whose IsReplay reports whether the operation is
@@ -232,8 +235,11 @@ type Plugin struct {
 	// handler can also end the invocation without reaching an operation
 	// whose outcome is new. Then the end of a [Wait], a callback, or an
 	// [Invoke] is dispatched after the handler returns and before
-	// OnInvocationEnd. These ends are ordered by EndTimestamp, and they
-	// obey [WithPluginChildOperationsDepth]. They are not dispatched
+	// OnInvocationEnd. The SDK first waits for the checkpoint calls still
+	// in flight, until the invocation's context is done, so an outcome
+	// such a call reports is included. These ends are ordered by
+	// EndTimestamp, and they obey [WithPluginChildOperationsDepth]. They
+	// are not dispatched
 	// when the invocation ends with [PluginInvocationRetrying], because
 	// the retry observes the same outcomes again. An operation of any
 	// other type that the handler does not reach dispatches no end. A
@@ -298,9 +304,24 @@ type Plugin struct {
 	// this one are not reported through this hook. They are in
 	// [InvocationHookInfo.UpdatedOperations].
 	//
+	// The SDK makes one call for each checkpoint response that changes a
+	// status. A response reports each operation in its latest status
+	// only, and one response can answer several updates. So the number
+	// of calls is not guaranteed, and a plugin does not observe every
+	// status an operation passes through.
+	//
 	// No call starts after OnInvocationEnd is dispatched. Before it
-	// dispatches OnInvocationEnd, the SDK waits for the checkpoint calls
-	// still in flight, until the invocation's context is done.
+	// dispatches the end-of-invocation hooks, the SDK waits for the
+	// checkpoint calls still in flight, until the invocation's context is
+	// done. The wait runs whenever a plugin is registered. So every
+	// change of the invocation is reported before OnInvocationEnd.
+	//
+	// The order against OnOperationEnd depends on the operation. An
+	// operation that waits for the response that reports its terminal
+	// status dispatches OnOperationEnd after the call for that response
+	// returns. An operation that does not wait for that response can
+	// dispatch OnOperationEnd first. So the order of the two hooks for
+	// one operation is not guaranteed.
 	//
 	// It is dispatched from the goroutine that sends checkpoints: on that
 	// goroutine with one plugin registered, on a goroutine the dispatch
@@ -1625,37 +1646,80 @@ func addCheckpointedOperationInfo(m map[string]OperationHookInfo, executionArn s
 	}
 }
 
-// operationChangeInfo returns the OperationChangeHookInfo for one
-// checkpoint response: changed are the operations whose status the
-// response changed, and state already holds the merged response. Both maps
-// apply the plugin depth bound, as boundedCheckpointedOperationInfo
-// describes. ok is false when the bound omits every changed operation, so
-// there is nothing to report.
+// operationChangeReporter builds the OperationChangeHookInfo of each
+// checkpoint response of one invocation. It keeps the hook info of every
+// operation the plugin depth bound reports. Building that map reads every
+// operation of the state. So the reporter builds it once, on the first
+// response that changes a status, and afterwards replaces only the entries
+// of the operations a response carries.
 //
-// IsReplay is cleared on every entry: the info describes what a response
-// in this invocation reported, not a replayed operation.
-func operationChangeInfo(executionArn string, state *executionState, bound int, changed []*operation) (info OperationChangeHookInfo, ok bool) {
-	add := func(m map[string]OperationHookInfo, op *operation) {
-		if entry, ok := boundedCheckpointedOperationInfo(executionArn, state, bound, op); ok {
-			entry.IsReplay = false
-			m[op.id] = entry
+// An entry depends on the record of its operation and on the operation's
+// depth. A response replaces the record. The depth follows the parent IDs,
+// and the parent ID of an operation does not change. So replacing the
+// entries of a response's operations keeps the map equal to the state.
+//
+// The reporter is not safe for concurrent use. The checkpointer calls it
+// from its flusher goroutine only.
+type operationChangeReporter struct {
+	executionArn string
+	state        *executionState
+	bound        int
+	// all is nil until the first response that changes a status.
+	all map[string]OperationHookInfo
+}
+
+// entry returns the hook info of op as boundedCheckpointedOperationInfo
+// describes. IsReplay is cleared: the info describes what a response in
+// this invocation reported, not a replayed operation.
+func (r *operationChangeReporter) entry(op *operation) (OperationHookInfo, bool) {
+	info, ok := boundedCheckpointedOperationInfo(r.executionArn, r.state, r.bound, op)
+	info.IsReplay = false
+	return info, ok
+}
+
+// info returns the OperationChangeHookInfo for one checkpoint response.
+// merged are the operations of the response, and changed are those among
+// them whose status the response changed. The state already holds merged.
+// Both maps of the info apply the plugin depth bound. ok is false when
+// there is nothing to report: the response changed no status, or the bound
+// omits every changed operation.
+//
+// Operations is a copy, so a plugin can keep or modify the map of one call
+// without affecting a later call.
+func (r *operationChangeReporter) info(merged, changed []*operation) (info OperationChangeHookInfo, ok bool) {
+	switch {
+	case r.all != nil:
+		for _, op := range merged {
+			if entry, ok := r.entry(op); ok {
+				r.all[op.id] = entry
+			}
+		}
+	case len(changed) > 0:
+		// The depth walk reads other operations through the state, so
+		// the map is built from a snapshot rather than under the state
+		// lock. The snapshot already holds merged.
+		ops := r.state.snapshotOperations()
+		r.all = make(map[string]OperationHookInfo, len(ops))
+		for _, op := range ops {
+			if entry, ok := r.entry(op); ok {
+				r.all[op.id] = entry
+			}
 		}
 	}
 	updated := make(map[string]OperationHookInfo, len(changed))
 	for _, op := range changed {
-		add(updated, op)
+		if entry, ok := r.entry(op); ok {
+			updated[op.id] = entry
+		}
 	}
 	if len(updated) == 0 {
 		return OperationChangeHookInfo{}, false
 	}
-	// The depth walk reads other operations through the state, so the
-	// full map is built from a snapshot rather than under the state lock.
-	ops := state.snapshotOperations()
-	all := make(map[string]OperationHookInfo, len(ops))
-	for _, op := range ops {
-		add(all, op)
-	}
-	return OperationChangeHookInfo{ExecutionArn: executionArn, UpdatedOperations: updated, Operations: all}, true
+	return OperationChangeHookInfo{
+		ExecutionArn:      r.executionArn,
+		UpdatedOperations: updated,
+		Operations:        maps.Clone(r.all),
+	}, true
 }
 
 // operationChangeGate orders the OnOperationChange dispatches of one

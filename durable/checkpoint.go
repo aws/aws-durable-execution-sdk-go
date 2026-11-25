@@ -139,14 +139,15 @@ type checkpointer struct {
 	onTokenWithdrawn func()
 
 	// onStateChanged, when non-nil, is called after a checkpoint response
-	// was merged into state, with the operations of that response whose
-	// status changed (see executionState.merge). It is called only when
-	// at least one changed. It runs on the flusher goroutine, without mu
+	// was merged into state, with the operations of that response and
+	// those among them whose status changed (see executionState.merge).
+	// It is called only when the response carried at least one operation.
+	// It runs on the flusher goroutine, without mu
 	// held, before the goroutines parked on those operations are resumed
 	// and before the requests of the call learn their outcome. So the
 	// next checkpoint call is not sent until it returns. Set during
 	// invocation wiring to dispatch OnOperationChange.
-	onStateChanged func(changed []*operation)
+	onStateChanged func(merged, changed []*operation)
 
 	// debugLog, when non-nil, writes the checkpoint enqueued and
 	// checkpoint flushed Debug records. ctx is the context of the request
@@ -712,8 +713,8 @@ func (cp *checkpointer) send(batch []*pendingCheckpoint, token string) error {
 	// The change is reported before any goroutine is resumed, so a plugin
 	// receives an operation's change before the hooks that goroutine
 	// dispatches next.
-	if cp.onStateChanged != nil && len(changed) > 0 {
-		cp.onStateChanged(changed)
+	if cp.onStateChanged != nil && len(merged) > 0 {
+		cp.onStateChanged(merged, changed)
 	}
 	// The records are matched against the watches after the merge,
 	// so a goroutine that starts awaiting an operation in between

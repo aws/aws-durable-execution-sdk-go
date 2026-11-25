@@ -150,3 +150,44 @@ func TestResume_SizeLimitedExportDropsOldestFirst(t *testing.T) {
 		})
 	}
 }
+
+// TestOperationChange_AppendsNewOperationsOldestFirst reports several new
+// operations in one OnOperationChange call. The record holds them in order
+// of start time, whatever the iteration order of the map. Truncate removes
+// a prefix of the operations, so this order makes it drop the oldest first.
+func TestOperationChange_AppendsNewOperationsOldestFirst(t *testing.T) {
+	const count = 8
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	updated := make(map[string]durable.OperationHookInfo, count)
+	want := make([]string, 0, count)
+	for i := range count {
+		// The IDs sort in the reverse of the start times.
+		id := fmt.Sprintf("op-%d", count-i)
+		updated[id] = resumeOp(id, "", "STEP", durable.PluginOperationSucceeded, start.Add(time.Duration(i)*time.Second))
+		want = append(want, id)
+	}
+	exp := &capturingExporter{}
+	pl := resumeInvocation(t, New(Config{EmitMode: EmitAlways, Exporters: []Exporter{exp}}), durable.InvocationHookInfo{
+		ExecutionArn:            resumeTestARN,
+		ExecutionStartTimestamp: start,
+	})
+	pl.OnOperationChange(t.Context(), durable.OperationChangeHookInfo{
+		ExecutionArn:      resumeTestARN,
+		UpdatedOperations: updated,
+	})
+	pl.OnInvocationEnd(t.Context(), durable.InvocationEndHookInfo{
+		ExecutionArn: resumeTestARN,
+		Status:       durable.PluginInvocationPending,
+	})
+	records := exp.snapshot()
+	if len(records) == 0 {
+		t.Fatal("exported no record")
+	}
+	var got []string
+	for _, op := range records[len(records)-1].Operations {
+		got = append(got, op.ID)
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("operation order = %v, want %v", got, want)
+	}
+}

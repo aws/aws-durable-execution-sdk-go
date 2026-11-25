@@ -91,14 +91,29 @@ status of one or more operations.
   that shares state between them must guard it.
 - The SDK sends no further checkpoint until the hook returns. So a hook
   that blocks delays the execution.
-- No call starts after `OnInvocationEnd` is dispatched. Before it
-  dispatches `OnInvocationEnd`, the SDK waits for the checkpoint calls
-  still in flight, until the invocation's context is done.
-- The entries of `InvocationHookInfo.Operations` and `UpdatedOperations`
-  for a step now carry `Attempt`.
+- No call starts after `OnInvocationEnd` is dispatched.
+- The SDK makes one call for each checkpoint response that changes a
+  status. A response reports each operation in its latest status only. So
+  the number of calls is not guaranteed, and a plugin does not observe
+  every status an operation passes through.
+- The order of `OnOperationChange` and `OnOperationEnd` for one operation
+  is not guaranteed. An operation that waits for the response that reports
+  its terminal status dispatches `OnOperationEnd` after the call for that
+  response returns.
 
-The telemetry plugin needs no change. It records the entries the hook
-reports.
+When a plugin is registered, the SDK now waits for the checkpoint calls
+still in flight before it dispatches the end-of-invocation hooks, until the
+invocation's context is done. Before, an invocation that suspended did not
+wait. This has two effects:
+
+- Every change of the invocation is reported before `OnInvocationEnd`.
+- A wait, a callback, or an invoke that the handler did not reach, and
+  that such a call reports as finished, gets its `OnOperationEnd` in this
+  invocation.
+
+The telemetry plugin records the entries the hook reports. It now adds the
+new operations of one call to its record in order of start time, so that a
+size-limited export drops the oldest operations first.
 
 ### Added: pause the execution from a retry decision (experimental)
 

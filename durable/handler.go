@@ -470,14 +470,15 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	ec.hookDepthBound = depthBound
 	// OnOperationChange is dispatched for each checkpoint response that
 	// changes the status of an operation. The callback is set only when a
-	// plugin implements the hook, because building the info reads every
-	// operation of the state. changeGate stays nil otherwise.
+	// plugin implements the hook, because building the info copies the
+	// hook info of every operation. changeGate stays nil otherwise.
 	var changeGate *operationChangeGate
 	if pd.hasOperationChangeHook() {
 		changeGate = &operationChangeGate{}
-		cp.onStateChanged = func(changed []*operation) {
+		reporter := &operationChangeReporter{executionArn: in.DurableExecutionArn, state: state, bound: depthBound}
+		cp.onStateChanged = func(merged, changed []*operation) {
 			changeGate.run(func() {
-				info, ok := operationChangeInfo(in.DurableExecutionArn, state, depthBound, changed)
+				info, ok := reporter.info(merged, changed)
 				if !ok {
 					return
 				}
@@ -489,19 +490,28 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 			})
 		}
 	}
+	// settle waits for the checkpoint calls still in flight, until ctx is
+	// done. A call can be in flight when the outcome is decided: a START
+	// queued without waiting, or a call a suspended operation did not wait
+	// for. Its response can change an operation. After settle returns, the
+	// state no longer changes. The end-of-invocation hooks read the state,
+	// so they run after settle. Without a plugin nothing reads the state,
+	// so the invocation does not wait.
+	settle := func() {
+		if pd != nil {
+			cp.awaitIdle(ctx)
+		}
+	}
 	// invocationEnd dispatches OnInvocationEnd. Every path that ends the
 	// invocation after the handler ran calls it exactly once.
 	//
-	// A checkpoint call can still be in flight when the outcome is
-	// decided: a START queued without waiting, or a call a suspended
-	// operation did not wait for. Its response can change an operation.
-	// So invocationEnd first waits for the checkpointer to become idle,
-	// until ctx is done. It then closes the gate. So a plugin receives
-	// that change before OnInvocationEnd, and no OnOperationChange call
-	// starts after OnInvocationEnd is dispatched.
+	// It first settles the checkpointer, because a path that ends the
+	// invocation as Retrying skips unreachedEnds. It then closes the gate.
+	// So a plugin receives every change before OnInvocationEnd, and no
+	// OnOperationChange call starts after OnInvocationEnd is dispatched.
 	invocationEnd := func(info InvocationEndHookInfo) {
+		settle()
 		if changeGate != nil {
-			cp.awaitIdle(ctx)
 			changeGate.close()
 		}
 		info.ExecutionArn = in.DurableExecutionArn
@@ -676,7 +686,13 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	// and invokes that the handler did not reach. Every path below calls
 	// it before OnInvocationEnd, except a path that ends the invocation
 	// as Retrying; see dispatchUnreachedEnds.
+	//
+	// It settles the checkpointer before it reads the state. Otherwise
+	// the response of a call still in flight could report such an
+	// operation as terminal after the read, and the operation would get
+	// no end in this invocation.
 	unreachedEnds := func() {
+		settle()
 		dispatchUnreachedEnds(pd, ctx, in.DurableExecutionArn, state, depthBound)
 	}
 
