@@ -337,3 +337,51 @@ func TestRevealCounts(t *testing.T) {
 		})
 	}
 }
+
+// buildTwiceWithErrorRecord returns a record with n operations in which
+// every name occurs exactly twice. The older operation of each name comes
+// first and has no content. The newer one has an Error with a 200-byte
+// message. Each name is 200 bytes long, so the by-name rendering is over
+// the LambdaLogExporter limit at n = 2,000.
+func buildTwiceWithErrorRecord(n int) Record {
+	half := n / 2
+	ops := make([]OperationRecord, 0, n)
+	name := func(i int) string { return fmt.Sprintf("step-%04d-", i) + strings.Repeat("n", 190) }
+	for i := 0; i < half; i++ {
+		ops = append(ops, OperationRecord{
+			ID: "op-" + strconv.Itoa(i), Name: name(i), Type: "STEP", Status: "SUCCEEDED",
+		})
+	}
+	for i := 0; i < half; i++ {
+		ops = append(ops, OperationRecord{
+			ID: "op-" + strconv.Itoa(half+i), Name: name(i), Type: "STEP", Status: "FAILED",
+			Error: &ErrorRecord{Type: "TestError", Message: strings.Repeat("e", 200)},
+		})
+	}
+	return Record{RecordType: "DurableExecutionTelemetry", ExecutionArn: "arn:test", Operations: ops}
+}
+
+// Every name occurs twice and the newer operation has an Error. Each
+// removal of an older operation makes one more Error appear in the
+// by-name rendering. The render count must still stay logarithmic.
+func TestTruncate_DropOperations_TwiceWithErrorRenderCountIsLogarithmic(t *testing.T) {
+	exp := &LambdaLogExporter{}
+	renders := 0
+	counting := func(r Record) ([]byte, error) {
+		renders++
+		return exp.Render(r)
+	}
+
+	record := buildTwiceWithErrorRecord(2000)
+	out := Truncate(record, exp.MaxRecordSizeBytes(), counting)
+
+	if out.DroppedOperations == 0 {
+		t.Fatalf("DroppedOperations = 0; the record must be over the limit")
+	}
+	if !fits(out, exp.MaxRecordSizeBytes(), exp.Render) {
+		t.Fatalf("result does not fit the limit")
+	}
+	if renders >= 40 {
+		t.Fatalf("Truncate rendered the record %d times, want fewer than 40", renders)
+	}
+}
