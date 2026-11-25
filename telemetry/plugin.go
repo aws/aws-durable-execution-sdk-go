@@ -602,7 +602,7 @@ func (p *TelemetryPlugin) dispatch(ctx context.Context, record Record) {
 			defer func() { _ = recover() }()
 			toSend := record
 			if rl, ok := exp.(RenderingSizeLimiter); ok {
-				toSend = Truncate(toSend, rl.MaxRecordSizeBytes(), rl.Render)
+				toSend = truncate(toSend, rl.MaxRecordSizeBytes(), rl.Render, meteredCopies(rl))
 			} else if limiter, ok := exp.(SizeLimiter); ok {
 				toSend = Truncate(toSend, limiter.MaxRecordSizeBytes(), nil)
 			}

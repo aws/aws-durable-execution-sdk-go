@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -130,11 +129,12 @@ func linearDropCount(record Record, maxBytes int, render Renderer) int {
 	return len(record.Operations)
 }
 
-// Unique names give the record no count at which a removal makes it
-// larger. So Step 2 needs only its binary search. The record has 2,000
-// operations and is about 670 KB. Removing one operation at a time took
-// about 1,800 renders for this record.
-func TestTruncate_DropOperations_RenderCountIsLogarithmic(t *testing.T) {
+// Unique names make each removal shrink the record. The record has 2,000
+// operations and is about 670 KB. Removing one operation at a time and
+// rendering after each took about 1,800 renders for this record. The
+// LambdaLogExporter uses the meter, so it renders far fewer times. The
+// result is still the smallest count that fits.
+func TestTruncate_DropOperations_RenderCountIsBounded(t *testing.T) {
 	exp := &LambdaLogExporter{}
 	renders := 0
 	counting := func(r Record) ([]byte, error) {
@@ -142,17 +142,15 @@ func TestTruncate_DropOperations_RenderCountIsLogarithmic(t *testing.T) {
 		return exp.Render(r)
 	}
 
-	out := Truncate(buildFailedRecord(2000), exp.MaxRecordSizeBytes(), counting)
+	out := truncateForExporter(buildFailedRecord(2000), exp, counting)
 
 	if out.DroppedOperations == 0 {
 		t.Fatalf("DroppedOperations = 0; the record must be over the limit")
 	}
 	if renders > 40 {
-		t.Fatalf("Truncate rendered the record %d times, want at most 40", renders)
+		t.Fatalf("truncation rendered the record %d times, want at most 40", renders)
 	}
 
-	// With unique names each removal makes the record smaller. So the
-	// smallest count that fits is the one whose predecessor does not fit.
 	record, limit, k := buildFailedRecord(2000), exp.MaxRecordSizeBytes(), out.DroppedOperations
 	if !fits(dropOldestForTest(record, k), limit, exp.Render) {
 		t.Fatalf("dropping %d operations does not fit", k)
@@ -278,61 +276,14 @@ func TestTruncate_DropOperations_MatchesLinearScan(t *testing.T) {
 
 // BenchmarkTruncate_DropOperations sizes records of the shape in the
 // large-record report on PR #175 against the default LambdaLogExporter
-// limit.
+// limit, as dispatch does.
 func BenchmarkTruncate_DropOperations(b *testing.B) {
 	for _, n := range []int{2000, 8000} {
 		b.Run(fmt.Sprintf("ops=%d", n), func(b *testing.B) {
 			exp := &LambdaLogExporter{}
 			record := buildFailedRecord(n)
 			for b.Loop() {
-				Truncate(record, exp.MaxRecordSizeBytes(), exp.Render)
-			}
-		})
-	}
-}
-
-func TestRevealCounts(t *testing.T) {
-	withError := func(name string) OperationRecord {
-		return OperationRecord{Name: name, Error: &ErrorRecord{Type: "E"}}
-	}
-	withResult := func(name, result string) OperationRecord {
-		return OperationRecord{Name: name, Result: json.RawMessage(result)}
-	}
-	plain := func(name string) OperationRecord { return OperationRecord{Name: name} }
-
-	tests := []struct {
-		name string
-		ops  []OperationRecord
-		want []int
-	}{
-		{"no operations", nil, nil},
-		{"unique names", []OperationRecord{withError("a"), withError("b")}, nil},
-		{
-			// Removing the oldest 1 operation leaves "a" once, with an Error.
-			"newer has an Error", []OperationRecord{plain("a"), withError("a")}, []int{1},
-		},
-		{
-			// Removing the oldest 2 operations leaves "a" once, with a Result.
-			"newer has a Result", []OperationRecord{plain("b"), plain("a"), plain("b"), withResult("a", `1`)}, []int{2},
-		},
-		{"newer has an empty Result", []OperationRecord{plain("a"), withResult("a", "")}, nil},
-		{"newer has no content", []OperationRecord{withError("a"), plain("a")}, nil},
-		{
-			// Only the second-newest "a" is a reveal count. Removing the
-			// oldest 2 operations leaves one "a".
-			"three occurrences", []OperationRecord{plain("a"), plain("a"), withError("a")}, []int{2},
-		},
-		{"no name", []OperationRecord{plain(""), withError("")}, nil},
-		{
-			"ascending order",
-			[]OperationRecord{plain("a"), plain("b"), withError("a"), withError("b")},
-			[]int{1, 2},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := revealCounts(tt.ops); !slices.Equal(got, tt.want) {
-				t.Fatalf("revealCounts = %v, want %v", got, tt.want)
+				truncateForExporter(record, exp, exp.Render)
 			}
 		})
 	}

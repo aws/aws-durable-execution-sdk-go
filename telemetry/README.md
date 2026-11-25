@@ -550,17 +550,42 @@ Truncation removes content in this order. Each step runs only when the record
 is still over the limit after the previous step:
 
 1. Operation results, oldest operation first. Each operation that loses its
-   result is marked `Truncated`. This step can clear more results than the
-   limit requires. That happens only when the rendering carries the
-   `operations` array and a cleared result is shorter than 7 bytes.
-2. Whole operations, oldest first. A binary search finds a count that fits.
-   This step then checks the count just below each point where a name's
-   `error` or `result` would appear in `operationsByName`, and keeps the
-   smallest count that fits. Near the limit it can drop more operations
-   than needed, because `DroppedOperations` or a name's `minDurationMs` can
-   gain a digit. `DroppedOperations` counts the dropped operations.
+   result is marked `Truncated`.
+2. Whole operations, oldest first. `DroppedOperations` counts the dropped
+   operations.
 3. The execution input. `DroppedInput` is set.
 4. The execution output. `DroppedOutput` is set.
+
+Truncation stops at the first drop after which the record fits. So it drops
+only what the limit requires.
+
+### How truncation checks the size
+
+Rendering the record after every drop costs one render per dropped
+operation. Each render is as large as the record. So the cost grows with the
+square of the record size.
+
+The built-in exporters skip most of these renders. After a render,
+truncation keeps the amount by which the record is over the limit. Each drop
+then adds an upper bound on the bytes it can remove. The bound is the
+operation's JSON size, plus its name's JSON size, plus 1,024 bytes. It is
+doubled for `OperationsFormatBoth`, which renders each operation twice.
+Truncation renders again only when the sum of the bounds since the last
+render reaches the excess. A record fits only when a render says so. So the
+record is never over the limit, and the result is the same as rendering
+after every drop.
+
+Two cases still render after every drop:
+
+- An exporter that is not one of this package's types, by exact type,
+  including a type that embeds one. Its `Render` output is unknown, so no
+  bound holds for it. A step that drops nothing, such as an operation
+  without a result in step 1, is still not rendered.
+- A record that is only slightly over the limit and whose oldest operations
+  add few bytes to the rendering. An example is `operationsByName` when
+  every name occurs twice. The bound of each drop then covers the excess. So
+  truncation renders after most drops, and the cost still grows with the
+  square of the record size.
 
 "Oldest" is the order of the `Operations` slice. The record's `Truncated`
 field is set when anything was removed.
