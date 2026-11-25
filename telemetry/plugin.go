@@ -400,11 +400,15 @@ func (p *telemetryInvocation) onOperationEnd(ctx context.Context, info durable.O
 func (p *telemetryInvocation) onOperationChange(ctx context.Context, info durable.OperationChangeHookInfo) {
 	recorded := false
 	p.mu.Lock()
-	for id, opInfo := range info.UpdatedOperations {
+	// An upsert appends an operation the record does not hold yet, and
+	// Truncate removes the oldest operations from the front of the slice.
+	// A map has no iteration order. So the changes are applied oldest
+	// first, as onInvocationStart applies its snapshot.
+	for _, id := range orderedOperationIDs(info.UpdatedOperations) {
 		if _, ended := p.endReported[id]; ended {
 			continue
 		}
-		p.upsertOperationLocked(id, opInfo)
+		p.upsertOperationLocked(id, info.UpdatedOperations[id])
 		recorded = true
 	}
 	p.mu.Unlock()

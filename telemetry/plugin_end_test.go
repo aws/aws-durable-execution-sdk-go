@@ -2,7 +2,10 @@ package telemetry
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
 )
@@ -94,5 +97,34 @@ func TestPlugin_OnOperationChange_SkippedChangeEmitsNothing(t *testing.T) {
 	p.onChangeWG.Wait()
 	if after := len(exp.snapshot()); after != before {
 		t.Errorf("the skipped change emitted %d records, want 0", after-before)
+	}
+}
+
+// TestPlugin_OnOperationChange_AppendsOldestFirst asserts that one change
+// with several new operations appends them by start time. Truncate removes
+// operations from the front of the slice as the oldest.
+func TestPlugin_OnOperationChange_AppendsOldestFirst(t *testing.T) {
+	p := &telemetryInvocation{
+		env:    New(Config{}),
+		record: &Record{Status: StatusRunning, ExecutionArn: "test-execution"},
+		byOpID: make(map[string]int), resultText: make(map[string]string), endReported: make(map[string]struct{}), sampledIn: true,
+	}
+	base := time.Unix(1700000000, 0)
+	updated := make(map[string]durable.OperationHookInfo)
+	var want []string
+	for i := range 16 {
+		// IDs sort in the reverse of the start times.
+		id := fmt.Sprintf("op-%02d", 15-i)
+		updated[id] = durable.OperationHookInfo{ID: id, Type: "STEP", Status: durable.PluginOperationStarted, StartTimestamp: base.Add(time.Duration(i) * time.Second)}
+		want = append(want, id)
+	}
+	p.onOperationChange(context.Background(), durable.OperationChangeHookInfo{UpdatedOperations: updated, Operations: updated})
+
+	var got []string
+	for _, op := range p.record.Operations {
+		got = append(got, op.ID)
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("operation order = %v, want oldest first %v", got, want)
 	}
 }
