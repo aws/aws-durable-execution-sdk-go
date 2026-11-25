@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -164,7 +163,8 @@ func TestTruncate_DropOperations_RenderCountIsLogarithmic(t *testing.T) {
 
 // A binary search over the count of removed operations can return a count
 // whose predecessor does not fit, while a smaller count fits. Truncate
-// must still return the smallest count.
+// accepts this trade-off: it returns the count of the binary search, and
+// the result still fits.
 //
 // The record has a unique operation "big" with a large Error. Then comes
 // the older of two operations named "repeated". Then come small unique
@@ -174,12 +174,11 @@ func TestTruncate_DropOperations_RenderCountIsLogarithmic(t *testing.T) {
 //   - 0: over the limit, because the Error of "big" is rendered.
 //   - 1: exactly the limit. "repeated" occurs twice, so its Error is not
 //     rendered.
-//   - 2 up to n-1: over the limit. "repeated" occurs once, so its Error is
-//     rendered.
-//   - n: under the limit. No operation is left.
+//   - 2 up to n-1: over the limit until enough small operations are gone.
+//     "repeated" occurs once, so its Error is rendered.
 //
-// So the correct answer is 1.
-func TestTruncate_DropOperations_FindsCountBelowBinarySearchResult(t *testing.T) {
+// So the fewest drops that fit is 1, and the binary search returns more.
+func TestTruncate_DropOperations_ByNameCanDropMoreThanNeeded(t *testing.T) {
 	failed := func(id, name string, messageLen int) OperationRecord {
 		return OperationRecord{
 			ID: id, Name: name, Type: "STEP", Status: "FAILED",
@@ -201,36 +200,46 @@ func TestTruncate_DropOperations_FindsCountBelowBinarySearchResult(t *testing.T)
 	}
 	limit := len(b)
 
-	// The test is meaningful only when a plain binary search misses 1.
+	if fewest := linearDropCount(record, limit, exp.Render); fewest != 1 {
+		t.Fatalf("fewest drops that fit = %d, want 1", fewest)
+	}
 	plain := 1 + sort.Search(n, func(i int) bool {
 		return fits(dropOldestForTest(record, i+1), limit, exp.Render)
 	})
 	if plain == 1 {
-		t.Fatalf("a plain binary search already returns 1; the record does not exercise the scan")
+		t.Fatalf("a plain binary search returns 1; the record does not show the trade-off")
 	}
 
 	out := Truncate(record, limit, exp.Render)
 
-	if out.DroppedOperations != 1 {
-		t.Fatalf("DroppedOperations = %d, want 1 (a plain binary search returns %d)", out.DroppedOperations, plain)
+	if out.DroppedOperations != plain {
+		t.Fatalf("DroppedOperations = %d, want the binary search result %d", out.DroppedOperations, plain)
+	}
+	if !fits(out, limit, exp.Render) {
+		t.Fatalf("result does not fit the %d-byte limit", limit)
 	}
 }
 
-// Truncate must return the same count as a scan of every count. The
-// records are generated from fixed seeds. They have repeated names, Errors
-// of different sizes, and operations without a name. Each record has at
-// most 9 operations, so DroppedOperations never gains a digit. No
-// operation has a DurationMs, so no duration gains a digit. So the scan
-// result is exact. The limits are each candidate's rendered size and one
-// byte less, because the result can change only at those limits.
+// When every removal makes the rendered record smaller, the binary search
+// returns the fewest drops that fit. So Truncate must return the same count
+// as a scan of every count. The array renderings meet this condition: each
+// record has at most 9 operations, so DroppedOperations never gains a
+// digit. The by-name renderings do not meet it. For them Truncate must
+// return a count that is at least the scan result and fits. The records
+// are generated from fixed seeds. They have repeated names, Errors of
+// different sizes, and operations without a name. The limits are each
+// candidate's rendered size and one byte less, because the result can
+// change only at those limits.
 func TestTruncate_DropOperations_MatchesLinearScan(t *testing.T) {
 	renderers := []struct {
 		name   string
 		render Renderer
+		exact  bool
 	}{
-		{"canonical", nil},
-		{"LambdaLogExporter", (&LambdaLogExporter{}).Render},
-		{"CloudWatchLogsExporter", (&CloudWatchLogsExporter{}).Render},
+		{"canonical", nil, true},
+		{"array", func(r Record) ([]byte, error) { return RenderRecord(r, OperationsFormatArray) }, true},
+		{"LambdaLogExporter", (&LambdaLogExporter{}).Render, false},
+		{"CloudWatchLogsExporter", (&CloudWatchLogsExporter{}).Render, false},
 	}
 	names := []string{"a", "b", "c", ""}
 
@@ -265,14 +274,128 @@ func TestTruncate_DropOperations_MatchesLinearScan(t *testing.T) {
 					for _, limit := range []int{len(b), len(b) - 1} {
 						want := linearDropCount(record, limit, render)
 						out := Truncate(record, limit, r.render)
-						if out.DroppedOperations != want {
-							t.Fatalf("seed %d, limit %d: DroppedOperations = %d, want %d",
-								seed, limit, out.DroppedOperations, want)
+						got := out.DroppedOperations
+						if r.exact && got != want {
+							t.Fatalf("seed %d, limit %d: DroppedOperations = %d, want %d", seed, limit, got, want)
+						}
+						if got < want {
+							t.Fatalf("seed %d, limit %d: DroppedOperations = %d, below the fewest %d", seed, limit, got, want)
+						}
+						if want < len(ops) && !fits(out, limit, render) {
+							t.Fatalf("seed %d, limit %d: result does not fit", seed, limit)
 						}
 					}
 				}
 			}
 		})
+	}
+}
+
+// For random records and limits, Truncate must return a record that fits
+// whenever dropping every operation, the input and the output fits. It
+// must remove only the oldest operations, and it must clear results only
+// from the oldest operations. The records use quotes, backslashes,
+// non-ASCII text, repeated and empty names, results, errors, input and
+// output.
+func TestTruncate_RandomRecordsFitAndDropOldestFirst(t *testing.T) {
+	texts := []string{`"q"`, `\b\`, "é✓", "日本", "", "plain"}
+	names := []string{"a", "a\\", `"b"`, "ü", ""}
+	renderers := []struct {
+		name   string
+		render Renderer
+	}{
+		{"canonical", defaultRenderer},
+		{"LambdaLogExporter", (&LambdaLogExporter{}).Render},
+		{"both", func(r Record) ([]byte, error) { return RenderRecord(r, OperationsFormatBoth) }},
+	}
+	for _, r := range renderers {
+		t.Run(r.name, func(t *testing.T) {
+			for seed := int64(0); seed < 200; seed++ {
+				rng := rand.New(rand.NewSource(seed))
+				text := func() string {
+					return strings.Repeat(texts[rng.Intn(len(texts))], 1+rng.Intn(40))
+				}
+				ops := make([]OperationRecord, rng.Intn(40))
+				for i := range ops {
+					ops[i] = OperationRecord{
+						ID: strconv.Itoa(i), Name: names[rng.Intn(len(names))], Type: "STEP", Status: "SUCCEEDED",
+					}
+					if rng.Intn(2) == 0 {
+						ops[i].Result, _ = json.Marshal(text())
+					}
+					if rng.Intn(3) == 0 {
+						ops[i].Status = "FAILED"
+						ops[i].Error = &ErrorRecord{Type: "E", Message: text()}
+					}
+				}
+				record := Record{RecordType: "DurableExecutionTelemetry", ExecutionArn: "arn:test", Operations: ops}
+				record.Input, _ = json.Marshal(text())
+				record.Output, _ = json.Marshal(text())
+
+				full, err := r.render(record)
+				if err != nil {
+					t.Fatalf("Render: %v", err)
+				}
+				empty := record
+				empty.Operations, empty.Input, empty.Output = nil, nil, nil
+				empty.Truncated, empty.DroppedInput, empty.DroppedOutput = true, true, true
+				empty.DroppedOperations = len(ops)
+				floor, err := r.render(empty)
+				if err != nil {
+					t.Fatalf("Render: %v", err)
+				}
+				limit := len(floor) + rng.Intn(len(full)-len(floor)+1)
+
+				out := Truncate(record, limit, r.render)
+
+				if !fits(out, limit, r.render) {
+					t.Fatalf("seed %d, limit %d: result does not fit", seed, limit)
+				}
+				k := out.DroppedOperations
+				if k+len(out.Operations) != len(ops) {
+					t.Fatalf("seed %d: dropped %d + kept %d != %d", seed, k, len(out.Operations), len(ops))
+				}
+				kept := false
+				for i, op := range out.Operations {
+					if op.ID != ops[k+i].ID {
+						t.Fatalf("seed %d: kept operation %d has ID %q, want %q", seed, i, op.ID, ops[k+i].ID)
+					}
+					if len(ops[k+i].Result) == 0 {
+						continue
+					}
+					if len(op.Result) > 0 {
+						kept = true
+					} else if kept {
+						t.Fatalf("seed %d: operation %s lost its result, but an older one kept its result", seed, op.ID)
+					}
+				}
+			}
+		})
+	}
+}
+
+// A custom Renderer must get the same bounded render count as a built-in
+// exporter. The renderer wraps the canonical JSON in an envelope.
+func TestTruncate_CustomRendererRenderCountIsLogarithmic(t *testing.T) {
+	renders := 0
+	custom := func(r Record) ([]byte, error) {
+		renders++
+		b, err := marshalNoHTMLEscape(r)
+		if err != nil {
+			return nil, err
+		}
+		return append(append([]byte(`{"envelope":`), b...), '}'), nil
+	}
+
+	for _, record := range []Record{buildOversizedRecord(2000), buildTwiceWithErrorRecord(2000)} {
+		renders = 0
+		out := Truncate(record, 100000, custom)
+		if out.DroppedOperations == 0 {
+			t.Fatalf("DroppedOperations = 0; the record must be over the limit")
+		}
+		if renders >= 40 {
+			t.Fatalf("Truncate rendered the record %d times, want fewer than 40", renders)
+		}
 	}
 }
 
@@ -286,53 +409,6 @@ func BenchmarkTruncate_DropOperations(b *testing.B) {
 			record := buildFailedRecord(n)
 			for b.Loop() {
 				Truncate(record, exp.MaxRecordSizeBytes(), exp.Render)
-			}
-		})
-	}
-}
-
-func TestRevealCounts(t *testing.T) {
-	withError := func(name string) OperationRecord {
-		return OperationRecord{Name: name, Error: &ErrorRecord{Type: "E"}}
-	}
-	withResult := func(name, result string) OperationRecord {
-		return OperationRecord{Name: name, Result: json.RawMessage(result)}
-	}
-	plain := func(name string) OperationRecord { return OperationRecord{Name: name} }
-
-	tests := []struct {
-		name string
-		ops  []OperationRecord
-		want []int
-	}{
-		{"no operations", nil, nil},
-		{"unique names", []OperationRecord{withError("a"), withError("b")}, nil},
-		{
-			// Removing the oldest 1 operation leaves "a" once, with an Error.
-			"newer has an Error", []OperationRecord{plain("a"), withError("a")}, []int{1},
-		},
-		{
-			// Removing the oldest 2 operations leaves "a" once, with a Result.
-			"newer has a Result", []OperationRecord{plain("b"), plain("a"), plain("b"), withResult("a", `1`)}, []int{2},
-		},
-		{"newer has an empty Result", []OperationRecord{plain("a"), withResult("a", "")}, nil},
-		{"newer has no content", []OperationRecord{withError("a"), plain("a")}, nil},
-		{
-			// Only the second-newest "a" is a reveal count. Removing the
-			// oldest 2 operations leaves one "a".
-			"three occurrences", []OperationRecord{plain("a"), plain("a"), withError("a")}, []int{2},
-		},
-		{"no name", []OperationRecord{plain(""), withError("")}, nil},
-		{
-			"ascending order",
-			[]OperationRecord{plain("a"), plain("b"), withError("a"), withError("b")},
-			[]int{1, 2},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := revealCounts(tt.ops); !slices.Equal(got, tt.want) {
-				t.Fatalf("revealCounts = %v, want %v", got, tt.want)
 			}
 		})
 	}

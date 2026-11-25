@@ -109,37 +109,29 @@ replaces a filter on the `operations` element whose `name` is `charge`. A
 custom exporter that needs the array form can call
 `RenderRecord(record, OperationsFormatArray)`.
 
-### Fixed: Truncate no longer skips a smaller drop count that fits
+### Fixed: Truncate renders the record O(log n) times for every shape
 
 `Truncate` drops whole operations, oldest first, when a record is over an
-exporter's size limit. It chose the number to drop with a binary search.
-A binary search is correct only when every dropped operation makes the
-rendered record smaller.
+exporter's size limit. It chooses the number to drop with a binary search.
+Each step of the search renders the whole record once. So the search
+renders the record about log2(n) times for n operations.
 
-That is not true for the `operationsByName` rendering. An entry there
-carries `error` and `result` only when its name occurs once. So dropping
-one of two operations that share a name makes the other operation's
-`error` and `result` appear, and the rendered record can grow. `Truncate`
-could then drop more operations than the limit required.
+Before this change, `Truncate` also rendered one extra candidate for each
+name that drops to one occurrence with an `error` or a `result`. When
+every name occurred twice and the newer occurrence had an `error`, this
+was one render per name. At 2,000 operations that was 1,022 renders and
+about 20 s. `Truncate` no longer renders these extra candidates. The same
+record now takes 23 renders and about 0.4 s.
 
-`Truncate` now chooses the number in three parts. A binary search finds a
-number that fits. Then `Truncate` renders the record at the number just
-below each point where a name drops to one occurrence and that occurrence
-has an `error` or a `result`. If any of those fits, a second binary search
-runs inside the range that ends at the lowest one that fits. This affects
-every exporter that renders `OperationsFormatByName` or
-`OperationsFormatBoth`.
-
-The result is the smallest number that fits, with one exception. Near the
-limit, one more dropped operation can add a few bytes, because
-`droppedOperations` or a name's `minDurationMs` gains a digit. `Truncate`
-can then drop more operations than needed.
-
-The cost is two binary searches plus one render per such point. A record
-with unique names needs only the binary search. In the worst case every
-name occurs exactly twice and the newer occurrence has an `error`. Then the
-cost is one render per name, so the total cost grows quadratically with the
-number of operations.
+A binary search returns the fewest drops only when every dropped operation
+makes the rendered record smaller. That is not always true for the
+`operationsByName` rendering. An entry there carries `error` and `result`
+only when its name occurs once. So dropping one of two operations that
+share a name can make the record larger. Then `Truncate` can drop more
+operations than the limit required. This affects every exporter that
+renders `OperationsFormatByName` or `OperationsFormatBoth`. The result
+still fits the limit, because `Truncate` returns only a count that it
+rendered and that fit.
 
 ### Fixed: attempt-end hooks report the attempt's end time
 

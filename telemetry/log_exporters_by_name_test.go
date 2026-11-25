@@ -271,9 +271,9 @@ func TestLogExporters_TruncatesOverLimitByNameRendering(t *testing.T) {
 	}
 }
 
-// TestLogExporters_TruncateDropsOnlyAsManyOperationsAsNeeded checks that
-// Truncate stops at the first number of dropped operations that fits, when
-// the size is measured on the by-name rendering.
+// TestLogExporters_TruncateByNameCanDropMoreThanNeeded checks the accepted
+// trade-off of the binary search in Truncate, when the size is measured on
+// the by-name rendering.
 //
 // The by-name rendering shows an operation's Error only when its name
 // occurs once. The record has three operations, oldest first: "big" with a
@@ -287,9 +287,11 @@ func TestLogExporters_TruncatesOverLimitByNameRendering(t *testing.T) {
 //     is rendered.
 //   - 3 dropped: under the limit.
 //
-// So the size does not shrink with every dropped operation, and the
-// correct answer is 1.
-func TestLogExporters_TruncateDropsOnlyAsManyOperationsAsNeeded(t *testing.T) {
+// So the size does not shrink with every dropped operation. The fewest
+// drops that fit is 1. The binary search checks 2 first, which does not
+// fit, so it moves up and returns 3. Truncate accepts this: it drops more
+// than needed, and the result still fits.
+func TestLogExporters_TruncateByNameCanDropMoreThanNeeded(t *testing.T) {
 	for _, tc := range logExporterCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			exp, _ := tc.build(0)
@@ -322,8 +324,8 @@ func TestLogExporters_TruncateDropsOnlyAsManyOperationsAsNeeded(t *testing.T) {
 
 			out := Truncate(rec, limit, exp.Render)
 
-			if out.DroppedOperations != 1 || len(out.Operations) != 2 {
-				t.Fatalf("DroppedOperations = %d with %d operations kept, want 1 dropped and 2 kept",
+			if out.DroppedOperations != 3 || len(out.Operations) != 0 {
+				t.Fatalf("DroppedOperations = %d with %d operations kept, want 3 dropped and 0 kept",
 					out.DroppedOperations, len(out.Operations))
 			}
 			got, err := exp.Render(out)
@@ -332,16 +334,6 @@ func TestLogExporters_TruncateDropsOnlyAsManyOperationsAsNeeded(t *testing.T) {
 			}
 			if len(got) > limit {
 				t.Errorf("rendered record is %d bytes, over the %d-byte limit", len(got), limit)
-			}
-			fields := decodeWithNumbers(t, string(got))
-			byName, _ := fields["operationsByName"].(map[string]any)
-			repeated, ok := byName["repeated"].(map[string]any)
-			if !ok {
-				t.Fatalf("operationsByName = %#v, want a \"repeated\" entry", fields["operationsByName"])
-			}
-			assertInteger(t, "operationsByName.repeated.count", repeated["count"], 2)
-			if _, ok := byName["big"]; ok {
-				t.Error("operationsByName still has \"big\", the oldest operation")
 			}
 		})
 	}
