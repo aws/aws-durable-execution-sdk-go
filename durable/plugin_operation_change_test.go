@@ -271,6 +271,46 @@ func TestOperationChangeFromConcurrentBranches(t *testing.T) {
 	}
 }
 
+// TestOperationChangeFollowsInvocationStart asserts that every
+// OnOperationChange call starts after OnInvocationStart completed. The
+// start hook is slow, and the step's changes are still reported after it.
+func TestOperationChangeFollowsInvocationStart(t *testing.T) {
+	var mu sync.Mutex
+	var order []string
+	record := func(event string) {
+		mu.Lock()
+		order = append(order, event)
+		mu.Unlock()
+	}
+	p := Plugin{
+		OnInvocationStart: func(context.Context, InvocationHookInfo) {
+			time.Sleep(10 * time.Millisecond)
+			record("invocation-start")
+		},
+		OnOperationChange: func(context.Context, OperationChangeHookInfo) { record("operation-change") },
+	}
+	handler := Wrap(func(ctx Context, _ string) (string, error) {
+		return Step(ctx, "s1", func(StepContext) (string, error) { return "ok", nil })
+	}, withTestPlugins(p), withLambdaAPI(stepEchoClient{}))
+
+	resp, err := handler(makePluginContext(), makePluginPayload(t, "arn:test:change", "tok1", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPluginResponseStatus(t, resp, invocationSucceeded)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(order) < 2 || order[0] != "invocation-start" {
+		t.Fatalf("hook order = %v, want invocation-start first, then at least one operation-change", order)
+	}
+	for _, event := range order[1:] {
+		if event != "operation-change" {
+			t.Errorf("hook order = %v, want only operation-change after invocation-start", order)
+		}
+	}
+}
+
 // slowStepStartClient is a stepEchoClient that holds the checkpoint call
 // carrying a step START for a fixed time. It closes waitSeen when a call
 // carrying a WAIT update returns, and stepSent when the held call begins.
