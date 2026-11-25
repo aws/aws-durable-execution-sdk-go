@@ -297,6 +297,8 @@ var expectations = map[string]expectation{
 	"error-handling-taxonomy": {result: `{"stepErrorInfo":{"matched":true,"typeName":"StepError","operationName":"failing-step","attempts":1,"isOpError":true,"opErrorName":"failing-step","errorType":"Error"},"invokeErrorInfo":{"matched":true,"typeName":"InvokeError","operationName":"failing-invoke","isOpError":true,"opErrorName":"failing-invoke","errorType":"Error"},"callbackErrorInfo":{"matched":true,"typeName":"CallbackExternalError","operationName":"failing-callback","isOpError":true,"opErrorName":"failing-callback","errorType":"CallbackError"}}`},
 	"error-stack-traces":      {result: `{"message":"charge 4111-xxxx: card declined","stackFrames":0}`},
 
+	"execution-client-custom": {result: `{"orderId":"ORD-12345","paidBy":"invoice"}`},
+
 	"force-checkpoint-callback":   {result: `"{\"Items\":[{\"Index\":0,\"Name\":\"long-running\",\"Status\":\"SUCCEEDED\",\"Result\":\"long-complete\",\"Err\":null},{\"Index\":1,\"Name\":\"callbacks\",\"Status\":\"SUCCEEDED\",\"Result\":\"callbacks-complete\",\"Err\":null}],\"Reason\":\"ALL_COMPLETED\"}"`},
 	"force-checkpoint-invoke":     {result: `"{\"Items\":[{\"Index\":0,\"Name\":\"long-running\",\"Status\":\"SUCCEEDED\",\"Result\":\"long-complete\",\"Err\":null},{\"Index\":1,\"Name\":\"invokes\",\"Status\":\"SUCCEEDED\",\"Result\":\"invokes-complete\",\"Err\":null}],\"Reason\":\"ALL_COMPLETED\"}"`},
 	"force-checkpoint-step-retry": {result: `"{\"Items\":[{\"Index\":0,\"Name\":\"long-running\",\"Status\":\"SUCCEEDED\",\"Result\":\"long-complete\",\"Err\":null},{\"Index\":1,\"Name\":\"retrying\",\"Status\":\"SUCCEEDED\",\"Result\":\"retry-complete\",\"Err\":null}],\"Reason\":\"ALL_COMPLETED\"}"`},
