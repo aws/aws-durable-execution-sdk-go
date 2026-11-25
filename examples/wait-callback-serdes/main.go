@@ -52,31 +52,38 @@ var processedSerdes = durable.SerdesOf(
 	},
 )
 
+// sendCallback is the WaitForCallback submitter. The deployed example
+// posts the result to the real SendDurableExecutionCallbackSuccess API;
+// the handler test replaces this variable so the submitter resolves the
+// callback through the local runner and the example runs end-to-end
+// without AWS.
+var sendCallback = func(sctx durable.StepContext, callbackID string) error {
+	cfg, err := config.LoadDefaultConfig(sctx)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	client := lambdasvc.NewFromConfig(cfg)
+
+	data := CustomData{
+		ID:        42,
+		Message:   "serialized callback data",
+		Timestamp: "2026-01-01T00:00:00Z",
+	}
+	data.Metadata.Version = "1.0"
+	payload, _ := json.Marshal(data)
+
+	_, err = client.SendDurableExecutionCallbackSuccess(
+		sctx,
+		&lambdasvc.SendDurableExecutionCallbackSuccessInput{
+			CallbackId: &callbackID,
+			Result:     payload,
+		})
+	return err
+}
+
 func handler(ctx durable.Context, _ any) (Result, error) {
 	result, err := durable.WaitForCallback[CustomData](ctx, "custom-serdes-callback",
-		func(sctx durable.StepContext, callbackID string) error {
-			cfg, err := config.LoadDefaultConfig(sctx)
-			if err != nil {
-				return fmt.Errorf("load config: %w", err)
-			}
-			client := lambdasvc.NewFromConfig(cfg)
-
-			data := CustomData{
-				ID:        42,
-				Message:   "serialized callback data",
-				Timestamp: "2026-01-01T00:00:00Z",
-			}
-			data.Metadata.Version = "1.0"
-			payload, _ := json.Marshal(data)
-
-			_, err = client.SendDurableExecutionCallbackSuccess(
-				sctx,
-				&lambdasvc.SendDurableExecutionCallbackSuccessInput{
-					CallbackId: &callbackID,
-					Result:     payload,
-				})
-			return err
-		},
+		sendCallback,
 		durable.WithCallbackTimeout(30*time.Second),
 		durable.WithCallbackSerdes(processedSerdes),
 	)

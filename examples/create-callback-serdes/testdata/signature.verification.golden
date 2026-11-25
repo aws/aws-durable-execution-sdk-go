@@ -1,8 +1,0 @@
-[
-  {
-    "type": "CALLBACK",
-    "subType": "Callback",
-    "name": "verify-serdes",
-    "status": "SUCCEEDED"
-  }
-]

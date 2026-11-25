@@ -3,16 +3,16 @@
     "type": "CONTEXT",
     "subType": "WaitForCallback",
     "name": "custom-serdes-callback",
-    "status": "FAILED"
+    "status": "SUCCEEDED"
   },
   {
     "type": "CALLBACK",
     "subType": "Callback",
-    "status": "STARTED"
+    "status": "SUCCEEDED"
   },
   {
     "type": "STEP",
     "subType": "Step",
-    "status": "FAILED"
+    "status": "SUCCEEDED"
   }
 ]

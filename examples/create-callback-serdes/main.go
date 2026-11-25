@@ -51,6 +51,25 @@ var messageSerdes = durable.SerdesOf(
 	},
 )
 
+// sendCallback delivers the callback payload. The deployed example posts
+// the result to the real SendDurableExecutionCallbackSuccess API; the
+// handler test replaces this variable so the step resolves the callback
+// through the local runner and the example runs end-to-end without AWS.
+var sendCallback = func(ctx context.Context, callbackID string, data CustomData) error {
+	cfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	client := lambdasvc.NewFromConfig(cfg)
+	payload, _ := json.Marshal(data)
+	_, err = client.SendDurableExecutionCallbackSuccess(ctx,
+		&lambdasvc.SendDurableExecutionCallbackSuccessInput{
+			CallbackId: &callbackID,
+			Result:     payload,
+		})
+	return err
+}
+
 func handler(ctx durable.Context, _ any) (Result, error) {
 	cb, err := durable.CreateCallback[CustomData](ctx, "custom-serdes-callback",
 		durable.WithCallbackTimeout(30*time.Second),
@@ -62,25 +81,12 @@ func handler(ctx durable.Context, _ any) (Result, error) {
 	// Send structured data in a durable Step.
 	callbackID := cb.ID()
 	_, err = durable.Step[Void](ctx, "send-custom-data", func(sctx durable.StepContext) (Void, error) {
-		cfg, err := config.LoadDefaultConfig(sctx)
-		if err != nil {
-			return Void{}, fmt.Errorf("load config: %w", err)
-		}
-		client := lambdasvc.NewFromConfig(cfg)
-
 		data := CustomData{
 			ID:        99,
 			Message:   "custom serialized data",
 			Timestamp: "2026-07-01T12:00:00Z",
 		}
-		payload, _ := json.Marshal(data)
-		_, err = client.SendDurableExecutionCallbackSuccess(
-			sctx,
-			&lambdasvc.SendDurableExecutionCallbackSuccessInput{
-				CallbackId: &callbackID,
-				Result:     payload,
-			})
-		return Void{}, err
+		return Void{}, sendCallback(sctx, callbackID, data)
 	})
 	if err != nil {
 		return Result{}, err
