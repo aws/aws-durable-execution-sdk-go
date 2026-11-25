@@ -285,9 +285,10 @@ func TestOperationLifecycleBatchFlatNesting(t *testing.T) {
 // TestOperationLifecycleBatchReplayed asserts the events of a batch across
 // a suspend-and-resume cycle. Invocation 1 runs item 0, then item 1
 // suspends on a wait: the batch and both items dispatch starts, item 0
-// dispatches its end, nothing else ends. Invocation 2 replays: item 0 is
-// terminal and dispatches only a replayed end with its checkpointed
-// timestamps; item 1 re-enters STARTED with a replayed start, then ends
+// dispatches its end, nothing else ends. Invocation 2 lists the wait as
+// updated and replays: item 0 is terminal and dispatches no hook, because
+// invocation 1 dispatched its end; item 1 re-enters STARTED with a replayed
+// start, the wait dispatches its end with IsReplay false, then item 1 ends
 // live; the batch re-enters with a replayed start and ends live.
 func TestOperationLifecycleBatchReplayed(t *testing.T) {
 	rec := &opRecorder{}
@@ -313,7 +314,7 @@ func TestOperationLifecycleBatchReplayed(t *testing.T) {
 		{Id: hashID("3-1"), ParentId: hashID("3"), Status: "SUCCEEDED", Type: "WAIT", SubType: "Wait", Name: "pause",
 			StartTimestamp: flexTimestamp{Time: lifecycleStart, Valid: true}, EndTimestamp: flexTimestamp{Time: lifecycleEnd, Valid: true}},
 	}
-	first, second := runSuspendResume(t, handler, rec, resumeOps, invocationSucceeded)
+	first, second := runSuspendResumeUpdated(t, handler, rec, resumeOps, []string{hashID("3-1")}, invocationSucceeded)
 
 	assertSequence(t, first,
 		"start:batch:STARTED:false",
@@ -324,25 +325,22 @@ func TestOperationLifecycleBatchReplayed(t *testing.T) {
 	)
 	assertSequence(t, second,
 		"start:batch:STARTED:true",
-		"end:item-0:SUCCEEDED:true",
 		"start:item-1:STARTED:true",
-		"end:pause:SUCCEEDED:true",
+		"end:pause:SUCCEEDED:false",
 		"end:item-1:SUCCEEDED:false",
 		"end:batch:SUCCEEDED:false",
 	)
-	assertReplayedTimestamps(t, second[1], true)
-	assertIdentity(t, second[1], hashID("2"), "item-0", string(OperationTypeContext), OperationSubTypeMapIteration, hashID("1"))
-	if second[1].info.Result != "1" {
-		t.Errorf("replayed item-0 end Result = %q, want %q", second[1].info.Result, "1")
-	}
-	assertReplayedTimestamps(t, second[2], false)
-	assertIdentity(t, second[2], hashID("3"), "item-1", string(OperationTypeContext), OperationSubTypeMapIteration, hashID("1"))
+	assertReplayedTimestamps(t, second[1], false)
+	assertIdentity(t, second[1], hashID("3"), "item-1", string(OperationTypeContext), OperationSubTypeMapIteration, hashID("1"))
+	assertReplayedTimestamps(t, second[2], true)
 	assertReplayedTimestamps(t, second[0], false)
 }
 
 // TestOperationLifecycleBatchReplayedTerminal asserts a batch replayed from
-// its SUCCEEDED aggregate checkpoint dispatches one replayed end with the
-// checkpointed timestamps and payload, and does not visit its items.
+// its SUCCEEDED aggregate checkpoint does not visit its items. It
+// dispatches no hook when the payload does not list it as updated. When the
+// payload lists it, it dispatches one end with IsReplay false, the
+// checkpointed timestamps, and the payload.
 func TestOperationLifecycleBatchReplayedTerminal(t *testing.T) {
 	rec := &opRecorder{}
 	handler := mapLifecycleHandler(rec, WithMaxConcurrency(1))
@@ -356,9 +354,16 @@ func TestOperationLifecycleBatchReplayedTerminal(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertPluginResponseStatus(t, resp, invocationSucceeded)
+	assertSequence(t, rec.take())
+
+	resp, err = handler(makePluginContext(), makePluginPayloadWithUpdated(t, "arn:test:lifecycle", "tok1", ops, []string{hashID("1")}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPluginResponseStatus(t, resp, invocationSucceeded)
 	evs := rec.take()
 
-	assertSequence(t, evs, "end:batch:SUCCEEDED:true")
+	assertSequence(t, evs, "end:batch:SUCCEEDED:false")
 	assertIdentity(t, evs[0], hashID("1"), "batch", string(OperationTypeContext), OperationSubTypeMap, "")
 	assertReplayedTimestamps(t, evs[0], true)
 	if evs[0].info.Result != payload {
@@ -366,10 +371,12 @@ func TestOperationLifecycleBatchReplayedTerminal(t *testing.T) {
 	}
 }
 
-// TestOperationLifecycleBatchReplayedAbandonedFromRecord asserts that a
-// batch too large to store, replayed from its decision record, dispatches a
-// replayed end for each admitted item: SUCCEEDED for the terminal ones and
-// STARTED for the abandoned ones, then its own replayed end.
+// TestOperationLifecycleBatchReplayedAbandonedFromRecord asserts the hooks
+// of a batch too large to store, replayed from its decision record. With no
+// operation listed as updated, the replay dispatches no hook. With every
+// operation listed, the terminal item and the batch each dispatch one end
+// with IsReplay false. The abandoned items dispatch nothing in either case,
+// because they have no outcome.
 func TestOperationLifecycleBatchReplayedAbandonedFromRecord(t *testing.T) {
 	rec := &opRecorder{}
 	handler := Wrap(func(ctx Context, _ string) (int, error) {
@@ -396,18 +403,25 @@ func TestOperationLifecycleBatchReplayedAbandonedFromRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertPluginResponseStatus(t, resp, invocationSucceeded)
+	assertSequence(t, rec.take())
+
+	updated := []string{hashID("1"), hashID("2"), hashID("3"), hashID("4")}
+	resp, err = handler(makePluginContext(), makePluginPayloadWithUpdated(t, "arn:test:lifecycle", "tok1", ops, updated))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPluginResponseStatus(t, resp, invocationSucceeded)
 	evs := rec.take()
 
 	assertSequence(t, evs,
-		"end:item-0:SUCCEEDED:true",
-		"end:item-1:STARTED:true",
-		"end:item-2:STARTED:true",
-		"end:batch:SUCCEEDED:true",
+		"end:item-0:SUCCEEDED:false",
+		"end:batch:SUCCEEDED:false",
 	)
-	for i, id := range []string{"2", "3", "4"} {
-		assertIdentity(t, evs[i], hashID(id), fmt.Sprintf("item-%d", i), string(OperationTypeContext), OperationSubTypeMapIteration, hashID("1"))
+	assertIdentity(t, evs[0], hashID("2"), "item-0", string(OperationTypeContext), OperationSubTypeMapIteration, hashID("1"))
+	assertReplayedTimestamps(t, evs[0], true)
+	if evs[0].info.Result != `"fast"` {
+		t.Errorf("item-0 end Result = %q, want %q", evs[0].info.Result, `"fast"`)
 	}
-	assertReplayedTimestamps(t, evs[1], false)
 }
 
 // TestOperationLifecycleBatchConcurrentDispatchRace runs a Map with

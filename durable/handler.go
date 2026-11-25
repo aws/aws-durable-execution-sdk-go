@@ -643,6 +643,14 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		runHandler,
 	)
 
+	// unreachedEnds dispatches the ends of the settled waits, callbacks,
+	// and invokes that the handler did not reach. Every path below calls
+	// it before OnInvocationEnd, except a path that ends the invocation
+	// as Retrying; see dispatchUnreachedEnds.
+	unreachedEnds := func() {
+		dispatchUnreachedEnds(pd, ctx, in.DurableExecutionArn, state, depthBound)
+	}
+
 	// Translate the wrapped outcome to the wire response.
 	var resp []byte
 	var respErr error
@@ -654,6 +662,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		if cp.haltCause() == nil {
 			ec.invocationDebugLog(ctx, debugMsgInvocationSuspending, slog.String(logKeyReason, ec.suspend.suspendReason()))
 		}
+		unreachedEnds()
 		dispatchNotification(pd, func(p *Plugin) {
 			if p.OnInvocationEnd != nil {
 				p.OnInvocationEnd(ctx, InvocationEndHookInfo{
@@ -677,6 +686,8 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		status := PluginInvocationFailed
 		if retrying {
 			status = PluginInvocationRetrying
+		} else {
+			unreachedEnds()
 		}
 		dispatchNotification(pd, func(p *Plugin) {
 			if p.OnInvocationEnd != nil {
@@ -707,6 +718,9 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		// Lambda, so the service invokes the execution again, and Failed
 		// when the invocation responds that the execution has failed.
 		failInvocationEnd := func(status PluginInvocationStatus, err error) {
+			if status != PluginInvocationRetrying {
+				unreachedEnds()
+			}
 			dispatchNotification(pd, func(p *Plugin) {
 				if p.OnInvocationEnd != nil {
 					p.OnInvocationEnd(ctx, InvocationEndHookInfo{
@@ -761,6 +775,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 					// not an error: it means the execution finished.
 					// Respond PENDING, as for any suspension; the next
 					// invocation replays and reports the result.
+					unreachedEnds()
 					dispatchNotification(pd, func(p *Plugin) {
 						if p.OnInvocationEnd != nil {
 							p.OnInvocationEnd(ctx, InvocationEndHookInfo{
@@ -793,6 +808,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 			resp, respErr = respond(wire.InvocationResponse{Status: wire.StatusSucceeded, Result: &s})
 		}
 		// OnInvocationEnd fires only after result durability is guaranteed.
+		unreachedEnds()
 		dispatchNotification(pd, func(p *Plugin) {
 			if p.OnInvocationEnd != nil {
 				p.OnInvocationEnd(ctx, InvocationEndHookInfo{

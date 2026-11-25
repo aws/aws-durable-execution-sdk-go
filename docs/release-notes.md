@@ -2,6 +2,65 @@
 
 ## Unreleased
 
+### Changed: a replayed operation no longer dispatches an end on every invocation
+
+The plugin API is experimental, and this is a change to its replay
+behavior. It fixes issue #187.
+
+Before, an operation replayed from a terminal checkpoint dispatched
+`OnOperationEnd` with `IsReplay` true on every invocation that replayed it.
+A replayed `Step` also dispatched `OnOperationStart`. So a plugin that
+counted ends counted each operation once per invocation.
+
+Now one rule applies to every operation type, including `Step` and `Map`
+and `Parallel` items. An invocation dispatches the end of an operation when
+the outcome is new to that invocation. The end reports `IsReplay` false. An
+outcome is new in three cases:
+
+1. The operation runs live. The end is dispatched after the terminal
+   checkpoint is recorded, as before.
+2. The outcome is recorded while no invocation runs, for example when a
+   `Wait` elapses, a callback is resolved, or an `Invoke` finishes. The next
+   invocation lists the operation in `UpdatedOperations`. When the handler
+   reaches the operation, the end is dispatched.
+3. A checkpoint response or a poll delivers the outcome before the handler
+   reaches the operation. The end is dispatched when the handler reaches
+   it.
+
+A later invocation that replays the operation dispatches no start. It
+dispatches no end either, unless it lists the operation in
+`UpdatedOperations` again. An abandoned `Map` or `Parallel` item dispatches
+no end on replay.
+
+An end can repeat when an invocation fails and is retried. The retry can
+list in `UpdatedOperations` an operation whose end the failed invocation
+dispatched. The retry then dispatches that end again, with `IsReplay`
+false. A plugin that must act once per operation deduplicates on the
+operation ID.
+
+The handler can end the invocation without reaching an operation whose
+outcome is new. For example, it returns early or suspends on another
+operation. Then the end of a `Wait`, a callback, or an `Invoke` is
+dispatched after the handler returns and before `OnInvocationEnd`. These
+ends are ordered by end time and obey `WithPluginChildOperationsDepth`. They
+are not dispatched when the invocation ends as `Retrying`, because the retry
+observes the same outcomes again. An operation of any other type that the
+handler does not reach dispatches no end. A plugin reads its outcome from
+`InvocationHookInfo.Operations`, which holds every checkpointed operation
+with its status, timestamps, result, and error.
+
+The end of a `Step` replayed from a failed checkpoint now reports the
+`*StepError` as `Error`, as the live end does. Before, it reported the
+cause.
+
+A child context under `WithChildVirtual` is unchanged. It has no
+checkpoint, so it dispatches a start and an end, with `IsReplay` true, on
+every invocation that replays it.
+
+The telemetry plugin builds its record from `InvocationHookInfo.Operations`
+at each invocation start. So record contents are unchanged. With
+`EmitOnChange`, a replay can emit fewer records, because fewer hooks fire.
+
 ### Added: pause the execution from a retry decision (experimental)
 
 The step pause API is experimental. It may be changed or removed in a

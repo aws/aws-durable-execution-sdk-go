@@ -1811,10 +1811,11 @@ func runNestedBatchItem[O any](
 }
 
 // replayTerminalChildItem resolves a child item that already has a terminal
-// status in the checkpoint log, and dispatches the item's replayed end
-// once its outcome is known: after the body re-ran when the item's result
-// was too large to store, else before its stored result is read, so a
-// failing result Serdes does not suppress the end.
+// status in the checkpoint log, and passes the item's end to
+// dispatchBatchItemReplayedEnd once its outcome is known: after the body
+// re-ran when the item's result was too large to store, else before its
+// stored result is read, so a failing result Serdes does not suppress the
+// end.
 func replayTerminalChildItem[O any](
 	ec *execContext,
 	op *operation,
@@ -2438,10 +2439,9 @@ func replayRunItem[I, O any](items []I, fn func(Context, I, int) (O, error)) bat
 // record: it replays exactly the recorded admitted set in index order rather
 // than re-deriving completion from a threshold. Terminal branches are
 // resolved from their own child checkpoints; abandoned branches are reported
-// STARTED without re-running their bodies. Each branch dispatches its
-// replayed end as it is visited: an abandoned branch reports the STARTED
-// status of its checkpoint, when it has one. parentID is the batch's
-// operation ID.
+// STARTED without re-running their bodies. A terminal branch passes its end
+// to dispatchBatchItemReplayedEnd as it is visited. An abandoned branch
+// dispatches nothing. parentID is the batch's operation ID.
 //
 // Batch children mint their operation ids as siblings in the enclosing
 // context, claimed in index order. This mirrors that id sequence with a
@@ -2463,9 +2463,9 @@ func replayBatchChildrenFromRecord[I, O any](
 		childID := sib.next()
 		itemName := itemNameForIndex(options, i)
 		if record.abandoned(i) {
-			if op := ec.state.get(childID); op != nil {
-				dispatchBatchItemReplayedEnd(ec, parentID, childID, itemName, childSubType, op, nil)
-			}
+			// The invocation that abandoned the item dispatched its end.
+			// The item has no outcome to observe, so a replay
+			// dispatches nothing.
 			results = append(results, BatchItem[O]{
 				Index:  i,
 				Name:   itemName,
@@ -2570,7 +2570,9 @@ func batchChildUpdate(ec *execContext, childID, childName, childSubType, parentI
 // failures are visible on the item events and in the returned BatchError.
 // A batch whose item loop returns an error other than suspension has no
 // terminal checkpoint and dispatches no end. A batch replayed from a
-// terminal checkpoint dispatches only a replayed end.
+// terminal checkpoint dispatches no start. It dispatches its end only when
+// the invocation is the first to observe the outcome; see
+// dispatchReplayedEnd.
 //
 // In NestingNormal mode each item is a checkpointed child context whose
 // parent is the batch, so its events name the batch as ParentID, not the
@@ -2582,10 +2584,11 @@ func batchChildUpdate(ec *execContext, childID, childName, childSubType, parentI
 // batch dispatches its end once every item worker has drained, with status
 // STARTED, the status of the item's checkpoint and of the BatchItem that
 // reports it. That end is distinguishable from SUCCEEDED and FAILED by its
-// status. An item replayed from a terminal checkpoint dispatches only a
-// replayed end. A batch replayed from its stored aggregate result does not
-// visit its items, so they dispatch nothing; a batch whose result was too
-// large to store replays its items and each dispatches its replayed end.
+// status. An item replayed from a terminal checkpoint dispatches no start.
+// It dispatches its end only when the invocation is the first to observe
+// the outcome, as a batch does. An abandoned item dispatches nothing on
+// replay. A batch replayed from its stored aggregate result does not visit
+// its items, so they dispatch nothing.
 // Items run under concurrency dispatch their events from their own
 // goroutines, so hooks may run in parallel; see the goroutine safety note
 // on Plugin.
@@ -2660,11 +2663,12 @@ func dispatchBatchItemAbandoned(ec *execContext, parentID, childID, itemName, ch
 	dispatchOperationEndTo(batchItemHooks(ec, parentID), ec, info, PluginOperationStarted)
 }
 
-// dispatchBatchItemReplayedEnd dispatches the replayed end of the item
-// childID of the batch parentID from its checkpoint op. err is the failure
-// the item reports, nil for a SUCCEEDED item, whose checkpointed payload is
-// reported as Result, and for an abandoned item, whose checkpoint is
-// STARTED.
+// dispatchBatchItemReplayedEnd passes the end of the item childID of the
+// batch parentID, whose checkpoint op is terminal, to
+// dispatchReplayedEndTo. So the end is dispatched only when this invocation
+// is the first to observe the outcome. err is the failure the item
+// reports, nil for a SUCCEEDED item, whose checkpointed payload is reported
+// as Result.
 func dispatchBatchItemReplayedEnd(ec *execContext, parentID, childID, itemName, childSubType string, op *operation, err error) {
 	info := batchItemHookInfo(ec, parentID, childID, itemName, childSubType, true)
 	info.StartTimestamp = op.startTimestamp
@@ -2674,7 +2678,7 @@ func dispatchBatchItemReplayedEnd(ec *execContext, parentID, childID, itemName, 
 	} else if op.childCtx != nil {
 		info.Result = op.childCtx.result
 	}
-	dispatchOperationEndTo(batchItemHooks(ec, parentID), ec, info, toPluginOperationStatus(op.status))
+	dispatchReplayedEndTo(batchItemHooks(ec, parentID), ec, childID, info, toPluginOperationStatus(op.status))
 }
 
 // replayedBatchFailure returns the error a replayed batch end reports: err,

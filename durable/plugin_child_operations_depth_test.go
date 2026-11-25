@@ -158,7 +158,14 @@ func runDepthHandler(t *testing.T, depth int, fn func(Context, string) (string, 
 		opts = append(opts, WithPluginChildOperationsDepth(depth))
 	}
 	handler := Wrap(fn, opts...)
-	resp, err := handler(makePluginContext(), makePluginPayload(t, "arn:test:depth", "tok1", ops))
+	// Every operation in ops is listed as updated. So each replayed
+	// terminal operation dispatches its end, and the tests observe
+	// ChildrenOmitted on the replay paths too.
+	updated := make([]string, 0, len(ops))
+	for _, op := range ops {
+		updated = append(updated, op.Id)
+	}
+	resp, err := handler(makePluginContext(), makePluginPayloadWithUpdated(t, "arn:test:depth", "tok1", ops, updated))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -418,8 +425,10 @@ func TestPluginChildOperationsDepthBatchReplayed(t *testing.T) {
 		}
 		rec, _ := runDepthHandler(t, 0, fn, ops, invocationSucceeded)
 		rec.assertReported(t, []string{"batch"}, []string{"batch"})
+		// The abandoned items have no outcome, so a replay dispatches no
+		// hook for them.
 		rec, _ = runDepthHandler(t, 1, fn, ops, invocationSucceeded)
-		rec.assertReported(t, []string{"batch", "item-0", "item-1", "item-2"}, []string{"item-0", "item-1", "item-2"})
+		rec.assertReported(t, []string{"batch", "item-0"}, []string{"item-0"})
 	})
 }
 

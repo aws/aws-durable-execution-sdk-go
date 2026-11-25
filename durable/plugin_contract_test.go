@@ -251,8 +251,9 @@ func TestPluginEveryHookFiresFromConcurrentBranches(t *testing.T) {
 		}
 		// Operation starts: the live wait in the first invocation; then
 		// the batch, four items, four children, and four steps in the
-		// second. Ends: the same, with the wait's end replayed in the
-		// second invocation.
+		// second. Ends: the same. The second invocation lists the wait as
+		// updated, so it is the first to observe the wait's outcome, and
+		// no end reports IsReplay.
 		wantOps := 1 + 1 + items + items + items
 		if got := c.count("OnOperationStart"); got != wantOps {
 			t.Errorf("plugin %d: OnOperationStart fired %d times, want %d", i, got, wantOps)
@@ -260,8 +261,8 @@ func TestPluginEveryHookFiresFromConcurrentBranches(t *testing.T) {
 		if got := c.count("OnOperationEnd"); got != wantOps {
 			t.Errorf("plugin %d: OnOperationEnd fired %d times, want %d", i, got, wantOps)
 		}
-		if got := c.replay["OnOperationEnd"]; got != 1 {
-			t.Errorf("plugin %d: OnOperationEnd fired %d times with IsReplay, want 1 (the wait)", i, got)
+		if got := c.replay["OnOperationEnd"]; got != 0 {
+			t.Errorf("plugin %d: OnOperationEnd fired %d times with IsReplay, want 0", i, got)
 		}
 		// One log record per step, each enriched once.
 		if got := c.count("EnrichLogContext"); got != items {
