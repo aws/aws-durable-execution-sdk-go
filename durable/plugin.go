@@ -105,10 +105,15 @@ import (
 // So within one invocation, one plugin's invocation-level hooks never
 // overlap one another. OnOperationChange is dispatched from its own
 // goroutine, one report at a time. So one plugin's OnOperationChange calls
-// never overlap one another, and every one of them completes after
-// OnInvocationStart and before OnInvocationEnd. An OnOperationChange call
-// may run concurrently with WrapInvocation, with any operation-level hook,
-// and with EnrichLogContext. The hooks of one operation are
+// never overlap one another, and every one of them starts after
+// OnInvocationStart completes. Every one of them completes before
+// OnInvocationEnd is dispatched, except when the invocation's context ends
+// first. Then the reports not yet dispatched are dropped, and a call
+// already in progress may still be running while OnInvocationEnd runs. So
+// a plugin that shares state between OnOperationChange and OnInvocationEnd
+// must synchronize it. An OnOperationChange call may run concurrently with
+// WrapInvocation, with any operation-level hook, and with
+// EnrichLogContext. The hooks of one operation are
 // dispatched in sequence from the goroutine that runs the operation, in
 // the order start, attempt hooks, wrap hook, end, each completing before
 // the next is dispatched. So one plugin's hooks for one operation never
@@ -319,10 +324,13 @@ type Plugin struct {
 	// dispatched. No order is defined between a call and the
 	// operation-level hooks, including the OnOperationEnd of an operation
 	// the call reports. The one exception to completing before
-	// OnInvocationEnd is an invocation whose context ends first: the
-	// reports not yet dispatched are then dropped. A response that
-	// arrives once the invocation has begun to dispatch OnInvocationEnd
-	// is not reported. The ctx argument is the invocation's context.
+	// OnInvocationEnd is an invocation whose context ends first. The
+	// reports not yet dispatched are then dropped, and a call already in
+	// progress may still be running while OnInvocationEnd runs. Before it
+	// dispatches OnInvocationEnd, the invocation waits for the checkpoint
+	// calls already sent, so their responses are reported; the context's
+	// end bounds that wait too. The ctx argument is the invocation's
+	// context.
 	OnOperationChange func(ctx context.Context, info OperationChangeHookInfo)
 
 	// WrapInvocation wraps the user handler invocation. It fires once per

@@ -29,15 +29,22 @@ is reported during that invocation.
   goroutine per invocation calls the hook, one response at a time, in the
   order the responses arrived. The calls for separate responses are never
   merged.
-- Every call completes before `OnInvocationEnd` is dispatched. No order is
-  defined between a call and the operation-level hooks.
+- Every call completes before `OnInvocationEnd` is dispatched, except when
+  the invocation's context ends first. Then the reports not yet dispatched
+  are dropped, and a call already in progress may still be running while
+  `OnInvocationEnd` runs. No order is defined between a call and the
+  operation-level hooks.
+- When a plugin implements `OnOperationChange`, the invocation waits for
+  the checkpoint calls already sent before it dispatches `OnInvocationEnd`,
+  so their responses are reported. This also applies to an invocation that
+  ends as pending. The context's end bounds the wait.
 - The hook no longer fires at the start of an invocation. A plugin reads the
   operations that changed between invocations from `UpdatedOperations` of
   `InvocationHookInfo`, as before.
 
-The telemetry plugin records a change only for an operation that
-`OnOperationStart` and `OnOperationEnd` did not report in the same
-invocation. So its records for the operations a handler runs are unchanged.
+The telemetry plugin records every change, except a change for an operation
+that `OnOperationEnd` already reported in the same invocation. So a late
+change cannot replace the outcome that `OnOperationEnd` reported.
 
 An operation that a checkpoint response or a paginated state read delivers
 now keeps its parent ID. Before, the depth bound of

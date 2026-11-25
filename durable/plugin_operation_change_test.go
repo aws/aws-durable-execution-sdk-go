@@ -270,6 +270,85 @@ func TestOperationChangeFromConcurrentBranches(t *testing.T) {
 	}
 }
 
+// slowStepStartClient is a stepEchoClient that holds the checkpoint call
+// carrying a step START for a fixed time. It closes waitSeen when a call
+// carrying a WAIT update returns, and stepSent when the held call begins.
+type slowStepStartClient struct {
+	stepEchoClient
+	hold     time.Duration
+	waitSeen chan struct{}
+	stepSent chan struct{}
+	waitOnce sync.Once
+	stepOnce sync.Once
+}
+
+func (c *slowStepStartClient) Checkpoint(ctx context.Context, in CheckpointInput) (CheckpointOutput, error) {
+	for _, u := range in.Updates {
+		if u.Type == OperationTypeStep && u.Action == OperationActionStart {
+			c.stepOnce.Do(func() { close(c.stepSent) })
+			time.Sleep(c.hold)
+		}
+		if u.Type == OperationTypeWait {
+			defer c.waitOnce.Do(func() { close(c.waitSeen) })
+		}
+	}
+	return c.stepEchoClient.Checkpoint(ctx, in)
+}
+
+// TestOperationChangeReportsCallInFlightWhenInvocationPends asserts that an
+// invocation which ends as pending reports the response of a checkpoint
+// call that was in flight when the handler returned. One branch blocks on
+// a wait, so the invocation is pending. A second branch starts a step, and
+// the client holds that call. The handler returns while the call is held.
+// The step's STARTED change is reported before OnInvocationEnd.
+func TestOperationChangeReportsCallInFlightWhenInvocationPends(t *testing.T) {
+	rec := &changeRecorder{}
+	client := &slowStepStartClient{
+		hold:     200 * time.Millisecond,
+		waitSeen: make(chan struct{}),
+		stepSent: make(chan struct{}),
+	}
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	handler := Wrap(func(ctx Context, _ string) (string, error) {
+		Go(ctx, "waiter", func(c Context) (string, error) {
+			return "", Wait(c, "pause", time.Hour)
+		})
+		<-client.waitSeen
+		Go(ctx, "stepper", func(c Context) (string, error) {
+			return Step(c, "held", func(StepContext) (string, error) {
+				<-release
+				return "", nil
+			})
+		})
+		<-client.stepSent
+		// Give the waiter branch time to block on its wait.
+		time.Sleep(50 * time.Millisecond)
+		return "ignored", nil
+	}, withTestPlugins(rec.plugin()), withLambdaAPI(client))
+
+	resp, err := handler(makePluginContext(), makePluginPayload(t, "arn:test:change", "tok1", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPluginResponseStatus(t, resp, invocationPending)
+
+	rec.assertEndIsLast(t)
+	started := 0
+	rec.mu.Lock()
+	for _, info := range rec.calls {
+		for _, op := range info.UpdatedOperations {
+			if op.Name == "held" && op.Status == PluginOperationStarted {
+				started++
+			}
+		}
+	}
+	rec.mu.Unlock()
+	if started != 1 {
+		t.Errorf("step reported STARTED %d times, want 1: its checkpoint call was in flight when the handler returned", started)
+	}
+}
+
 // TestOperationChangeNotDispatchedForChangesBetweenInvocations asserts
 // that an operation which changed between two invocations is reported in
 // InvocationHookInfo.UpdatedOperations and through no OnOperationChange
@@ -349,9 +428,10 @@ func TestOperationChangeQueueClose(t *testing.T) {
 		started <- struct{}{}
 		<-release
 	}}})
-	q := newOperationChangeQueue(context.Background(), d)
+	q := newOperationChangeQueue(context.Background(), d, "arn:test:change", newExecutionState(nil), -1)
+	q.report = func(operationChange) (OperationChangeHookInfo, bool) { return OperationChangeHookInfo{}, true }
 	for range 3 {
-		q.enqueue(OperationChangeHookInfo{})
+		q.enqueue(nil)
 	}
 	<-started
 	q.mu.Lock()
@@ -361,7 +441,7 @@ func TestOperationChangeQueueClose(t *testing.T) {
 	ended, cancel := context.WithCancel(context.Background())
 	cancel()
 	q.close(ended)
-	q.enqueue(OperationChangeHookInfo{})
+	q.enqueue(nil)
 	close(release)
 	<-idle
 
@@ -375,7 +455,7 @@ func TestOperationChangeQueueClose(t *testing.T) {
 // nil queue is safe to close.
 func TestOperationChangeQueueNilWithoutHook(t *testing.T) {
 	d := newPluginDispatcher([]Plugin{{OnInvocationEnd: func(context.Context, InvocationEndHookInfo) {}}})
-	q := newOperationChangeQueue(context.Background(), d)
+	q := newOperationChangeQueue(context.Background(), d, "arn:test:change", newExecutionState(nil), -1)
 	if q != nil {
 		t.Fatalf("queue = %v, want nil when no plugin implements OnOperationChange", q)
 	}

@@ -80,10 +80,9 @@ type telemetryInvocation struct {
 	// transform runs only when the text changes.
 	resultText map[string]string
 
-	// live holds the IDs of the operations that OnOperationStart or
-	// OnOperationEnd reported in this invocation. Guarded by mu. See
-	// onOperationChange.
-	live map[string]struct{}
+	// endReported holds the IDs of the operations that OnOperationEnd
+	// reported in this invocation. Guarded by mu. See onOperationChange.
+	endReported map[string]struct{}
 
 	// sampledIn is computed in CreatePlugin from the execution ARN.
 	// The same execution has the same decision across invocations.
@@ -152,12 +151,12 @@ var _ durable.PluginFactory = (*TelemetryPlugin)(nil)
 func (p *TelemetryPlugin) CreatePlugin(_ context.Context, info durable.InvocationHookInfo) (*durable.Plugin, error) {
 	region, accountID, functionName, qualifier := parseFunctionARN(info.ExecutionArn)
 	inv := &telemetryInvocation{
-		env:        p,
-		record:     NewRecord(info.ExecutionArn),
-		byOpID:     make(map[string]int),
-		resultText: make(map[string]string),
-		live:       make(map[string]struct{}),
-		sampledIn:  sampledIn(info.ExecutionArn, p.samplingRate),
+		env:         p,
+		record:      NewRecord(info.ExecutionArn),
+		byOpID:      make(map[string]int),
+		resultText:  make(map[string]string),
+		endReported: make(map[string]struct{}),
+		sampledIn:   sampledIn(info.ExecutionArn, p.samplingRate),
 	}
 	inv.record.FunctionName = functionName
 	inv.record.FunctionQualifier = qualifier
@@ -367,7 +366,6 @@ func (p *telemetryInvocation) onInvocationEnd(ctx context.Context, info durable.
 // onOperationStart records the operation's start into the cumulative record.
 func (p *telemetryInvocation) onOperationStart(ctx context.Context, info durable.OperationHookInfo) {
 	p.mu.Lock()
-	p.live[info.ID] = struct{}{}
 	p.upsertOperationLocked(info.ID, info)
 	p.mu.Unlock()
 	p.scheduleOnChangeDispatch(ctx)
@@ -376,29 +374,33 @@ func (p *telemetryInvocation) onOperationStart(ctx context.Context, info durable
 // onOperationEnd records the operation's completion.
 func (p *telemetryInvocation) onOperationEnd(ctx context.Context, info durable.OperationHookInfo) {
 	p.mu.Lock()
-	p.live[info.ID] = struct{}{}
+	p.endReported[info.ID] = struct{}{}
 	p.upsertOperationLocked(info.ID, info)
 	p.mu.Unlock()
 	p.scheduleOnChangeDispatch(ctx)
 }
 
 // onOperationChange records the operations whose status a checkpoint
-// response changed, except those the operation hooks own.
+// response changed, except those whose end OnOperationEnd already reported.
 //
 // The SDK defines no order between OnOperationChange and the operation
 // hooks. A change that reports an operation as STARTED can therefore be
 // dispatched after the OnOperationEnd of the same operation. An upsert
-// replaces the whole operation record. So upserting every change would
-// let a late change replace a terminal record with an older status, and
-// would make the attempt count and the error of the final record depend
-// on which hook ran last. The operation hooks carry the outcome the
-// handler observed. So an operation that OnOperationStart or
-// OnOperationEnd reported in this invocation is left to those hooks, and
-// a change is recorded only for an operation they did not report.
+// replaces the whole operation record. So upserting such a change would
+// replace a terminal record with an older status. OnOperationEnd carries
+// the outcome the handler observed. So a change is skipped for an
+// operation that OnOperationEnd reported in this invocation.
+//
+// A change for an operation that only OnOperationStart reported is
+// recorded. The SDK dispatches the changes in the order the responses
+// arrived, so such a change carries the status of a response at least as
+// new as the start. Example: a step whose retry is scheduled gets no
+// OnOperationEnd when the invocation suspends, and the change reports its
+// PENDING status.
 func (p *telemetryInvocation) onOperationChange(ctx context.Context, info durable.OperationChangeHookInfo) {
 	p.mu.Lock()
 	for id, opInfo := range info.UpdatedOperations {
-		if _, live := p.live[id]; live {
+		if _, ended := p.endReported[id]; ended {
 			continue
 		}
 		p.upsertOperationLocked(id, opInfo)

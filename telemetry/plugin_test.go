@@ -497,8 +497,8 @@ func TestPlugin_OnOperationChange_BackfillsOps(t *testing.T) {
 }
 
 // TestPlugin_OnOperationChange_KeepsOperationHookRecord asserts that a
-// change dispatched after the operation hooks of the same operation does
-// not replace their record. The step ends as SUCCEEDED with attempt 2, and
+// change dispatched after the OnOperationEnd of the same operation does
+// not replace its record. The step ends as SUCCEEDED with attempt 2, and
 // a late change then reports it as STARTED. The emitted record keeps the
 // outcome OnOperationEnd reported.
 func TestPlugin_OnOperationChange_KeepsOperationHookRecord(t *testing.T) {
@@ -540,6 +540,50 @@ func TestPlugin_OnOperationChange_KeepsOperationHookRecord(t *testing.T) {
 	}
 	if op := records[0].Operations[0]; op.Status != string(durable.PluginOperationSucceeded) || op.Attempt != 2 || op.EndTimestamp == nil {
 		t.Errorf("operation = %+v, want the SUCCEEDED record with attempt 2 and an end timestamp", op)
+	}
+}
+
+// TestPlugin_OnOperationChange_AfterStartWithoutEnd asserts that a change
+// is recorded for an operation that OnOperationStart reported and
+// OnOperationEnd did not. A step starts, a checkpoint response then reports
+// it as PENDING because a retry is scheduled, and the invocation ends as
+// pending. The emitted record holds the PENDING status.
+func TestPlugin_OnOperationChange_AfterStartWithoutEnd(t *testing.T) {
+	exp := &capturingExporter{}
+	// EmitAlways emits a record for a pending invocation.
+	ip := New(Config{Exporters: []Exporter{exp}, EmitMode: EmitAlways})
+
+	ctx := context.Background()
+	arn := "arn:aws:lambda:us-east-1:123456789012:function:fn:1"
+	now := time.Now()
+
+	plugin := startTestPlugin(t, ctx, ip, durable.InvocationHookInfo{
+		ExecutionArn:            arn,
+		ExecutionStartTimestamp: now,
+	})
+
+	step := durable.OperationHookInfo{ExecutionArn: arn, ID: "op-1", Name: "step", Type: "STEP", Status: durable.PluginOperationStarted, StartTimestamp: now}
+	plugin.OnOperationStart(ctx, step)
+	pending := step
+	pending.Status = durable.PluginOperationPending
+	pending.Attempt = 1
+	plugin.OnOperationChange(ctx, durable.OperationChangeHookInfo{
+		ExecutionArn:      arn,
+		UpdatedOperations: map[string]durable.OperationHookInfo{"op-1": pending},
+		Operations:        map[string]durable.OperationHookInfo{"op-1": pending},
+	})
+
+	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
+		ExecutionArn: arn,
+		Status:       durable.PluginInvocationPending,
+	})
+
+	records := exp.snapshot()
+	if len(records) != 1 || len(records[0].Operations) != 1 {
+		t.Fatalf("records = %+v, want 1 record with 1 operation", records)
+	}
+	if op := records[0].Operations[0]; op.Status != string(durable.PluginOperationPending) || op.Attempt != 1 {
+		t.Errorf("operation = %+v, want the PENDING record with attempt 1", op)
 	}
 }
 

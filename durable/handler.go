@@ -421,14 +421,10 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	// reports in order on its own goroutine. changes is nil, and the state
 	// tracks no change, when no plugin implements the hook. The state is
 	// not shared yet, so trackChanges is written without its lock.
-	changes := newOperationChangeQueue(ctx, pd)
+	changes := newOperationChangeQueue(ctx, pd, in.DurableExecutionArn, state, depthBound)
 	if changes != nil {
 		state.trackChanges = true
-		cp.onOperationsChanged = func(changed []*operation) {
-			if info, ok := operationChangeInfo(in.DurableExecutionArn, state, depthBound, changed); ok {
-				changes.enqueue(info)
-			}
-		}
+		cp.onOperationsChanged = changes.enqueue
 	}
 
 	// The user handler runs on its own goroutine, which owns the root
@@ -647,6 +643,20 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		},
 		runHandler,
 	)
+
+	// The checkpointer is terminated by now, so it sends no further branch
+	// request. A call sent before that can still be in flight: an
+	// invocation that ends as pending does not wait for the calls of its
+	// unjoined branches. Such a call still merges its response into the
+	// state. Without a wait, the change queue would close first and the
+	// status change of that response would never be reported, because no
+	// later invocation reports it through OnOperationChange. So when a
+	// plugin implements OnOperationChange, wait for the calls in flight
+	// before the end hooks. The JavaScript SDK waits for its checkpoint
+	// queue on every exit. The context's end bounds the wait.
+	if changes != nil {
+		cp.awaitIdle(ctx)
+	}
 
 	// unreachedEnds dispatches the ends of the settled waits, callbacks,
 	// and invokes that the handler did not reach. Every path below calls

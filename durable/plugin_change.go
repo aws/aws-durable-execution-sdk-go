@@ -5,11 +5,29 @@ import (
 	"sync"
 )
 
+// operationChange is what the checkpoint response path records for one
+// response that changed an operation's status. The records are shared with
+// the state, not copied: a record is never modified after it enters the
+// state.
+type operationChange struct {
+	// changed holds the operations whose status the response changed.
+	changed []*operation
+	// operations holds every operation in the state once the response was
+	// merged.
+	operations []*operation
+	// changedIDs holds the wire IDs of the operations whose status a
+	// response changed during this invocation, up to and including this
+	// response.
+	changedIDs map[string]struct{}
+}
+
 // operationChangeQueue delivers OnOperationChange reports for one
-// invocation. The checkpoint response path queues one report per response
-// that changed an operation's status, and one goroutine dispatches the
-// reports in the order they were queued. So a slow hook delays later
-// reports and the end of the invocation, never a checkpoint call.
+// invocation. The checkpoint response path queues one change per response
+// that changed an operation's status. One goroutine builds the report of
+// each change and dispatches it, in the order the changes were queued. So
+// the checkpoint path only copies the operation pointers, and a slow hook
+// delays later reports and the end of the invocation, never a checkpoint
+// call.
 //
 // The goroutine exists only while a report is queued or being dispatched:
 // enqueue starts it when none runs, and it exits when the queue is empty.
@@ -22,9 +40,14 @@ type operationChangeQueue struct {
 	// for the invocation-level hooks.
 	ctx context.Context
 	d   *pluginDispatcher
+	// state is the invocation's operation state. enqueue reads it.
+	state *executionState
+	// report builds the hook info of a queued change. It returns false
+	// when the change dispatches no hook. See operationChangeInfo.
+	report func(operationChange) (OperationChangeHookInfo, bool)
 
 	mu      sync.Mutex
-	pending []OperationChangeHookInfo
+	pending []operationChange
 	// idle is non-nil while the dispatch goroutine runs, and is closed
 	// when it exits.
 	idle chan struct{}
@@ -33,34 +56,51 @@ type operationChangeQueue struct {
 }
 
 // newOperationChangeQueue returns the queue for one invocation, or nil
-// when no plugin of d implements OnOperationChange.
-func newOperationChangeQueue(ctx context.Context, d *pluginDispatcher) *operationChangeQueue {
+// when no plugin of d implements OnOperationChange. bound is the plugin
+// depth bound of the invocation.
+func newOperationChangeQueue(ctx context.Context, d *pluginDispatcher, executionArn string, state *executionState, bound int) *operationChangeQueue {
 	if !d.hasOperationChangeHook() {
 		return nil
 	}
-	return &operationChangeQueue{ctx: ctx, d: d}
+	return &operationChangeQueue{
+		ctx:   ctx,
+		d:     d,
+		state: state,
+		report: func(c operationChange) (OperationChangeHookInfo, bool) {
+			return operationChangeInfo(executionArn, state, bound, c)
+		},
+	}
 }
 
-// enqueue queues info for dispatch and returns without waiting for the
-// hooks. A report queued after close is dropped: the invocation has
-// dispatched, or is about to dispatch, OnInvocationEnd, and no hook may
-// follow it.
-func (q *operationChangeQueue) enqueue(info OperationChangeHookInfo) {
+// enqueue queues the change that one checkpoint response made and returns
+// without waiting for the hooks. changed holds the operations whose status
+// the response changed. The checkpoint response path calls enqueue after
+// it merged the response, on the goroutine that merged it. So the state
+// enqueue reads is the state that response produced.
+//
+// A change queued after close is dropped: the invocation has dispatched,
+// or is about to dispatch, OnInvocationEnd, and no hook may follow it.
+func (q *operationChangeQueue) enqueue(changed []*operation) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.closed {
 		return
 	}
-	q.pending = append(q.pending, info)
+	c := operationChange{changed: changed}
+	if q.state != nil {
+		c.operations, c.changedIDs = q.state.snapshot()
+	}
+	q.pending = append(q.pending, c)
 	if q.idle == nil {
 		q.idle = make(chan struct{})
 		go q.run(q.idle)
 	}
 }
 
-// run dispatches the queued reports one at a time, in queue order, and
-// exits when none is left. Each dispatch waits for every plugin's hook, so
-// one plugin's OnOperationChange calls never overlap one another.
+// run builds and dispatches the report of each queued change, one at a
+// time, in queue order, and exits when none is left. Each dispatch waits
+// for every plugin's hook, so one plugin's OnOperationChange calls never
+// overlap one another.
 func (q *operationChangeQueue) run(idle chan struct{}) {
 	for {
 		q.mu.Lock()
@@ -70,11 +110,15 @@ func (q *operationChangeQueue) run(idle chan struct{}) {
 			q.mu.Unlock()
 			return
 		}
-		info := q.pending[0]
-		q.pending[0] = OperationChangeHookInfo{}
+		c := q.pending[0]
+		q.pending[0] = operationChange{}
 		q.pending = q.pending[1:]
 		q.mu.Unlock()
 
+		info, ok := q.report(c)
+		if !ok {
+			continue
+		}
 		dispatchNotification(q.d, func(p *Plugin) {
 			if p.OnOperationChange != nil {
 				p.OnOperationChange(q.ctx, info)
@@ -83,14 +127,15 @@ func (q *operationChangeQueue) run(idle chan struct{}) {
 	}
 }
 
-// close stops the queue accepting reports and waits until every report
+// close stops the queue accepting changes and waits until every change
 // queued so far is dispatched, so that OnInvocationEnd follows them. The
 // handler calls it before each OnInvocationEnd dispatch.
 //
-// ctx bounds the wait. When ctx ends first, the reports not yet dispatched
+// ctx bounds the wait. When ctx ends first, the changes not yet dispatched
 // are dropped, so that no hook starts after OnInvocationEnd. A hook call
-// already running cannot be interrupted and may still be running when
-// close returns.
+// already running cannot be interrupted. So it may still be running when
+// close returns, and therefore while OnInvocationEnd runs. The Plugin
+// documentation states this exception.
 func (q *operationChangeQueue) close(ctx context.Context) {
 	if q == nil {
 		return
@@ -125,10 +170,12 @@ func (d *pluginDispatcher) hasOperationChangeHook() bool {
 	return false
 }
 
-// operationChangeInfo builds the OnOperationChange report for the
-// operations a checkpoint response changed. It reads state after the
-// response was merged, on the goroutine that merged it, so Operations
-// holds the state that response produced.
+// operationChangeInfo builds the OnOperationChange report for the change
+// one checkpoint response made. Operations is built from the operations
+// that enqueue copied when the response was merged, so it holds the state
+// that response produced, whatever later responses changed. state is read
+// only to find the depth of an operation; an operation's parent never
+// changes.
 //
 // Both maps omit the operations beyond the plugin depth bound, as the maps
 // of [InvocationHookInfo] do. ok is false when the bound omits every
@@ -137,21 +184,20 @@ func (d *pluginDispatcher) hasOperationChangeHook() bool {
 // An entry has IsReplay false when the operation's status changed during
 // this invocation, and true when its record is unchanged since the
 // invocation started.
-func operationChangeInfo(executionArn string, state *executionState, bound int, changed []*operation) (info OperationChangeHookInfo, ok bool) {
-	updated := make(map[string]OperationHookInfo, len(changed))
-	for _, op := range changed {
+func operationChangeInfo(executionArn string, state *executionState, bound int, c operationChange) (info OperationChangeHookInfo, ok bool) {
+	updated := make(map[string]OperationHookInfo, len(c.changed))
+	for _, op := range c.changed {
 		addCheckpointedOperationInfo(updated, executionArn, state, bound, op)
 	}
 	if len(updated) == 0 {
 		return OperationChangeHookInfo{}, false
 	}
-	ops, changedIDs := state.snapshot()
-	all := make(map[string]OperationHookInfo, len(ops))
-	for _, op := range ops {
+	all := make(map[string]OperationHookInfo, len(c.operations))
+	for _, op := range c.operations {
 		addCheckpointedOperationInfo(all, executionArn, state, bound, op)
 	}
 	for id, opInfo := range all {
-		if _, live := changedIDs[id]; live {
+		if _, live := c.changedIDs[id]; live {
 			opInfo.IsReplay = false
 			all[id] = opInfo
 		}
