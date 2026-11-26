@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -227,5 +228,66 @@ func TestAtLeastOnceAsyncPluginEndBeforeSucceedIsRecorded(t *testing.T) {
 	close(c.release)
 	if s := <-done; s != "SUCCEEDED" {
 		t.Fatalf("status = %s, want SUCCEEDED", s)
+	}
+}
+
+// scopedSucceedFailClient fails every Checkpoint call that carries a step
+// SUCCEED with a ClientError of scope. The failure arrives after a delay,
+// so the handler returns while the call is in flight.
+type scopedSucceedFailClient struct {
+	scope durable.ErrorScope
+
+	mu sync.Mutex
+	n  int
+}
+
+func (c *scopedSucceedFailClient) GetExecutionState(context.Context, durable.GetExecutionStateInput) (durable.GetExecutionStateOutput, error) {
+	return durable.GetExecutionStateOutput{}, nil
+}
+
+func (c *scopedSucceedFailClient) Checkpoint(_ context.Context, in durable.CheckpointInput) (durable.CheckpointOutput, error) {
+	c.mu.Lock()
+	c.n++
+	n := c.n
+	c.mu.Unlock()
+	for _, u := range in.Updates {
+		if isStepAction(durable.OperationActionSucceed)(u) {
+			time.Sleep(50 * time.Millisecond)
+			return durable.CheckpointOutput{}, &durable.ClientError{Scope: c.scope, Err: errors.New("checkpoint rejected")}
+		}
+	}
+	return durable.CheckpointOutput{CheckpointToken: "tok-" + strconv.Itoa(n)}, nil
+}
+
+// handlerErrorAfterAsyncStep returns a handler that runs an
+// AtLeastOnceAsync step and then returns an error while the step's SUCCEED
+// is still queued or in flight.
+func handlerErrorAfterAsyncStep(ctx durable.Context, _ struct{}) (string, error) {
+	if _, err := durable.Step(ctx, "s", func(durable.StepContext) (string, error) {
+		return "ok", nil
+	}, durable.WithSemantics(durable.AtLeastOnceAsync)); err != nil {
+		return "", err
+	}
+	return "", errors.New("handler failed")
+}
+
+// The handler fails while the SUCCEED of an AtLeastOnceAsync step is in
+// flight, and that call then fails for the invocation only. The invocation
+// ends with the checkpoint error, so the service retries it and the step
+// result is not lost. It does not answer FAILED with the handler's error.
+func TestAtLeastOnceAsyncHandlerErrorWithInvocationScopedSucceedFailureRetries(t *testing.T) {
+	done := invokeWith(t, handlerErrorAfterAsyncStep, &scopedSucceedFailClient{scope: durable.ErrorScopeInvocation})
+	s := <-done
+	if !strings.HasPrefix(s, "error: ") || !strings.Contains(s, "checkpoint rejected") {
+		t.Fatalf("outcome = %s, want the invocation to end with the checkpoint error", s)
+	}
+}
+
+// The same, but the call fails for the whole execution, for example a
+// validation error. The invocation still answers FAILED.
+func TestAtLeastOnceAsyncHandlerErrorWithExecutionScopedSucceedFailureFails(t *testing.T) {
+	done := invokeWith(t, handlerErrorAfterAsyncStep, &scopedSucceedFailClient{scope: durable.ErrorScopeExecution})
+	if s := <-done; s != "FAILED" {
+		t.Fatalf("outcome = %s, want FAILED", s)
 	}
 }
