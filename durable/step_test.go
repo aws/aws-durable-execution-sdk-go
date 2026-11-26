@@ -580,7 +580,7 @@ func TestStepStartedAtMostOnceInterrupted(t *testing.T) {
 					out, err := Step(ctx, "s", func(StepContext) (string, error) {
 						executed = true
 						return "", nil
-					}, WithSemantics(AtMostOncePerRetry), WithRetry(tt.retry))
+					}, WithSemantics(AtMostOnce), WithRetry(tt.retry))
 					gotErr = err
 					return out, err
 				})
@@ -685,13 +685,13 @@ func TestStepPanicIsFailedAttempt(t *testing.T) {
 }
 
 func TestStepCheckpointErrorPropagates(t *testing.T) {
-	// Under AtMostOncePerRetry the step waits for its START, so Step
-	// returns the client's error. Under AtLeastOncePerRetry the START is
+	// Under AtMostOnce the step waits for its START, so Step
+	// returns the client's error. Under AtLeastOnce the START is
 	// queued without waiting: when its call fails after the body ran, the
 	// SUCCEED is refused and Step returns the suspension signal instead.
 	// Either way the failure halts the checkpointer, so the invocation
 	// ends with the client's error.
-	for name, sem := range map[string]StepSemantics{"AtMostOncePerRetry": AtMostOncePerRetry, "AtLeastOncePerRetry": AtLeastOncePerRetry} {
+	for name, sem := range map[string]StepSemantics{"AtMostOnce": AtMostOnce, "AtLeastOnce": AtLeastOnce} {
 		t.Run(name, func(t *testing.T) {
 			wantErr := errors.New("throttled")
 			fake := &fakeLambda{checkpointErr: wantErr}
@@ -704,7 +704,7 @@ func TestStepCheckpointErrorPropagates(t *testing.T) {
 			}, withLambdaAPI(fake))
 			_, invokeErr := h(context.Background(), stepPayload(`""`))
 
-			if sem == AtMostOncePerRetry && !errors.Is(gotErr, wantErr) {
+			if sem == AtMostOnce && !errors.Is(gotErr, wantErr) {
 				t.Errorf("Step() error = %v, want wrapping %v", gotErr, wantErr)
 			}
 			if gotErr == nil {

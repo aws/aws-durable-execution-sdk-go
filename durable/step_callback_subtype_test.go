@@ -98,7 +98,7 @@ func TestStepSubTypeRecordedInCheckpointAndPlugin(t *testing.T) {
 		{"custom", []StepOption{WithStepSubType("Payment")}, "Payment"},
 	}
 	for _, tc := range cases {
-		opts := append([]StepOption{WithSemantics(AtMostOncePerRetry)}, tc.opts...)
+		opts := append([]StepOption{WithSemantics(AtMostOnce)}, tc.opts...)
 		for variant, handler := range stepSubTypeHandlers(stepReturnsV, opts...) {
 			t.Run(tc.name+"/"+variant, func(t *testing.T) {
 				rec := &opRecorder{}

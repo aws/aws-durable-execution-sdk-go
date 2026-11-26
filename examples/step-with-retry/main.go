@@ -27,7 +27,7 @@ func handler(ctx durable.Context, _ any) (string, error) {
 			BackoffRate:  1,
 			Jitter:       durable.JitterNone,
 		})),
-		durable.WithSemantics(durable.AtMostOncePerRetry),
+		durable.WithSemantics(durable.AtMostOnce),
 	)
 }
 

@@ -15,17 +15,17 @@ type StepSemantics int
 
 // Step execution guarantees.
 const (
-	// AtLeastOncePerRetry re-executes a step whose previous invocation
-	// was interrupted before recording an outcome. The step body may run
-	// more than once per retry attempt. This is the default.
-	AtLeastOncePerRetry StepSemantics = iota
+	// AtLeastOnce re-executes a step whose previous invocation was
+	// interrupted before recording an outcome. The step body may run more
+	// than once per retry attempt. This is the default.
+	AtLeastOnce StepSemantics = iota
 
-	// AtMostOncePerRetry never re-executes an interrupted attempt.
-	// Interruption is treated as a failed attempt and consumes one retry
-	// from the step's retry strategy.
-	AtMostOncePerRetry
+	// AtMostOnce never re-executes an interrupted attempt. Interruption
+	// is treated as a failed attempt and consumes one retry from the
+	// step's retry strategy.
+	AtMostOnce
 
-	// AtLeastOnceAsync is [AtLeastOncePerRetry], except that the step
+	// AtLeastOnceAsync is [AtLeastOnce], except that the step
 	// does not wait for its SUCCEED checkpoint before it returns its
 	// result. So the step has lower latency. RETRY and FAIL checkpoints
 	// are still awaited.
@@ -34,7 +34,7 @@ const (
 	// invocation sends every queued checkpoint before it reports a result
 	// or an error, and a failed checkpoint call ends the invocation. So
 	// when the SUCCEED is not recorded, the step runs again on replay, as
-	// under [AtLeastOncePerRetry].
+	// under [AtLeastOnce].
 	//
 	// The code after the step can run before the result is saved. If the
 	// invocation ends before the save, that code and the step run again on
@@ -42,6 +42,15 @@ const (
 	// this mode for a step whose result becomes an idempotency key, client
 	// token, or other identifier for a later step.
 	AtLeastOnceAsync
+)
+
+// Deprecated step semantics names. They keep their values.
+const (
+	// Deprecated: Use [AtLeastOnce] instead.
+	AtLeastOncePerRetry = AtLeastOnce
+
+	// Deprecated: Use [AtMostOnce] instead.
+	AtMostOncePerRetry = AtMostOnce
 )
 
 // StepOption configures a single step operation.
@@ -61,7 +70,7 @@ func WithStepSerdes(s Serdes) StepOption {
 }
 
 // WithSemantics sets the step's execution guarantee. The default is
-// [AtLeastOncePerRetry].
+// [AtLeastOnce].
 func WithSemantics(s StepSemantics) StepOption {
 	return stepOptionFunc(func(o *stepOptions) { o.semantics = s })
 }
@@ -198,11 +207,11 @@ func StepAsync[O any](ctx Context, name string, fn func(StepContext) (O, error),
 
 	// The START of a step with no record is queued on the calling
 	// goroutine, so it is queued before the handler can return. Under
-	// AtMostOncePerRetry the body waits for the call that carries it.
+	// AtMostOnce the body waits for the call that carries it.
 	var start *queuedStart
 	if op == nil {
 		update := stepUpdate(ec, id, name, options.subType, OperationActionStart)
-		start, err = ec.checkpointer.queueStart(ec, update, options.semantics == AtMostOncePerRetry)
+		start, err = ec.checkpointer.queueStart(ec, update, options.semantics == AtMostOnce)
 		if err != nil {
 			return newFailedFuture[O](errSuspendExecution)
 		}
@@ -264,7 +273,7 @@ func retryDue(err error) time.Time {
 //
 // Operation lifecycle hooks: the live start is dispatched once per
 // invocation, before the first attempt the invocation runs. A step whose
-// previous attempt was interrupted under AtMostOncePerRetry replays its
+// previous attempt was interrupted under AtMostOnce replays its
 // start instead, with IsReplay true and the checkpointed start time. The end is
 // dispatched with the step's outcome; a step that is still waiting for an
 // attempt when the invocation suspends dispatches no end. A step replayed
@@ -347,7 +356,7 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 				continue
 
 			case statusStarted:
-				if options.semantics == AtMostOncePerRetry && lastAttempt == 0 {
+				if options.semantics == AtMostOnce && lastAttempt == 0 {
 					// The previous attempt was interrupted before
 					// recording an outcome and must not re-execute. The
 					// step is re-entered before it settled, so its start
@@ -471,13 +480,13 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 			return zero, err
 		}
 	} else if op == nil || op.status != statusStarted {
-		// Under AtLeastOncePerRetry the body runs again on the next
+		// Under AtLeastOnce the body runs again on the next
 		// invocation when the START was not recorded, so the START is
-		// queued without waiting. Under AtMostOncePerRetry the body must
+		// queued without waiting. Under AtMostOnce the body must
 		// not run before the START is recorded, so the START is awaited.
 		update := stepUpdate(ec, id, name, options.subType, OperationActionStart)
 		var err error
-		if options.semantics == AtMostOncePerRetry {
+		if options.semantics == AtMostOnce {
 			err = ec.checkpointer.checkpoint(ec, []OperationUpdate{update})
 		} else {
 			err = ec.checkpointer.checkpointNoWait(ec, update)

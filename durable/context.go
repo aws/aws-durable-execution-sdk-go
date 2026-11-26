@@ -64,7 +64,7 @@ type Context interface {
 	// crashing or timing out. The SDK cannot know which lines a failed
 	// invocation wrote, so the next invocation logs again the lines the
 	// failed invocation ran after it received an outcome. A step body can
-	// also run more than once under [AtLeastOncePerRetry], and the lines
+	// also run more than once under [AtLeastOnce], and the lines
 	// of its [StepContext.Logger] repeat with the body.
 	//
 	// Replay is decided per context: the root, each child context, and

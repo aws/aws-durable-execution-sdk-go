@@ -251,7 +251,7 @@ func TestOrphanBranchRefusedBeforeInvocationPostProcessing(t *testing.T) {
 // orphan branch's checkpoint call is in flight as the handler returns an
 // oversized result, the invocation waits for that call, then sends its
 // final write with the token the call rotated to, while the orphan's own
-// request is refused. The orphan's step uses AtMostOncePerRetry, so its
+// request is refused. The orphan's step uses AtMostOnce, so its
 // START is awaited and its body does not run once the START is refused.
 func TestOversizedResultCheckpointedBehindInFlightOrphan(t *testing.T) {
 	large := resultOfSerializedSize(lambdaResponseSizeLimit + 1)
@@ -294,7 +294,7 @@ func TestOversizedResultCheckpointedBehindInFlightOrphan(t *testing.T) {
 		_ = Go(ctx, "orphan", func(c Context) (string, error) {
 			_, err := Step(c, "orphan-step", func(_ StepContext) (string, error) {
 				return "late", nil
-			}, WithSemantics(AtMostOncePerRetry))
+			}, WithSemantics(AtMostOnce))
 			stepErr <- err
 			return "orphan", err
 		})

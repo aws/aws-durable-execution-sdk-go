@@ -66,7 +66,7 @@ func TestAsyncStartPrecedesLaterOperation(t *testing.T) {
 			handler: func(ctx durable.Context, _ any) (string, error) {
 				fut := durable.StepAsync(ctx, "async", func(_ durable.StepContext) (string, error) {
 					return "a", nil
-				}, durable.WithSemantics(durable.AtMostOncePerRetry))
+				}, durable.WithSemantics(durable.AtMostOnce))
 				if err := later(ctx); err != nil {
 					return "", err
 				}

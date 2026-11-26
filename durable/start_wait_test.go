@@ -123,7 +123,7 @@ func assertStartFirst(t *testing.T, updates []durable.OperationUpdate) {
 	}
 }
 
-// Under AtLeastOncePerRetry, a step body runs while the call that carries
+// Under AtLeastOnce, a step body runs while the call that carries
 // its START is in flight. On main the body waits for that call, so this
 // test blocks until go test -timeout ends it.
 func TestAtLeastOnceStepBodyRunsWhileStartIsInFlight(t *testing.T) {
@@ -147,7 +147,7 @@ func TestAtLeastOnceStepBodyRunsWhileStartIsInFlight(t *testing.T) {
 	assertStartFirst(t, c.updates())
 }
 
-// Under AtMostOncePerRetry, a step body runs only after the call that
+// Under AtMostOnce, a step body runs only after the call that
 // carries its START has returned. This holds on main and must keep holding.
 func TestAtMostOnceStepBodyRunsAfterStartIsRecorded(t *testing.T) {
 	c := newHoldClient(func(u durable.OperationUpdate) bool {
@@ -159,7 +159,7 @@ func TestAtMostOnceStepBodyRunsAfterStartIsRecorded(t *testing.T) {
 		return durable.Step(ctx, "s", func(durable.StepContext) (string, error) {
 			sawRelease.Store(released.Load())
 			return "ok", nil
-		}, durable.WithSemantics(durable.AtMostOncePerRetry))
+		}, durable.WithSemantics(durable.AtMostOnce))
 	}, c)
 
 	<-c.held
@@ -267,7 +267,7 @@ func returnsAfterHeldCall(t *testing.T, what string, match func(durable.Operatio
 	assertStartFirst(t, c.updates())
 }
 
-// A step under AtLeastOncePerRetry does not wait for its START, but it
+// A step under AtLeastOnce does not wait for its START, but it
 // still waits for its SUCCEED. The SUCCEED is queued after the START, so
 // when the wait returns, the START is recorded too.
 func TestAtLeastOnceStepReturnsAfterSucceedIsRecorded(t *testing.T) {

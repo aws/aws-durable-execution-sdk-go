@@ -50,7 +50,7 @@ type RetryDecision struct {
 	// [ExecutionPauser], the step retries as usual with no warning.
 	//
 	// The SDK ignores Pause when it asks the strategy about an attempt
-	// that an earlier invocation interrupted under [AtMostOncePerRetry],
+	// that an earlier invocation interrupted under [AtMostOnce],
 	// and in [Retry], which does not run as a step. The submitter of
 	// [WaitForCallback] runs as a step, so it honors Pause.
 	//

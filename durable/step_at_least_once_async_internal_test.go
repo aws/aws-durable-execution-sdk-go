@@ -5,7 +5,7 @@ package durable
 import "testing"
 
 // A step under AtLeastOnceAsync whose previous attempt was interrupted
-// after its START runs again on replay, as under AtLeastOncePerRetry.
+// after its START runs again on replay, as under AtLeastOnce.
 func TestAtLeastOnceAsyncStartedStepRunsAgain(t *testing.T) {
 	executed := false
 	handler := Wrap(func(ctx Context, _ string) (string, error) {
