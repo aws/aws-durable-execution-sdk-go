@@ -363,12 +363,49 @@ func (p *telemetryInvocation) onInvocationEnd(ctx context.Context, info durable.
 	p.env.dispatch(ctx, record)
 }
 
-// onOperationStart records the operation's start into the cumulative record.
+// onOperationStart records the operation's start into the cumulative
+// record, except a start older than the record.
+//
+// The SDK defines no order between OnOperationStart and OnOperationChange.
+// A wait, a callback, and an invoke settle outside the handler. The handler
+// reads such an operation as STARTED and then dispatches the start with
+// that status. A checkpoint response can record the operation as SUCCEEDED
+// between the read and the dispatch. Its OnOperationChange can then run
+// before the start. An upsert replaces the whole operation record. So
+// upserting that start would replace the terminal record with the older
+// status. An invocation that ends as Retrying dispatches no end for the
+// operation, so no later hook would correct the record.
+//
+// A terminal status never changes. So a start that reports a nonterminal
+// status for an operation whose record is terminal is older than the
+// record. Such a start is skipped. It leaves the record as it was, so it
+// schedules no on-change emission. A start that reports a terminal status
+// is recorded.
 func (p *telemetryInvocation) onOperationStart(ctx context.Context, info durable.OperationHookInfo) {
 	p.mu.Lock()
-	p.upsertOperationLocked(info.ID, info)
+	idx, exists := p.byOpID[info.ID]
+	stale := exists && !terminalOperationStatus(string(info.Status)) &&
+		terminalOperationStatus(p.record.Operations[idx].Status)
+	if !stale {
+		p.upsertOperationLocked(info.ID, info)
+	}
 	p.mu.Unlock()
-	p.scheduleOnChangeDispatch(ctx)
+	if !stale {
+		p.scheduleOnChangeDispatch(ctx)
+	}
+}
+
+// terminalOperationStatus reports whether status is one an operation never
+// leaves: SUCCEEDED, FAILED, TIMED_OUT, STOPPED, or CANCELLED.
+func terminalOperationStatus(status string) bool {
+	switch durable.PluginOperationStatus(status) {
+	case durable.PluginOperationSucceeded, durable.PluginOperationFailed,
+		durable.PluginOperationTimedOut, durable.PluginOperationStopped,
+		durable.PluginOperationCancelled:
+		return true
+	default:
+		return false
+	}
 }
 
 // onOperationEnd records the operation's completion.
@@ -397,6 +434,9 @@ func (p *telemetryInvocation) onOperationEnd(ctx context.Context, info durable.O
 // new as the start. Example: a step whose retry is scheduled gets no
 // OnOperationEnd when the invocation suspends, and the change reports its
 // PENDING status.
+//
+// The opposite order, a change dispatched before the OnOperationStart of
+// the same operation, is handled in onOperationStart.
 func (p *telemetryInvocation) onOperationChange(ctx context.Context, info durable.OperationChangeHookInfo) {
 	recorded := false
 	p.mu.Lock()

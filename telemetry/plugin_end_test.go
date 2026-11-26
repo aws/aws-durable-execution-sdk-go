@@ -128,3 +128,78 @@ func TestPlugin_OnOperationChange_AppendsOldestFirst(t *testing.T) {
 		t.Errorf("operation order = %v, want oldest first %v", got, want)
 	}
 }
+
+// TestPlugin_OnOperationStart_KeepsTerminalChangeRecord asserts that a
+// start dispatched after a change of the same operation does not replace a
+// terminal record with a nonterminal status. The handler reads a callback
+// as STARTED, a checkpoint response then reports it as SUCCEEDED, and the
+// change is dispatched before the start. The invocation ends as Retrying,
+// so no OnOperationEnd follows. The emitted record keeps the SUCCEEDED
+// status, and the skipped start emits no on-change record.
+func TestPlugin_OnOperationStart_KeepsTerminalChangeRecord(t *testing.T) {
+	for _, mode := range []EmitMode{EmitAlways, EmitOnChange} {
+		t.Run(string(mode), func(t *testing.T) {
+			exp := &capturingExporter{}
+			p := &telemetryInvocation{
+				env:    New(Config{EmitMode: mode, Exporters: []Exporter{exp}}),
+				record: &Record{Status: StatusRunning, ExecutionArn: "test-execution"},
+				byOpID: make(map[string]int), resultText: make(map[string]string), endReported: make(map[string]struct{}), sampledIn: true,
+			}
+			ctx := context.Background()
+			now := time.Unix(1700000000, 0)
+			started := durable.OperationHookInfo{ID: "op-1", Name: "callback", Type: "CALLBACK", Status: durable.PluginOperationStarted, StartTimestamp: now}
+			p.onInvocationStart(ctx, durable.InvocationHookInfo{Operations: map[string]durable.OperationHookInfo{"op-1": started}})
+
+			succeeded := started
+			succeeded.Status = durable.PluginOperationSucceeded
+			succeeded.EndTimestamp = now.Add(time.Second)
+			p.onOperationChange(ctx, durable.OperationChangeHookInfo{
+				UpdatedOperations: map[string]durable.OperationHookInfo{"op-1": succeeded},
+				Operations:        map[string]durable.OperationHookInfo{"op-1": succeeded},
+			})
+			p.onChangeWG.Wait()
+			before := len(exp.snapshot())
+
+			p.onOperationStart(ctx, started)
+			p.onChangeWG.Wait()
+			if after := len(exp.snapshot()); after != before {
+				t.Errorf("the skipped start emitted %d records, want 0", after-before)
+			}
+
+			p.onInvocationEnd(ctx, durable.InvocationEndHookInfo{Status: durable.PluginInvocationRetrying})
+			records := exp.snapshot()
+			if len(records) != before+1 {
+				t.Fatalf("got %d records after the invocation end, want %d", len(records), before+1)
+			}
+			last := records[len(records)-1]
+			if len(last.Operations) != 1 {
+				t.Fatalf("operations = %+v, want 1 operation", last.Operations)
+			}
+			if op := last.Operations[0]; op.Status != string(durable.PluginOperationSucceeded) || op.EndTimestamp == nil {
+				t.Errorf("operation = %+v, want the SUCCEEDED record with an end timestamp", op)
+			}
+		})
+	}
+}
+
+// TestPlugin_OnOperationStart_RecordsTerminalStart asserts that a start
+// which reports a terminal status is recorded over a terminal record. The
+// Plugin contract lets an operation dispatch a start when it is replayed
+// from a terminal checkpoint. Such a start is not older than the record.
+func TestPlugin_OnOperationStart_RecordsTerminalStart(t *testing.T) {
+	p := &telemetryInvocation{
+		env:    New(Config{}),
+		record: &Record{Status: StatusRunning, ExecutionArn: "test-execution"},
+		byOpID: make(map[string]int), resultText: make(map[string]string), endReported: make(map[string]struct{}), sampledIn: true,
+	}
+	ctx := context.Background()
+	op := durable.OperationHookInfo{ID: "op-1", Name: "step", Type: "STEP", Status: durable.PluginOperationSucceeded, Attempt: 1}
+	p.onInvocationStart(ctx, durable.InvocationHookInfo{Operations: map[string]durable.OperationHookInfo{"op-1": op}})
+
+	op.Attempt = 2
+	p.onOperationStart(ctx, op)
+
+	if got := p.record.Operations[0].Attempt; got != 2 {
+		t.Errorf("attempt = %d, want 2 from the terminal start", got)
+	}
+}
