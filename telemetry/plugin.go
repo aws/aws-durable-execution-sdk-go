@@ -376,16 +376,15 @@ func (p *telemetryInvocation) onInvocationEnd(ctx context.Context, info durable.
 // status. An invocation that ends as Retrying dispatches no end for the
 // operation, so no later hook would correct the record.
 //
-// A terminal status never changes. So a start that reports a nonterminal
-// status for an operation whose record is terminal is older than the
-// record. Such a start is skipped. It leaves the record as it was, so it
-// schedules no on-change emission. A start that reports a terminal status
-// is recorded.
+// A start never reports a terminal status: an operation replayed from a
+// terminal checkpoint dispatches no start. A terminal status never
+// changes. So a start for an operation whose record is terminal is older
+// than the record. Such a start is skipped. It leaves the record as it
+// was, so it schedules no on-change emission.
 func (p *telemetryInvocation) onOperationStart(ctx context.Context, info durable.OperationHookInfo) {
 	p.mu.Lock()
 	idx, exists := p.byOpID[info.ID]
-	stale := exists && !terminalOperationStatus(string(info.Status)) &&
-		terminalOperationStatus(p.record.Operations[idx].Status)
+	stale := exists && terminalOperationStatus(p.record.Operations[idx].Status)
 	if !stale {
 		p.upsertOperationLocked(info.ID, info)
 	}

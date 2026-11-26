@@ -181,25 +181,3 @@ func TestPlugin_OnOperationStart_KeepsTerminalChangeRecord(t *testing.T) {
 		})
 	}
 }
-
-// TestPlugin_OnOperationStart_RecordsTerminalStart asserts that a start
-// which reports a terminal status is recorded over a terminal record. The
-// Plugin contract lets an operation dispatch a start when it is replayed
-// from a terminal checkpoint. Such a start is not older than the record.
-func TestPlugin_OnOperationStart_RecordsTerminalStart(t *testing.T) {
-	p := &telemetryInvocation{
-		env:    New(Config{}),
-		record: &Record{Status: StatusRunning, ExecutionArn: "test-execution"},
-		byOpID: make(map[string]int), resultText: make(map[string]string), endReported: make(map[string]struct{}), sampledIn: true,
-	}
-	ctx := context.Background()
-	op := durable.OperationHookInfo{ID: "op-1", Name: "step", Type: "STEP", Status: durable.PluginOperationSucceeded, Attempt: 1}
-	p.onInvocationStart(ctx, durable.InvocationHookInfo{Operations: map[string]durable.OperationHookInfo{"op-1": op}})
-
-	op.Attempt = 2
-	p.onOperationStart(ctx, op)
-
-	if got := p.record.Operations[0].Attempt; got != 2 {
-		t.Errorf("attempt = %d, want 2 from the terminal start", got)
-	}
-}
