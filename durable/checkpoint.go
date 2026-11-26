@@ -411,6 +411,12 @@ func (cp *checkpointer) checkpointFinal(ctx context.Context, updates []Operation
 // ends with that error. The operation's later SUCCEED, FAIL, or RETRY is
 // queued after the START and awaited, and the flusher sends calls in queue
 // order, so when that wait returns the START is recorded too.
+//
+// It is also for the SUCCEED of a step under [AtLeastOnceAsync]. The step
+// runs again on the next invocation when the SUCCEED was not recorded. The
+// handler sends every queued request before it reports an outcome (see
+// terminateAtQueueEnd), and the invocation ends with the error of a failed
+// call, so no outcome is reported over an unrecorded SUCCEED.
 func (cp *checkpointer) checkpointNoWait(ctx context.Context, update OperationUpdate) error {
 	if cp.terminated.Load() {
 		return errCheckpointTerminated

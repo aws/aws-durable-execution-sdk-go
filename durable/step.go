@@ -24,6 +24,24 @@ const (
 	// Interruption is treated as a failed attempt and consumes one retry
 	// from the step's retry strategy.
 	AtMostOncePerRetry
+
+	// AtLeastOnceAsync is [AtLeastOncePerRetry], except that the step
+	// does not wait for its SUCCEED checkpoint before it returns its
+	// result. So the step has lower latency. RETRY and FAIL checkpoints
+	// are still awaited.
+	//
+	// The SUCCEED is queued, and checkpoints are sent in queue order. The
+	// invocation sends every queued checkpoint before it reports a result
+	// or an error, and a failed checkpoint call ends the invocation. So
+	// when the SUCCEED is not recorded, the step runs again on replay, as
+	// under [AtLeastOncePerRetry].
+	//
+	// The code after the step can run before the result is saved. If the
+	// invocation ends before the save, that code and the step run again on
+	// replay, and the step can return a different value. So do not use
+	// this mode for a step whose result becomes an idempotency key, client
+	// token, or other identifier for a later step.
+	AtLeastOnceAsync
 )
 
 // StepOption configures a single step operation.
@@ -381,10 +399,11 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 		// The attempt counts as executing from its START checkpoint through
 		// the checkpoint of its outcome, so an invocation whose handler blocks
 		// meanwhile waits for the outcome to be recorded before it suspends.
+		var payload string
 		result, err := func() (O, error) {
 			ec.suspend.enterExecuting()
 			defer ec.suspend.exitExecuting()
-			return executeStepAttempt(ec, id, name, fn, options, op, attempt, start)
+			return executeStepAttempt(ec, id, name, fn, options, op, attempt, start, &payload)
 		}()
 		start = nil
 		lastAttempt = attempt
@@ -407,8 +426,13 @@ func runStep[O any](ec *execContext, id, name string, fn func(StepContext) (O, e
 			// The SUCCEED checkpoint has returned, and its response merged the
 			// step record into the state. So the record holds the
 			// checkpointed result, which the end reports as the replayed
-			// end does.
-			liveInfo.Result = ec.state.get(id).operationResult()
+			// end does. Under AtLeastOnceAsync the SUCCEED may still be
+			// queued, so the end reports the payload it carries.
+			if options.semantics == AtLeastOnceAsync {
+				liveInfo.Result = payload
+			} else {
+				liveInfo.Result = ec.state.get(id).operationResult()
+			}
 			dispatchOperationEnd(ec, liveInfo, PluginOperationSucceeded)
 		} else if !errors.Is(err, errSuspendExecution) {
 			liveInfo.EndTimestamp = time.Now()
@@ -434,8 +458,9 @@ func stepReplayedInfo(ec *execContext, id, name, subType string, op *operation) 
 
 // executeStepAttempt runs one attempt of the step body and checkpoints its
 // outcome. start, when non-nil, is the attempt's START, already queued by
-// StepAsync.
-func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepContext) (O, error), options stepOptions, op *operation, attempt int, start *queuedStart) (O, error) {
+// StepAsync. payload receives the serialized result that the SUCCEED
+// carries.
+func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepContext) (O, error), options stepOptions, op *operation, attempt int, start *queuedStart, payload *string) (O, error) {
 	var zero O
 
 	if start != nil {
@@ -583,9 +608,20 @@ func executeStepAttempt[O any](ec *execContext, id, name string, fn func(StepCon
 		return zero, decodeErr
 	}
 
+	*payload = string(serialized)
 	update := stepUpdate(ec, id, name, options.subType, OperationActionSucceed)
-	update.Payload = aws.String(string(serialized))
-	if cerr := ec.checkpointer.checkpoint(ec, []OperationUpdate{update}); cerr != nil {
+	update.Payload = aws.String(*payload)
+	// Under AtLeastOnceAsync the SUCCEED is queued without waiting. The
+	// flusher sends calls in queue order, and the invocation sends every
+	// queued request before it reports an outcome, so a later recorded
+	// checkpoint implies this one is recorded too.
+	var cerr error
+	if options.semantics == AtLeastOnceAsync {
+		cerr = ec.checkpointer.checkpointNoWait(ec, update)
+	} else {
+		cerr = ec.checkpointer.checkpoint(ec, []OperationUpdate{update})
+	}
+	if cerr != nil {
 		if errors.Is(cerr, errCheckpointTerminated) {
 			return zero, errSuspendExecution
 		}
