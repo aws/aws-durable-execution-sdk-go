@@ -58,18 +58,26 @@ import (
 // panics is recovered and the panic discarded; the hook never affects
 // execution.
 //
+// OnOperationChange is the one exception to "the goroutine that reached the
+// point". A checkpoint response that changes an operation's status queues
+// one report and does not wait for the hook. One goroutine per invocation
+// dispatches the queued reports, one at a time, in the order the responses
+// arrived. So a slow OnOperationChange hook delays the later reports and
+// the end of the invocation, and never a checkpoint.
+//
 // The wrap hooks (the Wrap* fields) run on the dispatching goroutine
 // however many plugins are registered. They compose in registration order:
 // the plugin at index 0 is outermost, and each hook receives the next as
 // fn. See the wrap-hook contract below.
 //
 // Hooks fire in this order within one invocation: OnInvocationStart, then
-// OnOperationChange when any operation changed externally since the
-// previous invocation, then WrapInvocation around the handler. The
-// operation-level hooks fire inside the handler as the operations run.
-// OnInvocationEnd fires last, once the invocation's outcome is decided and
-// recorded. Exactly one OnInvocationStart and exactly one OnInvocationEnd
-// fire per invocation. Every operation-level hook receives an
+// WrapInvocation around the handler. The operation-level hooks fire inside
+// the handler as the operations run. OnOperationChange fires while the
+// handler runs, once for each checkpoint response that changes the status
+// of at least one operation. OnInvocationEnd fires last, once the
+// invocation's outcome is decided and recorded and every queued
+// OnOperationChange report is dispatched. Exactly one OnInvocationStart and
+// exactly one OnInvocationEnd fire per invocation. Every operation-level hook receives an
 // [OperationHookInfo] whose IsReplay reports whether the operation is
 // replayed from a checkpoint; each hook's documentation states when it
 // fires on replay. An operation beyond the depth set by
@@ -91,17 +99,27 @@ import (
 // package tests exercise every hook from concurrent branches under the race
 // detector.
 //
-// The invocation-level hooks (OnInvocationStart, OnOperationChange,
-// WrapInvocation, OnInvocationEnd) are dispatched in sequence from the
-// goroutine that received the invocation: each dispatch completes before
-// the next begins. So within one invocation, one plugin's invocation-level
-// hooks never overlap one another. The hooks of one operation are
+// The invocation-level hooks (OnInvocationStart, WrapInvocation,
+// OnInvocationEnd) are dispatched in sequence from the goroutine that
+// received the invocation: each dispatch completes before the next begins.
+// So within one invocation, one plugin's invocation-level hooks never
+// overlap one another. OnOperationChange is dispatched from its own
+// goroutine, one report at a time. So one plugin's OnOperationChange calls
+// never overlap one another, and every one of them starts after
+// OnInvocationStart completes. Every one of them completes before
+// OnInvocationEnd is dispatched, except when the invocation's context ends
+// first. Then the reports not yet dispatched are dropped, and a call
+// already in progress may still be running while OnInvocationEnd runs. So
+// a plugin that shares state between OnOperationChange and OnInvocationEnd
+// must synchronize it. An OnOperationChange call may run concurrently with
+// WrapInvocation, with any operation-level hook, and with
+// EnrichLogContext. The hooks of one operation are
 // dispatched in sequence from the goroutine that runs the operation, in
 // the order start, attempt hooks, wrap hook, end, each completing before
 // the next is dispatched. So one plugin's hooks for one operation never
-// overlap one another either. Both guarantees hold per plugin: with
+// overlap one another either. These guarantees hold per plugin: with
 // several plugins registered, the hooks of different plugins for the same
-// notification run in parallel, as the Dispatch section states. Neither
+// notification run in parallel, as the Dispatch section states. No
 // guarantee extends across operations or across invocations: a hook for
 // one operation may run concurrently with a hook for another operation on
 // a concurrent branch, and EnrichLogContext may run concurrently with any
@@ -153,8 +171,8 @@ import (
 type Plugin struct {
 	// OnInvocationStart is called once at the start of each Lambda
 	// invocation of the execution, before the user handler runs. It is
-	// the first hook of the invocation: it fires before OnOperationChange
-	// and before WrapInvocation. It fires on the first invocation and on
+	// the first hook of the invocation: it fires before WrapInvocation
+	// and before every OnOperationChange. It fires on the first invocation and on
 	// every later one; IsFirstInvocation on the info tells them apart.
 	// The info's Operations map is a snapshot of every checkpointed
 	// operation as the invocation begins. It is dispatched from the
@@ -282,22 +300,42 @@ type Plugin struct {
 	// joins with several.
 	OnOperationAttemptEnd func(ctx context.Context, info AttemptEndHookInfo)
 
-	// OnOperationChange is called at most once per invocation, after
-	// OnInvocationStart and before WrapInvocation, when at least one
-	// operation changed status externally between the previous invocation
-	// and this one: a wait that elapsed, a callback that was resolved, a
-	// chained invoke that finished. It does not fire on an invocation
-	// with no such change, including the first. The info's
-	// UpdatedOperations is the same map [InvocationHookInfo] carries
-	// under that name; every entry has IsReplay set. It is dispatched
-	// from the goroutine that received the invocation: on that goroutine
-	// with one plugin registered, on a goroutine the dispatch joins with
-	// several.
+	// OnOperationChange is called once for each checkpoint response that
+	// changes the status of at least one operation: an operation the SDK
+	// did not hold before, or one whose status differs from the status
+	// the SDK held. A step that starts and succeeds within one invocation
+	// is therefore reported during that invocation. A response that
+	// changes no status dispatches no call, and the calls for separate
+	// responses are never merged into one. The hook does not report the
+	// operations that changed between the previous invocation and this
+	// one; UpdatedOperations of [InvocationHookInfo] reports those.
+	//
+	// The info's UpdatedOperations holds the operations that response
+	// changed, and Operations holds every operation known once the
+	// response was applied. Both omit the operations beyond the depth set
+	// by [WithPluginChildOperationsDepth], and a response that changes
+	// only such operations dispatches no call.
+	//
+	// The checkpoint that received the response does not wait for the
+	// hook. One goroutine per invocation dispatches the calls one at a
+	// time, in the order the responses arrived, so the calls of one
+	// plugin never overlap one another. Every call follows
+	// OnInvocationStart and completes before OnInvocationEnd is
+	// dispatched. No order is defined between a call and the
+	// operation-level hooks, including the OnOperationEnd of an operation
+	// the call reports. The one exception to completing before
+	// OnInvocationEnd is an invocation whose context ends first. The
+	// reports not yet dispatched are then dropped, and a call already in
+	// progress may still be running while OnInvocationEnd runs. Before it
+	// dispatches OnInvocationEnd, the invocation waits for the checkpoint
+	// calls already sent, so their responses are reported; the context's
+	// end bounds that wait too. The ctx argument is the invocation's
+	// context.
 	OnOperationChange func(ctx context.Context, info OperationChangeHookInfo)
 
 	// WrapInvocation wraps the user handler invocation. It fires once per
-	// invocation, after OnInvocationStart and OnOperationChange and
-	// before every operation-level hook; OnInvocationEnd fires after it
+	// invocation, after OnInvocationStart and before every
+	// operation-level hook and every OnOperationChange; OnInvocationEnd fires after it
 	// returns. The outer plugin (index 0) wraps first. fn must be called
 	// exactly once; the context passed to fn is the parent of the
 	// handler's [Context]. fn returns the handler's result and error,
@@ -400,10 +438,10 @@ type InvocationHookInfo struct {
 	ExecutionStartTimestamp time.Time
 
 	// UpdatedOperations contains operations whose status changed
-	// externally between invocations, keyed by operation ID. This
-	// embeds the same data as OnOperationChange to allow plugins that
-	// need both to avoid state ordering dependencies. It is a subset of
-	// Operations.
+	// externally between invocations, keyed by operation ID.
+	// OnOperationChange does not report these changes: it reports the
+	// changes that checkpoint responses deliver during the invocation.
+	// It is a subset of Operations.
 	UpdatedOperations map[string]OperationHookInfo
 
 	// Operations contains every operation known at the start of the
@@ -614,14 +652,32 @@ const (
 	PluginAttemptFailed    PluginAttemptOutcome = "FAILED"
 )
 
-// OperationChangeHookInfo carries context for OnOperationChange. A minor
-// release may add fields; construct it with keyed fields.
+// OperationChangeHookInfo carries context for OnOperationChange: the
+// operations whose status one checkpoint response changed, and every
+// operation known once that response was applied. A minor release may add
+// fields; construct it with keyed fields.
 //
 // EXPERIMENTAL: this type is experimental and may be changed or removed in
 // future releases.
 type OperationChangeHookInfo struct {
-	ExecutionArn      string
+	ExecutionArn string
+
+	// UpdatedOperations contains the operations whose status the
+	// checkpoint response changed, keyed by operation ID, each with the
+	// status, timestamps, result, and error the response carried. It is
+	// never empty, and it is a subset of Operations. Every entry has
+	// IsReplay false.
 	UpdatedOperations map[string]OperationHookInfo
+
+	// Operations contains every operation known once the checkpoint
+	// response was applied, keyed by operation ID, including the root
+	// execution operation. An entry has IsReplay false when the
+	// operation's status changed during this invocation and true when its
+	// record is unchanged since the invocation started. Like the maps of
+	// [InvocationHookInfo], it omits the operations beyond the depth set
+	// by [WithPluginChildOperationsDepth]. The map is built for this call
+	// and is shared by the plugins that receive it; treat it as read-only.
+	Operations map[string]OperationHookInfo
 }
 
 // WithPlugins registers instrumentation plugin factories with the handler.

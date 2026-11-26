@@ -560,65 +560,17 @@ func TestPluginAttemptHooksFire(t *testing.T) {
 
 // --- S1 plugin-layer upgrade tests ---
 
-// TestPluginInvocationStartBeforeOperationChange verifies the dispatch
-// ordering contract: OnInvocationStart fires before OnOperationChange.
-func TestPluginInvocationStartBeforeOperationChange(t *testing.T) {
-	var order []string
-	var mu sync.Mutex
-	record := func(s string) {
-		mu.Lock()
-		order = append(order, s)
-		mu.Unlock()
-	}
-
-	plugin := Plugin{
-		OnInvocationStart: func(_ context.Context, _ InvocationHookInfo) {
-			record("invocation-start")
-		},
-		OnOperationChange: func(_ context.Context, _ OperationChangeHookInfo) {
-			record("operation-change")
-		},
-	}
-
-	handler := Wrap(func(ctx Context, event string) (string, error) {
-		return Step(ctx, "s1", func(StepContext) (string, error) {
-			return "ok", nil
-		})
-	}, withTestPlugins(plugin), withLambdaAPI(&fakePluginClient{}))
-
-	ops := []wireOperation{
-		{Id: "exec", Status: "STARTED", Type: "EXECUTION", ExecutionDetails: &wireExecutionDetails{InputPayload: `"hello"`}},
-		{Id: hashID("1"), Status: "SUCCEEDED", Type: "STEP", SubType: "Step", Name: "s1", StepDetails: &wireStepDetails{Attempt: 1, Result: `"ok"`}},
-	}
-	payload := makePluginPayloadWithUpdated(t, "arn:test:order", "tok1", ops, []string{hashID("1")})
-	if _, err := handler(makePluginContext(), payload); err != nil {
-		t.Fatal(err)
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-	if len(order) != 2 || order[0] != "invocation-start" || order[1] != "operation-change" {
-		t.Fatalf("expected [invocation-start operation-change], got %v", order)
-	}
-}
-
 // TestPluginUpdatedOperationsMapKeyedByID verifies that UpdatedOperations is
-// delivered as a map keyed by operation ID, on both OnInvocationStart and
-// OnOperationChange, with the new per-operation fields populated.
+// delivered to OnInvocationStart as a map keyed by operation ID, with the
+// per-operation fields populated.
 func TestPluginUpdatedOperationsMapKeyedByID(t *testing.T) {
 	var startInfo InvocationHookInfo
-	var changeInfo OperationChangeHookInfo
 	var mu sync.Mutex
 
 	plugin := Plugin{
 		OnInvocationStart: func(_ context.Context, info InvocationHookInfo) {
 			mu.Lock()
 			startInfo = info
-			mu.Unlock()
-		},
-		OnOperationChange: func(_ context.Context, info OperationChangeHookInfo) {
-			mu.Lock()
-			changeInfo = info
 			mu.Unlock()
 		},
 	}
@@ -648,7 +600,6 @@ func TestPluginUpdatedOperationsMapKeyedByID(t *testing.T) {
 	defer mu.Unlock()
 	for name, updated := range map[string]map[string]OperationHookInfo{
 		"OnInvocationStart": startInfo.UpdatedOperations,
-		"OnOperationChange": changeInfo.UpdatedOperations,
 	} {
 		op, ok := updated[stepID]
 		if !ok {

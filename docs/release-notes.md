@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+### Changed: `OnOperationChange` fires on checkpoint responses
+
+The plugin API is experimental, and this is a breaking change to one of its
+hooks. It fixes issue #186.
+
+Before, `OnOperationChange` fired at most once per invocation, after
+`OnInvocationStart`. It reported the operations that changed between the
+previous invocation and this one. So a step that started and succeeded
+within one invocation was never reported.
+
+Now `OnOperationChange` fires once for each checkpoint response that
+changes the status of at least one operation. A response changes an
+operation when the SDK did not hold the operation before, or held it with a
+different status. So a step that starts and succeeds within one invocation
+is reported during that invocation.
+
+- `OperationChangeHookInfo` has a new field, `Operations`. It holds every
+  operation known once the response was applied. `UpdatedOperations` holds
+  the operations that response changed and is a subset of `Operations`.
+  Both omit the operations beyond the depth set by
+  `WithPluginChildOperationsDepth`.
+- An entry has `IsReplay` false when its status changed during this
+  invocation.
+- The checkpoint that received the response does not wait for the hook. One
+  goroutine per invocation calls the hook, one response at a time, in the
+  order the responses arrived. The calls for separate responses are never
+  merged.
+- Every call completes before `OnInvocationEnd` is dispatched, except when
+  the invocation's context ends first. Then the reports not yet dispatched
+  are dropped, and a call already in progress may still be running while
+  `OnInvocationEnd` runs. No order is defined between a call and the
+  operation-level hooks.
+- When a plugin implements `OnOperationChange`, the invocation waits for
+  the checkpoint calls already sent before it dispatches `OnInvocationEnd`,
+  so their responses are reported. This also applies to an invocation that
+  ends as pending. The context's end bounds the wait.
+- The hook no longer fires at the start of an invocation. A plugin reads the
+  operations that changed between invocations from `UpdatedOperations` of
+  `InvocationHookInfo`, as before.
+
+The telemetry plugin records every change, except a change for an operation
+that `OnOperationEnd` already reported in the same invocation. So a late
+change cannot replace the outcome that `OnOperationEnd` reported.
+
+An operation that a checkpoint response or a paginated state read delivers
+now keeps its parent ID. Before, the depth bound of
+`WithPluginChildOperationsDepth` treated such an operation as top-level in
+the maps of `InvocationHookInfo`.
+
 ### Changed: a replayed operation no longer dispatches an end on every invocation
 
 The plugin API is experimental, and this is a change to its replay

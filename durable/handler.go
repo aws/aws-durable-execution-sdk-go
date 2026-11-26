@@ -332,8 +332,10 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	// see WithPluginChildOperationsDepth.
 	depthBound := h.options.pluginDepthBound()
 
-	// Build updated operations map for both InvocationHookInfo and
-	// OnOperationChange (Item 11: map[string]OperationHookInfo keyed by ID).
+	// Build the updated operations map of InvocationHookInfo: the
+	// operations that changed between the previous invocation and this
+	// one, keyed by ID. OnOperationChange does not report them; it reports
+	// the changes that checkpoint responses deliver during the invocation.
 	var updatedOpsMap map[string]OperationHookInfo
 	if hasPlugins && len(in.UpdatedOperationIds) > 0 {
 		updatedOpsMap = make(map[string]OperationHookInfo, len(in.UpdatedOperationIds))
@@ -406,24 +408,23 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		pd = newPluginDispatcher(newInvocationPlugins(ctx, factoryLogger, h.options.pluginFactories, h.options.pluginFactoryNames, invInfo))
 	}
 
-	// Item 12: OnInvocationStart fires BEFORE OnOperationChange.
+	// OnInvocationStart is the first hook of the invocation. No checkpoint
+	// call has been sent yet, so no OnOperationChange can precede it.
 	dispatchNotification(pd, func(p *Plugin) {
 		if p.OnInvocationStart != nil {
 			p.OnInvocationStart(ctx, invInfo)
 		}
 	})
 
-	// OnOperationChange: fire for operations that changed externally.
-	if pd != nil && len(updatedOpsMap) > 0 {
-		changeInfo := OperationChangeHookInfo{
-			ExecutionArn:      in.DurableExecutionArn,
-			UpdatedOperations: updatedOpsMap,
-		}
-		dispatchNotification(pd, func(p *Plugin) {
-			if p.OnOperationChange != nil {
-				p.OnOperationChange(ctx, changeInfo)
-			}
-		})
+	// OnOperationChange: every checkpoint response that changes the status
+	// of an operation queues one report, and the queue dispatches the
+	// reports in order on its own goroutine. changes is nil, and the state
+	// tracks no change, when no plugin implements the hook. The state is
+	// not shared yet, so trackChanges is written without its lock.
+	changes := newOperationChangeQueue(ctx, pd, in.DurableExecutionArn, state, depthBound)
+	if changes != nil {
+		state.trackChanges = true
+		cp.onOperationsChanged = changes.enqueue
 	}
 
 	// The user handler runs on its own goroutine, which owns the root
@@ -643,12 +644,40 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		runHandler,
 	)
 
+	// The checkpointer is terminated by now, so it sends no further branch
+	// request. A call sent before that can still be in flight: an
+	// invocation that ends as pending does not wait for the calls of its
+	// unjoined branches. Such a call still merges its response into the
+	// state. Without a wait, the change queue would close first and the
+	// status change of that response would never be reported, because no
+	// later invocation reports it through OnOperationChange. So when a
+	// plugin implements OnOperationChange, wait for the calls in flight
+	// before the end hooks. The JavaScript SDK waits for its checkpoint
+	// queue on every exit. The context's end bounds the wait.
+	if changes != nil {
+		cp.awaitIdle(ctx)
+	}
+
 	// unreachedEnds dispatches the ends of the settled waits, callbacks,
 	// and invokes that the handler did not reach. Every path below calls
 	// it before OnInvocationEnd, except a path that ends the invocation
 	// as Retrying; see dispatchUnreachedEnds.
 	unreachedEnds := func() {
 		dispatchUnreachedEnds(pd, ctx, in.DurableExecutionArn, state, depthBound)
+	}
+
+	// invocationEnd dispatches OnInvocationEnd, the last hook of the
+	// invocation. It first closes the change queue and waits for the
+	// OnOperationChange reports queued so far, so every change a checkpoint
+	// response delivered before this point is reported before
+	// OnInvocationEnd, and none is reported after it.
+	invocationEnd := func(info InvocationEndHookInfo) {
+		changes.close(ctx)
+		dispatchNotification(pd, func(p *Plugin) {
+			if p.OnInvocationEnd != nil {
+				p.OnInvocationEnd(ctx, info)
+			}
+		})
 	}
 
 	// Translate the wrapped outcome to the wire response.
@@ -663,14 +692,10 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 			ec.invocationDebugLog(ctx, debugMsgInvocationSuspending, slog.String(logKeyReason, ec.suspend.suspendReason()))
 		}
 		unreachedEnds()
-		dispatchNotification(pd, func(p *Plugin) {
-			if p.OnInvocationEnd != nil {
-				p.OnInvocationEnd(ctx, InvocationEndHookInfo{
-					ExecutionArn: in.DurableExecutionArn,
-					Status:       PluginInvocationPending,
-					// ExecutionResult/ExecutionError are nil on suspension.
-				})
-			}
+		invocationEnd(InvocationEndHookInfo{
+			ExecutionArn: in.DurableExecutionArn,
+			Status:       PluginInvocationPending,
+			// ExecutionResult/ExecutionError are nil on suspension.
 		})
 		resp, respErr = respond(wire.InvocationResponse{Status: wire.StatusPending})
 	case wrapErr != nil:
@@ -689,14 +714,10 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		} else {
 			unreachedEnds()
 		}
-		dispatchNotification(pd, func(p *Plugin) {
-			if p.OnInvocationEnd != nil {
-				p.OnInvocationEnd(ctx, InvocationEndHookInfo{
-					ExecutionArn:   in.DurableExecutionArn,
-					Status:         status,
-					ExecutionError: wrapErr,
-				})
-			}
+		invocationEnd(InvocationEndHookInfo{
+			ExecutionArn:   in.DurableExecutionArn,
+			Status:         status,
+			ExecutionError: wrapErr,
 		})
 		if retrying {
 			return nil, wrapErr
@@ -721,14 +742,10 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 			if status != PluginInvocationRetrying {
 				unreachedEnds()
 			}
-			dispatchNotification(pd, func(p *Plugin) {
-				if p.OnInvocationEnd != nil {
-					p.OnInvocationEnd(ctx, InvocationEndHookInfo{
-						ExecutionArn:   in.DurableExecutionArn,
-						Status:         status,
-						ExecutionError: err,
-					})
-				}
+			invocationEnd(InvocationEndHookInfo{
+				ExecutionArn:   in.DurableExecutionArn,
+				Status:         status,
+				ExecutionError: err,
 			})
 		}
 		serialized, serr := marshalNoHTMLEscape(wrapResult)
@@ -776,13 +793,9 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 					// Respond PENDING, as for any suspension; the next
 					// invocation replays and reports the result.
 					unreachedEnds()
-					dispatchNotification(pd, func(p *Plugin) {
-						if p.OnInvocationEnd != nil {
-							p.OnInvocationEnd(ctx, InvocationEndHookInfo{
-								ExecutionArn: in.DurableExecutionArn,
-								Status:       PluginInvocationPending,
-							})
-						}
+					invocationEnd(InvocationEndHookInfo{
+						ExecutionArn: in.DurableExecutionArn,
+						Status:       PluginInvocationPending,
 					})
 					return respond(wire.InvocationResponse{Status: wire.StatusPending})
 				}
@@ -809,14 +822,10 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		}
 		// OnInvocationEnd fires only after result durability is guaranteed.
 		unreachedEnds()
-		dispatchNotification(pd, func(p *Plugin) {
-			if p.OnInvocationEnd != nil {
-				p.OnInvocationEnd(ctx, InvocationEndHookInfo{
-					ExecutionArn:    in.DurableExecutionArn,
-					Status:          PluginInvocationSucceeded,
-					ExecutionResult: wrapResult,
-				})
-			}
+		invocationEnd(InvocationEndHookInfo{
+			ExecutionArn:    in.DurableExecutionArn,
+			Status:          PluginInvocationSucceeded,
+			ExecutionResult: wrapResult,
 		})
 	}
 	return resp, respErr
