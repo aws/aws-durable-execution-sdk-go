@@ -565,11 +565,12 @@ is still over the limit after the previous step:
    dropped operation makes the rendered record smaller. That is true for
    the `operations` array. It is not always true for `operationsByName`:
    dropping one of two operations that share a name makes the other one's
-   `error` and `result` appear. So only the `operationsByName` rendering,
-   alone or as part of `OperationsFormatBoth`, can drop more operations
-   than the limit requires. The result still fits, because the chosen
-   count was rendered and fit. `DroppedOperations` counts the dropped
-   operations.
+   `error` and `result` appear. So among the built-in renderings, only the
+   `operationsByName` rendering, alone or as part of `OperationsFormatBoth`,
+   can drop more operations than the limit requires. A chosen count was
+   rendered and fit. So the result fits whenever dropping everything
+   droppable fits. If even that does not fit, the result can be over the
+   limit. `DroppedOperations` counts the dropped operations.
 3. The execution input. `DroppedInput` is set.
 4. The execution output. `DroppedOutput` is set.
 

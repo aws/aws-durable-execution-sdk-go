@@ -67,17 +67,19 @@ func Truncate(record Record, maxBytes int, render Renderer) Record {
 	// GroupOperationsByName). So removing one of two operations that share
 	// a name makes the other operation's Error and Result appear. Then the
 	// search can return a count that fits while a smaller count also fits.
-	// Step 2 then removes more operations than the limit required. This
-	// can happen only in the by-name rendering, including the by-name part
-	// of OperationsFormatBoth. In the array rendering every removal makes
-	// the record smaller, so Step 2 removes the fewest. This is an accepted
+	// Step 2 then removes more operations than the limit required. Among
+	// the built-in renderings, this can happen only in the by-name
+	// rendering, including the by-name part of OperationsFormatBoth. In
+	// the array rendering every removal makes the record smaller, so
+	// Step 2 removes the fewest. This is an accepted
 	// trade-off: the cost stays O(log n) renders for every record shape and
 	// every Renderer.
 	//
 	// Each candidate record is sized with the final truncation metadata
 	// already set. Step 2 returns only a count whose candidate record was
 	// rendered and fit. So a wrong guess can only remove extra operations.
-	// It never makes the result exceed the limit.
+	// It never makes the result exceed the limit. If no count fits, Step 2
+	// removes every operation, and the result can still be over the limit.
 
 	ops := record.Operations
 	n := len(ops)

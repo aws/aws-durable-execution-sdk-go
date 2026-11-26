@@ -142,10 +142,12 @@ The `LambdaLogExporter` and `CloudWatchLogsExporter` render
 carries `error` and `result` only when its name occurs once. So dropping
 one of two operations that share a name can make the record larger. Then
 the binary search can drop more old operations than the limit requires.
-This can happen only in the `operationsByName` rendering, alone or as
-part of `OperationsFormatBoth`. In the `operations` array `Truncate` drops
-the fewest operations. In every rendering the result fits the limit,
-because `Truncate` returns only a count that it rendered and that fit.
+Among the built-in renderings, this can happen only in the
+`operationsByName` rendering, alone or as part of `OperationsFormatBoth`.
+In the `operations` array `Truncate` drops the fewest operations.
+`Truncate` returns only a count that it rendered and that fit. So the
+result fits the limit whenever dropping everything droppable fits. If
+even that does not fit, the result can be over the limit, as before.
 
 ### Fixed: attempt-end hooks report the attempt's end time
 
