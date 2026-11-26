@@ -339,6 +339,38 @@ START to be recorded. The step still waits for its SUCCEED or FAIL to be
 recorded before it returns. Under `AtMostOnce` the SDK waits for
 the START to be recorded before the body runs.
 
+`AtLeastOnceAsync` is `AtLeastOnce`, except that the step does not wait for
+its SUCCEED to be recorded before it returns. So the step has lower
+latency. RETRY and FAIL are still awaited. The SDK sends checkpoints in
+order, and the invocation sends every queued checkpoint before it reports
+a result or an error. A failed checkpoint ends the invocation, and the step
+then runs again on replay. So the step still runs at least once.
+
+The code after an `AtLeastOnceAsync` step can run before the result is
+saved. If the invocation ends before the save, that code and the step run
+again on replay, and the step can return a different value. So do not use
+the mode for a step whose result becomes an idempotency key, client token,
+or other identifier for a later step. Plugins receive the step's end with
+SUCCEEDED and the result before the service answers the SUCCEED.
+
+`WithDefaultStepSemantics` sets the semantics of every step that does not
+set its own, in every context of the execution, including child contexts,
+`Map` and `Parallel` items, and the submitter step of `WaitForCallback`. A
+step's own `WithSemantics` wins. Without the option the default stays
+`AtLeastOnce`.
+
+```go
+func main() {
+	durable.Start(handler, durable.WithDefaultStepSemantics(durable.AtLeastOnceAsync))
+}
+
+func handler(ctx durable.Context, _ any) (string, error) {
+	return durable.Step(ctx, "greet", func(durable.StepContext) (string, error) {
+		return "hello", nil
+	})
+}
+```
+
 `WithRetry` sets the retry strategy. The default is `ExponentialBackoff()`,
 which makes 6 attempts in total, starting 5 seconds apart, doubling each
 time, capped at 60 seconds, with full jitter. `NoRetry()` fails on the first

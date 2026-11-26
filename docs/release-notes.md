@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+### Changed: `AtLeastOnce` and `AtMostOnce` replace the `PerRetry` names
+
+`AtLeastOnce` and `AtMostOnce` are new names for the step semantics. They
+have the old values, so nothing changes on the wire.
+
+`AtLeastOncePerRetry` and `AtMostOncePerRetry` are deprecated aliases of
+them. Existing code keeps working.
+
+### Added: `AtLeastOnceAsync` step semantics
+
+A step under `AtLeastOnceAsync` does not wait for its SUCCEED checkpoint
+before it returns its result. So the step has lower latency. RETRY and FAIL
+checkpoints are still awaited, and the START is not awaited, as under
+`AtLeastOnce`.
+
+The invocation sends every queued checkpoint, in order, before it reports
+a result or an error. A failed checkpoint call ends the invocation, and the
+step then runs again on replay. So the step keeps the at-least-once
+guarantee.
+
+The code after the step can run before the result is saved. If the
+invocation ends before the save, the step runs again on replay and can
+return a different value. So do not use the mode for a step whose result
+becomes an idempotency key for a later step.
+
+The operation end hook reports SUCCEEDED, the result, and the end time
+before the service answers the SUCCEED.
+
+### Added: `WithDefaultStepSemantics`
+
+The `WithDefaultStepSemantics` handler option sets the semantics of every
+step that does not set its own. It applies in every context of the
+execution, including child contexts, `Map` and `Parallel` items, and the
+submitter step of `WaitForCallback`. A step's own `WithSemantics` wins.
+Without the option, the default stays `AtLeastOnce`.
+
 ### Changed: `OnOperationChange` fires on checkpoint responses
 
 The plugin API is experimental, and this is a breaking change to one of its
