@@ -69,8 +69,9 @@ func WithStepSerdes(s Serdes) StepOption {
 	return stepOptionFunc(func(o *stepOptions) { o.serdes = s })
 }
 
-// WithSemantics sets the step's execution guarantee. The default is
-// [AtLeastOnce].
+// WithSemantics sets the step's execution guarantee. The default is the
+// [WithDefaultStepSemantics] value of the handler, or [AtLeastOnce] when
+// the handler sets none.
 func WithSemantics(s StepSemantics) StepOption {
 	return stepOptionFunc(func(o *stepOptions) { o.semantics = s })
 }
@@ -117,7 +118,7 @@ type stepOptions struct {
 // resolveStepOptions applies opts over the defaults and resolves the
 // step's subtype. An invalid subtype is a configuration error.
 func resolveStepOptions(ec *execContext, op, name string, opts []StepOption) (stepOptions, error) {
-	options := stepOptions{retry: ExponentialBackoff(), serdes: ec.serdesDefaults().serdes}
+	options := stepOptions{retry: ExponentialBackoff(), serdes: ec.serdesDefaults().serdes, semantics: ec.defaultStepSemantics}
 	for _, o := range opts {
 		o.applyStep(&options)
 	}

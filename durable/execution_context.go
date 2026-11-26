@@ -172,6 +172,11 @@ type execContext struct {
 	// enabled. Shared by the root and all child contexts.
 	noStackTraces bool
 
+	// defaultStepSemantics is the semantics of a step that sets none. Set
+	// from [WithDefaultStepSemantics]; the zero value is [AtLeastOnce].
+	// Shared by the root and all child contexts.
+	defaultStepSemantics StepSemantics
+
 	// combinatorObserve, when non-nil, is called by the [Any] and [Race]
 	// receive loops after each future outcome is observed. It is set only
 	// by tests, on one context before its combinators run, so that a
@@ -777,24 +782,25 @@ func (c *execContext) child(entityID, name string, owner goroutineOwner, mode ex
 // instead of read from c.
 func (c *execContext) childWith(entityID, name string, owner goroutineOwner, mode executionMode, d inheritedDefaults) *execContext {
 	child := &execContext{
-		Context:            c.Context,
-		executionArn:       c.executionArn,
-		invocation:         c.invocation,
-		logScope:           contextLogAttrs(entityID, name),
-		ids:                c.ids.child(entityID),
-		owner:              owner,
-		state:              c.state,
-		checkpointParent:   entityID,
-		suspend:            c.suspend,
-		checkpointer:       c.checkpointer,
-		pluginDispatcher:   c.pluginDispatcher,
-		hookDepth:          c.hookDepth + 1,
-		hookDepthBound:     c.hookDepthBound,
-		executionStartTime: c.executionStartTime,
-		noStackTraces:      c.noStackTraces,
-		abandon:            c.abandon,
-		branchTok:          c.branchTok,
-		combinatorObserve:  c.combinatorObserve,
+		Context:              c.Context,
+		executionArn:         c.executionArn,
+		invocation:           c.invocation,
+		logScope:             contextLogAttrs(entityID, name),
+		ids:                  c.ids.child(entityID),
+		owner:                owner,
+		state:                c.state,
+		checkpointParent:     entityID,
+		suspend:              c.suspend,
+		checkpointer:         c.checkpointer,
+		pluginDispatcher:     c.pluginDispatcher,
+		hookDepth:            c.hookDepth + 1,
+		hookDepthBound:       c.hookDepthBound,
+		executionStartTime:   c.executionStartTime,
+		noStackTraces:        c.noStackTraces,
+		defaultStepSemantics: c.defaultStepSemantics,
+		abandon:              c.abandon,
+		branchTok:            c.branchTok,
+		combinatorObserve:    c.combinatorObserve,
 	}
 	// A child owned by c's goroutine shares c's tracker, because its body
 	// runs nested inside c's code on that goroutine. A child owned by
@@ -927,24 +933,25 @@ func (c *execContext) branch(owner goroutineOwner) *execContext {
 // instead of read from c.
 func (c *execContext) branchWith(owner goroutineOwner, d inheritedDefaults) *execContext {
 	b := &execContext{
-		Context:            c.Context,
-		executionArn:       c.executionArn,
-		invocation:         c.invocation,
-		logScope:           c.logScope,
-		ids:                c.ids,
-		owner:              owner,
-		state:              c.state,
-		checkpointParent:   c.checkpointParent,
-		suspend:            c.suspend,
-		checkpointer:       c.checkpointer,
-		pluginDispatcher:   c.pluginDispatcher,
-		hookDepth:          c.hookDepth,
-		hookDepthBound:     c.hookDepthBound,
-		executionStartTime: c.executionStartTime,
-		noStackTraces:      c.noStackTraces,
-		abandon:            c.abandon,
-		branchTok:          c.branchTok,
-		combinatorObserve:  c.combinatorObserve,
+		Context:              c.Context,
+		executionArn:         c.executionArn,
+		invocation:           c.invocation,
+		logScope:             c.logScope,
+		ids:                  c.ids,
+		owner:                owner,
+		state:                c.state,
+		checkpointParent:     c.checkpointParent,
+		suspend:              c.suspend,
+		checkpointer:         c.checkpointer,
+		pluginDispatcher:     c.pluginDispatcher,
+		hookDepth:            c.hookDepth,
+		hookDepthBound:       c.hookDepthBound,
+		executionStartTime:   c.executionStartTime,
+		noStackTraces:        c.noStackTraces,
+		defaultStepSemantics: c.defaultStepSemantics,
+		abandon:              c.abandon,
+		branchTok:            c.branchTok,
+		combinatorObserve:    c.combinatorObserve,
 	}
 	b.active = newActiveTracker(b)
 	b.setSerdesDefaults(d.serdes)
