@@ -550,20 +550,32 @@ Truncation removes content in this order. Each step runs only when the record
 is still over the limit after the previous step:
 
 1. Operation results, oldest operation first. Each operation that loses its
-   result is marked `Truncated`. This step can clear more results than the
-   limit requires. That happens only when the rendering carries the
-   `operations` array and a cleared result is shorter than 7 bytes.
-2. Whole operations, oldest first. A binary search finds a count that fits.
-   This step then checks the count just below each point where a name's
-   `error` or `result` would appear in `operationsByName`, and keeps the
-   smallest count that fits. Near the limit it can drop more operations
-   than needed, because `DroppedOperations` or a name's `minDurationMs` can
-   gain a digit. `DroppedOperations` counts the dropped operations.
+   result is marked `Truncated`. A binary search finds the count to clear.
+2. Whole operations, oldest first. A binary search finds the count to drop.
 3. The execution input. `DroppedInput` is set.
 4. The execution output. `DroppedOutput` is set.
 
 "Oldest" is the order of the `Operations` slice. The record's `Truncated`
 field is set when anything was removed.
+
+Each binary search renders the record about log2(n) times for n
+operations, for every exporter. Each count that a search chooses was
+rendered and fit. So the result fits whenever dropping everything
+droppable fits. If even that does not fit, the result can be over the
+limit.
+
+A binary search returns the fewest drops only when each drop makes the
+rendered record smaller. That is not always true. So truncation can clear
+more results and drop more operations than the limit requires. This is
+accepted, because it keeps the code simple and fast. These are the known
+cases where a drop does not make the record smaller:
+
+- In the `operations` array, `"truncated":true` replaces
+  `"result":<value>`. So clearing a short result, such as `true`, makes
+  the record larger.
+- In `operationsByName`, an entry shows `error` and `result` only when its
+  name occurs once. So dropping one of two operations that share a name
+  makes the other one's `error` and `result` appear.
 
 | Exporter | Default Limit |
 | --- | --- |
