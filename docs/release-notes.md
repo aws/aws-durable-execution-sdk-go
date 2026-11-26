@@ -118,36 +118,31 @@ cleared result and once after each dropped operation. So a record with n
 operations could take about 2n renders, and each render costs O(n).
 
 `Truncate` now chooses the number of results to clear and the number of
-operations to drop with a binary search. Each probe of a search renders
+operations to drop with a binary search. Each step of a search renders
 the record once. So clearing results and dropping operations each take
 about log2(n) renders.
 
-A small result is one whose JSON is 7 bytes or shorter, such as `true`,
-`1`, `null` or `"ok"`. In the `operations` array, `"truncated":true`
-replaces `"result":<value>`. So there clearing a small result made the
-record larger, and v1.0.0 still cleared it. The `operationsByName`
-rendering has no per-operation marker. So there clearing a small result
-makes the record smaller.
+Each count that a search chooses was rendered and fit. So the result fits
+the limit whenever dropping everything droppable fits. If even that does
+not fit, the result can be over the limit, as before.
 
-So `Truncate` now renders the record once with every small result
-cleared. It makes this render only when the record has a small result.
-If the render is smaller than the record, small results are cleared like
-the others. Otherwise they stay in the record, and their operations are
-not marked `Truncated`. Results longer than 7 bytes are always
-candidates. So with the `operations` array alone, small results now stay
-in the record.
+A binary search returns the fewest drops only when each drop makes the
+rendered record smaller. That is not always true. So `Truncate` can clear
+more results and drop more operations than v1.0.0. For example, a record
+has one 102-byte result, then nine results of `1`, in the `operations`
+array. The limit is the size after clearing the long result. v1.0.0
+clears that one result. This release clears all ten results and drops 2
+operations.
+These are the known cases where a drop does not make the record smaller:
 
-The `LambdaLogExporter` and `CloudWatchLogsExporter` render
-`operationsByName` from this release on (see above). An entry there
-carries `error` and `result` only when its name occurs once. So dropping
-one of two operations that share a name can make the record larger. Then
-the binary search can drop more old operations than the limit requires.
-Among the built-in renderings, this can happen only in the
-`operationsByName` rendering, alone or as part of `OperationsFormatBoth`.
-In the `operations` array `Truncate` drops the fewest operations.
-`Truncate` returns only a count that it rendered and that fit. So the
-result fits the limit whenever dropping everything droppable fits. If
-even that does not fit, the result can be over the limit, as before.
+- In the `operations` array, `"truncated":true` replaces
+  `"result":<value>`. So clearing a short result, such as `true`, makes
+  the record larger.
+- The `LambdaLogExporter` and `CloudWatchLogsExporter` render
+  `operationsByName` from this release on (see above). An entry there
+  shows `error` and `result` only when its name occurs once. So dropping
+  one of two operations that share a name makes the other one's `error`
+  and `result` appear.
 
 ### Fixed: attempt-end hooks report the attempt's end time
 

@@ -1,10 +1,6 @@
 package telemetry
 
-import (
-	"bytes"
-	"encoding/json"
-	"sort"
-)
+import "sort"
 
 // Renderer produces the exact byte shape a Truncate call should size
 // against. Exporters with custom rendering (OperationsFormat) provide
@@ -30,56 +26,34 @@ func Truncate(record Record, maxBytes int, render Renderer) Record {
 	if render == nil {
 		render = defaultRenderer
 	}
-	fullSize, err := renderedSize(record, render)
-	if err == nil && fullSize <= maxBytes {
+	if fits(record, maxBytes, render) {
 		return record
 	}
 
-	// Steps 1 and 2 drop content oldest-first. They choose how much to drop
-	// in different ways.
+	// Steps 1 and 2 drop content oldest-first. Each step binary-searches
+	// for how much to drop, so it renders the record O(log n) times instead
+	// of once per result or operation. Step 1 searches the number of oldest
+	// results to clear. Step 2 searches the number of oldest operations to
+	// remove.
 	//
-	// Step 1 clears operation results. It binary-searches for the smallest
-	// number of results to clear, so it renders the record O(log n) times
-	// instead of once per operation. A binary search is correct only when
-	// clearing more results never makes the rendered record larger.
-	//
-	// Clearing a Result also sets the operation's Truncated flag. The array
-	// rendering writes the flag: `"truncated":true` (16 bytes) replaces
-	// `"result":<value>`. So there clearing a small Result, whose value is
-	// 7 bytes or shorter (such as `true`, `1`, `null` or `"ok"`), makes the
-	// record larger, and it cannot help the record fit. The by-name
-	// rendering writes no per-operation flag. So there clearing any Result
-	// makes the record smaller or leaves it unchanged.
-	//
-	// So Step 1 renders the record once with every small Result cleared.
-	// If that render is smaller than the record as given, the rendering
-	// does not write the flag, and small results stay candidates. Otherwise
-	// Step 1 clears only large results and leaves the small ones in the
-	// record. A large Result is always a candidate. Then each cleared
-	// candidate makes the record smaller or leaves it unchanged, and the
-	// search returns the fewest results to clear. The check costs one
-	// render, and only when the record has a small result.
-	//
-	// Step 2 removes whole operations. It also binary-searches the number
-	// of oldest operations to remove. Removing an operation can make the
-	// rendered record larger. The by-name rendering shows a name's Error
-	// and Result only when the name occurs once (see
-	// GroupOperationsByName). So removing one of two operations that share
-	// a name makes the other operation's Error and Result appear. Then the
-	// search can return a count that fits while a smaller count also fits.
-	// Step 2 then removes more operations than the limit required. Among
-	// the built-in renderings, this can happen only in the by-name
-	// rendering, including the by-name part of OperationsFormatBoth. In
-	// the array rendering every removal makes the record smaller, so
-	// Step 2 removes the fewest. This is an accepted
-	// trade-off: the cost stays O(log n) renders for every record shape and
-	// every Renderer.
+	// A binary search returns the fewest drops only when each drop makes
+	// the rendered record smaller. That is not always true, so a search can
+	// drop more than the limit required:
+	//   - The array rendering writes `"truncated":true` for an operation
+	//     whose Result was cleared. So clearing a short Result, such as
+	//     `true`, makes the record larger.
+	//   - The by-name rendering shows a name's Error and Result only when
+	//     the name occurs once (see GroupOperationsByName). So removing one
+	//     of two operations that share a name makes the other operation's
+	//     Error and Result appear.
+	// This is an accepted trade-off: the code stays simple, and the cost
+	// stays O(log n) renders for every record shape and every Renderer.
 	//
 	// Each candidate record is sized with the final truncation metadata
-	// already set. Step 2 returns only a count whose candidate record was
-	// rendered and fit. So a wrong guess can only remove extra operations.
-	// It never makes the result exceed the limit. If no count fits, Step 2
-	// removes every operation, and the result can still be over the limit.
+	// already set. A search returns a count below its upper end only after
+	// it rendered that count and the count fit. So a wrong guess can only
+	// drop extra content. The result fits whenever dropping everything
+	// droppable fits.
 
 	ops := record.Operations
 	n := len(ops)
@@ -90,60 +64,39 @@ func Truncate(record Record, maxBytes int, render Renderer) Record {
 	// empty value would set Truncated and the Dropped* flags for content
 	// that was never in the output.
 
-	// Step 1: clear the Result of each candidate operation, oldest first.
-	// The record with no Result cleared was rendered above and does not
-	// fit, so the search starts at one.
-	var small []int
-	for i, op := range ops {
-		if len(op.Result) > 0 && !clearingShrinks(op.Result) {
-			small = append(small, i)
-		}
-	}
-	keepSmall := false
-	if len(small) > 0 && err == nil {
-		probe := record
-		probe.Operations = make([]OperationRecord, n)
-		copy(probe.Operations, ops)
-		for _, i := range small {
-			probe.Operations[i].Result = nil
-			probe.Operations[i].Truncated = true
-		}
-		size, perr := renderedSize(probe, render)
-		keepSmall = perr == nil && size < fullSize
-	}
-	var candidates []int
-	for i, op := range ops {
-		if len(op.Result) > 0 && (keepSmall || clearingShrinks(op.Result)) {
-			candidates = append(candidates, i)
-		}
-	}
-	m := len(candidates)
-	// applyResultDrops returns a copy of ops with the Result of the oldest
-	// j candidates cleared.
-	applyResultDrops := func(j int) []OperationRecord {
-		dropped := make([]OperationRecord, n)
+	// Step 1: drop each operation's Result field, oldest first.
+	// applyResultDrops returns a copy of ops with the oldest j operations'
+	// Result cleared, and whether any Result was actually cleared.
+	applyResultDrops := func(j int) (dropped []OperationRecord, any bool) {
+		dropped = make([]OperationRecord, n)
 		copy(dropped, ops)
-		for _, i := range candidates[:j] {
-			dropped[i].Result = nil
-			dropped[i].Truncated = true
+		for i := 0; i < j; i++ {
+			if len(dropped[i].Result) > 0 {
+				dropped[i].Result = nil
+				dropped[i].Truncated = true
+				any = true
+			}
 		}
-		return dropped
+		return dropped, any
 	}
-	if m > 0 {
-		j := 1 + sort.Search(m, func(i int) bool {
-			candidate := record
-			candidate.Operations = applyResultDrops(i + 1)
+	j := sort.Search(n+1, func(j int) bool {
+		candidate := record
+		cops, any := applyResultDrops(j)
+		candidate.Operations = cops
+		if any {
 			candidate.Truncated = true
-			return fits(candidate, maxBytes, render)
-		})
-		if j > m {
-			j = m // clearing every candidate still doesn't fit; apply all, then Step 2.
 		}
-		record.Operations = applyResultDrops(j)
+		return fits(candidate, maxBytes, render)
+	})
+	// When j > n, clearing every Result still doesn't fit; apply all,
+	// then Step 2. Otherwise the search rendered j and it fit.
+	cops, any := applyResultDrops(min(j, n))
+	record.Operations = cops
+	if any {
 		record.Truncated = true
-		if fits(record, maxBytes, render) {
-			return record
-		}
+	}
+	if j <= n {
+		return record
 	}
 
 	// Step 2: drop whole operations, oldest first. If even dropping every
@@ -185,34 +138,11 @@ func Truncate(record Record, maxBytes int, render Renderer) Record {
 	return record
 }
 
-// resultKeyLen and truncatedKeyLen are the byte lengths of the array
-// rendering's `"result":` key and its `"truncated":true` member.
-const (
-	resultKeyLen    = len(`"result":`)
-	truncatedKeyLen = len(`"truncated":true`)
-)
-
-// clearingShrinks reports whether replacing `"result":<result>` with
-// `"truncated":true` makes the array rendering smaller. A result for which
-// it is false is a small result. The JSON encoder
-// renders a json.RawMessage compacted, so the compacted length counts.
-func clearingShrinks(result json.RawMessage) bool {
-	size := len(result)
-	var buf bytes.Buffer
-	if err := json.Compact(&buf, result); err == nil {
-		size = buf.Len()
-	}
-	return resultKeyLen+size > truncatedKeyLen
-}
-
 // fits reports whether record's rendered size is within maxBytes.
 func fits(record Record, maxBytes int, render Renderer) bool {
-	size, err := renderedSize(record, render)
-	return err == nil && size <= maxBytes
-}
-
-// renderedSize returns the byte length of record as render renders it.
-func renderedSize(record Record, render Renderer) (int, error) {
 	b, err := render(record)
-	return len(b), err
+	if err != nil {
+		return false
+	}
+	return len(b) <= maxBytes
 }
