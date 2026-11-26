@@ -23,6 +23,7 @@ EXAMPLES="
   simple-step
   named-step
   step-with-retry
+  step-default-semantics
   steps-with-retry
   attempt-fallback
   interrupted-no-retry

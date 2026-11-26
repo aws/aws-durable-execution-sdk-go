@@ -92,6 +92,23 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 120
 
+  StepDefaultSemanticsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-step-default-semantics
+      CodeUri: .aws-sam/build-artifacts/step-default-semantics/
+      Handler: bootstrap
+      Description: AtLeastOnceAsync default step semantics with an AtLeastOnce idempotency key step
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
   StepsWithRetryFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -2853,6 +2870,9 @@ Outputs:
   StepWithRetryFunction:
     Description: Step With Retry Function ARN
     Value: !GetAtt StepWithRetryFunction.Arn
+  StepDefaultSemanticsFunction:
+    Description: Step Default Semantics Function ARN
+    Value: !GetAtt StepDefaultSemanticsFunction.Arn
   StepsWithRetryFunction:
     Description: Steps With Retry Function ARN
     Value: !GetAtt StepsWithRetryFunction.Arn

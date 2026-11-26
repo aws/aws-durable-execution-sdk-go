@@ -110,6 +110,7 @@ serde/preview-truncation/preview-field-selection                                
 serde/preview-truncation/preview-truncation                                        serde-preview-truncation
 simple-execution/simple-execution                                                  simple-execution
 step/attempt-fallback/step-attempt-fallback                                        attempt-fallback
+step/default-semantics/step-default-semantics                                      step-default-semantics
 step/basic/step-basic                                                              simple-step
 step/interrupted-no-retry/step-interrupted-no-retry                                interrupted-no-retry
 step/named/step-named                                                              named-step
