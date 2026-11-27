@@ -501,20 +501,25 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	// of the outcome on this goroutine once the handler has returned.
 	var handlerTrace []string
 
-	// haltAtOutcome is the halt cause recorded when runHandler returned,
-	// that is, when the invocation's outcome was decided. A checkpoint call
-	// still in flight can record a halt cause later, during the wait that
-	// follows runHandler. That later cause did not decide the outcome. So
-	// the pending path reads this value, not the current halt cause, to
+	// haltAtOutcome is the halt cause that runHandler last read to decide
+	// the invocation's outcome. A checkpoint call still in flight can
+	// record a halt cause after that read, for example during the wait
+	// that follows runHandler. That later cause did not decide the outcome.
+	// So the pending path reads this value, not the current halt cause, to
 	// decide whether the invocation is pending on an operation.
 	var haltAtOutcome error
+	// decidingHalt reads the halt cause for an outcome decision and stores
+	// it in haltAtOutcome. runHandler reads the halt cause only through it.
+	decidingHalt := func() error {
+		haltAtOutcome = cp.haltCause()
+		return haltAtOutcome
+	}
 
 	// WrapInvocation: compose around the handler execution. The context
 	// the hooks supply becomes the root context's parent; the handler
 	// goroutine has not started yet, so no other goroutine reads it.
 	runHandler := func(hctx context.Context) (any, error) {
 		ec.Context = hctx
-		defer func() { haltAtOutcome = cp.haltCause() }()
 		// Every exit from runHandler terminates the checkpointer:
 		// suspension, success, handler error, and handler panic (which
 		// runUserFunc converts into an error). One defer covers them all,
@@ -554,7 +559,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		select {
 		case out := <-outcomeCh:
 			handlerTrace = out.trace
-			if halt := cp.haltCause(); halt != nil {
+			if halt := decidingHalt(); halt != nil {
 				// The service stopped accepting this invocation's
 				// checkpoints before the handler returned. Whatever the
 				// handler returned cannot be reported: a result or an
@@ -588,7 +593,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 					settle = defaultSuspendSettle
 				}
 				ec.suspend.awaitDrain(ctx, settle)
-				if halt := cp.haltCause(); halt != nil {
+				if halt := decidingHalt(); halt != nil {
 					// A branch's checkpoint halted the checkpointer
 					// while draining; the invocation ends with the
 					// recorded cause, as above.
@@ -621,7 +626,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 			// wait.
 			cp.terminateAtQueueEnd()
 			cp.awaitIdle(ctx)
-			if halt := cp.haltCause(); halt != nil {
+			if halt := decidingHalt(); halt != nil {
 				return nil, halt
 			}
 			if out.err != nil {
@@ -640,7 +645,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 				handlerTrace = out.trace
 			case <-ctx.Done():
 			}
-			if halt := cp.haltCause(); halt != nil {
+			if halt := decidingHalt(); halt != nil {
 				// Same override as above: the recorded cause decides
 				// the outcome even when every branch has since
 				// blocked.
