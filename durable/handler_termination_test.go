@@ -490,8 +490,21 @@ func TestPendingInvocationWaitsForCallInFlight(t *testing.T) {
 		<-client.stepSent
 		// The waiter branch must be blocked on its wait before the
 		// handler returns, or the invocation does not end as pending.
-		// The package exposes no signal for that, so the handler sleeps.
-		time.Sleep(200 * time.Millisecond)
+		// The handler decides that by reading the suspend signal's
+		// committed state. So poll the same state until it is true.
+		ec, ok := ctx.(*execContext)
+		if !ok {
+			t.Errorf("handler Context is %T, want *execContext", ctx)
+			return "ignored", nil
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for !ec.suspend.committed() {
+			if time.Now().After(deadline) {
+				t.Error("waiter branch did not block on its wait")
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
 		return "ignored", nil
 	}, withLambdaAPI(client))
 
