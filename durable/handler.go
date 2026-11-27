@@ -501,11 +501,20 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	// of the outcome on this goroutine once the handler has returned.
 	var handlerTrace []string
 
+	// haltAtOutcome is the halt cause recorded when runHandler returned,
+	// that is, when the invocation's outcome was decided. A checkpoint call
+	// still in flight can record a halt cause later, during the wait that
+	// follows runHandler. That later cause did not decide the outcome. So
+	// the pending path reads this value, not the current halt cause, to
+	// decide whether the invocation is pending on an operation.
+	var haltAtOutcome error
+
 	// WrapInvocation: compose around the handler execution. The context
 	// the hooks supply becomes the root context's parent; the handler
 	// goroutine has not started yet, so no other goroutine reads it.
 	runHandler := func(hctx context.Context) (any, error) {
 		ec.Context = hctx
+		defer func() { haltAtOutcome = cp.haltCause() }()
 		// Every exit from runHandler terminates the checkpointer:
 		// suspension, success, handler error, and handler panic (which
 		// runUserFunc converts into an error). One defer covers them all,
@@ -706,8 +715,9 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	case errors.Is(wrapErr, errSuspendExecution) || ec.suspend.fired():
 		// OnInvocationEnd with PENDING.
 		// The invocation is pending on an operation unless it ends
-		// because a response withdrew the checkpoint token.
-		if cp.haltCause() == nil {
+		// because a response withdrew the checkpoint token. See
+		// haltAtOutcome.
+		if haltAtOutcome == nil {
 			ec.invocationDebugLog(ctx, debugMsgInvocationSuspending, slog.String(logKeyReason, ec.suspend.suspendReason()))
 		}
 		unreachedEnds()
