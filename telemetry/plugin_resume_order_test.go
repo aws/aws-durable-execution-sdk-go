@@ -112,11 +112,10 @@ func TestResume_SizeLimitedExportDropsOldestFirst(t *testing.T) {
 				ExecutionStartTimestamp: start,
 				Operations:              ops,
 			})
-			// Re-reporting an older operation must update its original slot.
-			pl.OnOperationEnd(t.Context(), ops["op-8"])
 			pl.OnInvocationEnd(t.Context(), durable.InvocationEndHookInfo{
 				ExecutionArn: resumeTestARN,
 				Status:       durable.PluginInvocationPending,
+				Operations:   ops,
 			})
 			records := exp.snapshot()
 			if len(records) != 1 {

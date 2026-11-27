@@ -418,12 +418,20 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 
 	// OnOperationChange: every checkpoint response that changes the status
 	// of an operation queues one report, and the queue dispatches the
-	// reports in order on its own goroutine. changes is nil, and the state
-	// tracks no change, when no plugin implements the hook. The state is
-	// not shared yet, so trackChanges is written without its lock.
+	// reports in order on its own goroutine. changes is nil when no plugin
+	// implements the hook.
+	//
+	// readsEndState is true when a plugin implements OnOperationChange or
+	// OnInvocationEnd. Both hooks receive an Operations map whose entries
+	// have IsReplay false for an operation that changed during this
+	// invocation. So the state tracks changes for either hook. The state
+	// is not shared yet, so trackChanges is written without its lock.
 	changes := newOperationChangeQueue(ctx, pd, in.DurableExecutionArn, state, depthBound)
-	if changes != nil {
+	readsEndState := pd.readsInvocationEndState()
+	if readsEndState {
 		state.trackChanges = true
+	}
+	if changes != nil {
 		cp.onOperationsChanged = changes.enqueue
 	}
 
@@ -650,11 +658,12 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	// unjoined branches. Such a call still merges its response into the
 	// state. Without a wait, the change queue would close first and the
 	// status change of that response would never be reported, because no
-	// later invocation reports it through OnOperationChange. So when a
-	// plugin implements OnOperationChange, wait for the calls in flight
-	// before the end hooks. The JavaScript SDK waits for its checkpoint
-	// queue on every exit. The context's end bounds the wait.
-	if changes != nil {
+	// later invocation reports it through OnOperationChange. The
+	// Operations map of OnInvocationEnd would lack that response too. So
+	// when a plugin implements OnOperationChange or OnInvocationEnd, wait
+	// for the calls in flight before the end hooks. The context's end
+	// bounds the wait.
+	if readsEndState {
 		cp.awaitIdle(ctx)
 	}
 
@@ -671,8 +680,18 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	// OnOperationChange reports queued so far, so every change a checkpoint
 	// response delivered before this point is reported before
 	// OnInvocationEnd, and none is reported after it.
+	//
+	// It then sets info.Operations to every operation the state holds at
+	// this point. The map is built only when a plugin implements
+	// OnInvocationEnd. The checkpointer is terminated on every path that
+	// reaches this function, so the state changes only through a call that
+	// is still in flight; see the wait above.
 	invocationEnd := func(info InvocationEndHookInfo) {
 		changes.close(ctx)
+		if pd.hasInvocationEndHook() {
+			ops, seq := state.snapshot()
+			info.Operations = operationsSnapshotInfo(in.DurableExecutionArn, state, depthBound, ops, seq)
+		}
 		dispatchNotification(pd, func(p *Plugin) {
 			if p.OnInvocationEnd != nil {
 				p.OnInvocationEnd(ctx, info)

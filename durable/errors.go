@@ -301,6 +301,18 @@ type errorRecord struct {
 	stackTrace []string
 }
 
+// empty reports whether the record holds none of the four error fields.
+func (r errorRecord) empty() bool {
+	return r.errType == "" && r.message == "" && r.data == "" && len(r.stackTrace) == 0
+}
+
+// hasCause reports whether the record holds an error type or a message.
+// A stand-in built from a record with neither has an empty Error() text. So
+// the callers build a stand-in only when this is true.
+func (r errorRecord) hasCause() bool {
+	return r.errType != "" || r.message != ""
+}
+
 // recordOf derives the record the SDK writes for a live error: the wire
 // ErrorType, the error's message, any [WithErrorData] payload found in
 // its chain, and the stack trace already recorded for the outermost SDK
@@ -986,7 +998,7 @@ func ErrorFromObject(obj *ErrorObject) error {
 		op.Err = &CheckpointError{Err: rec.standIn(nil)}
 		return op
 	}
-	if rec.errType != "" || rec.message != "" {
+	if rec.hasCause() {
 		op.Err = rec.standIn(nil)
 	}
 	return op

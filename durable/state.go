@@ -203,15 +203,16 @@ type executionState struct {
 
 	// trackChanges makes merge report and record status changes. The
 	// handler sets it before the handler function runs, and only when a
-	// plugin implements OnOperationChange, so an invocation without such a
-	// plugin pays nothing for the comparison.
+	// plugin implements OnOperationChange or OnInvocationEnd, so an
+	// invocation without such a plugin pays nothing for the comparison.
 	trackChanges bool
 
 	// changed maps the wire ID of each operation whose status a merge
 	// changed during this invocation to the sequence number of the first
 	// merge that changed it. Guarded by mu. An operation in this map is
-	// reported to OnOperationChange with IsReplay false, because its
-	// current record was produced during this invocation.
+	// reported with IsReplay false in the Operations map of
+	// OnOperationChange and of OnInvocationEnd, because its current record
+	// was produced during this invocation.
 	changed map[string]uint64
 
 	// mergeSeq counts the merges that changed a status while trackChanges
@@ -469,22 +470,61 @@ func (op *operation) operationResult() string {
 	}
 }
 
-// operationError returns the error for a failed operation, or nil if not
-// applicable. Used to populate OperationHookInfo.Error.
-func (op *operation) operationError() error {
+// checkpointedErrorRecord returns the error that the operation's checkpoint
+// holds. ok is false when op is nil or the checkpoint holds none of the four
+// error fields: type, message, data, and stack trace. A record with a
+// message and no type counts as an error: a callback can fail with only a
+// message.
+func (op *operation) checkpointedErrorRecord() (rec errorRecord, ok bool) {
 	if op == nil {
+		return errorRecord{}, false
+	}
+	var recs [4]errorRecord
+	if op.step != nil {
+		recs[0] = op.step.record()
+	}
+	if op.invoke != nil {
+		recs[1] = op.invoke.record()
+	}
+	if op.childCtx != nil {
+		recs[2] = op.childCtx.record()
+	}
+	if op.callback != nil {
+		recs[3] = op.callback.record()
+	}
+	for _, rec := range recs {
+		if !rec.empty() {
+			return rec, true
+		}
+	}
+	return errorRecord{}, false
+}
+
+// operationError returns the checkpointed error of the operation as an
+// [*OperationError], or nil when the checkpoint holds none of the four
+// error fields. Used to populate OperationHookInfo.Error in a snapshot
+// entry.
+//
+// The OperationError carries the operation's name and the four checkpointed
+// error fields. A plugin reads them with [errors.As]. Err is the stand-in
+// built from the error type and message. Err is nil when the checkpoint
+// holds neither, as in the result of [ErrorFromObject]. The stand-in's type
+// is unexported and gains no method here. So the errors that handler code
+// receives do not change.
+func (op *operation) operationError() error {
+	rec, ok := op.checkpointedErrorRecord()
+	if !ok {
 		return nil
 	}
-	switch {
-	case op.step != nil && op.step.errType != "":
-		return op.step.record().standIn(nil)
-	case op.invoke != nil && op.invoke.errType != "":
-		return op.invoke.record().standIn(nil)
-	case op.childCtx != nil && op.childCtx.errType != "":
-		return op.childCtx.record().standIn(nil)
-	case op.callback != nil && op.callback.errType != "":
-		return op.callback.record().standIn(nil)
-	default:
-		return nil
+	opErr := &OperationError{
+		Name:       op.name,
+		ErrorType:  rec.errType,
+		Message:    rec.message,
+		ErrorData:  rec.data,
+		StackTrace: rec.stackTrace,
 	}
+	if rec.hasCause() {
+		opErr.Err = rec.standIn(nil)
+	}
+	return opErr
 }

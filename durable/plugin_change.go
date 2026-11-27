@@ -173,6 +173,28 @@ func (q *operationChangeQueue) close(ctx context.Context) {
 	}
 }
 
+// operationsSnapshotInfo builds the Operations map of a hook info from ops,
+// a copy of the state's operations taken once the merge numbered seq was
+// applied. state is read only to find the depth of an operation and the
+// operations that changed during this invocation.
+//
+// The map omits the operations beyond the plugin depth bound. An entry has
+// IsReplay false when a merge numbered seq or lower changed the operation's
+// status during this invocation, and true otherwise.
+func operationsSnapshotInfo(executionArn string, state *executionState, bound int, ops []*operation, seq uint64) map[string]OperationHookInfo {
+	all := make(map[string]OperationHookInfo, len(ops))
+	for _, op := range ops {
+		addCheckpointedOperationInfo(all, executionArn, state, bound, op)
+	}
+	state.rangeChangedThrough(seq, func(id string) {
+		if opInfo, present := all[id]; present {
+			opInfo.IsReplay = false
+			all[id] = opInfo
+		}
+	})
+	return all
+}
+
 // hasOperationChangeHook reports whether at least one registered plugin
 // implements OnOperationChange. False for a nil dispatcher.
 func (d *pluginDispatcher) hasOperationChangeHook() bool {
@@ -185,6 +207,29 @@ func (d *pluginDispatcher) hasOperationChangeHook() bool {
 		}
 	}
 	return false
+}
+
+// hasInvocationEndHook reports whether at least one registered plugin
+// implements OnInvocationEnd. False for a nil dispatcher.
+func (d *pluginDispatcher) hasInvocationEndHook() bool {
+	if d == nil {
+		return false
+	}
+	for i := range d.plugins {
+		if d.plugins[i].OnInvocationEnd != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// readsInvocationEndState reports whether at least one registered plugin
+// implements a hook that reports the operations checkpointed during the
+// invocation: OnOperationChange or OnInvocationEnd. The handler tracks
+// status changes and waits for the checkpoint calls in flight only then.
+// False for a nil dispatcher.
+func (d *pluginDispatcher) readsInvocationEndState() bool {
+	return d.hasOperationChangeHook() || d.hasInvocationEndHook()
 }
 
 // operationChangeInfo builds the OnOperationChange report for the change
@@ -209,16 +254,7 @@ func operationChangeInfo(executionArn string, state *executionState, bound int, 
 	if len(updated) == 0 {
 		return OperationChangeHookInfo{}, false
 	}
-	all := make(map[string]OperationHookInfo, len(c.operations))
-	for _, op := range c.operations {
-		addCheckpointedOperationInfo(all, executionArn, state, bound, op)
-	}
-	state.rangeChangedThrough(c.seq, func(id string) {
-		if opInfo, present := all[id]; present {
-			opInfo.IsReplay = false
-			all[id] = opInfo
-		}
-	})
+	all := operationsSnapshotInfo(executionArn, state, bound, c.operations, c.seq)
 	for id, opInfo := range updated {
 		opInfo.IsReplay = false
 		updated[id] = opInfo

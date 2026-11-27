@@ -40,8 +40,9 @@ const (
 	// outcome.
 	EmitAlways EmitMode = "always"
 
-	// EmitOnChange emits a running snapshot on every operation start/end
-	// in addition to the terminal record.
+	// EmitOnChange emits a running record at invocation start and after
+	// each checkpoint response that changes the status of an operation, in
+	// addition to the record at invocation end.
 	EmitOnChange EmitMode = "on-change"
 
 	// EmitOnComplete emits a record only when the execution reaches a

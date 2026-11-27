@@ -3,6 +3,8 @@ package telemetry
 import (
 	"cmp"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"regexp"
@@ -64,29 +66,23 @@ type TelemetryPlugin struct {
 }
 
 // telemetryInvocation owns the mutable state of one invocation.
-// Operation hooks and log enrichment can overlap within that invocation.
-// So mu protects the record, operation index, and dispatch bookkeeping.
+// The hooks and log enrichment can overlap within that invocation.
+// So mu protects the record, the result cache, and dispatch bookkeeping.
+//
+// The plugin keeps no state of its own for an operation, except the result
+// cache. Each hook receives the full set of checkpointed operations. The
+// record's operation list is rebuilt from that set; see setOperationsLocked.
 type telemetryInvocation struct {
 	env *TelemetryPlugin
 
 	mu     sync.Mutex
 	record *Record
-	byOpID map[string]int // operation ID -> index in record.Operations
 
-	// resultText maps an operation ID to the checkpointed result text
-	// that produced the operation's current Result. Several hooks report
-	// the same unchanged result for one operation. So upsertOperationLocked
-	// reuses the stored Result when the text matches, and the Result
-	// transform runs only when the text changes.
-	resultText map[string]string
-
-	// endReported holds the IDs of the operations that OnOperationEnd
-	// reported in this invocation. Guarded by mu. See onOperationChange.
-	endReported map[string]struct{}
-
-	// sampledIn is computed in CreatePlugin from the execution ARN.
-	// The same execution has the same decision across invocations.
-	sampledIn bool
+	// results maps an operation ID to the Result last recorded for it.
+	// Several hooks report the same unchanged result for one operation.
+	// So setOperationsLocked reuses the stored value when the name and
+	// text match, and the Result transform runs only when one changes.
+	results map[string]recordedResult
 
 	// ended prevents new on-change dispatches once invocation finalization starts.
 	// Protected by mu, so every WaitGroup Add precedes the final Wait.
@@ -105,6 +101,14 @@ type telemetryInvocation struct {
 	// lastEmittedMs is the Unix millisecond of the last emitted record.
 	// See nextEmittedAtLocked.
 	lastEmittedMs int64
+}
+
+// recordedResult is the Result recorded for one operation, with the
+// operation name and the checkpointed result text that produced it.
+type recordedResult struct {
+	name  string
+	text  string
+	value json.RawMessage
 }
 
 // New constructs a Durable Execution Telemetry plugin from cfg. A
@@ -146,37 +150,59 @@ var _ durable.PluginFactory = (*TelemetryPlugin)(nil)
 
 // CreatePlugin returns hooks bound to fresh invocation-local state.
 // Configuration and exporters remain shared on the factory. The record,
-// sampling decision, mutex, and on-change dispatch state belong to the
-// returned plugin alone.
+// mutex, and on-change dispatch state belong to the returned plugin alone.
+//
+// The sampling decision is computed here from the execution ARN. So the
+// same execution has the same decision across invocations. A sampled-out
+// invocation gets a plugin with EnrichLogContext only; see the comment in
+// the function body.
 func (p *TelemetryPlugin) CreatePlugin(_ context.Context, info durable.InvocationHookInfo) (*durable.Plugin, error) {
 	region, accountID, functionName, qualifier := parseFunctionARN(info.ExecutionArn)
 	inv := &telemetryInvocation{
-		env:         p,
-		record:      NewRecord(info.ExecutionArn),
-		byOpID:      make(map[string]int),
-		resultText:  make(map[string]string),
-		endReported: make(map[string]struct{}),
-		sampledIn:   sampledIn(info.ExecutionArn, p.samplingRate),
+		env:     p,
+		record:  NewRecord(info.ExecutionArn),
+		results: make(map[string]recordedResult),
 	}
 	inv.record.FunctionName = functionName
 	inv.record.FunctionQualifier = qualifier
 	inv.record.Region = region
 	inv.record.AccountID = accountID
 	inv.record.Status = StatusRunning
-	start := resolveExecutionStart(info)
-	inv.record.StartTimestamp = &start
-	// A sampled-out invocation emits nothing. So its transforms are
-	// skipped: their results would be discarded.
-	if inv.sampledIn {
-		inv.record.Input = p.content.inputValue(info.ExecutionInput)
+
+	// Each return below lists every hook that its case registers.
+	// EnrichLogContext is in all three. So log records carry the same
+	// fields whatever the sampling decision and the emit mode.
+
+	// A sampled-out invocation emits no record. So it registers no hook
+	// except EnrichLogContext, and no transform runs for it.
+	//
+	// OnInvocationStart must stay unregistered: in EmitOnChange it emits a
+	// running record. Leaving out OnOperationChange and OnInvocationEnd
+	// also lets the SDK skip the work that it does only for those hooks.
+	// The section "Work that depends on the registered hooks" of
+	// [durable.Plugin] lists that work.
+	if !sampledIn(info.ExecutionArn, p.samplingRate) {
+		return &durable.Plugin{EnrichLogContext: inv.enrichLogContext}, nil
 	}
 
+	start := resolveExecutionStart(info)
+	inv.record.StartTimestamp = &start
+	inv.record.Input = p.content.inputValue(info.ExecutionInput)
+
+	// Only EmitOnChange emits between invocation start and end. The SDK
+	// builds a full operations map for each OnOperationChange call. So the
+	// other emit modes do not register the hook.
+	if p.emitMode == EmitOnChange {
+		return &durable.Plugin{
+			OnInvocationStart: inv.onInvocationStart,
+			OnInvocationEnd:   inv.onInvocationEnd,
+			OnOperationChange: inv.onOperationChange,
+			EnrichLogContext:  inv.enrichLogContext,
+		}, nil
+	}
 	return &durable.Plugin{
 		OnInvocationStart: inv.onInvocationStart,
 		OnInvocationEnd:   inv.onInvocationEnd,
-		OnOperationStart:  inv.onOperationStart,
-		OnOperationEnd:    inv.onOperationEnd,
-		OnOperationChange: inv.onOperationChange,
 		EnrichLogContext:  inv.enrichLogContext,
 	}, nil
 }
@@ -256,15 +282,70 @@ func sampledIn(executionArn string, rate float64) bool {
 	return bucket < threshold
 }
 
-// onInvocationStart restores the full checkpointed operation snapshot.
-// Completed child contexts can return without executing their bodies again.
-// So their unchanged nested operations must come from this snapshot.
-func (p *telemetryInvocation) onInvocationStart(_ context.Context, info durable.InvocationHookInfo) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	for _, id := range orderedOperationIDs(info.Operations) {
-		p.upsertOperationLocked(id, info.Operations[id])
+// onInvocationStart emits the first running record of the invocation in
+// EmitOnChange. The record lists the operations checkpointed before this
+// invocation. The other emit modes emit only at invocation end, so the hook
+// does nothing for them.
+func (p *telemetryInvocation) onInvocationStart(ctx context.Context, info durable.InvocationHookInfo) {
+	if p.env.emitMode != EmitOnChange {
+		return
 	}
+	p.mu.Lock()
+	p.setOperationsLocked(info.Operations)
+	p.mu.Unlock()
+	p.scheduleOnChangeDispatch(ctx)
+}
+
+// onOperationChange emits a running record after a checkpoint response
+// changed the status of at least one operation. The record lists every
+// operation checkpointed so far. The hook is registered only in
+// EmitOnChange.
+//
+// The SDK dispatches the changes of one invocation one at a time, in the
+// order the responses arrived. So a later call carries a newer set of
+// operations, and replacing the whole list keeps the newest status.
+func (p *telemetryInvocation) onOperationChange(ctx context.Context, info durable.OperationChangeHookInfo) {
+	p.mu.Lock()
+	p.setOperationsLocked(info.Operations)
+	p.mu.Unlock()
+	p.scheduleOnChangeDispatch(ctx)
+}
+
+// setOperationsLocked replaces the record's operation list with the
+// operations of snapshot, the Operations map of a hook info. Called with
+// p.mu held.
+//
+// The list is ordered by start timestamp, then ID; see
+// orderedOperationIDs. The root EXECUTION operation is skipped: the
+// record's top-level fields cover it.
+func (p *telemetryInvocation) setOperationsLocked(snapshot map[string]durable.OperationHookInfo) {
+	ops := make([]OperationRecord, 0, len(snapshot))
+	for _, id := range orderedOperationIDs(snapshot) {
+		info := snapshot[id]
+		if info.Type == "EXECUTION" || info.Type == "Execution" {
+			continue
+		}
+		rec := toOperationRecord(id, info)
+		rec.Result = p.resultLocked(id, info)
+		ops = append(ops, rec)
+	}
+	p.record.Operations = ops
+}
+
+// resultLocked returns the Result to record for an operation. Called with
+// p.mu held.
+//
+// When the operation's name and result text equal those that produced the
+// stored Result, the stored Result is returned and no transform runs. The
+// name is compared because overrides are matched by name. Otherwise
+// resultValue runs the transform, and the outcome is stored.
+func (p *telemetryInvocation) resultLocked(id string, info durable.OperationHookInfo) json.RawMessage {
+	if prev, seen := p.results[id]; seen && prev.name == info.Name && prev.text == info.Result {
+		return prev.value
+	}
+	value := p.env.content.resultValue(info.Name, info.Result)
+	p.results[id] = recordedResult{name: info.Name, text: info.Result, value: value}
+	return value
 }
 
 // orderedOperationIDs orders a checkpoint snapshot for oldest-first truncation.
@@ -291,41 +372,43 @@ func orderedOperationIDs(ops map[string]durable.OperationHookInfo) []string {
 	return ids
 }
 
-// onInvocationEnd finalizes the record with the terminal outcome and
-// emits to exporters if the emit mode and sampling gates allow. A pending
-// or retrying outcome means the execution continues in a later invocation,
-// so it leaves the record running; EmitAlways still emits a snapshot for
-// it, since that mode reports every invocation regardless of outcome.
+// onInvocationEnd builds the record's operation list from info.Operations,
+// finalizes the record with the terminal outcome, and emits to exporters if
+// the emit mode allows. A pending or retrying outcome
+// means the execution continues in a later invocation, so it leaves the
+// record running; EmitAlways and EmitOnChange still emit a record for it.
+//
+// info.Operations holds every operation checkpointed when the invocation
+// ends. So the emitted record does not depend on the delivery of the last
+// OnOperationChange, which the SDK drops when the invocation's context ends
+// first.
 func (p *telemetryInvocation) onInvocationEnd(ctx context.Context, info durable.InvocationEndHookInfo) {
 	p.mu.Lock()
 	p.ended = true
 	p.mu.Unlock()
 
-	if info.Status == durable.PluginInvocationPending || info.Status == durable.PluginInvocationRetrying {
-		if p.env.emitMode == EmitOnChange {
-			// Finish this invocation's on-change dispatches before its
-			// final running snapshot and before the end hook returns.
-			p.onChangeWG.Wait()
-		}
-		if p.env.emitMode != EmitAlways && p.env.emitMode != EmitOnChange {
-			return
-		}
-		p.mu.Lock()
+	continuing := info.Status == durable.PluginInvocationPending || info.Status == durable.PluginInvocationRetrying
+	if continuing && !p.env.shouldEmit(StatusRunning) {
+		return
+	}
+
+	// Finish this invocation's on-change dispatches before the last record
+	// is built. ended is set, so no new dispatch starts. The last record is
+	// therefore emitted after every other record of the invocation.
+	p.onChangeWG.Wait()
+
+	p.mu.Lock()
+	p.setOperationsLocked(info.Operations)
+	if continuing {
 		// The execution continues after this invocation: keep the
 		// running status and leave the end timestamp unset.
 		record := p.snapshotRecordLocked()
 		record.EmittedAt = p.nextEmittedAtLocked()
-		sampledIn := p.sampledIn
 		p.mu.Unlock()
 
-		if !sampledIn {
-			return
-		}
 		p.env.dispatch(ctx, record)
 		return
 	}
-
-	p.mu.Lock()
 
 	now := time.Now()
 	p.record.EndTimestamp = &now
@@ -338,9 +421,7 @@ func (p *telemetryInvocation) onInvocationEnd(ctx context.Context, info durable.
 
 	if info.Status == durable.PluginInvocationSucceeded {
 		p.record.Status = StatusSucceeded
-		if p.sampledIn {
-			p.record.Output = p.env.content.outputValue(info.ExecutionResult)
-		}
+		p.record.Output = p.env.content.outputValue(info.ExecutionResult)
 	} else {
 		p.record.Status = StatusFailed
 		if info.ExecutionError != nil {
@@ -350,112 +431,12 @@ func (p *telemetryInvocation) onInvocationEnd(ctx context.Context, info durable.
 
 	// Take a snapshot for emission.
 	record := p.snapshotRecordLocked()
-	sampledIn := p.sampledIn
 	p.mu.Unlock()
 
-	if !sampledIn || !p.env.shouldEmit(record.Status) {
+	if !p.env.shouldEmit(record.Status) {
 		return
 	}
-
-	// Wait for any in-flight on-change dispatch to finish before
-	// sending the terminal record (ordering guarantee).
-	p.onChangeWG.Wait()
 	p.env.dispatch(ctx, record)
-}
-
-// onOperationStart records the operation's start into the cumulative
-// record, except a start older than the record.
-//
-// The SDK defines no order between OnOperationStart and OnOperationChange.
-// A wait, a callback, and an invoke settle outside the handler. The handler
-// reads such an operation as STARTED and then dispatches the start with
-// that status. A checkpoint response can record the operation as SUCCEEDED
-// between the read and the dispatch. Its OnOperationChange can then run
-// before the start. An upsert replaces the whole operation record. So
-// upserting that start would replace the terminal record with the older
-// status. An invocation that ends as Retrying dispatches no end for the
-// operation, so no later hook would correct the record.
-//
-// A start never reports a terminal status: an operation replayed from a
-// terminal checkpoint dispatches no start. A terminal status never
-// changes. So a start for an operation whose record is terminal is older
-// than the record. Such a start is skipped. It leaves the record as it
-// was, so it schedules no on-change emission.
-func (p *telemetryInvocation) onOperationStart(ctx context.Context, info durable.OperationHookInfo) {
-	p.mu.Lock()
-	idx, exists := p.byOpID[info.ID]
-	stale := exists && terminalOperationStatus(p.record.Operations[idx].Status)
-	if !stale {
-		p.upsertOperationLocked(info.ID, info)
-	}
-	p.mu.Unlock()
-	if !stale {
-		p.scheduleOnChangeDispatch(ctx)
-	}
-}
-
-// terminalOperationStatus reports whether status is one an operation never
-// leaves: SUCCEEDED, FAILED, TIMED_OUT, STOPPED, or CANCELLED.
-func terminalOperationStatus(status string) bool {
-	switch durable.PluginOperationStatus(status) {
-	case durable.PluginOperationSucceeded, durable.PluginOperationFailed,
-		durable.PluginOperationTimedOut, durable.PluginOperationStopped,
-		durable.PluginOperationCancelled:
-		return true
-	default:
-		return false
-	}
-}
-
-// onOperationEnd records the operation's completion.
-func (p *telemetryInvocation) onOperationEnd(ctx context.Context, info durable.OperationHookInfo) {
-	p.mu.Lock()
-	p.endReported[info.ID] = struct{}{}
-	p.upsertOperationLocked(info.ID, info)
-	p.mu.Unlock()
-	p.scheduleOnChangeDispatch(ctx)
-}
-
-// onOperationChange records the operations whose status a checkpoint
-// response changed, except those whose end OnOperationEnd already reported.
-//
-// The SDK defines no order between OnOperationChange and the operation
-// hooks. A change that reports an operation as STARTED can therefore be
-// dispatched after the OnOperationEnd of the same operation. An upsert
-// replaces the whole operation record. So upserting such a change would
-// replace a terminal record with an older status. OnOperationEnd carries
-// the outcome the handler observed. So a change is skipped for an
-// operation that OnOperationEnd reported in this invocation.
-//
-// A change for an operation that only OnOperationStart reported is
-// recorded. The SDK dispatches the changes in the order the responses
-// arrived, so such a change carries the status of a response at least as
-// new as the start. Example: a step whose retry is scheduled gets no
-// OnOperationEnd when the invocation suspends, and the change reports its
-// PENDING status.
-//
-// The opposite order, a change dispatched before the OnOperationStart of
-// the same operation, is handled in onOperationStart.
-func (p *telemetryInvocation) onOperationChange(ctx context.Context, info durable.OperationChangeHookInfo) {
-	recorded := false
-	p.mu.Lock()
-	// An upsert appends an operation the record does not hold yet, and
-	// Truncate removes the oldest operations from the front of the slice.
-	// A map has no iteration order. So the changes are applied oldest
-	// first, as onInvocationStart applies its snapshot.
-	for _, id := range orderedOperationIDs(info.UpdatedOperations) {
-		if _, ended := p.endReported[id]; ended {
-			continue
-		}
-		p.upsertOperationLocked(id, info.UpdatedOperations[id])
-		recorded = true
-	}
-	p.mu.Unlock()
-	// A change whose every operation was skipped leaves the record as it
-	// was, so it schedules no on-change emission.
-	if recorded {
-		p.scheduleOnChangeDispatch(ctx)
-	}
 }
 
 // enrichLogContext adds execution metadata to the log context.
@@ -488,45 +469,15 @@ func (p *telemetryInvocation) snapshotRecordLocked() Record {
 	return record
 }
 
-// upsertOperationLocked inserts or updates in place the OperationRecord
-// for the given operation ID. Skips the root EXECUTION operation (already
-// covered by the record's top-level fields). Called with p.mu held.
+// toOperationRecord converts an entry of a hook info's Operations map into
+// an OperationRecord, computing DurationMs when both timestamps are
+// present. It leaves Result unset; setOperationsLocked sets it.
 //
-// The Result field is set in one of three ways:
-//   - The invocation is sampled out: Result stays nil and no transform
-//     runs, because the record is never emitted.
-//   - The result text and operation name equal those that produced the
-//     stored Result: the stored Result is reused and no transform runs.
-//   - Otherwise: resultValue runs the transform, and the text is stored.
-func (p *telemetryInvocation) upsertOperationLocked(id string, info durable.OperationHookInfo) {
-	if info.Type == "EXECUTION" || info.Type == "Execution" {
-		return
-	}
-	rec := toOperationRecord(id, info)
-	idx, exists := p.byOpID[id]
-	if p.sampledIn {
-		// The name check keeps the reuse correct if a hook reports a
-		// different name, because overrides are matched by name.
-		if text, seen := p.resultText[id]; exists && seen && text == info.Result &&
-			p.record.Operations[idx].Name == info.Name {
-			rec.Result = p.record.Operations[idx].Result
-		} else {
-			rec.Result = p.env.content.resultValue(info.Name, info.Result)
-			p.resultText[id] = info.Result
-		}
-	}
-	if exists {
-		p.record.Operations[idx] = rec
-		return
-	}
-	p.byOpID[id] = len(p.record.Operations)
-	p.record.Operations = append(p.record.Operations, rec)
-}
-
-// toOperationRecord converts a durable.OperationHookInfo into an
-// OperationRecord, computing DurationMs when both timestamps are present.
-// It leaves Result unset. upsertOperationLocked sets Result, so that it
-// can skip the transform when the result text has not changed.
+// The entry's Error is a *durable.OperationError built from the checkpoint,
+// or nil when the checkpoint holds no error. The record's error carries the
+// checkpointed error type and message. A checkpoint can hold an error with
+// no type, for example a message alone. The record's type is then
+// defaultErrorType, so the type of an error record is never empty.
 func toOperationRecord(id string, info durable.OperationHookInfo) OperationRecord {
 	rec := OperationRecord{
 		ID:      id,
@@ -551,14 +502,21 @@ func toOperationRecord(id string, info durable.OperationHookInfo) OperationRecor
 		d := rec.EndTimestamp.Sub(*rec.StartTimestamp).Milliseconds()
 		rec.DurationMs = &d
 	}
-	if info.Error != nil {
-		rec.Error = errorRecordFromErr(info.Error)
+	var opErr *durable.OperationError
+	if errors.As(info.Error, &opErr) {
+		rec.Error = &ErrorRecord{Type: cmp.Or(opErr.ErrorType, defaultErrorType), Message: opErr.Message}
 	}
 	return rec
 }
 
-// errorRecordFromErr builds an ErrorRecord from a Go error. Unwraps one
-// level via Cause() (for SDK operation errors) to get the clean message.
+// defaultErrorType is the type of an operation's error record when the
+// checkpointed error has no type. It is the type that the SDK checkpoints
+// for an error with no type name of its own, such as one from errors.New.
+const defaultErrorType = "Error"
+
+// errorRecordFromErr builds the ErrorRecord of the execution from the Go
+// error the handler returned. Unwraps one level via Cause() (for SDK
+// operation errors) to get the clean message.
 func errorRecordFromErr(err error) *ErrorRecord {
 	if err == nil {
 		return nil
@@ -599,7 +557,9 @@ func filterTopLevel(ops []OperationRecord) []OperationRecord {
 	return filtered
 }
 
-// shouldEmit applies EmitMode's gating for the terminal record.
+// shouldEmit reports whether the emit mode emits a record with the given
+// status at invocation end. A pending or retrying invocation ends with
+// StatusRunning.
 func (p *TelemetryPlugin) shouldEmit(status Status) bool {
 	switch p.emitMode {
 	case EmitOnComplete:
@@ -607,8 +567,8 @@ func (p *TelemetryPlugin) shouldEmit(status Status) bool {
 	case EmitAlways:
 		return true
 	case EmitOnChange:
-		// EmitOnChange emits mid-flight RUNNING snapshots via
-		// scheduleOnChangeDispatch AND the terminal record.
+		// EmitOnChange also emits running records between invocation
+		// start and end, through scheduleOnChangeDispatch.
 		return true
 	default:
 		return status == StatusSucceeded || status == StatusFailed
@@ -616,15 +576,11 @@ func (p *TelemetryPlugin) shouldEmit(status Status) bool {
 }
 
 // scheduleOnChangeDispatch implements EmitOnChange's coalescing: at most
-// one dispatch goroutine runs at a time. No-op when EmitMode is not
-// EmitOnChange or the invocation is sampled out.
+// one dispatch goroutine runs at a time. Its two callers, onInvocationStart
+// and onOperationChange, call it only in EmitOnChange.
 func (p *telemetryInvocation) scheduleOnChangeDispatch(ctx context.Context) {
-	if p.env.emitMode != EmitOnChange {
-		return
-	}
-
 	p.mu.Lock()
-	if !p.sampledIn || p.ended {
+	if p.ended {
 		p.mu.Unlock()
 		return
 	}

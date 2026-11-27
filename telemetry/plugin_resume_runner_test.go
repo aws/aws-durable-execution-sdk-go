@@ -151,9 +151,8 @@ func TestResume_LocalRunnerCompletedChildContext(t *testing.T) {
 // TestResume_LocalRunnerReplayedOperationsKeepRecordContents runs a handler
 // over three invocations through the local runner. Each wait suspends one
 // invocation. The third invocation replays the first step, the first wait,
-// and the second step. The SDK dispatches no operation hook for them,
-// because earlier invocations dispatched their ends. So the telemetry
-// record reads them from the invocation start snapshot. The final record
+// and the second step. The telemetry record reads them from the operations
+// of OnInvocationEnd, like every other operation. The final record
 // must hold every operation once, with its type, its terminal status, and
 // its result. The local runner's invocation payload carries no operation
 // timestamps. So the operations in the final record have none, and the
@@ -233,9 +232,8 @@ func TestResume_LocalRunnerReplayedOperationsKeepRecordContents(t *testing.T) {
 // completion through the local runner. A step fails twice and then
 // succeeds. A wait-for-condition stops on its third check. Then a wait
 // suspends the invocation. The last invocation replays the step and the
-// wait-for-condition from terminal checkpoints. Earlier invocations
-// dispatched their ends, so the SDK dispatches no operation hook for them.
-// So the telemetry record reads them from the invocation start snapshot.
+// wait-for-condition from terminal checkpoints. The telemetry record reads
+// them from the operations of OnInvocationEnd, like every other operation.
 // The final record must report, for both, the attempt count that the
 // checkpoint holds. The test reads that count from the runner's result, so
 // it does not depend on how the runner numbers attempts.
@@ -323,5 +321,44 @@ func TestResume_LocalRunnerReplayedOperationsKeepAttempt(t *testing.T) {
 		if got := recorded[name]; got != want {
 			t.Errorf("operation %q attempt = %d, want the checkpointed %d", name, got, want)
 		}
+	}
+}
+
+// TestSampledOut_LocalRunnerExecutionCompletes runs a handler through the
+// local runner with a factory that samples every execution out. The plugin
+// of such an invocation registers only EnrichLogContext. The execution must
+// still suspend on the wait, resume, and succeed, and no record is emitted.
+func TestSampledOut_LocalRunnerExecutionCompletes(t *testing.T) {
+	handler := func(ctx durable.Context, _ string) (string, error) {
+		one, err := durable.Step(ctx, "s1", func(durable.StepContext) (string, error) { return "one", nil })
+		if err != nil {
+			return "", err
+		}
+		if err := durable.Wait(ctx, "w1", 5*time.Second); err != nil {
+			return "", err
+		}
+		return one, nil
+	}
+
+	exp := &capturingExporter{}
+	// At this rate the sampling threshold is 0 buckets, so every ARN
+	// samples out.
+	factory := New(Config{EmitMode: EmitOnChange, SamplingRate: 1e-9, Exporters: []Exporter{exp}})
+	runner := durabletest.NewLocalRunner(handler, durable.WithPlugins(factory))
+
+	for i, want := range []durabletest.ExecutionStatus{durabletest.Pending, durabletest.Succeeded} {
+		if i > 0 && !runner.CompletePendingTimers() {
+			t.Fatalf("invocation %d: CompletePendingTimers completed no timer", i+1)
+		}
+		res, err := runner.Run("event")
+		if err != nil {
+			t.Fatalf("invocation %d Run: %v", i+1, err)
+		}
+		if res.Status != want {
+			t.Fatalf("invocation %d status = %s, want %s", i+1, res.Status, want)
+		}
+	}
+	if records := exp.snapshot(); len(records) != 0 {
+		t.Errorf("got %d records for a sampled-out execution, want 0", len(records))
 	}
 }

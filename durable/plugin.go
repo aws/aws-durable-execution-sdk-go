@@ -166,6 +166,25 @@ import (
 // is suspending. A wrap hook must return fn's result and error unchanged;
 // a hook that replaces the error breaks suspension and replay.
 //
+// # Work that depends on the registered hooks
+//
+// The SDK does the following work only when at least one plugin of the
+// invocation sets the hook that reads the result of that work:
+//
+//   - OnOperationChange or OnInvocationEnd is set: the SDK tracks which
+//     operations changed status during the invocation. Before it
+//     dispatches OnInvocationEnd, it waits for the checkpoint calls still
+//     in flight.
+//   - OnOperationChange is set: the SDK builds the Operations and
+//     UpdatedOperations maps of each [OperationChangeHookInfo].
+//   - OnInvocationEnd is set: the SDK builds the Operations map of
+//     [InvocationEndHookInfo].
+//
+// So when no plugin of the invocation sets either hook, the SDK does none
+// of this work. The Operations map of [InvocationHookInfo] is different.
+// The SDK builds it whenever a [PluginFactory] is registered, because the
+// factory receives the map before any plugin exists.
+//
 // EXPERIMENTAL: this type is experimental and may be changed or removed in
 // future releases.
 type Plugin struct {
@@ -480,6 +499,37 @@ type InvocationEndHookInfo struct {
 	// ExecutionError is the error that caused invocation failure. Nil on
 	// success or suspension.
 	ExecutionError error
+
+	// Operations contains every operation known when OnInvocationEnd is
+	// dispatched, keyed by operation ID, including the root execution
+	// operation. Each entry carries the checkpointed status, timestamps,
+	// result, and error. The entry of a step or a wait-for-condition also
+	// carries the checkpointed attempt count. An entry has IsReplay false
+	// when the operation's status changed during this invocation and true
+	// when its status is unchanged since the invocation started. Like the
+	// maps of [InvocationHookInfo], it omits the operations beyond the
+	// depth set by [WithPluginChildOperationsDepth].
+	//
+	// Every OnInvocationEnd dispatch carries the map, whatever the
+	// invocation status. A plugin that builds its final view from this map
+	// does not depend on the delivery of the last OnOperationChange report,
+	// which is dropped when the invocation's context ends first.
+	//
+	// The invocation waits for the checkpoint calls still in flight before
+	// it builds the map. The context's end bounds the wait. So the map can
+	// lack the response of a call that was still in flight when the context
+	// ended.
+	//
+	// The map holds the operation state that the invocation payload and
+	// the checkpoint responses delivered. A checkpoint response without a
+	// checkpoint token ends the invocation, and the SDK does not apply the
+	// operation state of that response. So the operations that call
+	// updated keep their earlier entries in this map. The next invocation
+	// receives their checkpointed state.
+	//
+	// The map is built for this dispatch and is shared by the plugins that
+	// receive it; treat it as read-only.
+	Operations map[string]OperationHookInfo
 }
 
 // PluginInvocationStatus is the invocation outcome visible to plugins.
@@ -588,6 +638,23 @@ type OperationHookInfo struct {
 
 	// Error is the error the operation failed with, if any. Set on
 	// OnOperationEnd for failed operations; nil otherwise.
+	//
+	// A snapshot entry is an entry of an Operations or UpdatedOperations
+	// map. Its Error is built from the checkpoint. When the checkpoint
+	// holds an error type, message, data, or stack trace, Error is an
+	// [*OperationError] with the operation's Name and the checkpointed
+	// ErrorType, Message, ErrorData, and StackTrace. Its text is
+	// `durable: operation "<name>" failed: <ErrorType>: <Message>`. A
+	// checkpoint can hold a message and no error type. The text then ends
+	// with the message alone, and ErrorType is empty. When the checkpoint
+	// holds none of the four, Error is nil, even when the operation's
+	// status is FAILED: for example a callback whose caller sent no error.
+	// Read the fields with [errors.As]:
+	//
+	//	var opErr *durable.OperationError
+	//	if errors.As(info.Error, &opErr) {
+	//	    // opErr.ErrorType, opErr.Message
+	//	}
 	Error error
 }
 
@@ -1219,7 +1286,7 @@ func dispatchUnreachedEnds(d *pluginDispatcher, ctx context.Context, executionAr
 	for _, op := range ops {
 		info := checkpointedOperationInfo(executionArn, op)
 		info.IsReplay = false
-		info.Error = unreachedEndError(op, info.Error)
+		info.Error = unreachedEndError(op)
 		if bound != 0 {
 			depth := checkpointedOperationDepth(state, op, bound)
 			if depth >= bound {
@@ -1245,9 +1312,14 @@ func dispatchUnreachedEnds(d *pluginDispatcher, ctx context.Context, executionAr
 // failed or timed-out callback, and the cause of the [*InvokeError] for an
 // invoke that did not succeed. A plugin must receive the same Error for one
 // outcome on both paths, so this builds the error with the same
-// constructors. Any other record keeps checkpointed, the error read from
-// the checkpoint.
-func unreachedEndError(op *operation, checkpointed error) error {
+// constructors.
+//
+// Any other record reports the stand-in built from the checkpointed error
+// type and message, or nil when the checkpoint holds neither. The
+// operation's snapshot entry wraps the same stand-in in an
+// [*OperationError]. An end does not: the Error of an end is the error the
+// operation's caller receives.
+func unreachedEndError(op *operation) error {
 	switch OperationType(op.opType) {
 	case OperationTypeCallback:
 		if op.status == statusFailed || op.status == statusTimedOut {
@@ -1261,7 +1333,10 @@ func unreachedEndError(op *operation, checkpointed error) error {
 			return invokeErrorFromCheckpoint(op.name, "", op).Err
 		}
 	}
-	return checkpointed
+	if rec, ok := op.checkpointedErrorRecord(); ok && rec.hasCause() {
+		return rec.standIn(nil)
+	}
+	return nil
 }
 
 // settlesOutsideInvocation reports whether an operation of the wire type

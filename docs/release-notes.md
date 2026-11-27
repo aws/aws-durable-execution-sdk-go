@@ -2,6 +2,63 @@
 
 ## Unreleased
 
+### Changed: the telemetry plugin reads operations from checkpoints only
+
+This is a breaking change to the records that the telemetry plugin emits. It
+fixes issues #203 and #164.
+
+Before, the plugin built the operations array from two sources: the
+checkpointed operations, and the `OnOperationStart` and `OnOperationEnd`
+hooks. The two sources could disagree about one operation.
+
+Now the plugin reads only the checkpointed operations. It registers no
+operation-level hook. At invocation end it reads the new
+`InvocationEndHookInfo.Operations`. So a record lists each operation as its
+checkpoint describes it:
+
+- A child context under `WithChildVirtual` is absent. It has no checkpoint.
+- The error of a failed operation holds the checkpointed error type and
+  message. Before, a step error held the Go type of the returned error and
+  its `Error()` text.
+- A failed operation with no checkpointed error has no error. Before, the
+  plugin recorded the Go error that the operation returned. When the
+  checkpoint holds an error with no type, for example a message alone, the
+  type in the record is `Error`.
+- The timestamps and the duration of a step are those of the checkpoint.
+  Before, they were the times at which the hooks ran.
+- The attempt of a step is the checkpointed attempt count. A running step
+  reports one lower than before. A step in its first attempt reports no
+  attempt.
+- With `EmitOnChange`, the plugin emits at invocation start, after each
+  `OnOperationChange` call, and at invocation end. Before, it emitted on
+  every operation start and end.
+
+For a sampled-out execution, `CreatePlugin` now returns a plugin with
+`EnrichLogContext` only. So the SDK skips the work that it does only for a
+plugin with `OnOperationChange` or `OnInvocationEnd`. The documentation of
+`durable.Plugin` lists that work in the new section "Work that depends on
+the registered hooks". The emitted records and the log fields are unchanged.
+
+### Added: `Operations` on `InvocationEndHookInfo`
+
+The plugin API is experimental.
+
+- `InvocationEndHookInfo` has a new field, `Operations`. It holds every
+  operation known when the invocation ended, keyed by operation ID, with
+  the state that the invocation payload and the checkpoint responses
+  delivered. It omits the operations beyond the depth set by
+  `WithPluginChildOperationsDepth`.
+- An invocation with a plugin that implements `OnInvocationEnd` waits for
+  the checkpoint calls already sent before it dispatches the hook. So the
+  map holds their responses. The context's end bounds the wait.
+- The `Error` of an entry in an `Operations` or `UpdatedOperations` map is
+  now an `*OperationError` when the checkpoint holds an error type, message,
+  data, or stack trace. Its fields carry those four values. Its text is
+  `durable: operation "<name>" failed: <ErrorType>: <Message>`. Before, an
+  entry had an `Error` only when the checkpoint held an error type. So a
+  failed operation whose checkpoint holds a message and no type now has an
+  `Error`.
+
 ### Changed: `OnOperationChange` fires on checkpoint responses
 
 The plugin API is experimental, and this is a breaking change to one of its
@@ -34,17 +91,14 @@ is reported during that invocation.
   are dropped, and a call already in progress may still be running while
   `OnInvocationEnd` runs. No order is defined between a call and the
   operation-level hooks.
-- When a plugin implements `OnOperationChange`, the invocation waits for
-  the checkpoint calls already sent before it dispatches `OnInvocationEnd`,
-  so their responses are reported. This also applies to an invocation that
-  ends as pending. The context's end bounds the wait.
+- When a plugin implements `OnOperationChange` or `OnInvocationEnd`, the
+  invocation waits for the checkpoint calls already sent before it
+  dispatches `OnInvocationEnd`, so their responses are reported. This also
+  applies to an invocation that ends as pending. The context's end bounds
+  the wait.
 - The hook no longer fires at the start of an invocation. A plugin reads the
   operations that changed between invocations from `UpdatedOperations` of
   `InvocationHookInfo`, as before.
-
-The telemetry plugin records every change, except a change for an operation
-that `OnOperationEnd` already reported in the same invocation. So a late
-change cannot replace the outcome that `OnOperationEnd` reported.
 
 An operation that a checkpoint response or a paginated state read delivers
 now keeps its parent ID. Before, the depth bound of
@@ -106,9 +160,8 @@ A child context under `WithChildVirtual` is unchanged. It has no
 checkpoint, so it dispatches a start and an end, with `IsReplay` true, on
 every invocation that replays it.
 
-The telemetry plugin builds its record from `InvocationHookInfo.Operations`
-at each invocation start. So record contents are unchanged. With
-`EmitOnChange`, a replay can emit fewer records, because fewer hooks fire.
+The telemetry plugin builds its record from the checkpointed operations. So
+this change to the end hooks does not change the record contents.
 
 ### Added: pause the execution from a retry decision (experimental)
 

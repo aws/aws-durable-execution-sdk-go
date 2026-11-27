@@ -62,7 +62,7 @@ func ExampleNew_withMultipleExporters() {
 	})
 
 	p, _ := plugin.CreatePlugin(context.Background(), durable.InvocationHookInfo{})
-	fmt.Println(p.OnOperationStart != nil)
+	fmt.Println(p.OnInvocationEnd != nil)
 	// Output:
 	// true
 }
@@ -76,8 +76,10 @@ func ExampleNew_withSampling() {
 		EmitMode:     telemetry.EmitOnComplete,
 	})
 
+	// Every execution gets a plugin. The plugin of a sampled-out execution
+	// registers only the log enrichment hook.
 	p, _ := plugin.CreatePlugin(context.Background(), durable.InvocationHookInfo{})
-	fmt.Println(p.OnInvocationStart != nil)
+	fmt.Println(p.EnrichLogContext != nil)
 	// Output:
 	// true
 }
@@ -105,7 +107,7 @@ func ExampleNew_withContentConfig() {
 	})
 
 	p, _ := plugin.CreatePlugin(context.Background(), durable.InvocationHookInfo{})
-	fmt.Println(p.OnOperationEnd != nil)
+	fmt.Println(p.OnInvocationEnd != nil)
 	// Output:
 	// true
 }

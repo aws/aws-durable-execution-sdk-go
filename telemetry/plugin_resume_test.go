@@ -153,7 +153,7 @@ func resumeEmits(t *testing.T, factory durable.PluginFactory, exp *capturingExpo
 		ExecutionStartTimestamp: time.Now(),
 	}
 	pl := resumeInvocation(t, factory, info)
-	pl.OnInvocationEnd(context.Background(), durable.InvocationEndHookInfo{
+	reportInvocationEnd(context.Background(), pl, durable.InvocationEndHookInfo{
 		ExecutionArn:    arn,
 		Status:          durable.PluginInvocationSucceeded,
 		ExecutionResult: "ok",
@@ -224,9 +224,9 @@ func resumeOperationIDs(rec Record) map[string]int {
 }
 
 // TestResume_FullTreeIncludesUnchangedOperationsFromSnapshot verifies that
-// a full-tree record includes unchanged checkpointed operations from the
-// start snapshot, excludes the root execution operation, and does not
-// duplicate an operation that a later hook reports again.
+// a full-tree record includes the unchanged checkpointed operations of the
+// invocation end snapshot, excludes the root execution operation, and
+// includes an operation that this invocation checkpointed.
 func TestResume_FullTreeIncludesUnchangedOperationsFromSnapshot(t *testing.T) {
 	exp := &capturingExporter{}
 	factory := New(Config{
@@ -247,19 +247,17 @@ func TestResume_FullTreeIncludesUnchangedOperationsFromSnapshot(t *testing.T) {
 		UpdatedOperations:       updated,
 	})
 
-	// A new operation starts and ends, and an operation from the
-	// snapshot is reported again.
-	late := resumeOp("late", "", "STEP", durable.PluginOperationStarted, start.Add(4*time.Second))
-	pl.OnOperationStart(ctx, late)
-	late.Status = durable.PluginOperationSucceeded
+	// This invocation checkpoints a new operation. The end snapshot holds
+	// it together with the operations of the start snapshot.
+	late := resumeOp("late", "", "STEP", durable.PluginOperationSucceeded, start.Add(4*time.Second))
 	late.Result = `"late-result"`
-	pl.OnOperationEnd(ctx, late)
-	pl.OnOperationEnd(ctx, ops["pause"])
+	ops["late"] = late
 
 	pl.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
 		ExecutionArn:    resumeTestARN,
 		Status:          durable.PluginInvocationSucceeded,
 		ExecutionResult: "ok",
+		Operations:      ops,
 	})
 
 	records := exp.snapshot()
@@ -285,13 +283,13 @@ func TestResume_FullTreeIncludesUnchangedOperationsFromSnapshot(t *testing.T) {
 			}
 		}
 		if op.ID == "late" && string(op.Result) != `"late-result"` {
-			t.Errorf("late operation = %+v, want the result from its end hook", op)
+			t.Errorf("late operation = %+v, want its checkpointed result", op)
 		}
 	}
 }
 
 // TestResume_TopLevelDetailOmitsNestedSnapshotOperations verifies that the
-// top-level detail still drops nested operations from the start snapshot.
+// top-level detail drops the nested operations of the end snapshot.
 func TestResume_TopLevelDetailOmitsNestedSnapshotOperations(t *testing.T) {
 	exp := &capturingExporter{}
 	factory := New(Config{
@@ -313,6 +311,7 @@ func TestResume_TopLevelDetailOmitsNestedSnapshotOperations(t *testing.T) {
 		ExecutionArn:    resumeTestARN,
 		Status:          durable.PluginInvocationSucceeded,
 		ExecutionResult: "ok",
+		Operations:      ops,
 	})
 
 	records := exp.snapshot()

@@ -150,25 +150,26 @@ func runPluginWithRepeatedSteps(t *testing.T, exporters []Exporter, n int, input
 		ExecutionStartTimestamp: now,
 		ExecutionInput:          input,
 	})
+	ops := make(map[string]durable.OperationHookInfo, n)
 	for i := 0; i < n; i++ {
-		info := durable.OperationHookInfo{
+		start := now.Add(time.Duration(i) * time.Millisecond)
+		id := fmt.Sprintf("op-%04d", i)
+		ops[id] = durable.OperationHookInfo{
 			ExecutionArn:   arn,
-			ID:             fmt.Sprintf("op-%04d", i),
+			ID:             id,
 			Name:           "poll",
 			Type:           "STEP",
 			SubType:        "Step",
-			Status:         durable.PluginOperationStarted,
+			Status:         durable.PluginOperationSucceeded,
 			Attempt:        1,
-			StartTimestamp: now.Add(time.Duration(i) * time.Millisecond),
+			StartTimestamp: start,
+			EndTimestamp:   start.Add(2 * time.Millisecond),
 		}
-		plugin.OnOperationStart(ctx, info)
-		info.Status = durable.PluginOperationSucceeded
-		info.EndTimestamp = info.StartTimestamp.Add(2 * time.Millisecond)
-		plugin.OnOperationEnd(ctx, info)
 	}
 	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
 		ExecutionArn: arn,
 		Status:       durable.PluginInvocationSucceeded,
+		Operations:   ops,
 	})
 }
 
