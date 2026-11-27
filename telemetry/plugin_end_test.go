@@ -111,7 +111,8 @@ func TestPlugin_OperationsOrderedOldestFirst(t *testing.T) {
 // one operation list under OperationDetailFullTree with an excluded
 // operation. Content filtering removes the excluded operation from each
 // snapshot. The snapshot must filter a copy: filtering the invocation's own
-// list would shift its entries, and the second snapshot would lose one.
+// list would overwrite the excluded entry with the next one. The list would
+// then hold "keep-me-2" twice, and so would the second snapshot.
 func TestPlugin_SnapshotLeavesOperationListUnchanged(t *testing.T) {
 	p := newTestInvocation(&capturingExporter{})
 	p.env.operationDetail = OperationDetailFullTree
