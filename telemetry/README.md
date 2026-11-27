@@ -75,9 +75,9 @@ Every field of an operation comes from its checkpoint:
 - The timestamps and `DurationMs` are the checkpointed start and end.
 - `Attempt` is the checkpointed attempt count. A step in its first attempt has
   no count yet, so the JSON omits `attempt`.
-- `Error` holds the checkpointed error type and message. A failed operation
-  with no checkpointed error type has no `Error`, even when the checkpoint
-  holds an error message.
+- `Error` holds the checkpointed error type and message. When the checkpoint
+  holds an error with no type, for example a message alone, the type is
+  `Error`. A failed operation with no checkpointed error has no `Error`.
 
 Exporters and content transforms remain shared. `InputTransform`,
 `OutputTransform`, and each `OperationOverride.Result` may be called concurrently

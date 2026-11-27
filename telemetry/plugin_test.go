@@ -480,7 +480,8 @@ func TestPlugin_FinalRecordUsesInvocationEndOperations(t *testing.T) {
 // TestPlugin_OperationError_CheckpointedTypeAndMessage asserts the error of
 // an operation in the record. A failed operation whose snapshot entry holds
 // a *durable.OperationError reports the checkpointed error type and
-// message. A failed operation whose snapshot entry holds no error, for
+// message. When the checkpointed error has no type, the type in the record
+// is "Error". A failed operation whose snapshot entry holds no error, for
 // example a callback whose caller sent none, has no error in the record.
 func TestPlugin_OperationError_CheckpointedTypeAndMessage(t *testing.T) {
 	exp := &capturingExporter{}
@@ -508,14 +509,22 @@ func TestPlugin_OperationError_CheckpointedTypeAndMessage(t *testing.T) {
 				ID: "op-2", Name: "approve", Type: "CALLBACK", Status: durable.PluginOperationFailed,
 				StartTimestamp: now.Add(time.Millisecond),
 			},
+			durable.OperationHookInfo{
+				ID: "op-3", Name: "confirm", Type: "CALLBACK", Status: durable.PluginOperationFailed,
+				StartTimestamp: now.Add(2 * time.Millisecond),
+				Error:          checkpointedError("confirm", "", "rejected"),
+			},
 		),
 	})
 
 	records := exp.snapshot()
-	if len(records) != 1 || len(records[0].Operations) != 2 {
-		t.Fatalf("records = %+v, want 1 record with 2 operations", records)
+	if len(records) != 1 || len(records[0].Operations) != 3 {
+		t.Fatalf("records = %+v, want 1 record with 3 operations", records)
 	}
-	step, callback := records[0].Operations[0], records[0].Operations[1]
+	step, callback, untyped := records[0].Operations[0], records[0].Operations[1], records[0].Operations[2]
+	if untyped.Error == nil || untyped.Error.Type != "Error" || untyped.Error.Message != "rejected" {
+		t.Errorf("untyped error = %+v, want type Error and message rejected", untyped.Error)
+	}
 	if step.Error == nil || step.Error.Type != "PaymentDeclinedError" || step.Error.Message != "card expired" {
 		t.Errorf("step error = %+v, want type PaymentDeclinedError and message card expired", step.Error)
 	}

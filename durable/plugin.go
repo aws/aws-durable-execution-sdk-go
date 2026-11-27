@@ -641,13 +641,15 @@ type OperationHookInfo struct {
 	//
 	// A snapshot entry is an entry of an Operations or UpdatedOperations
 	// map. Its Error is built from the checkpoint. When the checkpoint
-	// holds an error type, Error is an [*OperationError] with the
-	// operation's Name and the checkpointed ErrorType, Message, ErrorData,
-	// and StackTrace. Its text is
-	// `durable: operation "<name>" failed: <ErrorType>: <Message>`.
-	// Otherwise Error is nil, even when the operation's status is FAILED:
-	// for example a callback whose caller sent no error. Read the fields
-	// with [errors.As]:
+	// holds an error type, message, data, or stack trace, Error is an
+	// [*OperationError] with the operation's Name and the checkpointed
+	// ErrorType, Message, ErrorData, and StackTrace. Its text is
+	// `durable: operation "<name>" failed: <ErrorType>: <Message>`. A
+	// checkpoint can hold a message and no error type. The text then ends
+	// with the message alone, and ErrorType is empty. When the checkpoint
+	// holds none of the four, Error is nil, even when the operation's
+	// status is FAILED: for example a callback whose caller sent no error.
+	// Read the fields with [errors.As]:
 	//
 	//	var opErr *durable.OperationError
 	//	if errors.As(info.Error, &opErr) {
@@ -1313,7 +1315,7 @@ func dispatchUnreachedEnds(d *pluginDispatcher, ctx context.Context, executionAr
 // constructors.
 //
 // Any other record reports the stand-in built from the checkpointed error
-// type and message, or nil when the checkpoint holds no error type. The
+// type and message, or nil when the checkpoint holds neither. The
 // operation's snapshot entry wraps the same stand-in in an
 // [*OperationError]. An end does not: the Error of an end is the error the
 // operation's caller receives.
@@ -1331,7 +1333,7 @@ func unreachedEndError(op *operation) error {
 			return invokeErrorFromCheckpoint(op.name, "", op).Err
 		}
 	}
-	if rec, ok := op.checkpointedErrorRecord(); ok {
+	if rec, ok := op.checkpointedErrorRecord(); ok && rec.hasCause() {
 		return rec.standIn(nil)
 	}
 	return nil

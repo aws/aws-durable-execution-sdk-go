@@ -271,6 +271,75 @@ func TestSnapshotOperationErrorIsOperationError(t *testing.T) {
 	}
 }
 
+// TestSnapshotOperationErrorPartialRecord asserts the Error of a snapshot
+// entry whose checkpoint holds some of the four error fields and no error
+// type. The entry has an *OperationError that carries the fields the
+// checkpoint holds. Its Err is the stand-in when the checkpoint holds a
+// message, and nil otherwise, as in the result of ErrorFromObject.
+func TestSnapshotOperationErrorPartialRecord(t *testing.T) {
+	cases := []struct {
+		label    string
+		err      *wireError
+		wantErr  string // text of Err; empty means Err is nil
+		wantText string
+	}{
+		{label: "message", err: &wireError{ErrorMessage: "card expired"},
+			wantErr: "card expired", wantText: `durable: operation "approve" failed: card expired`},
+		{label: "message and data", err: &wireError{ErrorMessage: "card expired", ErrorData: `{"code":7}`},
+			wantErr: "card expired", wantText: `durable: operation "approve" failed: card expired`},
+		{label: "data", err: &wireError{ErrorData: `{"code":7}`},
+			wantText: `durable: operation "approve" failed`},
+		{label: "stack trace", err: &wireError{StackTrace: []string{"frame-1"}},
+			wantText: `durable: operation "approve" failed`},
+	}
+
+	ops := []wireOperation{lifecycleExecOp()}
+	for i, tc := range cases {
+		ops = append(ops, wireOperation{
+			Id: hashID(string(rune('1' + i))), Type: "CALLBACK", SubType: "Callback", Name: "approve", Status: "FAILED",
+			StartTimestamp:  flexTimestamp{Time: lifecycleStart, Valid: true},
+			EndTimestamp:    flexTimestamp{Time: lifecycleEnd, Valid: true},
+			CallbackDetails: &wireCallbackDetails{CallbackId: "cb-" + tc.label, Error: tc.err},
+		})
+	}
+	rec := &endInfoRecorder{}
+	handler := Wrap(func(Context, string) (string, error) { return "done", nil },
+		withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
+	if _, err := handler(makePluginContext(), makePluginPayload(t, "arn:test:end-ops", "tok1", ops)); err != nil {
+		t.Fatal(err)
+	}
+
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	maps := map[string]map[string]OperationHookInfo{
+		"OnInvocationStart": rec.start.Operations,
+		"OnInvocationEnd":   rec.end.Operations,
+	}
+	for hook, snapshot := range maps {
+		for i, tc := range cases {
+			entry := snapshot[ops[i+1].Id]
+			var opErr *OperationError
+			if !errors.As(entry.Error, &opErr) {
+				t.Errorf("%s, %s: Error = %T %v, want an *OperationError", hook, tc.label, entry.Error, entry.Error)
+				continue
+			}
+			if opErr.Name != "approve" || opErr.ErrorType != "" || opErr.Message != tc.err.ErrorMessage ||
+				opErr.ErrorData != tc.err.ErrorData || !slices.Equal(opErr.StackTrace, tc.err.StackTrace) {
+				t.Errorf("%s, %s: OperationError = %+v, want the name and the checkpointed fields", hook, tc.label, *opErr)
+			}
+			switch {
+			case tc.wantErr == "" && opErr.Err != nil:
+				t.Errorf("%s, %s: Err = %v, want nil", hook, tc.label, opErr.Err)
+			case tc.wantErr != "" && (opErr.Err == nil || opErr.Err.Error() != tc.wantErr):
+				t.Errorf("%s, %s: Err = %v, want the stand-in %q", hook, tc.label, opErr.Err, tc.wantErr)
+			}
+			if entry.Error.Error() != tc.wantText {
+				t.Errorf("%s, %s: Error text = %q, want %q", hook, tc.label, entry.Error.Error(), tc.wantText)
+			}
+		}
+	}
+}
+
 // TestUnreachedEndErrorKeepsStandIn asserts that the end of an operation
 // the handler did not reach reports the stand-in built from the checkpoint,
 // not the *OperationError of the operation's snapshot entry. The callback
@@ -296,5 +365,18 @@ func TestUnreachedEndErrorKeepsStandIn(t *testing.T) {
 	}
 	if unreachedEndError(&operation{opType: string(OperationTypeWait)}) != nil {
 		t.Error("end error of an operation with no checkpointed error is not nil")
+	}
+
+	// A checkpoint that holds a message and no error type reports the
+	// stand-in, whose text is the message.
+	op.callback = &callbackDetails{errMessage: "no"}
+	if got := unreachedEndError(op); got == nil || got.Error() != "no" {
+		t.Errorf("end error of a message-only checkpoint = %v, want %q", got, "no")
+	}
+	// A checkpoint that holds neither an error type nor a message reports
+	// nil. A stand-in built from it would have an empty text.
+	op.callback = &callbackDetails{errData: `{"code":7}`}
+	if got := unreachedEndError(op); got != nil {
+		t.Errorf("end error of a data-only checkpoint = %v, want nil", got)
 	}
 }

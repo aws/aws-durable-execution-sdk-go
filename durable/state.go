@@ -470,45 +470,60 @@ func (op *operation) operationResult() string {
 }
 
 // checkpointedErrorRecord returns the error that the operation's checkpoint
-// holds. ok is false when op is nil or the checkpoint holds no error type.
+// holds. ok is false when op is nil or the checkpoint holds none of the four
+// error fields: type, message, data, and stack trace. A record with a
+// message and no type counts as an error: a callback can fail with only a
+// message.
 func (op *operation) checkpointedErrorRecord() (rec errorRecord, ok bool) {
 	if op == nil {
 		return errorRecord{}, false
 	}
-	switch {
-	case op.step != nil && op.step.errType != "":
-		return op.step.record(), true
-	case op.invoke != nil && op.invoke.errType != "":
-		return op.invoke.record(), true
-	case op.childCtx != nil && op.childCtx.errType != "":
-		return op.childCtx.record(), true
-	case op.callback != nil && op.callback.errType != "":
-		return op.callback.record(), true
-	default:
-		return errorRecord{}, false
+	var recs [4]errorRecord
+	if op.step != nil {
+		recs[0] = op.step.record()
 	}
+	if op.invoke != nil {
+		recs[1] = op.invoke.record()
+	}
+	if op.childCtx != nil {
+		recs[2] = op.childCtx.record()
+	}
+	if op.callback != nil {
+		recs[3] = op.callback.record()
+	}
+	for _, rec := range recs {
+		if !rec.empty() {
+			return rec, true
+		}
+	}
+	return errorRecord{}, false
 }
 
 // operationError returns the checkpointed error of the operation as an
-// [*OperationError], or nil when the checkpoint holds no error type. Used
-// to populate OperationHookInfo.Error in a snapshot entry.
+// [*OperationError], or nil when the checkpoint holds none of the four
+// error fields. Used to populate OperationHookInfo.Error in a snapshot
+// entry.
 //
 // The OperationError carries the operation's name and the four checkpointed
 // error fields. A plugin reads them with [errors.As]. Err is the stand-in
-// built from the error type and message, which was the whole value before.
-// The stand-in's type is unexported and gains no method here. So the errors
-// that handler code receives do not change.
+// built from the error type and message. Err is nil when the checkpoint
+// holds neither, as in the result of [ErrorFromObject]. The stand-in's type
+// is unexported and gains no method here. So the errors that handler code
+// receives do not change.
 func (op *operation) operationError() error {
 	rec, ok := op.checkpointedErrorRecord()
 	if !ok {
 		return nil
 	}
-	return &OperationError{
+	opErr := &OperationError{
 		Name:       op.name,
 		ErrorType:  rec.errType,
 		Message:    rec.message,
 		ErrorData:  rec.data,
 		StackTrace: rec.stackTrace,
-		Err:        rec.standIn(nil),
 	}
+	if rec.hasCause() {
+		opErr.Err = rec.standIn(nil)
+	}
+	return opErr
 }

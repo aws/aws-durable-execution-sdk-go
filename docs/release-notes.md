@@ -20,9 +20,10 @@ checkpoint describes it:
 - The error of a failed operation holds the checkpointed error type and
   message. Before, a step error held the Go type of the returned error and
   its `Error()` text.
-- A failed operation with no checkpointed error type has no error, even
-  when the checkpoint holds an error message. Before, the plugin recorded
-  the Go error that the operation returned.
+- A failed operation with no checkpointed error has no error. Before, the
+  plugin recorded the Go error that the operation returned. When the
+  checkpoint holds an error with no type, for example a message alone, the
+  type in the record is `Error`.
 - The timestamps and the duration of a step are those of the checkpoint.
   Before, they were the times at which the hooks ran.
 - The attempt of a step is the checkpointed attempt count. A running step
@@ -51,10 +52,18 @@ The plugin API is experimental.
   the checkpoint calls already sent before it dispatches the hook. So the
   map holds their responses. The context's end bounds the wait.
 - The `Error` of an entry in an `Operations` or `UpdatedOperations` map is
-  now an `*OperationError` when the checkpoint holds an error type. Its fields
-  carry the checkpointed error type, message, data, and stack trace. Its
-  text is `durable: operation "<name>" failed: <ErrorType>: <Message>`. The
-  `Error` that `OnOperationEnd` reports is unchanged.
+  now an `*OperationError` when the checkpoint holds an error type, message,
+  data, or stack trace. Its fields carry those four values. Its text is
+  `durable: operation "<name>" failed: <ErrorType>: <Message>`. Before, an
+  entry had an `Error` only when the checkpoint held an error type. So a
+  failed operation whose checkpoint holds a message and no type now has an
+  `Error`.
+- The `Error` that `OnOperationEnd` reports changes in one case. The case
+  needs three conditions. The handler does not reach the operation. The
+  operation is a callback whose terminal status is neither FAILED nor
+  TIMED_OUT. Its checkpoint holds an error message and no error type. Its
+  `OnOperationEnd` now reports an error whose text is that message. Before,
+  it reported nil.
 
 ### Changed: `OnOperationChange` fires on checkpoint responses
 

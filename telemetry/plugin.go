@@ -463,10 +463,10 @@ func (p *telemetryInvocation) snapshotRecordLocked() Record {
 // present. It leaves Result unset; setOperationsLocked sets it.
 //
 // The entry's Error is a *durable.OperationError built from the checkpoint,
-// or nil when the checkpoint holds no error type. The record's error
-// carries the checkpointed error type and message. So a failed operation
-// whose checkpoint holds no error type has no error in the record, even
-// when the checkpoint holds an error message.
+// or nil when the checkpoint holds no error. The record's error carries the
+// checkpointed error type and message. A checkpoint can hold an error with
+// no type, for example a message alone. The record's type is then
+// defaultErrorType, so the type of an error record is never empty.
 func toOperationRecord(id string, info durable.OperationHookInfo) OperationRecord {
 	rec := OperationRecord{
 		ID:      id,
@@ -493,10 +493,15 @@ func toOperationRecord(id string, info durable.OperationHookInfo) OperationRecor
 	}
 	var opErr *durable.OperationError
 	if errors.As(info.Error, &opErr) {
-		rec.Error = &ErrorRecord{Type: opErr.ErrorType, Message: opErr.Message}
+		rec.Error = &ErrorRecord{Type: cmp.Or(opErr.ErrorType, defaultErrorType), Message: opErr.Message}
 	}
 	return rec
 }
+
+// defaultErrorType is the type of an operation's error record when the
+// checkpointed error has no type. It is the type that the SDK checkpoints
+// for an error with no type name of its own, such as one from errors.New.
+const defaultErrorType = "Error"
 
 // errorRecordFromErr builds the ErrorRecord of the execution from the Go
 // error the handler returned. Unwraps one level via Cause() (for SDK
