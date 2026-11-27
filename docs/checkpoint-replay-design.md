@@ -299,7 +299,9 @@ The two mechanisms above decide the result and settle futures, but neither
 constrains a branch that is still running user code when the invocation
 responds. The handler never joins outstanding branches. When the handler
 goroutine returns a result or an error while a commitment stands, or the
-suspend signal fires, it responds with `PENDING` immediately. When the
+suspend signal fires, it responds with `PENDING` without joining those
+branches. It waits only for the checkpoint calls already in flight, as
+described below. When the
 handler goroutine unwinds with `errSuspendExecution`, it first waits for
 executing spans to record their outcomes (executing-span accounting,
 above), then responds; branches running code outside a span are still not
@@ -333,7 +335,7 @@ the wait. A response without a token to that call halts the checkpointer,
 and the invocation responds PENDING instead of the handler's outcome.
 
 An invocation that ends as pending waits for the same calls. Its handler
-suspended, so the checkpointer is already terminated, and a call that an
+has exited, so the checkpointer is already terminated, and a call that an
 unjoined branch sent may still be in flight. The invocation waits until no
 checkpoint request is in flight before it dispatches the end hooks and
 responds. The wait does not depend on the registered plugins. The

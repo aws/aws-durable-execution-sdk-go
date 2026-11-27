@@ -592,9 +592,10 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 				// operation that is not finished, or while a commitment
 				// stands: the invocation responds PENDING. Orphaned
 				// branches (durable.Go children still mid-flight) are
-				// not joined, so the response is immediate; the
-				// checkpointer termination deferred above stops them
-				// recording further state.
+				// not joined; the checkpointer termination deferred
+				// above stops them recording further state. The
+				// invocation still waits, after runHandler, for the
+				// checkpoint calls already in flight.
 				return nil, errSuspendExecution
 			}
 			// The handler returned a result or an error. A START queued
@@ -653,17 +654,17 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	)
 
 	// The checkpointer is terminated by now, so it sends no further branch
-	// request. A call sent before that can still be in flight: an
-	// invocation that ends as pending does not wait for the calls of its
-	// unjoined branches. Such a call still merges its response into the
-	// state. Without a wait, the change queue would close first and the
-	// status change of that response would never be reported, because no
-	// later invocation reports it through OnOperationChange. The
-	// Operations map of OnInvocationEnd would lack that response too. So
-	// wait for the calls in flight before the end hooks. The wait runs on
-	// every invocation, with or without a plugin, so registering a plugin
-	// does not change when a pending invocation responds. The context's
-	// end bounds the wait.
+	// request. A call sent before that can still be in flight: the paths
+	// of runHandler that end as pending return without waiting for the
+	// calls of unjoined branches. Such a call still merges its response
+	// into the state. Without a wait, the change queue would close first
+	// and the status change of that response would never be reported,
+	// because no later invocation reports it through OnOperationChange.
+	// The Operations map of OnInvocationEnd would lack that response too.
+	// So wait for the calls in flight before the end hooks. The wait runs
+	// on every invocation, with or without a plugin, so registering a
+	// plugin does not change when a pending invocation responds. The
+	// context's end bounds the wait.
 	cp.awaitIdle(ctx)
 
 	// unreachedEnds dispatches the ends of the settled waits, callbacks,
