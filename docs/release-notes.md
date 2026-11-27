@@ -20,8 +20,9 @@ checkpoint describes it:
 - The error of a failed operation holds the checkpointed error type and
   message. Before, a step error held the Go type of the returned error and
   its `Error()` text.
-- A failed operation with no checkpointed error has no error. Before, the
-  plugin recorded the Go error that the operation returned.
+- A failed operation with no checkpointed error type has no error, even
+  when the checkpoint holds an error message. Before, the plugin recorded
+  the Go error that the operation returned.
 - The timestamps and the duration of a step are those of the checkpoint.
   Before, they were the times at which the hooks ran.
 - The attempt of a step is the checkpointed attempt count. A running step

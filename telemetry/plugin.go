@@ -465,9 +465,10 @@ func (p *telemetryInvocation) snapshotRecordLocked() Record {
 // present. It leaves Result unset; setOperationsLocked sets it.
 //
 // The entry's Error is a *durable.OperationError built from the checkpoint,
-// or nil when the checkpoint holds no error. The record's error carries the
-// checkpointed error type and message. So a failed operation whose
-// checkpoint holds no error has no error in the record.
+// or nil when the checkpoint holds no error type. The record's error
+// carries the checkpointed error type and message. So a failed operation
+// whose checkpoint holds no error type has no error in the record, even
+// when the checkpoint holds an error message.
 func toOperationRecord(id string, info durable.OperationHookInfo) OperationRecord {
 	rec := OperationRecord{
 		ID:      id,
