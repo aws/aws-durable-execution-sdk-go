@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	ddbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
 // htmlText holds the three characters encoding/json escapes by default.
@@ -151,7 +152,17 @@ func TestExporters_KeepHTMLCharactersLiteral(t *testing.T) {
 		if err := (&DynamoDBExporter{API: fake, TableName: "t"}).Export(ctx, rec); err != nil {
 			t.Fatalf("Export: %v", err)
 		}
-		assertHTMLLiteral(t, []byte(attrS(t, fake.calls[0].Item, "recordJson")), 5)
+		// The item holds the record as attributes, not as JSON text. An
+		// escape in the rendering that Export decodes would be decoded
+		// back to the character. An escape stored in an attribute would
+		// be marshaled below as \\u003c, which assertHTMLLiteral rejects.
+		// So the item is converted back to JSON and checked as text.
+		item := attrJSON(t, &ddbtypes.AttributeValueMemberM{Value: fake.calls[0].Item})
+		body, err := marshalNoHTMLEscape(item)
+		if err != nil {
+			t.Fatalf("marshaling item: %v", err)
+		}
+		assertHTMLLiteral(t, body, 5)
 	})
 	t.Run("RDS", func(t *testing.T) {
 		fake := &fakeRDSDataAPI{}
