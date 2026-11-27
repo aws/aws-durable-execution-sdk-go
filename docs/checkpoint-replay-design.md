@@ -299,18 +299,14 @@ The two mechanisms above decide the result and settle futures, but neither
 constrains a branch that is still running user code when the invocation
 responds. The handler never joins outstanding branches. When the handler
 goroutine returns a result or an error while a commitment stands, or the
-suspend signal fires, it responds with `PENDING` immediately. When the
+suspend signal fires, it responds with `PENDING` without joining those
+branches. It waits only for the checkpoint calls already in flight, as
+described below. When the
 handler goroutine unwinds with `errSuspendExecution`, it first waits for
 executing spans to record their outcomes (executing-span accounting,
 above), then responds; branches running code outside a span are still not
 joined beyond the settle period, so that response cannot stall behind a
 branch blocked between operations.
-
-A checkpoint call that a branch already sent can still be in flight at that
-point. When a plugin implements `OnOperationChange` or `OnInvocationEnd`,
-the handler waits for those calls before it dispatches `OnInvocationEnd`,
-so the hooks report their responses. The wait covers calls already sent
-only. It joins no branch, and the context's end bounds it.
 
 The checkpointer is terminated on every exit from the handler, not only
 on suspension. A single `defer` in `runHandler` performs the termination,
@@ -331,6 +327,17 @@ Termination refuses queued branch requests without a call, so the wait
 covers only the call already in flight. The invocation's context bounds
 the wait. A response without a token to that call halts the checkpointer,
 and the invocation responds PENDING instead of the handler's outcome.
+
+An invocation that ends as pending waits for the same calls. So does an
+invocation that ends with a halt cause recorded before its handler
+returned, such as a retryable serdes failure. The invocation's outcome is
+decided, so the checkpointer is already terminated, and a call that an
+unjoined branch sent may still be in flight. The invocation waits until no checkpoint
+request is in flight before it dispatches the end hooks and responds. So
+`OnOperationChange` and `OnInvocationEnd` report the responses of those
+calls. The wait does not depend on the registered plugins. The invocation's context
+bounds it. The response of a pending invocation stays PENDING whatever the
+call returns.
 
 A response without a token to the call that carries the execution's own
 terminal update means the execution finished. That call succeeds, nothing

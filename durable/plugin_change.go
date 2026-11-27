@@ -226,8 +226,7 @@ func (d *pluginDispatcher) hasInvocationEndHook() bool {
 // readsInvocationEndState reports whether at least one registered plugin
 // implements a hook that reports the operations checkpointed during the
 // invocation: OnOperationChange or OnInvocationEnd. The handler tracks
-// status changes and waits for the checkpoint calls in flight only then.
-// False for a nil dispatcher.
+// status changes only then. False for a nil dispatcher.
 func (d *pluginDispatcher) readsInvocationEndState() bool {
 	return d.hasOperationChangeHook() || d.hasInvocationEndHook()
 }

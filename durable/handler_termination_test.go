@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -429,5 +430,225 @@ func TestOrphanStepBodyStartedBeforeTerminationIsRefusedAtNextCheckpoint(t *test
 	}
 	if ended {
 		t.Error("orphan-step result was recorded after the invocation responded; want refusal")
+	}
+}
+
+// heldStepStartClient is a stepEchoClient that holds the checkpoint call
+// carrying a step START until release is closed. It closes waitSeen when a
+// call carrying a WAIT update returns, and stepSent when the held call
+// begins. When heldErr is set, the held call fails with it once released.
+type heldStepStartClient struct {
+	stepEchoClient
+	heldErr  error
+	release  chan struct{}
+	waitSeen chan struct{}
+	stepSent chan struct{}
+	waitOnce sync.Once
+	stepOnce sync.Once
+}
+
+func (c *heldStepStartClient) Checkpoint(ctx context.Context, in CheckpointInput) (CheckpointOutput, error) {
+	for _, u := range in.Updates {
+		if u.Type == OperationTypeStep && u.Action == OperationActionStart {
+			c.stepOnce.Do(func() { close(c.stepSent) })
+			<-c.release
+			if c.heldErr != nil {
+				return CheckpointOutput{}, c.heldErr
+			}
+		}
+		if u.Type == OperationTypeWait {
+			defer c.waitOnce.Do(func() { close(c.waitSeen) })
+		}
+	}
+	return c.stepEchoClient.Checkpoint(ctx, in)
+}
+
+// TestPendingInvocationWaitsForCallInFlight asserts that an invocation
+// which ends as pending responds only after the checkpoint call of an
+// unjoined branch has returned. No plugin is registered. One branch blocks
+// on a wait, so the invocation is pending. A second branch starts a step,
+// and the client holds that call. The handler returns while the call is
+// held. The test asserts that no response arrives while the call is held,
+// and that the invocation responds PENDING once the call is released.
+func TestPendingInvocationWaitsForCallInFlight(t *testing.T) {
+	client := &heldStepStartClient{
+		release:  make(chan struct{}),
+		waitSeen: make(chan struct{}),
+		stepSent: make(chan struct{}),
+	}
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(client.release) }) }
+	t.Cleanup(release)
+
+	handlerReturned := make(chan struct{})
+	handler := Wrap(func(ctx Context, _ string) (string, error) {
+		defer close(handlerReturned)
+		Go(ctx, "waiter", func(c Context) (string, error) {
+			return "", Wait(c, "pause", time.Hour)
+		})
+		<-client.waitSeen
+		Go(ctx, "stepper", func(c Context) (string, error) {
+			return Step(c, "held", func(StepContext) (string, error) {
+				return "", nil
+			})
+		})
+		<-client.stepSent
+		// The waiter branch must be blocked on its wait before the
+		// handler returns, or the invocation does not end as pending.
+		// The handler decides that by reading the suspend signal's
+		// committed state. So poll the same state until it is true.
+		ec, ok := ctx.(*execContext)
+		if !ok {
+			t.Errorf("handler Context is %T, want *execContext", ctx)
+			return "ignored", nil
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for !ec.suspend.committed() {
+			if time.Now().After(deadline) {
+				t.Error("waiter branch did not block on its wait")
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		return "ignored", nil
+	}, withLambdaAPI(client))
+
+	type response struct {
+		raw []byte
+		err error
+	}
+	respCh := make(chan response, 1)
+	go func() {
+		raw, err := handler(makePluginContext(), makePluginPayload(t, "arn:test:pending-wait", "tok1", nil))
+		respCh <- response{raw, err}
+	}()
+
+	select {
+	case <-handlerReturned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("handler did not return")
+	}
+	select {
+	case resp := <-respCh:
+		t.Fatalf("invocation responded %s (err %v) while the step START call was in flight", resp.raw, resp.err)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	release()
+	select {
+	case resp := <-respCh:
+		if resp.err != nil {
+			t.Fatal(resp.err)
+		}
+		assertPluginResponseStatus(t, resp.raw, invocationPending)
+	case <-time.After(5 * time.Second):
+		t.Fatal("invocation did not respond after the step START call returned")
+	}
+}
+
+// suspendingLogCounter is a slog.Handler that counts the SDK's invocation
+// suspending records.
+type suspendingLogCounter struct{ n atomic.Int32 }
+
+func (*suspendingLogCounter) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *suspendingLogCounter) Handle(_ context.Context, r slog.Record) error {
+	if r.Message == debugMsgInvocationSuspending {
+		h.n.Add(1)
+	}
+	return nil
+}
+
+func (h *suspendingLogCounter) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *suspendingLogCounter) WithGroup(string) slog.Handler      { return h }
+
+// TestPendingInvocationLogsSuspendingWhenCallInFlightFails asserts that an
+// invocation which ends as pending on a wait still writes the invocation
+// suspending record when the checkpoint call of an unjoined branch fails
+// after the handler returned. The failed call records a halt cause while
+// the invocation waits for it. That cause did not decide the outcome, so it
+// must not remove the record.
+//
+// The call must fail only after the outcome is decided. A WrapInvocation
+// hook regains control when the outcome is decided, so the test releases
+// the call from that point. The plugin has no OnOperationChange hook.
+func TestPendingInvocationLogsSuspendingWhenCallInFlightFails(t *testing.T) {
+	client := &heldStepStartClient{
+		heldErr:  errors.New("held call failed"),
+		release:  make(chan struct{}),
+		waitSeen: make(chan struct{}),
+		stepSent: make(chan struct{}),
+	}
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(client.release) }) }
+	t.Cleanup(release)
+
+	logs := &suspendingLogCounter{}
+	outcomeDecided := make(chan struct{})
+	plugin := PluginFactoryFunc(func(context.Context, InvocationHookInfo) (*Plugin, error) {
+		return &Plugin{
+			WrapInvocation: func(ctx context.Context, _ InvocationHookInfo, fn func(context.Context) (any, error)) (any, error) {
+				defer close(outcomeDecided)
+				return fn(ctx)
+			},
+		}, nil
+	})
+	handler := Wrap(func(ctx Context, _ string) (string, error) {
+		if err := ConfigureLogging(ctx, LogConfig{Handler: logs}); err != nil {
+			return "", err
+		}
+		Go(ctx, "waiter", func(c Context) (string, error) {
+			return "", Wait(c, "pause", time.Hour)
+		})
+		<-client.waitSeen
+		Go(ctx, "stepper", func(c Context) (string, error) {
+			return Step(c, "held", func(StepContext) (string, error) {
+				return "", nil
+			})
+		})
+		<-client.stepSent
+		ec, ok := ctx.(*execContext)
+		if !ok {
+			t.Errorf("handler Context is %T, want *execContext", ctx)
+			return "ignored", nil
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for !ec.suspend.committed() {
+			if time.Now().After(deadline) {
+				t.Error("waiter branch did not block on its wait")
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		return "ignored", nil
+	}, withLambdaAPI(client), WithPlugins(plugin))
+
+	type response struct {
+		raw []byte
+		err error
+	}
+	respCh := make(chan response, 1)
+	go func() {
+		raw, err := handler(makePluginContext(), makePluginPayload(t, "arn:test:pending-wait-log", "tok1", nil))
+		respCh <- response{raw, err}
+	}()
+
+	select {
+	case <-outcomeDecided:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the invocation's outcome was not decided")
+	}
+	release()
+	select {
+	case resp := <-respCh:
+		if resp.err != nil {
+			t.Fatal(resp.err)
+		}
+		assertPluginResponseStatus(t, resp.raw, invocationPending)
+	case <-time.After(5 * time.Second):
+		t.Fatal("invocation did not respond after the step START call returned")
+	}
+	if got := logs.n.Load(); got != 1 {
+		t.Errorf("invocation suspending records = %d, want 1", got)
 	}
 }

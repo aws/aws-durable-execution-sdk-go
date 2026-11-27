@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### Changed: a pending invocation waits for the checkpoint calls already sent
+
+An invocation ends as pending when its handler suspends, or when its
+handler returns while a `durable.Go` branch is blocked on an unfinished
+operation. A checkpoint call that an unjoined `durable.Go` branch sent can
+still be in flight at that point.
+
+Before, a pending invocation responded without waiting for such a call.
+The two plugin changes below added the wait, but only when a plugin
+implemented `OnOperationChange` or `OnInvocationEnd`. So registering a
+plugin changed when a pending invocation responded.
+
+Now every invocation waits until no checkpoint call is in flight before it
+dispatches `OnInvocationEnd` and responds. The invocation's context bounds
+the wait. A pending invocation still responds `PENDING`. An invocation that
+reports its handler's result or error already waited, and is unchanged. An
+invocation that ends because a serdes returned a `RetryableSerdesError`
+waited before only when a plugin implemented `OnOperationChange` or
+`OnInvocationEnd`. It always waits now.
+
 ### Changed: the telemetry plugin reads operations from checkpoints only
 
 This is a breaking change to the records that the telemetry plugin emits. It
@@ -48,9 +68,9 @@ The plugin API is experimental.
   the state that the invocation payload and the checkpoint responses
   delivered. It omits the operations beyond the depth set by
   `WithPluginChildOperationsDepth`.
-- An invocation with a plugin that implements `OnInvocationEnd` waits for
-  the checkpoint calls already sent before it dispatches the hook. So the
-  map holds their responses. The context's end bounds the wait.
+- The invocation waits for the checkpoint calls already sent before it
+  dispatches `OnInvocationEnd`. So the map holds their responses. The
+  context's end bounds the wait.
 - The `Error` of an entry in an `Operations` or `UpdatedOperations` map is
   now an `*OperationError` when the checkpoint holds an error type, message,
   data, or stack trace. Its fields carry those four values. Its text is
@@ -91,8 +111,7 @@ is reported during that invocation.
   are dropped, and a call already in progress may still be running while
   `OnInvocationEnd` runs. No order is defined between a call and the
   operation-level hooks.
-- When a plugin implements `OnOperationChange` or `OnInvocationEnd`, the
-  invocation waits for the checkpoint calls already sent before it
+- The invocation waits for the checkpoint calls already sent before it
   dispatches `OnInvocationEnd`, so their responses are reported. This also
   applies to an invocation that ends as pending. The context's end bounds
   the wait.
