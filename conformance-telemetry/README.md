@@ -23,20 +23,26 @@ run with `--suite telemetry` and fail. So the telemetry handlers live in their o
 
 ## Coverage
 
-| Suite       | Requirements  | What it pins down                                                                                                                              |
-| ----------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `telemetry` | `telemetry-1` | One successful single-step execution emits one `SUCCEEDED` record with `input`, `output`, ARN-derived identity fields, and `operationsByName`. |
+| Suite       | Requirement   | What it checks                                                                                                                                  |
+| ----------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `telemetry` | `telemetry-1` | One successful single-step execution emits one `SUCCEEDED` record with `input`, `output`, ARN-derived identity fields, and `operationsByName`.  |
+| `telemetry` | `telemetry-2` | One execution whose single step fails emits one `FAILED` record with an `error` on the record and on the step, and no `output`.                 |
+| `telemetry` | `telemetry-3` | A result override on one step exports exactly one selected key of the step result. Execution `input` and `output` are excluded.                 |
+| `telemetry` | `telemetry-4` | With `full-tree` operation detail, the record carries a map, its two named iteration contexts, and the step inside each iteration.              |
 
 ## Layout
 
 ```
-telemetry_1_success/main.go   # single step "increment"; plugin + CloudWatchLogsExporter
-template.yaml                 # telemetry suite; declares TelemetryLogGroupName and creates the group
-build.sh                      # builds publish/<handler>/bootstrap and the SAM Makefile
-doc.go                        # second package, so `go build ./...` writes no executable
+telemetry_1_success/main.go         # single step "increment"; plugin + CloudWatchLogsExporter
+telemetry_2_failure/main.go         # single step "charge" that fails with no retry
+telemetry_3_result_select/main.go   # single step "fetch-user"; result override keeps one key
+telemetry_4_full_tree_map/main.go   # map "process-items" with one step per item; full-tree detail
+template.yaml                       # telemetry suite; declares TelemetryLogGroupName and creates the group
+build.sh                            # builds publish/<handler>/bootstrap and the SAM Makefile
+doc.go                              # second package, so `go build ./...` writes no executable
 ```
 
-The handler uses the real SDK API only. It constructs no record and calls no exporter method.
+Each handler uses the real SDK API only. It constructs no record and calls no exporter method.
 A missing or wrong record is the plugin's defect. That defect is the signal the suite measures.
 
 ## Template contract
@@ -56,7 +62,7 @@ Prerequisites: Go 1.24 or later.
 ```bash
 cd conformance-telemetry
 go build ./... && go vet ./...
-./build.sh        # -> publish/telemetry_1_success/bootstrap and Makefile
+./build.sh        # -> publish/<handler>/bootstrap and Makefile, for every handler
 ```
 
 Cloud run, from a checkout of the conformance repository with the telemetry package installed:
@@ -69,4 +75,21 @@ durable-execution-conformance \
   --parameter-overrides LambdaExecutionRoleArn=<role-arn>
 ```
 
-A caller GitHub workflow is a follow-on.
+## CI
+
+[`.github/workflows/telemetry-conformance-tests.yml`](../.github/workflows/telemetry-conformance-tests.yml)
+runs on pull requests and pushes to `main` that touch the SDK, the telemetry
+module, this module, or related CI and dependency files. It also supports
+manual dispatch.
+
+It calls the conformance repository's reusable telemetry workflow at a pinned
+SHA. For a pull request, `sdk_ref` selects the merge commit of the PR head into
+`main`. `examples_dir` points to this module. The reusable workflow installs no
+Go toolchain. CI uses the Go that the CodeBuild runner image provides. CI prints
+the Go version, vets the module, and builds the handlers with `build.sh`,
+because SAM's makefile build only copies the built `bootstrap` binary. CI then
+deploys the template and validates the `telemetry` suite.
+Reports and execution histories are uploaded as artifacts.
+
+CI assumes AWS credentials through OIDC using the repository's existing test
+secrets. Fork and Dependabot pull requests skip the cloud job.

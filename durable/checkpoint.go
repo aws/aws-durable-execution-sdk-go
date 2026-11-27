@@ -148,6 +148,14 @@ type checkpointer struct {
 	// that a response reporting an awaited operation finished resumes the
 	// goroutine parked on it. Set during invocation wiring.
 	suspend *suspendSignal
+
+	// onOperationsChanged, when non-nil, is called after a checkpoint
+	// response changed the status of at least one operation in state,
+	// with those operations. It runs on the flush goroutine, after the
+	// goroutines parked on the merged operations are resumed, so it must
+	// not block. Set during invocation wiring, only when a plugin
+	// implements OnOperationChange.
+	onOperationsChanged func(changed []*operation)
 }
 
 // busy reports whether a checkpoint request is queued or in flight.
@@ -690,13 +698,13 @@ func (cp *checkpointer) send(batch []*pendingCheckpoint, token string) error {
 	// subsequent reads (e.g. reading CallbackId after START) see
 	// backend-assigned fields. Done under mu to keep the lock order
 	// checkpointer.mu → executionState.mu that merge documents.
-	var merged []*operation
+	var merged, changed []*operation
 	if cp.state != nil && out.NewExecutionState != nil {
 		merged = make([]*operation, 0, len(out.NewExecutionState))
 		for _, apiOp := range out.NewExecutionState {
 			merged = append(merged, operationFromAPI(apiOp))
 		}
-		cp.state.merge(merged)
+		changed = cp.state.merge(merged)
 	}
 	cp.mu.Unlock()
 	// The records are matched against the watches after the merge,
@@ -705,6 +713,14 @@ func (cp *checkpointer) send(batch []*pendingCheckpoint, token string) error {
 	// unparked before the requests of this call learn their outcome.
 	if cp.suspend != nil && len(merged) > 0 {
 		cp.suspend.onStateMerged(merged)
+	}
+	// The plugins learn of the status changes after the waiters are
+	// resumed, as in the JavaScript SDK. The callback copies the
+	// pointers of the operations in the state and queues them. The report is built and the
+	// hooks run on another goroutine, so a slow OnOperationChange hook
+	// never delays this call.
+	if cp.onOperationsChanged != nil && len(changed) > 0 {
+		cp.onOperationsChanged(changed)
 	}
 
 	// The API call succeeded. The service rotated the token, so the
@@ -766,11 +782,12 @@ func (cp *checkpointer) currentToken() string {
 // internal record.
 func operationFromAPI(op Operation) *operation {
 	rec := &operation{
-		id:      aws.ToString(op.Id),
-		status:  operationStatus(op.Status),
-		opType:  string(op.Type),
-		subType: aws.ToString(op.SubType),
-		name:    aws.ToString(op.Name),
+		id:       aws.ToString(op.Id),
+		parentID: aws.ToString(op.ParentId),
+		status:   operationStatus(op.Status),
+		opType:   string(op.Type),
+		subType:  aws.ToString(op.SubType),
+		name:     aws.ToString(op.Name),
 	}
 	rec.setTimestamps(op.StartTimestamp, op.EndTimestamp)
 	if sd := op.StepDetails; sd != nil {

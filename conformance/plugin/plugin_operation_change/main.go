@@ -2,19 +2,14 @@
 // the operation-change hook reports each updated step operation and
 // whether it is present in the full operation map.
 //
-// The Go SDK dispatches OnOperationChange only for operations whose status
-// changed between two invocations: a wait that elapsed, a callback that was
-// resolved, a chained invoke that finished. A step that reaches its
-// terminal status inside the invocation that started it is not reported
-// through that hook. This handler's single step does exactly that, so the
-// plugin below emits no record for it, and the requirement is registered
-// as not implemented in template_plugin.yaml until the hook also reports
-// in-invocation terminal transitions.
+// The handler runs one step. The SDK dispatches OnOperationChange for each
+// checkpoint response that changes an operation's status, so the response
+// that records the step as SUCCEEDED reports it during the invocation that
+// ran it.
 package main
 
 import (
 	"context"
-	"sync"
 
 	"github.com/aws/aws-durable-execution-sdk-go/conformance/internal/pluginlog"
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
@@ -22,49 +17,19 @@ import (
 
 var out = pluginlog.New(nil)
 
-// operationChangePlugin reports step operations from the operation-change
-// hook. The change info carries the updated operations. The full operation
-// map is the one the invocation-start hook received, extended with every
-// operation the change itself reports: an operation that reaches a
-// terminal status during the invocation is part of the execution's
-// operations even though the start snapshot predates it.
-type operationChangePlugin struct {
-	mu   sync.Mutex
-	full map[string]durable.OperationHookInfo
-}
-
-// fullMap returns the operations known at invocation start merged with the
-// operations of one change.
-func (p *operationChangePlugin) fullMap(updated map[string]durable.OperationHookInfo) map[string]durable.OperationHookInfo {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	full := make(map[string]durable.OperationHookInfo, len(p.full)+len(updated))
-	for id, op := range p.full {
-		full[id] = op
-	}
-	for id, op := range updated {
-		full[id] = op
-	}
-	return full
-}
-
-// newOperationChangePlugin is a durable.PluginFactory. Each invocation gets its own
-// operationChangePlugin, so the state it holds never leaks into another invocation.
+// newOperationChangePlugin is a durable.PluginFactory: the handler calls it
+// once per invocation and the returned Plugin serves that invocation alone.
+// The plugin emits one record for each step in a change's
+// UpdatedOperations, with in_full_map reporting whether the change's
+// Operations map holds the same ID.
 func newOperationChangePlugin(_ context.Context, inv durable.InvocationHookInfo) (*durable.Plugin, error) {
-	p := &operationChangePlugin{}
 	return &durable.Plugin{
-		OnInvocationStart: func(_ context.Context, info durable.InvocationHookInfo) {
-			p.mu.Lock()
-			p.full = info.Operations
-			p.mu.Unlock()
-		},
 		OnOperationChange: func(_ context.Context, info durable.OperationChangeHookInfo) {
-			full := p.fullMap(info.UpdatedOperations)
 			for id, op := range info.UpdatedOperations {
 				if pluginlog.Upper(op.Type) != string(durable.OperationTypeStep) {
 					continue
 				}
-				_, inFull := full[id]
+				_, inFull := info.Operations[id]
 				out.EmitWithArn(map[string]any{
 					"plugin":      "CONFPLUGIN",
 					"hook":        "operation-change",

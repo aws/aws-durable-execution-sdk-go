@@ -31,14 +31,8 @@ Resources:
     TestingMetadata:
       TestDescription: ["10-1"]
       NotImplemented:
-        - id: "10-8"
-          reason: "OnOperationChange fires only for operations updated between invocations; a step that completes inside the invocation that started it is not reported"
-        - id: "10-13"
-          reason: "OnOperationStart and OnOperationEnd fire for a step replayed from a terminal checkpoint; the requirement expects neither"
         - id: "10-19"
           reason: "no handler: InvocationEndHookInfo carries no first-invocation flag, request id, operations map, or execution start timestamp"
-        - id: "10-22"
-          reason: "no handler: OnOperationChange fires only for operations updated between invocations"
         - id: "10-23"
           reason: "no handler: the plugin API has no branch user-function start hook and no children-replay field"
     Metadata:
@@ -145,7 +139,7 @@ Resources:
   PluginOperationChange:
     Type: AWS::Serverless::Function
     TestingMetadata:
-      TestDescription: []
+      TestDescription: ["10-8"]
     Metadata:
       BuildMethod: makefile
     Properties:
@@ -220,7 +214,7 @@ Resources:
   PluginReplayFlags:
     Type: AWS::Serverless::Function
     TestingMetadata:
-      TestDescription: []
+      TestDescription: ["10-13"]
     Metadata:
       BuildMethod: makefile
     Properties:
@@ -317,6 +311,21 @@ Resources:
       CodeUri: publish/plugin_operation_info_shape/
       Handler: bootstrap
       Description: Operation-start and operation-end hook info carries the full operation field set
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 300
+
+  PluginOperationChangeShape:
+    Type: AWS::Serverless::Function
+    TestingMetadata:
+      TestDescription: ["10-22"]
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: publish/plugin_operation_change_shape/
+      Handler: bootstrap
+      Description: Operation-change hook info carries full operation items and their membership in the full map
       Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
@@ -449,6 +458,12 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub "/aws/lambda/${PluginOperationInfoShape}"
+      RetentionInDays: 7
+
+  PluginOperationChangeShapeLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${PluginOperationChangeShape}"
       RetentionInDays: 7
 
   PluginAttemptInfoShapeLogGroup:

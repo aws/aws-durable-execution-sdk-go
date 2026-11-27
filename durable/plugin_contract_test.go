@@ -41,6 +41,11 @@ type hookCounter struct {
 // invocationScope is the scope key of the invocation-level hooks.
 const invocationScope = "invocation"
 
+// changeScope is the scope key of OnOperationChange. Its calls never
+// overlap one another, but they run while WrapInvocation is in progress,
+// so they are not part of the invocation scope.
+const changeScope = "operation-change"
+
 func newHookCounter() *hookCounter {
 	return &hookCounter{counts: map[string]int{}, replay: map[string]int{}, active: map[string]string{}}
 }
@@ -109,7 +114,7 @@ func (h *hookCounter) plugin() Plugin {
 			h.hitOp("OnOperationAttemptEnd", info.OperationHookInfo)
 		},
 		OnOperationChange: func(_ context.Context, _ OperationChangeHookInfo) {
-			defer h.enter("OnOperationChange", invocationScope)()
+			defer h.enter("OnOperationChange", changeScope)()
 			h.hit("OnOperationChange")
 		},
 		WrapInvocation: func(ctx context.Context, _ InvocationHookInfo, fn func(context.Context) (any, error)) (any, error) {
@@ -161,12 +166,13 @@ var allHooks = []string{
 // one invocation or one operation never overlap one another.
 //
 // The first invocation suspends on a wait. The second invocation resumes
-// with the wait completed and listed as updated, so OnOperationChange
-// fires, then runs a four-item Map at concurrency four. Each item runs a
-// child context around a step that logs, so the item's goroutine dispatches
-// the child wrap hook, the attempt hooks, the attempt wrap hook, the
-// operation start and end hooks, and the log enrichment hook while the
-// other items do the same.
+// with the wait completed, then runs a four-item Map at concurrency four.
+// Each item runs a child context around a step that logs, so the item's
+// goroutine dispatches the child wrap hook, the attempt hooks, the attempt
+// wrap hook, the operation start and end hooks, and the log enrichment hook
+// while the other items do the same. The client returns each succeeded
+// step in its checkpoint response, so OnOperationChange fires while the
+// items run.
 func TestPluginEveryHookFiresFromConcurrentBranches(t *testing.T) {
 	const items = 4
 
@@ -194,7 +200,7 @@ func TestPluginEveryHookFiresFromConcurrentBranches(t *testing.T) {
 	},
 		withTestPlugins(counters[0].plugin(), counters[1].plugin()),
 		WithLogHandler(slog.NewTextHandler(io.Discard, nil)),
-		withLambdaAPI(&fakePluginClient{}),
+		withLambdaAPI(stepResultEchoClient{}),
 	)
 
 	resp, err := handler(makePluginContext(), makePluginPayload(t, "arn:test:all-hooks", "tok1", nil))
@@ -225,13 +231,14 @@ func TestPluginEveryHookFiresFromConcurrentBranches(t *testing.T) {
 			}
 		}
 		// Per-invocation hooks fire exactly once per invocation, twice
-		// over the two invocations. OnOperationChange fires only on the
-		// second invocation, the one with an updated operation.
+		// over the two invocations. OnOperationChange fires once per
+		// checkpoint response that changes a status. How the steps'
+		// checkpoints are batched into calls is not fixed, so only the
+		// loop above checks it, for at least one call.
 		for hook, want := range map[string]int{
 			"OnInvocationStart": 2,
 			"OnInvocationEnd":   2,
 			"WrapInvocation":    2,
-			"OnOperationChange": 1,
 		} {
 			if got := c.count(hook); got != want {
 				t.Errorf("plugin %d: %s fired %d times, want %d", i, hook, got, want)
@@ -251,8 +258,9 @@ func TestPluginEveryHookFiresFromConcurrentBranches(t *testing.T) {
 		}
 		// Operation starts: the live wait in the first invocation; then
 		// the batch, four items, four children, and four steps in the
-		// second. Ends: the same, with the wait's end replayed in the
-		// second invocation.
+		// second. Ends: the same. The second invocation lists the wait as
+		// updated, so it is the first to observe the wait's outcome, and
+		// no end reports IsReplay.
 		wantOps := 1 + 1 + items + items + items
 		if got := c.count("OnOperationStart"); got != wantOps {
 			t.Errorf("plugin %d: OnOperationStart fired %d times, want %d", i, got, wantOps)
@@ -260,8 +268,8 @@ func TestPluginEveryHookFiresFromConcurrentBranches(t *testing.T) {
 		if got := c.count("OnOperationEnd"); got != wantOps {
 			t.Errorf("plugin %d: OnOperationEnd fired %d times, want %d", i, got, wantOps)
 		}
-		if got := c.replay["OnOperationEnd"]; got != 1 {
-			t.Errorf("plugin %d: OnOperationEnd fired %d times with IsReplay, want 1 (the wait)", i, got)
+		if got := c.replay["OnOperationEnd"]; got != 0 {
+			t.Errorf("plugin %d: OnOperationEnd fired %d times with IsReplay, want 0", i, got)
 		}
 		// One log record per step, each enriched once.
 		if got := c.count("EnrichLogContext"); got != items {

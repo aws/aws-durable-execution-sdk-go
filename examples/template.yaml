@@ -249,6 +249,40 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 120
 
+  RetryGroupFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-retry-group
+      CodeUri: .aws-sam/build-artifacts/retry-group/
+      Handler: bootstrap
+      Description: Retry over a group of operations, matched on the recorded error
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  RetryGroupInlineFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-retry-group-inline
+      CodeUri: .aws-sam/build-artifacts/retry-group-inline/
+      Handler: bootstrap
+      Description: Retry without per-attempt child contexts, matched on the live error
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
   # --- Slice 2: Wait & WaitForCondition examples ---
 
   WaitBasicFunction:
@@ -336,6 +370,23 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 120
 
+  WaitForConditionBackoffFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-wait-for-condition-backoff
+      CodeUri: .aws-sam/build-artifacts/wait-for-condition-backoff/
+      Handler: bootstrap
+      Description: WaitForCondition polled on an exponential backoff wait strategy
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
   MultipleWaitsFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -386,7 +437,7 @@ Resources:
           - go-invoke-simple-target
       CodeUri: .aws-sam/build-artifacts/invoke-simple-target/
       Handler: bootstrap
-      Description: Target function for invoke-simple and chained-invoke
+      Description: Target function for invoke-simple, chained-invoke, invoke-async, invoke-serdes, and invoke-error-sentinels
       Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
@@ -450,6 +501,66 @@ Resources:
       DurableConfig:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 300
+
+  InvokeAsyncFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-invoke-async
+      CodeUri: .aws-sam/build-artifacts/invoke-async/
+      Handler: bootstrap
+      Description: Concurrent durable invokes started with InvokeAsync
+      Role: !Ref ExecutionRoleArn
+      Environment:
+        Variables:
+          FUNCTION_NAME_PREFIX: !Ref FunctionNamePrefix
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  InvokeSerdesFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-invoke-serdes
+      CodeUri: .aws-sam/build-artifacts/invoke-serdes/
+      Handler: bootstrap
+      Description: Durable invoke with per-invoke payload and result serdes
+      Role: !Ref ExecutionRoleArn
+      Environment:
+        Variables:
+          FUNCTION_NAME_PREFIX: !Ref FunctionNamePrefix
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  InvokeErrorSentinelsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-invoke-error-sentinels
+      CodeUri: .aws-sam/build-artifacts/invoke-error-sentinels/
+      Handler: bootstrap
+      Description: Durable invoke outcomes told apart with the invoke error sentinels
+      Role: !Ref ExecutionRoleArn
+      Environment:
+        Variables:
+          FUNCTION_NAME_PREFIX: !Ref FunctionNamePrefix
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
 
   ChildContextBasicFunction:
     Type: AWS::Serverless::Function
@@ -690,6 +801,57 @@ Resources:
       CodeUri: .aws-sam/build-artifacts/child-ops-invalid-depth/
       Handler: bootstrap
       Description: Unhandled child error fails the execution
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  ChildContextErrorMapperFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-child-context-error-mapper
+      CodeUri: .aws-sam/build-artifacts/child-context-error-mapper/
+      Handler: bootstrap
+      Description: Child context failure mapped to a handler-owned error type
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  ChildContextSummaryFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-child-context-summary
+      CodeUri: .aws-sam/build-artifacts/child-context-summary/
+      Handler: bootstrap
+      Description: Summary stored for a child context result over the checkpoint limit
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  ChildContextSubtypeFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-child-context-subtype
+      CodeUri: .aws-sam/build-artifacts/child-context-subtype/
+      Handler: bootstrap
+      Description: Child context recorded with a caller-defined subtype
       Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
@@ -1400,6 +1562,40 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 60
 
+  MapSerdesFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-map-serdes
+      CodeUri: .aws-sam/build-artifacts/map-serdes/
+      Handler: bootstrap
+      Description: Map with a per-item serdes and a whole-result serdes
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  MapCompletionPolicyFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-map-completion-policy
+      CodeUri: .aws-sam/build-artifacts/map-completion-policy/
+      Handler: bootstrap
+      Description: Map with a ShouldComplete policy composed from rules
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
   ParallelBasicFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -2039,6 +2235,40 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 120
 
+  LoggerReplayModeFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-logger-replay-mode
+      CodeUri: .aws-sam/build-artifacts/logger-replay-mode/
+      Handler: bootstrap
+      Description: WithReplayLogMode and ConfigureLogging select whether replayed log records are emitted
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 120
+
+  ErrorStackTracesFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-error-stack-traces
+      CodeUri: .aws-sam/build-artifacts/error-stack-traces/
+      Handler: bootstrap
+      Description: WithStackTraces(false) records step failures without stack traces
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
   PluginLifecycleFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -2068,6 +2298,74 @@ Resources:
       CodeUri: .aws-sam/build-artifacts/telemetry-exporter/
       Handler: bootstrap
       Description: Durable Execution Telemetry plugin with custom config
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  PluginChildDepthFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-plugin-child-depth
+      CodeUri: .aws-sam/build-artifacts/plugin-child-depth/
+      Handler: bootstrap
+      Description: Plugin notifications bounded by WithPluginChildOperationsDepth
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  CustomEntryPointFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-custom-entry-point
+      CodeUri: .aws-sam/build-artifacts/custom-entry-point/
+      Handler: bootstrap
+      Description: Own Lambda entry point around durable.Wrap
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  ExecutionStartTimeFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-execution-start-time
+      CodeUri: .aws-sam/build-artifacts/execution-start-time/
+      Handler: bootstrap
+      Description: Deadline derived from ExecutionStartTime across invocations
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
+  SerdeRetryableErrorFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-serde-retryable-error
+      CodeUri: .aws-sam/build-artifacts/serde-retryable-error/
+      Handler: bootstrap
+      Description: Custom serdes returning RetryableSerdesError for a transient failure
       Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
@@ -2386,6 +2684,23 @@ Resources:
         RetentionPeriodInDays: 7
         ExecutionTimeout: 120
 
+  ExecutionClientCustomFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Join
+        - ''
+        - - !Ref FunctionNamePrefix
+          - go-execution-client-custom
+      CodeUri: .aws-sam/build-artifacts/execution-client-custom/
+      Handler: bootstrap
+      Description: Custom ExecutionClient on the Lambda service
+      Role: !Ref ExecutionRoleArn
+      DurableConfig:
+        RetentionPeriodInDays: 7
+        ExecutionTimeout: 60
+
   HandlerErrorFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -2565,6 +2880,12 @@ Outputs:
   RetryCallbackFunction:
     Description: Retry Callback Function ARN
     Value: !GetAtt RetryCallbackFunction.Arn
+  RetryGroupFunction:
+    Description: Retry Group Function ARN
+    Value: !GetAtt RetryGroupFunction.Arn
+  RetryGroupInlineFunction:
+    Description: Retry Group Inline Function ARN
+    Value: !GetAtt RetryGroupInlineFunction.Arn
   WaitBasicFunction:
     Description: Wait Basic Function ARN
     Value: !GetAtt WaitBasicFunction.Arn
@@ -2580,6 +2901,9 @@ Outputs:
   WaitForConditionFunction:
     Description: Wait For Condition Function ARN
     Value: !GetAtt WaitForConditionFunction.Arn
+  WaitForConditionBackoffFunction:
+    Description: Wait For Condition Backoff Function ARN
+    Value: !GetAtt WaitForConditionBackoffFunction.Arn
   MultipleWaitsFunction:
     Description: Multiple Waits Function ARN
     Value: !GetAtt MultipleWaitsFunction.Arn
@@ -2598,6 +2922,15 @@ Outputs:
   ChainedInvokeFunction:
     Description: Chained Invoke Function ARN
     Value: !GetAtt ChainedInvokeFunction.Arn
+  InvokeAsyncFunction:
+    Description: Invoke Async Function ARN
+    Value: !GetAtt InvokeAsyncFunction.Arn
+  InvokeSerdesFunction:
+    Description: Invoke Serdes Function ARN
+    Value: !GetAtt InvokeSerdesFunction.Arn
+  InvokeErrorSentinelsFunction:
+    Description: Invoke Error Sentinels Function ARN
+    Value: !GetAtt InvokeErrorSentinelsFunction.Arn
   ChildContextBasicFunction:
     Description: Child Context Basic Function ARN
     Value: !GetAtt ChildContextBasicFunction.Arn
@@ -2640,6 +2973,15 @@ Outputs:
   ChildOpsInvalidDepthFunction:
     Description: Child Ops Invalid Depth Function ARN
     Value: !GetAtt ChildOpsInvalidDepthFunction.Arn
+  ChildContextErrorMapperFunction:
+    Description: Child Context Error Mapper Function ARN
+    Value: !GetAtt ChildContextErrorMapperFunction.Arn
+  ChildContextSummaryFunction:
+    Description: Child Context Summary Function ARN
+    Value: !GetAtt ChildContextSummaryFunction.Arn
+  ChildContextSubtypeFunction:
+    Description: Child Context Subtype Function ARN
+    Value: !GetAtt ChildContextSubtypeFunction.Arn
   CallbackSenderFunction:
     Description: Callback Sender Function ARN
     Value: !GetAtt CallbackSenderFunction.Arn
@@ -2763,6 +3105,12 @@ Outputs:
   MapFlatSummarizedReplayFunction:
     Description: Map Flat Summarized Replay Function ARN
     Value: !GetAtt MapFlatSummarizedReplayFunction.Arn
+  MapSerdesFunction:
+    Description: Map Serdes Function ARN
+    Value: !GetAtt MapSerdesFunction.Arn
+  MapCompletionPolicyFunction:
+    Description: Map Completion Policy Function ARN
+    Value: !GetAtt MapCompletionPolicyFunction.Arn
   ParallelBasicFunction:
     Description: Parallel Basic Function ARN
     Value: !GetAtt ParallelBasicFunction.Arn
@@ -2871,12 +3219,30 @@ Outputs:
   LoggerSlogHandlerFunction:
     Description: Logger Slog Handler Function ARN
     Value: !GetAtt LoggerSlogHandlerFunction.Arn
+  LoggerReplayModeFunction:
+    Description: Logger Replay Mode Function ARN
+    Value: !GetAtt LoggerReplayModeFunction.Arn
+  ErrorStackTracesFunction:
+    Description: Error Stack Traces Function ARN
+    Value: !GetAtt ErrorStackTracesFunction.Arn
   PluginLifecycleFunction:
     Description: Plugin Lifecycle Function ARN
     Value: !GetAtt PluginLifecycleFunction.Arn
   TelemetryExporterFunction:
     Description: Telemetry Exporter Function ARN
     Value: !GetAtt TelemetryExporterFunction.Arn
+  PluginChildDepthFunction:
+    Description: Plugin Child Depth Function ARN
+    Value: !GetAtt PluginChildDepthFunction.Arn
+  CustomEntryPointFunction:
+    Description: Custom Entry Point Function ARN
+    Value: !GetAtt CustomEntryPointFunction.Arn
+  ExecutionStartTimeFunction:
+    Description: Execution Start Time Function ARN
+    Value: !GetAtt ExecutionStartTimeFunction.Arn
+  SerdeRetryableErrorFunction:
+    Description: Serde Retryable Error Function ARN
+    Value: !GetAtt SerdeRetryableErrorFunction.Arn
   SerdeBasicFunction:
     Description: Serde Basic Function ARN
     Value: !GetAtt SerdeBasicFunction.Arn
@@ -2931,6 +3297,9 @@ Outputs:
   ErrorHandlingTaxonomyFunction:
     Description: Error Handling Taxonomy Function ARN
     Value: !GetAtt ErrorHandlingTaxonomyFunction.Arn
+  ExecutionClientCustomFunction:
+    Description: Execution Client Custom Function ARN
+    Value: !GetAtt ExecutionClientCustomFunction.Arn
   HandlerErrorFunction:
     Description: Handler Error Function ARN
     Value: !GetAtt HandlerErrorFunction.Arn

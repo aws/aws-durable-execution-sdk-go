@@ -140,10 +140,12 @@
 //
 // The module follows semantic versioning. Code written against a v1
 // release keeps compiling and working as documented with every later v1
-// release, with one exception. The plugin instrumentation API is
+// release, with two exceptions. The plugin instrumentation API is
 // experimental, and any part of it may change or be removed in a minor
-// release. [Plugin] lists what the plugin API comprises. Each of its
-// declarations carries an EXPERIMENTAL marker.
+// release. [Plugin] lists what the plugin API comprises. The step pause
+// API is experimental too. It comprises [RetryDecision.Pause],
+// [RetryConfig.PauseEvery], [ExecutionPauser] and its input and output
+// types. Each of these declarations carries an EXPERIMENTAL marker.
 //
 // # Struct Literals
 //

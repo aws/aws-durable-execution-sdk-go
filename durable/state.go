@@ -200,6 +200,33 @@ type executionState struct {
 	// needs no lock. An operation that is absent from it settled during
 	// this invocation, or has not settled.
 	settledAtStart map[string]struct{}
+
+	// trackChanges makes merge report and record status changes. The
+	// handler sets it before the handler function runs, and only when a
+	// plugin implements OnOperationChange, so an invocation without such a
+	// plugin pays nothing for the comparison.
+	trackChanges bool
+
+	// changed maps the wire ID of each operation whose status a merge
+	// changed during this invocation to the sequence number of the first
+	// merge that changed it. Guarded by mu. An operation in this map is
+	// reported to OnOperationChange with IsReplay false, because its
+	// current record was produced during this invocation.
+	changed map[string]uint64
+
+	// mergeSeq counts the merges that changed a status while trackChanges
+	// is set. Guarded by mu. See changed.
+	mergeSeq uint64
+
+	// endMu guards endDispatched.
+	endMu sync.Mutex
+
+	// endDispatched holds the wire IDs of the operations whose end this
+	// invocation dispatched to the plugins. A branch goroutine can still
+	// replay an operation while the invocation dispatches the ends of the
+	// operations the handler did not reach. Both read and write this set,
+	// so each operation dispatches at most one end per invocation.
+	endDispatched map[string]struct{}
 }
 
 func newExecutionState(ops []*operation) *executionState {
@@ -240,13 +267,6 @@ func (s *executionState) setUpdatedOperationIDs(wireIDs []string) {
 	}
 }
 
-// updatedSinceLastInvocation reports whether the operation with the
-// positional ID changed between the previous invocation and this one.
-func (s *executionState) updatedSinceLastInvocation(positionalID string) bool {
-	_, ok := s.updated[hashID(positionalID)]
-	return ok
-}
-
 // newOutcome reports whether the outcome of the operation with the
 // positional ID is one the previous invocation did not have. That holds
 // in two cases:
@@ -259,12 +279,34 @@ func (s *executionState) updatedSinceLastInvocation(positionalID string) bool {
 // Code that receives a new outcome runs for the first time; see
 // execContext.observeOutcome.
 func (s *executionState) newOutcome(positionalID string) bool {
-	wireID := hashID(positionalID)
+	return s.newOutcomeByWireID(hashID(positionalID))
+}
+
+// newOutcomeByWireID is newOutcome for an operation already identified by
+// its wire ID.
+func (s *executionState) newOutcomeByWireID(wireID string) bool {
 	if _, ok := s.updated[wireID]; ok {
 		return true
 	}
 	_, settled := s.settledAtStart[wireID]
 	return !settled
+}
+
+// claimEnd records that this invocation dispatches the end of the
+// operation with the wire ID. It reports true to the first caller for an
+// ID and false to every later caller, so the caller dispatches the end
+// only when it reports true.
+func (s *executionState) claimEnd(wireID string) bool {
+	s.endMu.Lock()
+	defer s.endMu.Unlock()
+	if _, ok := s.endDispatched[wireID]; ok {
+		return false
+	}
+	if s.endDispatched == nil {
+		s.endDispatched = make(map[string]struct{})
+	}
+	s.endDispatched[wireID] = struct{}{}
+	return true
 }
 
 // get returns the checkpointed operation for the positional ID, or nil if
@@ -300,15 +342,65 @@ func (s *executionState) hasChildOf(positionalID string) bool {
 // merge inserts or replaces operations in the map. Callers that hold
 // checkpointer.mu must call merge (not assign to the map directly) so that
 // the lock order checkpointer.mu → executionState.mu is respected.
-func (s *executionState) merge(ops []*operation) {
+//
+// When trackChanges is set, merge returns the operations of ops whose
+// status differs from the status the map held for the same ID, in the
+// order of ops. An operation the map did not hold counts as changed. merge
+// returns nil when trackChanges is unset or no status changed.
+func (s *executionState) merge(ops []*operation) []*operation {
+	var changed []*operation
 	s.mu.Lock()
 	if s.childCount == nil {
 		s.childCount = make(map[string]int)
 	}
 	for _, op := range ops {
+		if s.trackChanges {
+			if prev, present := s.operations[op.id]; !present || prev.status != op.status {
+				if s.changed == nil {
+					s.changed = make(map[string]uint64)
+				}
+				if len(changed) == 0 {
+					s.mergeSeq++
+				}
+				if _, seen := s.changed[op.id]; !seen {
+					s.changed[op.id] = s.mergeSeq
+				}
+				changed = append(changed, op)
+			}
+		}
 		s.insert(op)
 	}
 	s.mu.Unlock()
+	return changed
+}
+
+// snapshot returns every operation in the map, in no defined order, and
+// the sequence number of the latest merge that changed a status. Both are
+// read under one lock, so they describe the same moment. The operation
+// records are shared, not copied: a record is never modified after it
+// enters the map.
+func (s *executionState) snapshot() (ops []*operation, seq uint64) {
+	s.mu.RLock()
+	ops = make([]*operation, 0, len(s.operations))
+	for _, op := range s.operations {
+		ops = append(ops, op)
+	}
+	seq = s.mergeSeq
+	s.mu.RUnlock()
+	return ops, seq
+}
+
+// rangeChangedThrough calls fn with the wire ID of each operation whose
+// status a merge changed during this invocation, counting only the merges
+// up to and including the one numbered seq.
+func (s *executionState) rangeChangedThrough(seq uint64, fn func(id string)) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for id, first := range s.changed {
+		if first <= seq {
+			fn(id)
+		}
+	}
 }
 
 // numOperations returns the number of checkpointed operations.

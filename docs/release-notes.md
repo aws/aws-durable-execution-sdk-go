@@ -2,7 +2,118 @@
 
 ## Unreleased
 
-### Added: pause the execution from a retry decision
+### Changed: `OnOperationChange` fires on checkpoint responses
+
+The plugin API is experimental, and this is a breaking change to one of its
+hooks. It fixes issue #186.
+
+Before, `OnOperationChange` fired at most once per invocation, after
+`OnInvocationStart`. It reported the operations that changed between the
+previous invocation and this one. So a step that started and succeeded
+within one invocation was never reported.
+
+Now `OnOperationChange` fires once for each checkpoint response that
+changes the status of at least one operation. A response changes an
+operation when the SDK did not hold the operation before, or held it with a
+different status. So a step that starts and succeeds within one invocation
+is reported during that invocation.
+
+- `OperationChangeHookInfo` has a new field, `Operations`. It holds every
+  operation known once the response was applied. `UpdatedOperations` holds
+  the operations that response changed and is a subset of `Operations`.
+  Both omit the operations beyond the depth set by
+  `WithPluginChildOperationsDepth`.
+- An entry has `IsReplay` false when its status changed during this
+  invocation.
+- The checkpoint that received the response does not wait for the hook. One
+  goroutine per invocation calls the hook, one response at a time, in the
+  order the responses arrived. The calls for separate responses are never
+  merged.
+- Every call completes before `OnInvocationEnd` is dispatched, except when
+  the invocation's context ends first. Then the reports not yet dispatched
+  are dropped, and a call already in progress may still be running while
+  `OnInvocationEnd` runs. No order is defined between a call and the
+  operation-level hooks.
+- When a plugin implements `OnOperationChange`, the invocation waits for
+  the checkpoint calls already sent before it dispatches `OnInvocationEnd`,
+  so their responses are reported. This also applies to an invocation that
+  ends as pending. The context's end bounds the wait.
+- The hook no longer fires at the start of an invocation. A plugin reads the
+  operations that changed between invocations from `UpdatedOperations` of
+  `InvocationHookInfo`, as before.
+
+The telemetry plugin records every change, except a change for an operation
+that `OnOperationEnd` already reported in the same invocation. So a late
+change cannot replace the outcome that `OnOperationEnd` reported.
+
+An operation that a checkpoint response or a paginated state read delivers
+now keeps its parent ID. Before, the depth bound of
+`WithPluginChildOperationsDepth` treated such an operation as top-level in
+the maps of `InvocationHookInfo`.
+
+### Changed: a replayed operation no longer dispatches an end on every invocation
+
+The plugin API is experimental, and this is a change to its replay
+behavior. It fixes issue #187.
+
+Before, an operation replayed from a terminal checkpoint dispatched
+`OnOperationEnd` with `IsReplay` true on every invocation that replayed it.
+A replayed `Step` also dispatched `OnOperationStart`. So a plugin that
+counted ends counted each operation once per invocation.
+
+Now one rule applies to every operation type, including `Step` and `Map`
+and `Parallel` items. An invocation dispatches the end of an operation when
+the outcome is new to that invocation. The end reports `IsReplay` false. An
+outcome is new in three cases:
+
+1. The operation runs live. The end is dispatched after the terminal
+   checkpoint is recorded, as before.
+2. The outcome is recorded while no invocation runs, for example when a
+   `Wait` elapses, a callback is resolved, or an `Invoke` finishes. The next
+   invocation lists the operation in `UpdatedOperations`. When the handler
+   reaches the operation, the end is dispatched.
+3. A checkpoint response or a poll delivers the outcome before the handler
+   reaches the operation. The end is dispatched when the handler reaches
+   it.
+
+A later invocation that replays the operation dispatches no start. It
+dispatches no end either, unless it lists the operation in
+`UpdatedOperations` again. An abandoned `Map` or `Parallel` item dispatches
+no end on replay.
+
+An end can repeat when an invocation fails and is retried. The retry can
+list in `UpdatedOperations` an operation whose end the failed invocation
+dispatched. The retry then dispatches that end again, with `IsReplay`
+false. A plugin that must act once per operation deduplicates on the
+operation ID.
+
+The handler can end the invocation without reaching an operation whose
+outcome is new. For example, it returns early or suspends on another
+operation. Then the end of a `Wait`, a callback, or an `Invoke` is
+dispatched after the handler returns and before `OnInvocationEnd`. These
+ends are ordered by end time and obey `WithPluginChildOperationsDepth`. They
+are not dispatched when the invocation ends as `Retrying`, because the retry
+observes the same outcomes again. An operation of any other type that the
+handler does not reach dispatches no end. A plugin reads its outcome from
+`InvocationHookInfo.Operations`, which holds every checkpointed operation
+with its status, timestamps, result, and error.
+
+The end of a `Step` replayed from a failed checkpoint now reports the
+`*StepError` as `Error`, as the live end does. Before, it reported the
+cause.
+
+A child context under `WithChildVirtual` is unchanged. It has no
+checkpoint, so it dispatches a start and an end, with `IsReplay` true, on
+every invocation that replays it.
+
+The telemetry plugin builds its record from `InvocationHookInfo.Operations`
+at each invocation start. So record contents are unchanged. With
+`EmitOnChange`, a replay can emit fewer records, because fewer hooks fire.
+
+### Added: pause the execution from a retry decision (experimental)
+
+The step pause API is experimental. It may be changed or removed in a
+future release.
 
 - `RetryDecision.Pause` asks the SDK to pause the durable execution after
   it records the retry. A step pauses only when its function failed in the
@@ -92,37 +203,40 @@ replaces a filter on the `operations` element whose `name` is `charge`. A
 custom exporter that needs the array form can call
 `RenderRecord(record, OperationsFormatArray)`.
 
-### Fixed: Truncate no longer skips a smaller drop count that fits
+### Changed: Truncate renders the record about log2(n) times
 
-`Truncate` drops whole operations, oldest first, when a record is over an
-exporter's size limit. It chose the number to drop with a binary search.
-A binary search is correct only when every dropped operation makes the
-rendered record smaller.
+`Truncate` removes content when a record is over an exporter's size limit.
+It clears operation results, oldest first. Then it drops whole operations,
+oldest first. In v1.0.0 it rendered the whole record once after each
+cleared result and once after each dropped operation. So a record with n
+operations could take about 2n renders, and each render costs O(n).
 
-That is not true for the `operationsByName` rendering. An entry there
-carries `error` and `result` only when its name occurs once. So dropping
-one of two operations that share a name makes the other operation's
-`error` and `result` appear, and the rendered record can grow. `Truncate`
-could then drop more operations than the limit required.
+`Truncate` now chooses the number of results to clear and the number of
+operations to drop with a binary search. Each step of a search renders
+the record once. So clearing results and dropping operations each take
+about log2(n) renders.
 
-`Truncate` now chooses the number in three parts. A binary search finds a
-number that fits. Then `Truncate` renders the record at the number just
-below each point where a name drops to one occurrence and that occurrence
-has an `error` or a `result`. If any of those fits, a second binary search
-runs inside the range that ends at the lowest one that fits. This affects
-every exporter that renders `OperationsFormatByName` or
-`OperationsFormatBoth`.
+Each count that a search chooses was rendered and fit. So the result fits
+the limit whenever dropping everything droppable fits. If even that does
+not fit, the result can be over the limit, as before.
 
-The result is the smallest number that fits, with one exception. Near the
-limit, one more dropped operation can add a few bytes, because
-`droppedOperations` or a name's `minDurationMs` gains a digit. `Truncate`
-can then drop more operations than needed.
+A binary search returns the fewest drops only when each drop makes the
+rendered record smaller. That is not always true. So `Truncate` can clear
+more results and drop more operations than v1.0.0. For example, a record
+has one 102-byte result, then nine results of `1`, in the `operations`
+array. The limit is the size after clearing the long result. v1.0.0
+clears that one result. This release clears all ten results and drops 2
+operations.
+These are the known cases where a drop does not make the record smaller:
 
-The cost is two binary searches plus one render per such point. A record
-with unique names needs only the binary search. In the worst case every
-name occurs exactly twice and the newer occurrence has an `error`. Then the
-cost is one render per name, so the total cost grows quadratically with the
-number of operations.
+- In the `operations` array, `"truncated":true` replaces
+  `"result":<value>`. So clearing a short result, such as `true`, makes
+  the record larger.
+- The `LambdaLogExporter` and `CloudWatchLogsExporter` render
+  `operationsByName` from this release on (see above). An entry there
+  shows `error` and `result` only when its name occurs once. So dropping
+  one of two operations that share a name makes the other one's `error`
+  and `result` appear.
 
 ### Fixed: attempt-end hooks report the attempt's end time
 

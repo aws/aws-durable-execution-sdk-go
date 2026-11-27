@@ -1,0 +1,26 @@
+[
+  {
+    "type": "CONTEXT",
+    "subType": "Map",
+    "name": "price-lines",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "MapIteration",
+    "name": "map-item-0",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "CONTEXT",
+    "subType": "MapIteration",
+    "name": "map-item-1",
+    "status": "FAILED"
+  },
+  {
+    "type": "WAIT",
+    "subType": "Wait",
+    "name": "settle",
+    "status": "SUCCEEDED"
+  }
+]

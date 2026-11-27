@@ -36,10 +36,12 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sso v1.32.1 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.37.1 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.44.1 // indirect
-	github.com/aws/smithy-go v1.28.9 // indirect
 )
 
-require github.com/aws/aws-durable-execution-sdk-go/telemetry v0.0.0
+require (
+	github.com/aws/aws-durable-execution-sdk-go/telemetry v0.0.0
+	github.com/aws/smithy-go v1.28.9
+)
 
 replace github.com/aws/aws-durable-execution-sdk-go => ../
 

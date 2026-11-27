@@ -1,6 +1,7 @@
-// Command invoke-simple-target is the target function for invoke-simple
-// and chained-invoke. It echoes its input with added metadata, simulating
-// a downstream service.
+// Command invoke-simple-target is the target function for invoke-simple,
+// chained-invoke, invoke-async, invoke-serdes, and invoke-error-sentinels.
+// It echoes its input with added metadata, simulating a downstream
+// service.
 package main
 
 import (

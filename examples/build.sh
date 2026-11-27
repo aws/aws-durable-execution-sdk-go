@@ -32,17 +32,23 @@ EXAMPLES="
   retry-invoke
   retry-invoke-target
   retry-callback
+  retry-group
+  retry-group-inline
   wait-basic
   wait-named
   wait-configurable
   wait-unawaited
   wait-for-condition
+  wait-for-condition-backoff
   multiple-waits
   invoke-simple
   invoke-simple-target
   invoke-tenant-id
   invoke-tenant-target
   chained-invoke
+  invoke-async
+  invoke-serdes
+  invoke-error-sentinels
   child-context-basic
   child-context-virtual
   child-context-serdes
@@ -57,6 +63,9 @@ EXAMPLES="
   block-example
   child-ops-preservation
   child-ops-invalid-depth
+  child-context-error-mapper
+  child-context-summary
+  child-context-subtype
   callback-sender
   wait-callback-basic
   wait-callback-timeout
@@ -98,6 +107,8 @@ EXAMPLES="
   map-virtual-context
   map-custom-summary-generator-replay
   map-flat-summarized-replay
+  map-serdes
+  map-completion-policy
   parallel-basic
   parallel-empty
   parallel-invoke
@@ -135,8 +146,14 @@ EXAMPLES="
   logger-exactly-once
   logger-log-levels
   logger-slog-handler
+  logger-replay-mode
+  error-stack-traces
   plugin-lifecycle
   telemetry-exporter
+  plugin-child-depth
+  custom-entry-point
+  execution-start-time
+  serde-retryable-error
   serde-basic
   serde-callback-deserializer
   serde-custom-config
@@ -155,6 +172,7 @@ EXAMPLES="
   force-checkpoint-step-retry
   error-determinism
   error-handling-taxonomy
+  execution-client-custom
   handler-error
   hello-world
   simple-execution
