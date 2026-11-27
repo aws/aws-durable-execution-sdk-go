@@ -290,6 +290,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		return nil, err
 	}
 	cp := newCheckpointer(client, in.DurableExecutionArn, in.CheckpointToken)
+	cp.invocationCtx = ctx
 
 	// The root branch token is released when the response is decided. The
 	// handler goroutine releases it itself only when it unwinds with

@@ -84,6 +84,14 @@ type checkpointer struct {
 	client       ExecutionClient
 	executionArn string
 
+	// invocationCtx is the invocation's context. A request that nobody
+	// waits for uses it instead of the caller's context: the caller can be
+	// a child-context body whose context a plugin's WrapChildContextFn
+	// supplied, and that context is cancelled when the body returns, while
+	// the request is still queued or in flight. Set once by the handler
+	// before any operation runs.
+	invocationCtx context.Context
+
 	mu       sync.Mutex
 	token    string
 	queue    []*pendingCheckpoint
@@ -417,9 +425,16 @@ func (cp *checkpointer) checkpointFinal(ctx context.Context, updates []Operation
 // handler sends every queued request before it reports an outcome (see
 // terminateAtQueueEnd), and the invocation ends with the error of a failed
 // call, so no outcome is reported over an unrecorded SUCCEED.
+//
+// The request uses the invocation's context, not ctx. Nobody waits for it,
+// so it must outlive the caller: a child-context body returns, and its
+// context can be cancelled, while the request is still queued or in flight.
 func (cp *checkpointer) checkpointNoWait(ctx context.Context, update OperationUpdate) error {
 	if cp.terminated.Load() {
 		return errCheckpointTerminated
+	}
+	if cp.invocationCtx != nil {
+		ctx = cp.invocationCtx
 	}
 	cp.submit(ctx, []OperationUpdate{update}, false)
 	return nil
