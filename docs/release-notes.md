@@ -10,17 +10,17 @@ operation. A checkpoint call that an unjoined `durable.Go` branch sent can
 still be in flight at that point.
 
 Before, a pending invocation responded without waiting for such a call.
-The `OnOperationChange` change below added the wait, but only when a plugin
-implemented that hook. So registering a plugin changed when a pending
-invocation responded.
+The two plugin changes below added the wait, but only when a plugin
+implemented `OnOperationChange` or `OnInvocationEnd`. So registering a
+plugin changed when a pending invocation responded.
 
 Now every invocation waits until no checkpoint call is in flight before it
 dispatches `OnInvocationEnd` and responds. The invocation's context bounds
 the wait. A pending invocation still responds `PENDING`. An invocation that
 reports its handler's result or error already waited, and is unchanged. An
 invocation that ends because a serdes returned a `RetryableSerdesError`
-waited before only when a plugin implemented `OnOperationChange`. It always
-waits now.
+waited before only when a plugin implemented `OnOperationChange` or
+`OnInvocationEnd`. It always waits now.
 
 ### Changed: the telemetry plugin reads operations from checkpoints only
 
@@ -68,9 +68,9 @@ The plugin API is experimental.
   the state that the invocation payload and the checkpoint responses
   delivered. It omits the operations beyond the depth set by
   `WithPluginChildOperationsDepth`.
-- An invocation with a plugin that implements `OnInvocationEnd` waits for
-  the checkpoint calls already sent before it dispatches the hook. So the
-  map holds their responses. The context's end bounds the wait.
+- The invocation waits for the checkpoint calls already sent before it
+  dispatches `OnInvocationEnd`. So the map holds their responses. The
+  context's end bounds the wait.
 - The `Error` of an entry in an `Operations` or `UpdatedOperations` map is
   now an `*OperationError` when the checkpoint holds an error type, message,
   data, or stack trace. Its fields carry those four values. Its text is

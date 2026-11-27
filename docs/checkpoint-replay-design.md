@@ -308,12 +308,6 @@ above), then responds; branches running code outside a span are still not
 joined beyond the settle period, so that response cannot stall behind a
 branch blocked between operations.
 
-A checkpoint call that a branch already sent can still be in flight at that
-point. When a plugin implements `OnOperationChange` or `OnInvocationEnd`,
-the handler waits for those calls before it dispatches `OnInvocationEnd`,
-so the hooks report their responses. The wait covers calls already sent
-only. It joins no branch, and the context's end bounds it.
-
 The checkpointer is terminated on every exit from the handler, not only
 on suspension. A single `defer` in `runHandler` performs the termination,
 so a handler that returns a result, returns an error, or panics terminates
@@ -339,8 +333,9 @@ invocation that ends with a halt cause recorded before its handler
 returned, such as a retryable serdes failure. The invocation's outcome is
 decided, so the checkpointer is already terminated, and a call that an
 unjoined branch sent may still be in flight. The invocation waits until no checkpoint
-request is in flight before it dispatches the end hooks and responds. The
-wait does not depend on the registered plugins. The invocation's context
+request is in flight before it dispatches the end hooks and responds. So
+`OnOperationChange` and `OnInvocationEnd` report the responses of those
+calls. The wait does not depend on the registered plugins. The invocation's context
 bounds it. The response of a pending invocation stays PENDING whatever the
 call returns.
 

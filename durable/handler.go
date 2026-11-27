@@ -421,14 +421,13 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	// reports in order on its own goroutine. changes is nil when no plugin
 	// implements the hook.
 	//
-	// readsEndState is true when a plugin implements OnOperationChange or
-	// OnInvocationEnd. Both hooks receive an Operations map whose entries
-	// have IsReplay false for an operation that changed during this
-	// invocation. So the state tracks changes for either hook. The state
-	// is not shared yet, so trackChanges is written without its lock.
+	// OnOperationChange and OnInvocationEnd both receive an Operations map
+	// whose entries have IsReplay false for an operation that changed
+	// during this invocation. So the state tracks changes when a plugin
+	// implements either hook. The state is not shared yet, so trackChanges
+	// is written without its lock.
 	changes := newOperationChangeQueue(ctx, pd, in.DurableExecutionArn, state, depthBound)
-	readsEndState := pd.readsInvocationEndState()
-	if readsEndState {
+	if pd.readsInvocationEndState() {
 		state.trackChanges = true
 	}
 	if changes != nil {

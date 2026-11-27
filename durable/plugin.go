@@ -172,16 +172,16 @@ import (
 // invocation sets the hook that reads the result of that work:
 //
 //   - OnOperationChange or OnInvocationEnd is set: the SDK tracks which
-//     operations changed status during the invocation. Before it
-//     dispatches OnInvocationEnd, it waits for the checkpoint calls still
-//     in flight.
+//     operations changed status during the invocation.
 //   - OnOperationChange is set: the SDK builds the Operations and
 //     UpdatedOperations maps of each [OperationChangeHookInfo].
 //   - OnInvocationEnd is set: the SDK builds the Operations map of
 //     [InvocationEndHookInfo].
 //
 // So when no plugin of the invocation sets either hook, the SDK does none
-// of this work. The Operations map of [InvocationHookInfo] is different.
+// of this work. The wait for the checkpoint calls still in flight is not
+// part of this work: the SDK waits on every invocation before it
+// dispatches OnInvocationEnd. The Operations map of [InvocationHookInfo] is different.
 // The SDK builds it whenever a [PluginFactory] is registered, because the
 // factory receives the map before any plugin exists.
 //
