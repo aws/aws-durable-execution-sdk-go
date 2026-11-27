@@ -18,8 +18,9 @@ Now every invocation waits until no checkpoint call is in flight before it
 dispatches `OnInvocationEnd` and responds. The invocation's context bounds
 the wait. A pending invocation still responds `PENDING`. An invocation that
 reports its handler's result or error already waited, and is unchanged. An
-invocation that ends because a serdes returned a `RetryableSerdesError` did
-not wait before, and waits now.
+invocation that ends because a serdes returned a `RetryableSerdesError`
+waited before only when a plugin implemented `OnOperationChange`. It always
+waits now.
 
 ### Changed: the telemetry plugin reads operations from checkpoints only
 

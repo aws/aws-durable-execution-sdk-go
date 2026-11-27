@@ -336,9 +336,9 @@ and the invocation responds PENDING instead of the handler's outcome.
 
 An invocation that ends as pending waits for the same calls. So does an
 invocation that ends with a halt cause recorded before its handler
-returned, such as a retryable serdes failure. The handler has exited, so
-the checkpointer is already terminated, and a call that an unjoined branch
-sent may still be in flight. The invocation waits until no checkpoint
+returned, such as a retryable serdes failure. The invocation's outcome is
+decided, so the checkpointer is already terminated, and a call that an
+unjoined branch sent may still be in flight. The invocation waits until no checkpoint
 request is in flight before it dispatches the end hooks and responds. The
 wait does not depend on the registered plugins. The invocation's context
 bounds it. The response of a pending invocation stays PENDING whatever the
