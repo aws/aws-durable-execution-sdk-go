@@ -209,6 +209,29 @@ func (d *pluginDispatcher) hasOperationChangeHook() bool {
 	return false
 }
 
+// hasInvocationEndHook reports whether at least one registered plugin
+// implements OnInvocationEnd. False for a nil dispatcher.
+func (d *pluginDispatcher) hasInvocationEndHook() bool {
+	if d == nil {
+		return false
+	}
+	for i := range d.plugins {
+		if d.plugins[i].OnInvocationEnd != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// readsInvocationEndState reports whether at least one registered plugin
+// implements a hook that reports the operations checkpointed during the
+// invocation: OnOperationChange or OnInvocationEnd. The handler tracks
+// status changes and waits for the checkpoint calls in flight only then.
+// False for a nil dispatcher.
+func (d *pluginDispatcher) readsInvocationEndState() bool {
+	return d.hasOperationChangeHook() || d.hasInvocationEndHook()
+}
+
 // operationChangeInfo builds the OnOperationChange report for the change
 // one checkpoint response made. Operations is built from the operations
 // that enqueue copied when the response was merged, so it holds the state

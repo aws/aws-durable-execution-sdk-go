@@ -177,16 +177,18 @@ func (p *TelemetryPlugin) CreatePlugin(_ context.Context, info durable.Invocatio
 		inv.record.Input = p.content.inputValue(info.ExecutionInput)
 	}
 
-	// OnOperationChange is registered in every emit mode. The SDK waits
-	// for the checkpoint calls still in flight before OnInvocationEnd only
-	// when a plugin implements OnOperationChange. Without that wait, the
-	// operations of OnInvocationEnd can lack the last checkpoint response.
-	return &durable.Plugin{
+	plugin := &durable.Plugin{
 		OnInvocationStart: inv.onInvocationStart,
 		OnInvocationEnd:   inv.onInvocationEnd,
-		OnOperationChange: inv.onOperationChange,
 		EnrichLogContext:  inv.enrichLogContext,
-	}, nil
+	}
+	// Only EmitOnChange emits between invocation start and end. The SDK
+	// builds a full operations map for each OnOperationChange call. So the
+	// other emit modes do not register the hook.
+	if p.emitMode == EmitOnChange {
+		plugin.OnOperationChange = inv.onOperationChange
+	}
+	return plugin, nil
 }
 
 // arnPattern extracts region, account ID, function name, and qualifier
@@ -278,19 +280,15 @@ func (p *telemetryInvocation) onInvocationStart(ctx context.Context, info durabl
 	p.scheduleOnChangeDispatch(ctx)
 }
 
-// onOperationChange emits a running record in EmitOnChange after a
-// checkpoint response changed the status of at least one operation. The
-// record lists every operation checkpointed so far. The other emit modes
-// emit only at invocation end, so the hook builds no operation list for
-// them.
+// onOperationChange emits a running record after a checkpoint response
+// changed the status of at least one operation. The record lists every
+// operation checkpointed so far. The hook is registered only in
+// EmitOnChange.
 //
 // The SDK dispatches the changes of one invocation one at a time, in the
 // order the responses arrived. So a later call carries a newer set of
 // operations, and replacing the whole list keeps the newest status.
 func (p *telemetryInvocation) onOperationChange(ctx context.Context, info durable.OperationChangeHookInfo) {
-	if p.env.emitMode != EmitOnChange {
-		return
-	}
 	p.mu.Lock()
 	p.setOperationsLocked(info.Operations)
 	p.mu.Unlock()

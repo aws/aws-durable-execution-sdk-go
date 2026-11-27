@@ -203,8 +203,8 @@ type executionState struct {
 
 	// trackChanges makes merge report and record status changes. The
 	// handler sets it before the handler function runs, and only when a
-	// plugin implements OnOperationChange, so an invocation without such a
-	// plugin pays nothing for the comparison.
+	// plugin implements OnOperationChange or OnInvocationEnd, so an
+	// invocation without such a plugin pays nothing for the comparison.
 	trackChanges bool
 
 	// changed maps the wire ID of each operation whose status a merge

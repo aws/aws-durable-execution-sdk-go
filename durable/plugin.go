@@ -496,9 +496,10 @@ type InvocationEndHookInfo struct {
 	// does not depend on the delivery of the last OnOperationChange report,
 	// which is dropped when the invocation's context ends first.
 	//
-	// The invocation waits for the checkpoint calls still in flight only
-	// when a plugin implements OnOperationChange. Without such a plugin,
-	// the map can lack the response of a call that is still in flight.
+	// The invocation waits for the checkpoint calls still in flight before
+	// it builds the map. The context's end bounds the wait. So the map can
+	// lack the response of a call that was still in flight when the context
+	// ended.
 	//
 	// The map is built for this dispatch and is shared by the plugins that
 	// receive it; treat it as read-only.

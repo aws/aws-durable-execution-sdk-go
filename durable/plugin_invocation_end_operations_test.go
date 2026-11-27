@@ -6,12 +6,12 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 )
 
 // endInfoRecorder is a plugin that records the info of OnInvocationStart
-// and of OnInvocationEnd. It implements OnOperationChange, so the
-// invocation waits for the checkpoint calls still in flight before it
-// dispatches OnInvocationEnd.
+// and of OnInvocationEnd. It implements no OnOperationChange. So the tests
+// show that OnInvocationEnd alone gets the complete Operations map.
 type endInfoRecorder struct {
 	mu    sync.Mutex
 	start InvocationHookInfo
@@ -25,7 +25,6 @@ func (r *endInfoRecorder) plugin() Plugin {
 			r.start = info
 			r.mu.Unlock()
 		},
-		OnOperationChange: func(context.Context, OperationChangeHookInfo) {},
 		OnInvocationEnd: func(_ context.Context, info InvocationEndHookInfo) {
 			r.mu.Lock()
 			r.end = info
@@ -91,6 +90,64 @@ func TestInvocationEndOperationsHoldsOperationCheckpointedInInvocation(t *testin
 	old, ok := rec.end.Operations[oldID]
 	if !ok || old.Status != PluginOperationSucceeded || !old.IsReplay {
 		t.Errorf("old step entry = %+v (present %v), want SUCCEEDED with IsReplay true", old, ok)
+	}
+}
+
+// TestInvocationEndOperationsHoldsCallInFlightWhenInvocationPends asserts
+// that an invocation waits for a checkpoint call in flight before it
+// dispatches OnInvocationEnd, when OnInvocationEnd is the only hook that
+// reads the operations. One branch blocks on a wait, so the invocation is
+// pending. A second branch starts a step, and the client holds that call.
+// The handler returns while the call is held. The Operations map still
+// holds the step as STARTED, with IsReplay false.
+func TestInvocationEndOperationsHoldsCallInFlightWhenInvocationPends(t *testing.T) {
+	rec := &endInfoRecorder{}
+	client := &slowStepStartClient{
+		// hold must exceed the handler's sleep below by a wide margin.
+		hold:     time.Second,
+		waitSeen: make(chan struct{}),
+		stepSent: make(chan struct{}),
+	}
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	handler := Wrap(func(ctx Context, _ string) (string, error) {
+		Go(ctx, "waiter", func(c Context) (string, error) {
+			return "", Wait(c, "pause", time.Hour)
+		})
+		<-client.waitSeen
+		Go(ctx, "stepper", func(c Context) (string, error) {
+			return Step(c, "held", func(StepContext) (string, error) {
+				<-release
+				return "", nil
+			})
+		})
+		<-client.stepSent
+		// The waiter branch must be blocked on its wait before the
+		// handler returns, or the invocation does not end as pending.
+		// The package exposes no signal for that, so the handler sleeps.
+		time.Sleep(200 * time.Millisecond)
+		return "ignored", nil
+	}, withTestPlugins(rec.plugin()), withLambdaAPI(client))
+
+	resp, err := handler(makePluginContext(), makePluginPayload(t, "arn:test:end-ops-in-flight", "tok1", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPluginResponseStatus(t, resp, invocationPending)
+
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	var held *OperationHookInfo
+	for _, op := range rec.end.Operations {
+		if op.Name == "held" {
+			held = &op
+		}
+	}
+	if held == nil {
+		t.Fatalf("end Operations lacks the step whose checkpoint call was in flight when the handler returned: %v", rec.end.Operations)
+	}
+	if held.Status != PluginOperationStarted || held.IsReplay {
+		t.Errorf("held step = %+v, want STARTED with IsReplay false", *held)
 	}
 }
 

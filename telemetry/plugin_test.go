@@ -537,11 +537,16 @@ func TestPlugin_DurablePlugin_WiresHooksCorrectly(t *testing.T) {
 	if dp.OnInvocationEnd == nil {
 		t.Error("expected OnInvocationEnd to be set")
 	}
-	if dp.OnOperationChange == nil {
-		t.Error("expected OnOperationChange to be set")
-	}
 	if dp.EnrichLogContext == nil {
 		t.Error("expected EnrichLogContext to be set")
+	}
+
+	onChange, err := New(Config{EmitMode: EmitOnChange}).CreatePlugin(context.Background(), durable.InvocationHookInfo{})
+	if err != nil {
+		t.Fatalf("CreatePlugin returned error: %v", err)
+	}
+	if onChange.OnOperationChange == nil {
+		t.Error("expected OnOperationChange to be set in EmitOnChange")
 	}
 }
 

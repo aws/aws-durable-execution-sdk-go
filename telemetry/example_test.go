@@ -62,7 +62,7 @@ func ExampleNew_withMultipleExporters() {
 	})
 
 	p, _ := plugin.CreatePlugin(context.Background(), durable.InvocationHookInfo{})
-	fmt.Println(p.OnOperationChange != nil)
+	fmt.Println(p.OnInvocationEnd != nil)
 	// Output:
 	// true
 }

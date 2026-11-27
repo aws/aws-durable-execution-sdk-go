@@ -18,8 +18,13 @@ func opsByID(ops ...durable.OperationHookInfo) map[string]durable.OperationHookI
 
 // reportChange calls the plugin's OnOperationChange with ops as the full
 // set of checkpointed operations. The SDK calls the hook this way after a
-// checkpoint response changed the status of an operation.
+// checkpoint response changed the status of an operation. The SDK calls
+// only the hooks that a plugin registered. So reportChange does nothing when
+// the plugin registered no OnOperationChange.
 func reportChange(ctx context.Context, plugin *durable.Plugin, ops ...durable.OperationHookInfo) {
+	if plugin.OnOperationChange == nil {
+		return
+	}
 	all := opsByID(ops...)
 	plugin.OnOperationChange(ctx, durable.OperationChangeHookInfo{UpdatedOperations: all, Operations: all})
 }

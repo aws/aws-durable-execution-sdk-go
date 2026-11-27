@@ -394,7 +394,7 @@ func TestPlugin_EmitOnChange_FullTree_ContentFilter_NoBackingArrayCorruption(t *
 			}
 		}
 		if !hasKeep {
-			t.Errorf("running record %d lost 'keep-me' op — backing array corrupted", i)
+			t.Errorf("running record %d lost 'keep-me' op — backing array corrupted", i+1)
 		}
 	}
 }

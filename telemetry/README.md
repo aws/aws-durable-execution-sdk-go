@@ -47,7 +47,7 @@ IAM permissions.
 ## Invocation lifetime and concurrency
 
 `TelemetryPlugin` is a factory shared by the execution environment. Each
-`CreatePlugin` call creates a separate record, operation index, sampling decision,
+`CreatePlugin` call creates a separate record, result cache, sampling decision,
 mutex, and on-change dispatch state. Hooks and log enrichment for one invocation
 use only that invocation's state. Concurrent hooks within an invocation remain
 synchronized.

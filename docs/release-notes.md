@@ -39,6 +39,9 @@ The plugin API is experimental.
   operation checkpointed when the invocation ended, keyed by operation ID.
   It omits the operations beyond the depth set by
   `WithPluginChildOperationsDepth`.
+- An invocation with a plugin that implements `OnInvocationEnd` waits for
+  the checkpoint calls already sent before it dispatches the hook. So the
+  map holds their responses. The context's end bounds the wait.
 - The `Error` of an entry in an `Operations` or `UpdatedOperations` map is
   now an `*OperationError` when the checkpoint holds an error type. Its fields
   carry the checkpointed error type, message, data, and stack trace. Its
@@ -77,10 +80,11 @@ is reported during that invocation.
   are dropped, and a call already in progress may still be running while
   `OnInvocationEnd` runs. No order is defined between a call and the
   operation-level hooks.
-- When a plugin implements `OnOperationChange`, the invocation waits for
-  the checkpoint calls already sent before it dispatches `OnInvocationEnd`,
-  so their responses are reported. This also applies to an invocation that
-  ends as pending. The context's end bounds the wait.
+- When a plugin implements `OnOperationChange` or `OnInvocationEnd`, the
+  invocation waits for the checkpoint calls already sent before it
+  dispatches `OnInvocationEnd`, so their responses are reported. This also
+  applies to an invocation that ends as pending. The context's end bounds
+  the wait.
 - The hook no longer fires at the start of an invocation. A plugin reads the
   operations that changed between invocations from `UpdatedOperations` of
   `InvocationHookInfo`, as before.
