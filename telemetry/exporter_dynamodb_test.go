@@ -228,9 +228,7 @@ func TestDynamoDBExporter_AttributeTypes(t *testing.T) {
 }
 
 // TestDynamoDBExporter_KeyAttributesReplaceRecordAttributes checks that a
-// key attribute named like a record key holds the key value. The
-// JavaScript exporter assigns the keys after spreading the record, with
-// the same result.
+// key attribute named like a record key holds the key value.
 func TestDynamoDBExporter_KeyAttributesReplaceRecordAttributes(t *testing.T) {
 	fake := &fakeDynamoDBAPI{}
 	sk := "status"

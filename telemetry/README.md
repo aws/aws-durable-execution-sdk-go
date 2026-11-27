@@ -416,8 +416,7 @@ exporter := &telemetry.DynamoDBExporter{
 Each item holds the record in the by-name shape: `operationsByName` replaces
 the `operations` array (see [OperationsFormat](#operationsformat)). Every
 top-level key of that record JSON is its own item attribute. There is no
-`recordJson` attribute. The JavaScript, Python, and Java exporters also write
-one attribute per top-level key of the by-name record.
+`recordJson` attribute.
 
 Each JSON value becomes the matching DynamoDB attribute type:
 
@@ -433,10 +432,8 @@ Each JSON value becomes the matching DynamoDB attribute type:
 So `input`, `output`, and `operationsByName` are `M` attributes when the value
 is an object. A reader can address a nested value by its document path, for
 example `operationsByName.increment.count`. A number keeps the digits of the
-record JSON. DynamoDB stores at most 38 significant digits, and a non-zero
-magnitude between 1E-130 and 9.99...E+125. A record that carries any other
-number, for example a `float64` value of `1e200`, fails `PutItem` with a
-`ValidationException`.
+record JSON. If DynamoDB rejects a number, `PutItem` fails and `Export`
+returns that error.
 
 Partition key (`pk` by default) is the execution ARN. Sort key (`sk` by default)
 is the EmittedAt timestamp. Set `SortKeyField` to `telemetry.NoSortKey` to disable

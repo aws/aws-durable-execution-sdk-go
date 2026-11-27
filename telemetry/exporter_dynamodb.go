@@ -32,8 +32,7 @@ type DynamoDBAPI interface {
 // a number an N, a boolean a BOOL, and null a NULL. So input, output, and
 // operationsByName are M attributes when the value is an object, and a
 // reader can address a nested value by its document path, for example
-// operationsByName.increment.count. The JavaScript, Python, and Java
-// exporters write the same item.
+// operationsByName.increment.count.
 //
 // Partition key value is the record's ExecutionArn. Sort key value (when
 // present) is the record's EmittedAt timestamp in the record's own
@@ -47,11 +46,9 @@ type DynamoDBAPI interface {
 // PutItem then overwrites the single item for a given partition key on
 // every call (only the latest state is kept).
 //
-// DynamoDB stores a number with at most 38 significant digits. The
-// magnitude of a non-zero number must be between 1E-130 and
-// 9.99...E+125. A record that carries any other number, for example a
-// float64 input value of 1e200, fails PutItem with a ValidationException,
-// and Export returns that error.
+// A number is written as an N attribute with the exact digits of the
+// record JSON. If DynamoDB rejects a number, PutItem fails and Export
+// returns that error.
 type DynamoDBExporter struct {
 	// API is the underlying DynamoDB client. Required.
 	API DynamoDBAPI
@@ -92,7 +89,11 @@ func (e *DynamoDBExporter) Export(ctx context.Context, record Record) error {
 		pk = "pk"
 	}
 
-	item, err := dynamoDBItem(record)
+	rendered, err := e.Render(record)
+	if err != nil {
+		return fmt.Errorf("telemetry.DynamoDBExporter: rendering record: %w", err)
+	}
+	item, err := dynamoDBItem(rendered)
 	if err != nil {
 		return fmt.Errorf("telemetry.DynamoDBExporter: %w", err)
 	}
@@ -127,28 +128,23 @@ func (e *DynamoDBExporter) MaxRecordSizeBytes() int {
 	return DefaultMaxRecordSizeBytesDynamoDB
 }
 
-// Render implements RenderingSizeLimiter. It returns the by-name record
-// JSON that Export converts into item attributes, so truncation sizes the
-// record in the shape the item carries. The size is of the JSON text, not
-// of DynamoDB's item size accounting, which counts attribute names and
-// values differently; the JavaScript exporter sizes the same JSON text.
+// Render implements RenderingSizeLimiter. It returns the record rendered
+// with OperationsFormatByName. Export calls Render and converts the
+// returned JSON into item attributes, so truncation sizes the record in
+// the shape the item carries. The size is the length of the JSON text,
+// not the size of the item.
 func (e *DynamoDBExporter) Render(record Record) ([]byte, error) {
 	return RenderRecord(record, OperationsFormatByName)
 }
 
-// dynamoDBItem converts record into one item attribute per top-level key
-// of its by-name JSON rendering.
+// dynamoDBItem converts rendered, the JSON object that Render returns, into
+// one item attribute per top-level key.
 //
-// The rendering is decoded with UseNumber. So every number stays a
+// The JSON is decoded with UseNumber. So every number stays a
 // json.Number with the exact digits of the record JSON, and attributevalue
 // writes those digits as the N value. Decoding into float64 instead would
 // round an integer above 2^53.
-func dynamoDBItem(record Record) (map[string]ddbtypes.AttributeValue, error) {
-	rendered, err := RenderRecord(record, OperationsFormatByName)
-	if err != nil {
-		return nil, fmt.Errorf("rendering record: %w", err)
-	}
-
+func dynamoDBItem(rendered []byte) (map[string]ddbtypes.AttributeValue, error) {
 	dec := json.NewDecoder(bytes.NewReader(rendered))
 	dec.UseNumber()
 	var fields map[string]any

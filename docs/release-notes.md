@@ -137,20 +137,20 @@ future release.
 ### Changed: the DynamoDB item carries one attribute per record field
 
 The telemetry record schema is experimental, and this is a change to the
-DynamoDB item that `DynamoDBExporter` writes. The change aligns the Go item
-with the JavaScript, Python, and Java DynamoDB exporters.
+DynamoDB item that `DynamoDBExporter` writes.
 
 - Each record key is now its own item attribute. The record is rendered in
   the by-name shape: `operationsByName` replaces the `operations` array.
 - The `recordJson` attribute is removed. Before, it held the whole record,
   in the array shape, as a JSON string.
-- The six attributes copied from the record are removed as a separate set:
-  `executionName`, `functionName`, `status`, `startTime`, `endTime`, and
-  `durationMs`. Each one is now one of the record attributes.
+- The seven attributes copied from the record are removed as a separate
+  set: `executionName`, `functionName`, `status`, `startTime`, `endTime`,
+  `durationMs`, and `emittedAt`. Each one is now one of the record
+  attributes.
 - `executionName`, `startTime`, `endTime`, and `durationMs` are omitted when
   empty or unset, as before.
 - `functionName` was omitted when empty. It is now always present.
-- `status` is always present, as before.
+- `status` and `emittedAt` are always present, as before.
 - New attributes: `recordType`, `schemaVersion`, `executionArn`,
   `functionQualifier`, `region`, `accountId`, `operationsByName`, and, when
   the record carries them, `input`, `output`, `error`, `custom`, and the
@@ -168,11 +168,10 @@ with the JavaScript, Python, and Java DynamoDB exporters.
 - `DynamoDBExporter` now implements `RenderingSizeLimiter`. Truncation sizes
   the by-name record JSON. Before, it sized the array-shape record, which is
   larger when an operation name repeats.
-- A number in the record that DynamoDB cannot store fails `PutItem` with a
-  `ValidationException`. DynamoDB stores at most 38 significant digits, and
-  a non-zero magnitude between 1E-130 and 9.99...E+125. So a `float64`
-  input value of `1e200` fails. Before, the number was inside the
-  `recordJson` string and was stored.
+- A number is written as an `N` attribute with the digits of the record
+  JSON. If DynamoDB rejects a number, `PutItem` fails and `Export` returns
+  that error. Before, the number was inside the `recordJson` string and was
+  stored.
 - `telemetry` now requires
   `github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue` v1.19.6.
 
