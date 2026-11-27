@@ -323,3 +323,42 @@ func TestResume_LocalRunnerReplayedOperationsKeepAttempt(t *testing.T) {
 		}
 	}
 }
+
+// TestSampledOut_LocalRunnerExecutionCompletes runs a handler through the
+// local runner with a factory that samples every execution out. The plugin
+// of such an invocation registers only EnrichLogContext. The execution must
+// still suspend on the wait, resume, and succeed, and no record is emitted.
+func TestSampledOut_LocalRunnerExecutionCompletes(t *testing.T) {
+	handler := func(ctx durable.Context, _ string) (string, error) {
+		one, err := durable.Step(ctx, "s1", func(durable.StepContext) (string, error) { return "one", nil })
+		if err != nil {
+			return "", err
+		}
+		if err := durable.Wait(ctx, "w1", 5*time.Second); err != nil {
+			return "", err
+		}
+		return one, nil
+	}
+
+	exp := &capturingExporter{}
+	// At this rate the sampling threshold is 0 buckets, so every ARN
+	// samples out.
+	factory := New(Config{EmitMode: EmitOnChange, SamplingRate: 1e-9, Exporters: []Exporter{exp}})
+	runner := durabletest.NewLocalRunner(handler, durable.WithPlugins(factory))
+
+	for i, want := range []durabletest.ExecutionStatus{durabletest.Pending, durabletest.Succeeded} {
+		if i > 0 && !runner.CompletePendingTimers() {
+			t.Fatalf("invocation %d: CompletePendingTimers completed no timer", i+1)
+		}
+		res, err := runner.Run("event")
+		if err != nil {
+			t.Fatalf("invocation %d Run: %v", i+1, err)
+		}
+		if res.Status != want {
+			t.Fatalf("invocation %d status = %s, want %s", i+1, res.Status, want)
+		}
+	}
+	if records := exp.snapshot(); len(records) != 0 {
+		t.Errorf("got %d records for a sampled-out execution, want 0", len(records))
+	}
+}

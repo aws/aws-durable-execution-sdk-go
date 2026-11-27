@@ -172,7 +172,7 @@ func TestPlugin_EmitOnChange_SampledOut_EmitsNothing(t *testing.T) {
 	step.EndTimestamp = now.Add(10 * time.Millisecond)
 	reportChange(ctx, plugin, step)
 
-	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
+	reportInvocationEnd(ctx, plugin, durable.InvocationEndHookInfo{
 		ExecutionArn:    arn,
 		Status:          durable.PluginInvocationSucceeded,
 		ExecutionResult: "ok",

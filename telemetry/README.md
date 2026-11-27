@@ -138,6 +138,12 @@ Fraction of executions (0.0 to 1.0) that emit records. Defaults to 1.0 (every
 execution). The decision is per-execution and deterministic, derived from an
 FNV-1a hash of the execution ARN.
 
+For a sampled-out execution, `CreatePlugin` returns a plugin with
+`EnrichLogContext` only. The SDK builds operation maps only for a plugin with
+an `OnOperationChange` or `OnInvocationEnd` hook. So the SDK builds none for a
+sampled-out invocation. Its log records still carry `execution_arn` and
+`function_name`.
+
 ```go
 plugin := telemetry.New(telemetry.Config{
     SamplingRate: 0.1, // 10% of executions

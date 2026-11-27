@@ -22,7 +22,9 @@ func createTestPlugin(t *testing.T, ctx context.Context, factory *TelemetryPlugi
 func startTestPlugin(t *testing.T, ctx context.Context, factory *TelemetryPlugin, info durable.InvocationHookInfo) *durable.Plugin {
 	t.Helper()
 	plugin := createTestPlugin(t, ctx, factory, info)
-	plugin.OnInvocationStart(ctx, info)
+	if plugin.OnInvocationStart != nil {
+		plugin.OnInvocationStart(ctx, info)
+	}
 	return plugin
 }
 

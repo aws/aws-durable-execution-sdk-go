@@ -84,10 +84,6 @@ type telemetryInvocation struct {
 	// text match, and the Result transform runs only when one changes.
 	results map[string]recordedResult
 
-	// sampledIn is computed in CreatePlugin from the execution ARN.
-	// The same execution has the same decision across invocations.
-	sampledIn bool
-
 	// ended prevents new on-change dispatches once invocation finalization starts.
 	// Protected by mu, so every WaitGroup Add precedes the final Wait.
 	ended bool
@@ -154,34 +150,43 @@ var _ durable.PluginFactory = (*TelemetryPlugin)(nil)
 
 // CreatePlugin returns hooks bound to fresh invocation-local state.
 // Configuration and exporters remain shared on the factory. The record,
-// sampling decision, mutex, and on-change dispatch state belong to the
-// returned plugin alone.
+// mutex, and on-change dispatch state belong to the returned plugin alone.
+//
+// The sampling decision is computed here from the execution ARN. So the
+// same execution has the same decision across invocations. A sampled-out
+// invocation gets a plugin with EnrichLogContext only; see the comment in
+// the function body.
 func (p *TelemetryPlugin) CreatePlugin(_ context.Context, info durable.InvocationHookInfo) (*durable.Plugin, error) {
 	region, accountID, functionName, qualifier := parseFunctionARN(info.ExecutionArn)
 	inv := &telemetryInvocation{
-		env:       p,
-		record:    NewRecord(info.ExecutionArn),
-		results:   make(map[string]recordedResult),
-		sampledIn: sampledIn(info.ExecutionArn, p.samplingRate),
+		env:     p,
+		record:  NewRecord(info.ExecutionArn),
+		results: make(map[string]recordedResult),
 	}
 	inv.record.FunctionName = functionName
 	inv.record.FunctionQualifier = qualifier
 	inv.record.Region = region
 	inv.record.AccountID = accountID
 	inv.record.Status = StatusRunning
-	start := resolveExecutionStart(info)
-	inv.record.StartTimestamp = &start
-	// A sampled-out invocation emits nothing. So its transforms are
-	// skipped: their results would be discarded.
-	if inv.sampledIn {
-		inv.record.Input = p.content.inputValue(info.ExecutionInput)
+
+	// EnrichLogContext is registered for every invocation. So log records
+	// carry the same fields whatever the sampling decision.
+	plugin := &durable.Plugin{EnrichLogContext: inv.enrichLogContext}
+
+	// A sampled-out invocation emits no record. The SDK tracks operation
+	// changes and builds an Operations map only for a plugin that
+	// implements OnOperationChange or OnInvocationEnd. So a sampled-out
+	// invocation registers no hook that reads operations, and the SDK
+	// skips that work for it. No transform runs for it either.
+	if !sampledIn(info.ExecutionArn, p.samplingRate) {
+		return plugin, nil
 	}
 
-	plugin := &durable.Plugin{
-		OnInvocationStart: inv.onInvocationStart,
-		OnInvocationEnd:   inv.onInvocationEnd,
-		EnrichLogContext:  inv.enrichLogContext,
-	}
+	start := resolveExecutionStart(info)
+	inv.record.StartTimestamp = &start
+	inv.record.Input = p.content.inputValue(info.ExecutionInput)
+	plugin.OnInvocationStart = inv.onInvocationStart
+	plugin.OnInvocationEnd = inv.onInvocationEnd
 	// Only EmitOnChange emits between invocation start and end. The SDK
 	// builds a full operations map for each OnOperationChange call. So the
 	// other emit modes do not register the hook.
@@ -302,13 +307,7 @@ func (p *telemetryInvocation) onOperationChange(ctx context.Context, info durabl
 // The list is ordered by start timestamp, then ID; see
 // orderedOperationIDs. The root EXECUTION operation is skipped: the
 // record's top-level fields cover it.
-//
-// A sampled-out invocation emits nothing. So no list is built and no
-// Result transform runs for it.
 func (p *telemetryInvocation) setOperationsLocked(snapshot map[string]durable.OperationHookInfo) {
-	if !p.sampledIn {
-		return
-	}
 	ops := make([]OperationRecord, 0, len(snapshot))
 	for _, id := range orderedOperationIDs(snapshot) {
 		info := snapshot[id]
@@ -364,7 +363,7 @@ func orderedOperationIDs(ops map[string]durable.OperationHookInfo) []string {
 
 // onInvocationEnd builds the record's operation list from info.Operations,
 // finalizes the record with the terminal outcome, and emits to exporters if
-// the emit mode and sampling gates allow. A pending or retrying outcome
+// the emit mode allows. A pending or retrying outcome
 // means the execution continues in a later invocation, so it leaves the
 // record running; EmitAlways and EmitOnChange still emit a record for it.
 //
@@ -394,12 +393,8 @@ func (p *telemetryInvocation) onInvocationEnd(ctx context.Context, info durable.
 		// running status and leave the end timestamp unset.
 		record := p.snapshotRecordLocked()
 		record.EmittedAt = p.nextEmittedAtLocked()
-		sampledIn := p.sampledIn
 		p.mu.Unlock()
 
-		if !sampledIn {
-			return
-		}
 		p.env.dispatch(ctx, record)
 		return
 	}
@@ -415,9 +410,7 @@ func (p *telemetryInvocation) onInvocationEnd(ctx context.Context, info durable.
 
 	if info.Status == durable.PluginInvocationSucceeded {
 		p.record.Status = StatusSucceeded
-		if p.sampledIn {
-			p.record.Output = p.env.content.outputValue(info.ExecutionResult)
-		}
+		p.record.Output = p.env.content.outputValue(info.ExecutionResult)
 	} else {
 		p.record.Status = StatusFailed
 		if info.ExecutionError != nil {
@@ -427,10 +420,9 @@ func (p *telemetryInvocation) onInvocationEnd(ctx context.Context, info durable.
 
 	// Take a snapshot for emission.
 	record := p.snapshotRecordLocked()
-	sampledIn := p.sampledIn
 	p.mu.Unlock()
 
-	if !sampledIn || !p.env.shouldEmit(record.Status) {
+	if !p.env.shouldEmit(record.Status) {
 		return
 	}
 	p.env.dispatch(ctx, record)
@@ -566,14 +558,14 @@ func (p *TelemetryPlugin) shouldEmit(status Status) bool {
 
 // scheduleOnChangeDispatch implements EmitOnChange's coalescing: at most
 // one dispatch goroutine runs at a time. No-op when EmitMode is not
-// EmitOnChange or the invocation is sampled out.
+// EmitOnChange.
 func (p *telemetryInvocation) scheduleOnChangeDispatch(ctx context.Context) {
 	if p.env.emitMode != EmitOnChange {
 		return
 	}
 
 	p.mu.Lock()
-	if !p.sampledIn || p.ended {
+	if p.ended {
 		p.mu.Unlock()
 		return
 	}

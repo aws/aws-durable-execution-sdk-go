@@ -13,12 +13,11 @@ import (
 // newTestInvocation returns the state of one invocation of a plugin in the
 // EmitOnChange mode that exports to exp. EmitOnChange is the mode in which
 // every hook builds the operation list and schedules an emission.
-func newTestInvocation(exp Exporter, sampledIn bool) *telemetryInvocation {
+func newTestInvocation(exp Exporter) *telemetryInvocation {
 	return &telemetryInvocation{
-		env:       New(Config{EmitMode: EmitOnChange, Exporters: []Exporter{exp}}),
-		record:    &Record{Status: StatusRunning, ExecutionArn: "test-execution"},
-		results:   make(map[string]recordedResult),
-		sampledIn: sampledIn,
+		env:     New(Config{EmitMode: EmitOnChange, Exporters: []Exporter{exp}}),
+		record:  &Record{Status: StatusRunning, ExecutionArn: "test-execution"},
+		results: make(map[string]recordedResult),
 	}
 }
 
@@ -31,7 +30,7 @@ func TestPlugin_LateHookDoesNotEmitAfterInvocationEnd(t *testing.T) {
 	} {
 		t.Run(string(status), func(t *testing.T) {
 			exp := &capturingExporter{}
-			p := newTestInvocation(exp, true)
+			p := newTestInvocation(exp)
 			ctx := context.Background()
 			p.onInvocationEnd(ctx, durable.InvocationEndHookInfo{Status: status})
 			if n := len(exp.snapshot()); n != 1 {
@@ -51,7 +50,7 @@ func TestPlugin_LateHookDoesNotEmitAfterInvocationEnd(t *testing.T) {
 func TestPlugin_ConcurrentHooksAndInvocationEnd(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		exp := &capturingExporter{}
-		p := newTestInvocation(exp, true)
+		p := newTestInvocation(exp)
 		ctx := context.Background()
 		start := make(chan struct{})
 		done := make(chan struct{})
@@ -83,7 +82,7 @@ func TestPlugin_ConcurrentHooksAndInvocationEnd(t *testing.T) {
 // from the front of the slice as the oldest.
 func TestPlugin_OperationsOrderedOldestFirst(t *testing.T) {
 	exp := &capturingExporter{}
-	p := newTestInvocation(exp, true)
+	p := newTestInvocation(exp)
 	base := time.Unix(1700000000, 0)
 	ops := make(map[string]durable.OperationHookInfo)
 	var want []string
@@ -114,7 +113,7 @@ func TestPlugin_OperationsOrderedOldestFirst(t *testing.T) {
 // snapshot. The snapshot must filter a copy: filtering the invocation's own
 // list would shift its entries, and the second snapshot would lose one.
 func TestPlugin_SnapshotLeavesOperationListUnchanged(t *testing.T) {
-	p := newTestInvocation(&capturingExporter{}, true)
+	p := newTestInvocation(&capturingExporter{})
 	p.env.operationDetail = OperationDetailFullTree
 	p.env.content = ContentConfig{Operations: ContentOperations{
 		Overrides: []OperationOverride{{OperationName: "filtered-out", Exclude: true}},
@@ -151,31 +150,5 @@ func TestPlugin_SnapshotLeavesOperationListUnchanged(t *testing.T) {
 	wantList := []string{"keep-me", "filtered-out", "keep-me-2"}
 	if got := names(p.record.Operations); !slices.Equal(got, wantList) {
 		t.Errorf("invocation's operation list = %v, want unchanged %v", got, wantList)
-	}
-}
-
-// TestPlugin_SampledOutBuildsNoOperationList asserts that a sampled-out
-// invocation builds no operation list in any hook. Its record is never
-// emitted, so the list would be discarded.
-func TestPlugin_SampledOutBuildsNoOperationList(t *testing.T) {
-	exp := &capturingExporter{}
-	p := newTestInvocation(exp, false)
-	ctx := context.Background()
-	ops := opsByID(durable.OperationHookInfo{ID: "op-1", Name: "step", Type: "STEP", Status: durable.PluginOperationSucceeded})
-
-	p.onInvocationStart(ctx, durable.InvocationHookInfo{Operations: ops})
-	p.onOperationChange(ctx, durable.OperationChangeHookInfo{UpdatedOperations: ops, Operations: ops})
-	p.onInvocationEnd(ctx, durable.InvocationEndHookInfo{Status: durable.PluginInvocationSucceeded, Operations: ops})
-
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if len(p.record.Operations) != 0 {
-		t.Errorf("sampled-out invocation built an operation list: %+v", p.record.Operations)
-	}
-	if len(p.results) != 0 {
-		t.Errorf("sampled-out invocation stored results: %v", p.results)
-	}
-	if n := len(exp.snapshot()); n != 0 {
-		t.Errorf("sampled-out invocation emitted %d records, want 0", n)
 	}
 }

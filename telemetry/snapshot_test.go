@@ -29,6 +29,16 @@ func reportChange(ctx context.Context, plugin *durable.Plugin, ops ...durable.Op
 	plugin.OnOperationChange(ctx, durable.OperationChangeHookInfo{UpdatedOperations: all, Operations: all})
 }
 
+// reportInvocationEnd calls the plugin's OnInvocationEnd when the plugin
+// registered one. The SDK calls only the hooks that a plugin registered,
+// and a sampled-out invocation registers no OnInvocationEnd.
+func reportInvocationEnd(ctx context.Context, plugin *durable.Plugin, info durable.InvocationEndHookInfo) {
+	if plugin.OnInvocationEnd == nil {
+		return
+	}
+	plugin.OnInvocationEnd(ctx, info)
+}
+
 // checkpointedError returns the Error of a snapshot entry for a failed
 // operation whose checkpoint holds the error type and message.
 func checkpointedError(name, errType, message string) error {

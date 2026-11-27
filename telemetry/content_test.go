@@ -898,8 +898,8 @@ func TestPlugin_Content_SampledOutSkipsTransforms(t *testing.T) {
 	exp := &capturingExporter{}
 	factory := New(Config{
 		SamplingRate: rate,
-		// EmitOnChange is the mode in which every hook builds the
-		// operation list.
+		// EmitOnChange is the mode that registers the most hooks for a
+		// sampled-in invocation.
 		EmitMode:  EmitOnChange,
 		Content:   content,
 		Exporters: []Exporter{exp},
@@ -914,7 +914,7 @@ func TestPlugin_Content_SampledOutSkipsTransforms(t *testing.T) {
 		Operations:     opsByID(op),
 	})
 	reportChange(ctx, plugin, op)
-	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
+	reportInvocationEnd(ctx, plugin, durable.InvocationEndHookInfo{
 		ExecutionArn:    arn,
 		Status:          durable.PluginInvocationSucceeded,
 		ExecutionResult: map[string]int{"value": 1},

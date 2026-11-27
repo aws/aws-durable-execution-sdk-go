@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"context"
+	"maps"
 	"strconv"
 	"testing"
 	"time"
@@ -96,7 +97,7 @@ func TestPlugin_SampledOutExecution_EmitsNoRecords(t *testing.T) {
 		ExecutionArn:            arn,
 		ExecutionStartTimestamp: time.Now(),
 	})
-	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
+	reportInvocationEnd(ctx, plugin, durable.InvocationEndHookInfo{
 		ExecutionArn:    arn,
 		Status:          durable.PluginInvocationSucceeded,
 		ExecutionResult: "ok",
@@ -104,6 +105,37 @@ func TestPlugin_SampledOutExecution_EmitsNoRecords(t *testing.T) {
 
 	if records := exp.snapshot(); len(records) != 0 {
 		t.Fatalf("expected 0 records for sampled-out execution, got %d", len(records))
+	}
+}
+
+// TestPlugin_SampledOutRegistersOnlyLogContext asserts which hooks a
+// sampled-out invocation registers. The SDK tracks operation changes and
+// builds an Operations map for a plugin that implements OnOperationChange
+// or OnInvocationEnd. So a sampled-out invocation must register neither.
+// Its log records still carry the plugin's fields.
+func TestPlugin_SampledOutRegistersOnlyLogContext(t *testing.T) {
+	const arn = "arn:aws:lambda:us-east-1:123456789012:function:orders:1/durable-execution/name/id"
+	// At this rate the sampling threshold is 0 buckets, so every ARN
+	// samples out.
+	const rate = 1e-9
+	for _, mode := range []EmitMode{EmitOnComplete, EmitAlways, EmitOnChange} {
+		t.Run(string(mode), func(t *testing.T) {
+			ctx := t.Context()
+			factory := New(Config{EmitMode: mode, SamplingRate: rate, Exporters: []Exporter{&capturingExporter{}}})
+			plugin := createTestPlugin(t, ctx, factory, durable.InvocationHookInfo{ExecutionArn: arn})
+
+			if plugin.OnInvocationStart != nil || plugin.OnOperationChange != nil || plugin.OnInvocationEnd != nil {
+				t.Errorf("sampled-out plugin registered hooks: start=%t change=%t end=%t, want none",
+					plugin.OnInvocationStart != nil, plugin.OnOperationChange != nil, plugin.OnInvocationEnd != nil)
+			}
+			if plugin.EnrichLogContext == nil {
+				t.Fatal("sampled-out plugin registered no EnrichLogContext")
+			}
+			want := map[string]any{"execution_arn": arn, "function_name": "orders"}
+			if got := plugin.EnrichLogContext(ctx); !maps.Equal(got, want) {
+				t.Errorf("EnrichLogContext = %v, want %v", got, want)
+			}
+		})
 	}
 }
 
@@ -162,7 +194,7 @@ func TestPlugin_ConcurrentInvocations_IsolateSampling(t *testing.T) {
 					}
 					succeeded := durable.OperationHookInfo{ID: "shared-id", Name: "shared", Type: "STEP", Status: durable.PluginOperationSucceeded, Result: "first"}
 					reportChange(ctx, first, succeeded)
-					first.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{Status: durable.PluginInvocationSucceeded, ExecutionResult: "first", Operations: opsByID(succeeded)})
+					reportInvocationEnd(ctx, first, durable.InvocationEndHookInfo{Status: durable.PluginInvocationSucceeded, ExecutionResult: "first", Operations: opsByID(succeeded)})
 				}()
 				awaitSignal(t, firstReady)
 				second := startTestPlugin(t, ctx, factory, durable.InvocationHookInfo{ExecutionArn: arns[!firstSampled], ExecutionInput: "second"})
@@ -170,7 +202,7 @@ func TestPlugin_ConcurrentInvocations_IsolateSampling(t *testing.T) {
 				close(secondReady)
 				succeeded := durable.OperationHookInfo{ID: "shared-id", Name: "shared", Type: "STEP", Status: durable.PluginOperationSucceeded, Result: "second"}
 				reportChange(ctx, second, succeeded)
-				second.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{Status: durable.PluginInvocationSucceeded, ExecutionResult: "second", Operations: opsByID(succeeded)})
+				reportInvocationEnd(ctx, second, durable.InvocationEndHookInfo{Status: durable.PluginInvocationSucceeded, ExecutionResult: "second", Operations: opsByID(succeeded)})
 				awaitSignal(t, done)
 				records := exp.snapshot()
 				if len(records) == 0 {

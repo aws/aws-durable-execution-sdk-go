@@ -153,7 +153,7 @@ func resumeEmits(t *testing.T, factory durable.PluginFactory, exp *capturingExpo
 		ExecutionStartTimestamp: time.Now(),
 	}
 	pl := resumeInvocation(t, factory, info)
-	pl.OnInvocationEnd(context.Background(), durable.InvocationEndHookInfo{
+	reportInvocationEnd(context.Background(), pl, durable.InvocationEndHookInfo{
 		ExecutionArn:    arn,
 		Status:          durable.PluginInvocationSucceeded,
 		ExecutionResult: "ok",

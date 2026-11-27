@@ -31,6 +31,10 @@ checkpoint describes it:
   `OnOperationChange` call, and at invocation end. Before, it emitted on
   every operation start and end.
 
+For a sampled-out execution, `CreatePlugin` now returns a plugin with
+`EnrichLogContext` only. So the SDK builds no operation map for that
+invocation. The emitted records and the log fields are unchanged.
+
 ### Added: `Operations` on `InvocationEndHookInfo`
 
 The plugin API is experimental.
