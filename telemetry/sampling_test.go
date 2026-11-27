@@ -110,12 +110,13 @@ func TestPlugin_SampledOutExecution_EmitsNoRecords(t *testing.T) {
 }
 
 // TestPlugin_SampledOutRegistersOnlyLogContext asserts which hooks a
-// sampled-out invocation registers. The SDK tracks operation changes and
-// builds the Operations maps of OnOperationChange and OnInvocationEnd for
-// a plugin that implements one of those hooks. So a sampled-out invocation
-// must register neither. The test checks every hook field of
-// durable.Plugin, so it also covers a hook that a later change adds. The
-// log records of a sampled-out invocation still carry the plugin's fields.
+// sampled-out invocation registers. The SDK does extra work for a plugin
+// that sets OnOperationChange or OnInvocationEnd. The section "Work that
+// depends on the registered hooks" of durable.Plugin lists that work. So a
+// sampled-out invocation must register neither. The test checks every hook
+// field of durable.Plugin, so it also covers a hook that a later change
+// adds. The log records of a sampled-out invocation still carry the
+// plugin's fields.
 func TestPlugin_SampledOutRegistersOnlyLogContext(t *testing.T) {
 	const arn = "arn:aws:lambda:us-east-1:123456789012:function:orders:1/durable-execution/name/id"
 	// At this rate the sampling threshold is 0 buckets, so every ARN

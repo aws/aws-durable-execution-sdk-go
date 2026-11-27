@@ -173,13 +173,11 @@ func (p *TelemetryPlugin) CreatePlugin(_ context.Context, info durable.Invocatio
 	// carry the same fields whatever the sampling decision.
 	plugin := &durable.Plugin{EnrichLogContext: inv.enrichLogContext}
 
-	// A sampled-out invocation emits no record. The SDK tracks operation
-	// changes and builds the Operations maps of OnOperationChange and
-	// OnInvocationEnd only for a plugin that implements one of those
-	// hooks. So a sampled-out invocation registers neither, and the SDK
-	// skips that work for it. The SDK still builds the Operations map of
-	// InvocationHookInfo, because it builds that map before CreatePlugin
-	// runs. No transform runs for a sampled-out invocation either.
+	// A sampled-out invocation emits no record. So it registers neither
+	// OnOperationChange nor OnInvocationEnd, and the SDK skips the work
+	// that it does only for those hooks. The section "Work that depends
+	// on the registered hooks" of [durable.Plugin] lists that work. No
+	// transform runs for a sampled-out invocation either.
 	if !sampledIn(info.ExecutionArn, p.samplingRate) {
 		return plugin, nil
 	}

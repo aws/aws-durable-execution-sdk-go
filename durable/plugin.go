@@ -166,6 +166,25 @@ import (
 // is suspending. A wrap hook must return fn's result and error unchanged;
 // a hook that replaces the error breaks suspension and replay.
 //
+// # Work that depends on the registered hooks
+//
+// The SDK does the following work only when at least one plugin of the
+// invocation sets the hook that reads the result of that work:
+//
+//   - OnOperationChange or OnInvocationEnd is set: the SDK tracks which
+//     operations changed status during the invocation. Before it
+//     dispatches OnInvocationEnd, it waits for the checkpoint calls still
+//     in flight.
+//   - OnOperationChange is set: the SDK builds the Operations and
+//     UpdatedOperations maps of each [OperationChangeHookInfo].
+//   - OnInvocationEnd is set: the SDK builds the Operations map of
+//     [InvocationEndHookInfo].
+//
+// So when no plugin of the invocation sets either hook, the SDK does none
+// of this work. The Operations map of [InvocationHookInfo] is different.
+// The SDK builds it whenever a [PluginFactory] is registered, because the
+// factory receives the map before any plugin exists.
+//
 // EXPERIMENTAL: this type is experimental and may be changed or removed in
 // future releases.
 type Plugin struct {

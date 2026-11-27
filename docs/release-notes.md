@@ -33,10 +33,10 @@ checkpoint describes it:
   every operation start and end.
 
 For a sampled-out execution, `CreatePlugin` now returns a plugin with
-`EnrichLogContext` only. So the SDK tracks no operation changes for that
-invocation and builds no `Operations` map at its end. The SDK still builds
-the `Operations` map that `CreatePlugin` receives. The emitted records and
-the log fields are unchanged.
+`EnrichLogContext` only. So the SDK skips the work that it does only for a
+plugin with `OnOperationChange` or `OnInvocationEnd`. The documentation of
+`durable.Plugin` lists that work in the new section "Work that depends on
+the registered hooks". The emitted records and the log fields are unchanged.
 
 ### Added: `Operations` on `InvocationEndHookInfo`
 
