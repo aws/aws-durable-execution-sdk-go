@@ -58,12 +58,6 @@ The plugin API is experimental.
   entry had an `Error` only when the checkpoint held an error type. So a
   failed operation whose checkpoint holds a message and no type now has an
   `Error`.
-- The `Error` that `OnOperationEnd` reports changes in one case. The case
-  needs three conditions. The handler does not reach the operation. The
-  operation is a callback whose terminal status is neither FAILED nor
-  TIMED_OUT. Its checkpoint holds an error message and no error type. Its
-  `OnOperationEnd` now reports an error whose text is that message. Before,
-  it reported nil.
 
 ### Changed: `OnOperationChange` fires on checkpoint responses
 

@@ -373,6 +373,15 @@ func TestUnreachedEndErrorKeepsStandIn(t *testing.T) {
 	if got := unreachedEndError(op); got == nil || got.Error() != "no" {
 		t.Errorf("end error of a message-only checkpoint = %v, want %q", got, "no")
 	}
+	// A succeeded invoke takes the same path: unreachedEndError builds an
+	// invoke error only for an invoke that did not succeed.
+	invoke := &operation{
+		id: "inv", name: "charge", opType: string(OperationTypeChainedInvoke), status: statusSucceeded,
+		invoke: &invokeDetails{errMessage: "no"},
+	}
+	if got := unreachedEndError(invoke); got == nil || got.Error() != "no" {
+		t.Errorf("end error of a succeeded invoke with a message-only checkpoint = %v, want %q", got, "no")
+	}
 	// A checkpoint that holds neither an error type nor a message reports
 	// nil. A stand-in built from it would have an empty text.
 	op.callback = &callbackDetails{errData: `{"code":7}`}

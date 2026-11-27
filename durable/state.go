@@ -210,8 +210,9 @@ type executionState struct {
 	// changed maps the wire ID of each operation whose status a merge
 	// changed during this invocation to the sequence number of the first
 	// merge that changed it. Guarded by mu. An operation in this map is
-	// reported to OnOperationChange with IsReplay false, because its
-	// current record was produced during this invocation.
+	// reported with IsReplay false in the Operations map of
+	// OnOperationChange and of OnInvocationEnd, because its current record
+	// was produced during this invocation.
 	changed map[string]uint64
 
 	// mergeSeq counts the merges that changed a status while trackChanges
