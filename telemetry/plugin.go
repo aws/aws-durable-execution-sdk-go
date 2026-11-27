@@ -169,31 +169,42 @@ func (p *TelemetryPlugin) CreatePlugin(_ context.Context, info durable.Invocatio
 	inv.record.AccountID = accountID
 	inv.record.Status = StatusRunning
 
-	// EnrichLogContext is registered for every invocation. So log records
-	// carry the same fields whatever the sampling decision.
-	plugin := &durable.Plugin{EnrichLogContext: inv.enrichLogContext}
+	// Each return below lists every hook that its case registers.
+	// EnrichLogContext is in all three. So log records carry the same
+	// fields whatever the sampling decision and the emit mode.
 
-	// A sampled-out invocation emits no record. So it registers neither
-	// OnOperationChange nor OnInvocationEnd, and the SDK skips the work
-	// that it does only for those hooks. The section "Work that depends
-	// on the registered hooks" of [durable.Plugin] lists that work. No
-	// transform runs for a sampled-out invocation either.
+	// A sampled-out invocation emits no record. So it registers no hook
+	// except EnrichLogContext, and no transform runs for it.
+	//
+	// OnInvocationStart must stay unregistered: in EmitOnChange it emits a
+	// running record. Leaving out OnOperationChange and OnInvocationEnd
+	// also lets the SDK skip the work that it does only for those hooks.
+	// The section "Work that depends on the registered hooks" of
+	// [durable.Plugin] lists that work.
 	if !sampledIn(info.ExecutionArn, p.samplingRate) {
-		return plugin, nil
+		return &durable.Plugin{EnrichLogContext: inv.enrichLogContext}, nil
 	}
 
 	start := resolveExecutionStart(info)
 	inv.record.StartTimestamp = &start
 	inv.record.Input = p.content.inputValue(info.ExecutionInput)
-	plugin.OnInvocationStart = inv.onInvocationStart
-	plugin.OnInvocationEnd = inv.onInvocationEnd
+
 	// Only EmitOnChange emits between invocation start and end. The SDK
 	// builds a full operations map for each OnOperationChange call. So the
 	// other emit modes do not register the hook.
 	if p.emitMode == EmitOnChange {
-		plugin.OnOperationChange = inv.onOperationChange
+		return &durable.Plugin{
+			OnInvocationStart: inv.onInvocationStart,
+			OnInvocationEnd:   inv.onInvocationEnd,
+			OnOperationChange: inv.onOperationChange,
+			EnrichLogContext:  inv.enrichLogContext,
+		}, nil
 	}
-	return plugin, nil
+	return &durable.Plugin{
+		OnInvocationStart: inv.onInvocationStart,
+		OnInvocationEnd:   inv.onInvocationEnd,
+		EnrichLogContext:  inv.enrichLogContext,
+	}, nil
 }
 
 // arnPattern extracts region, account ID, function name, and qualifier

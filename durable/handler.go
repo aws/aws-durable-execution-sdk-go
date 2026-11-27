@@ -661,8 +661,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	// later invocation reports it through OnOperationChange. The
 	// Operations map of OnInvocationEnd would lack that response too. So
 	// when a plugin implements OnOperationChange or OnInvocationEnd, wait
-	// for the calls in flight before the end hooks. The JavaScript SDK
-	// waits for its checkpoint queue on every exit. The context's end
+	// for the calls in flight before the end hooks. The context's end
 	// bounds the wait.
 	if readsEndState {
 		cp.awaitIdle(ctx)

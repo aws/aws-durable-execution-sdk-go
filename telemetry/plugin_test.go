@@ -2,6 +2,8 @@ package telemetry
 
 import (
 	"context"
+	"reflect"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -533,29 +535,39 @@ func TestPlugin_OperationError_CheckpointedTypeAndMessage(t *testing.T) {
 	}
 }
 
+// TestPlugin_DurablePlugin_WiresHooksCorrectly asserts the exact set of
+// hooks that a sampled-in invocation registers in each emit mode.
+// CreatePlugin returns a separate durable.Plugin literal for EmitOnChange.
+// So the test compares every func field of the plugin with the expected
+// set, and a hook missing from one literal fails it.
 func TestPlugin_DurablePlugin_WiresHooksCorrectly(t *testing.T) {
-	ip := New(Config{})
-	dp, err := ip.CreatePlugin(context.Background(), durable.InvocationHookInfo{})
-	if err != nil {
-		t.Fatalf("CreatePlugin returned error: %v", err)
+	base := []string{"EnrichLogContext", "OnInvocationEnd", "OnInvocationStart"}
+	tests := []struct {
+		mode EmitMode
+		want []string
+	}{
+		{EmitOnComplete, base},
+		{EmitAlways, base},
+		{EmitOnChange, []string{"EnrichLogContext", "OnInvocationEnd", "OnInvocationStart", "OnOperationChange"}},
 	}
-
-	if dp.OnInvocationStart == nil {
-		t.Error("expected OnInvocationStart to be set")
-	}
-	if dp.OnInvocationEnd == nil {
-		t.Error("expected OnInvocationEnd to be set")
-	}
-	if dp.EnrichLogContext == nil {
-		t.Error("expected EnrichLogContext to be set")
-	}
-
-	onChange, err := New(Config{EmitMode: EmitOnChange}).CreatePlugin(context.Background(), durable.InvocationHookInfo{})
-	if err != nil {
-		t.Fatalf("CreatePlugin returned error: %v", err)
-	}
-	if onChange.OnOperationChange == nil {
-		t.Error("expected OnOperationChange to be set in EmitOnChange")
+	for _, tt := range tests {
+		t.Run(string(tt.mode), func(t *testing.T) {
+			dp, err := New(Config{EmitMode: tt.mode}).CreatePlugin(t.Context(), durable.InvocationHookInfo{})
+			if err != nil {
+				t.Fatalf("CreatePlugin returned error: %v", err)
+			}
+			var got []string
+			fields := reflect.ValueOf(*dp)
+			for i := range fields.NumField() {
+				if fields.Field(i).Kind() == reflect.Func && !fields.Field(i).IsNil() {
+					got = append(got, fields.Type().Field(i).Name)
+				}
+			}
+			slices.Sort(got)
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("registered hooks = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
