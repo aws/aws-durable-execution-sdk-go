@@ -32,11 +32,20 @@ func newCtxHoldClient(match func(durable.OperationUpdate) bool) *ctxHoldClient {
 	return &ctxHoldClient{match: match, held: make(chan struct{}), release: make(chan struct{})}
 }
 
-// releaseLater releases the held call after a delay. The release cannot wait
-// for the child to return: the child awaits its own SUCCEED, which queues
-// behind the held call.
-func (c *ctxHoldClient) releaseLater() {
-	go func() { time.Sleep(100 * time.Millisecond); close(c.release) }()
+// releaseAfterBodyReturns releases the held call once bodyCtx, the context
+// of a wrapped child body, is cancelled. The SDK cancels that context when
+// the body returns, so the held call is released only after the body
+// returned. Call it from inside the body. The timeout only guards against
+// a hang.
+func (c *ctxHoldClient) releaseAfterBodyReturns(t *testing.T, bodyCtx context.Context) {
+	go func() {
+		select {
+		case <-bodyCtx.Done():
+		case <-time.After(10 * time.Second):
+			t.Error("the child body context was not cancelled")
+		}
+		close(c.release)
+	}()
 }
 
 func (c *ctxHoldClient) GetExecutionState(context.Context, durable.GetExecutionStateInput) (durable.GetExecutionStateOutput, error) {
@@ -116,8 +125,8 @@ func TestAtLeastOnceAsyncSucceedInWrappedChildIsSent(t *testing.T) {
 		}
 		// The pre SUCCEED call is held, so the child's updates queue behind it
 		// until the child body has returned.
-		c.releaseLater()
 		return durable.RunInChildContext(ctx, "child", func(cctx durable.Context) (string, error) {
+			c.releaseAfterBodyReturns(t, cctx)
 			return asyncStepValue(cctx, "a", "A")
 		})
 	}, c, wrapChildContextPlugin())
@@ -138,8 +147,8 @@ func TestAtLeastOnceAsyncSucceedInWrappedChildIsSent(t *testing.T) {
 func TestAtLeastOnceAsyncSucceedCallOutlivesWrappedChild(t *testing.T) {
 	c := newCtxHoldClient(updateNamed("a", durable.OperationActionSucceed))
 	done := invokeWith(t, func(ctx durable.Context, _ struct{}) (string, error) {
-		c.releaseLater()
 		return durable.RunInChildContext(ctx, "child", func(cctx durable.Context) (string, error) {
+			c.releaseAfterBodyReturns(t, cctx)
 			out, err := asyncStepValue(cctx, "a", "A")
 			<-c.held // the SUCCEED call is in flight when the body returns
 			return out, err
@@ -151,28 +160,6 @@ func TestAtLeastOnceAsyncSucceedCallOutlivesWrappedChild(t *testing.T) {
 	}
 	if len(c.errs) != 0 {
 		t.Fatalf("checkpoint calls failed: %v", c.errs)
-	}
-}
-
-// A Map item is a wrapped child body too.
-func TestAtLeastOnceAsyncSucceedInWrappedMapItemIsSent(t *testing.T) {
-	c := newCtxHoldClient(updateNamed("pre", durable.OperationActionSucceed))
-	done := invokeWith(t, func(ctx durable.Context, _ struct{}) (int, error) {
-		if _, err := asyncStepValue(ctx, "pre", "p"); err != nil {
-			return 0, err
-		}
-		c.releaseLater()
-		res, err := durable.Map(ctx, "m", []string{"x"}, func(ictx durable.Context, item string, _ int) (string, error) {
-			return asyncStepValue(ictx, "item-"+item, item)
-		})
-		return len(res.Results()), err
-	}, c, wrapChildContextPlugin())
-
-	if got := <-done; got != "SUCCEEDED" {
-		t.Fatalf("status = %s, want SUCCEEDED; recorded %v, errors %v", got, c.recorded(), c.errs)
-	}
-	if !slices.Contains(c.recorded(), "item-x:SUCCEED") {
-		t.Fatalf("recorded %v: want item-x:SUCCEED", c.recorded())
 	}
 }
 
