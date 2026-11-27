@@ -487,7 +487,7 @@ type InvocationEndHookInfo struct {
 	// result, and error. The entry of a step or a wait-for-condition also
 	// carries the checkpointed attempt count. An entry has IsReplay false
 	// when the operation's status changed during this invocation and true
-	// when its record is unchanged since the invocation started. Like the
+	// when its status is unchanged since the invocation started. Like the
 	// maps of [InvocationHookInfo], it omits the operations beyond the
 	// depth set by [WithPluginChildOperationsDepth].
 	//
@@ -1258,7 +1258,7 @@ func dispatchUnreachedEnds(d *pluginDispatcher, ctx context.Context, executionAr
 	for _, op := range ops {
 		info := checkpointedOperationInfo(executionArn, op)
 		info.IsReplay = false
-		info.Error = unreachedEndError(op, info.Error)
+		info.Error = unreachedEndError(op)
 		if bound != 0 {
 			depth := checkpointedOperationDepth(state, op, bound)
 			if depth >= bound {
@@ -1286,12 +1286,12 @@ func dispatchUnreachedEnds(d *pluginDispatcher, ctx context.Context, executionAr
 // outcome on both paths, so this builds the error with the same
 // constructors.
 //
-// checkpointed is the Error of the operation's snapshot entry: nil, or an
-// [*OperationError] that wraps the stand-in built from the checkpointed
-// error type and message. An end reports the stand-in, as it did before
-// the snapshot entry gained the wrapper. So any other record returns the
-// wrapped stand-in.
-func unreachedEndError(op *operation, checkpointed error) error {
+// Any other record reports the stand-in built from the checkpointed error
+// type and message, or nil when the checkpoint holds no error type. The
+// operation's snapshot entry wraps the same stand-in in an
+// [*OperationError]. An end does not: the Error of an end is the error the
+// operation's caller receives.
+func unreachedEndError(op *operation) error {
 	switch OperationType(op.opType) {
 	case OperationTypeCallback:
 		if op.status == statusFailed || op.status == statusTimedOut {
@@ -1305,11 +1305,10 @@ func unreachedEndError(op *operation, checkpointed error) error {
 			return invokeErrorFromCheckpoint(op.name, "", op).Err
 		}
 	}
-	var opErr *OperationError
-	if errors.As(checkpointed, &opErr) {
-		return opErr.Err
+	if rec, ok := op.checkpointedErrorRecord(); ok {
+		return rec.standIn(nil)
 	}
-	return checkpointed
+	return nil
 }
 
 // settlesOutsideInvocation reports whether an operation of the wire type

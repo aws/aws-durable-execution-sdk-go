@@ -287,14 +287,14 @@ func TestUnreachedEndErrorKeepsStandIn(t *testing.T) {
 		t.Fatalf("snapshot error = %T, want *OperationError", snapshot)
 	}
 
-	got := unreachedEndError(op, snapshot)
+	got := unreachedEndError(op)
 	if errors.As(got, &opErr) {
 		t.Errorf("end error = %T, want the stand-in without the *OperationError wrapper", got)
 	}
 	if got == nil || got.Error() != "Rejected: no" {
 		t.Errorf("end error = %v, want %q", got, "Rejected: no")
 	}
-	if unreachedEndError(&operation{opType: string(OperationTypeWait)}, nil) != nil {
+	if unreachedEndError(&operation{opType: string(OperationTypeWait)}) != nil {
 		t.Error("end error of an operation with no checkpointed error is not nil")
 	}
 }

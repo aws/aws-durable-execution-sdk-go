@@ -150,7 +150,7 @@ checkpoint, so it dispatches a start and an end, with `IsReplay` true, on
 every invocation that replays it.
 
 The telemetry plugin builds its record from the checkpointed operations. So
-record contents are unchanged.
+this change to the end hooks does not change the record contents.
 
 ### Added: pause the execution from a retry decision (experimental)
 

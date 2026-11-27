@@ -469,6 +469,26 @@ func (op *operation) operationResult() string {
 	}
 }
 
+// checkpointedErrorRecord returns the error that the operation's checkpoint
+// holds. ok is false when op is nil or the checkpoint holds no error type.
+func (op *operation) checkpointedErrorRecord() (rec errorRecord, ok bool) {
+	if op == nil {
+		return errorRecord{}, false
+	}
+	switch {
+	case op.step != nil && op.step.errType != "":
+		return op.step.record(), true
+	case op.invoke != nil && op.invoke.errType != "":
+		return op.invoke.record(), true
+	case op.childCtx != nil && op.childCtx.errType != "":
+		return op.childCtx.record(), true
+	case op.callback != nil && op.callback.errType != "":
+		return op.callback.record(), true
+	default:
+		return errorRecord{}, false
+	}
+}
+
 // operationError returns the checkpointed error of the operation as an
 // [*OperationError], or nil when the checkpoint holds no error type. Used
 // to populate OperationHookInfo.Error in a snapshot entry.
@@ -479,20 +499,8 @@ func (op *operation) operationResult() string {
 // The stand-in's type is unexported and gains no method here. So the errors
 // that handler code receives do not change.
 func (op *operation) operationError() error {
-	if op == nil {
-		return nil
-	}
-	var rec errorRecord
-	switch {
-	case op.step != nil && op.step.errType != "":
-		rec = op.step.record()
-	case op.invoke != nil && op.invoke.errType != "":
-		rec = op.invoke.record()
-	case op.childCtx != nil && op.childCtx.errType != "":
-		rec = op.childCtx.record()
-	case op.callback != nil && op.callback.errType != "":
-		rec = op.callback.record()
-	default:
+	rec, ok := op.checkpointedErrorRecord()
+	if !ok {
 		return nil
 	}
 	return &OperationError{
