@@ -4,6 +4,7 @@ package durable_test
 
 import (
 	"context"
+	"log/slog"
 	"slices"
 	"strconv"
 	"sync"
@@ -172,5 +173,103 @@ func TestAtLeastOnceAsyncSucceedInWrappedMapItemIsSent(t *testing.T) {
 	}
 	if !slices.Contains(c.recorded(), "item-x:SUCCEED") {
 		t.Fatalf("recorded %v: want item-x:SUCCEED", c.recorded())
+	}
+}
+
+// valueClient records, for each checkpoint call, the updates it carries and
+// the value its context holds for key.
+type valueClient struct {
+	key   any
+	mu    sync.Mutex
+	calls []valueCall
+}
+
+type valueCall struct {
+	updates []string
+	value   any
+}
+
+func (c *valueClient) GetExecutionState(context.Context, durable.GetExecutionStateInput) (durable.GetExecutionStateOutput, error) {
+	return durable.GetExecutionStateOutput{}, nil
+}
+
+func (c *valueClient) Checkpoint(ctx context.Context, in durable.CheckpointInput) (durable.CheckpointOutput, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var names []string
+	for _, u := range in.Updates {
+		names = append(names, aws.ToString(u.Name)+":"+string(u.Action))
+	}
+	c.calls = append(c.calls, valueCall{updates: names, value: ctx.Value(c.key)})
+	return durable.CheckpointOutput{CheckpointToken: "tok-" + strconv.Itoa(len(c.calls))}, nil
+}
+
+// The call that carries a no-wait START or async SUCCEED sees the context
+// values a WrapInvocation hook added.
+func TestAtLeastOnceAsyncCallKeepsWrapInvocationValues(t *testing.T) {
+	type traceKey struct{}
+	c := &valueClient{key: traceKey{}}
+	plugin := durable.WithPlugins(durable.PluginFactoryFunc(func(context.Context, durable.InvocationHookInfo) (*durable.Plugin, error) {
+		return &durable.Plugin{
+			WrapInvocation: func(ctx context.Context, _ durable.InvocationHookInfo, fn func(context.Context) (any, error)) (any, error) {
+				return fn(context.WithValue(ctx, traceKey{}, "trace"))
+			},
+		}, nil
+	}))
+	done := invokeWith(t, func(ctx durable.Context, _ struct{}) (string, error) {
+		return asyncStepValue(ctx, "a", "A")
+	}, c, plugin)
+
+	if got := <-done; got != "SUCCEEDED" {
+		t.Fatalf("status = %s, want SUCCEEDED", got)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var sawStart, sawSucceed bool
+	for _, call := range c.calls {
+		start := slices.Contains(call.updates, "a:START")
+		succeed := slices.Contains(call.updates, "a:SUCCEED")
+		if !start && !succeed {
+			continue
+		}
+		sawStart = sawStart || start
+		sawSucceed = sawSucceed || succeed
+		if call.value != "trace" {
+			t.Errorf("call %v: context value = %v, want trace", call.updates, call.value)
+		}
+	}
+	if !sawStart || !sawSucceed {
+		t.Fatalf("calls %v: want a:START and a:SUCCEED", c.calls)
+	}
+}
+
+// The checkpoint Debug records of a no-wait request in a child context go
+// to the handler the child installed with ConfigureLogging.
+func TestAtLeastOnceAsyncDebugRecordsKeepChildLogScope(t *testing.T) {
+	c := newCtxHoldClient(func(durable.OperationUpdate) bool { return false })
+	sink := &attrSink{}
+	done := invokeWith(t, func(ctx durable.Context, _ struct{}) (string, error) {
+		return durable.RunInChildContext(ctx, "child", func(cctx durable.Context) (string, error) {
+			if err := durable.ConfigureLogging(cctx, durable.LogConfig{
+				Handler: attrHandler{sink: sink, level: slog.LevelDebug},
+			}); err != nil {
+				return "", err
+			}
+			return asyncStepValue(cctx, "a", "A")
+		})
+	}, c, wrapChildContextPlugin())
+
+	if got := <-done; got != "SUCCEEDED" {
+		t.Fatalf("status = %s, want SUCCEEDED; errors %v", got, c.errs)
+	}
+	var enqueued int
+	for _, r := range sink.records() {
+		if r.msg == "checkpoint enqueued" {
+			enqueued++
+		}
+	}
+	// The child records the START and the SUCCEED of a.
+	if enqueued < 2 {
+		t.Fatalf("child handler got %d checkpoint enqueued records, want at least 2; records %v", enqueued, sink.records())
 	}
 }
