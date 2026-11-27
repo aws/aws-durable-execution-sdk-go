@@ -10,7 +10,7 @@ have the old values, so nothing changes on the wire.
 `AtLeastOncePerRetry` and `AtMostOncePerRetry` are deprecated aliases of
 them. Existing code keeps working.
 
-### Added: `AtLeastOnceAsync` step semantics
+### Added: `AtLeastOnceAsync` step semantics (experimental)
 
 A step under `AtLeastOnceAsync` does not wait for its SUCCEED checkpoint
 before it returns its result. So the step has lower latency. RETRY and FAIL

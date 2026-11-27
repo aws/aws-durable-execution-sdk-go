@@ -339,7 +339,7 @@ START to be recorded. The step still waits for its SUCCEED or FAIL to be
 recorded before it returns. Under `AtMostOnce` the SDK waits for
 the START to be recorded before the body runs.
 
-`AtLeastOnceAsync` is `AtLeastOnce`, except that the step does not wait for
+`AtLeastOnceAsync` (experimental) is `AtLeastOnce`, except that the step does not wait for
 its SUCCEED to be recorded before it returns. So the step has lower
 latency. RETRY and FAIL are still awaited. The SDK sends checkpoints in
 order, and the invocation sends every queued checkpoint before it reports

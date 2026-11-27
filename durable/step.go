@@ -41,6 +41,9 @@ const (
 	// replay, and the step can return a different value. So do not use
 	// this mode for a step whose result becomes an idempotency key, client
 	// token, or other identifier for a later step.
+	//
+	// EXPERIMENTAL: this value is experimental and may be changed or
+	// removed in future releases.
 	AtLeastOnceAsync
 )
 
