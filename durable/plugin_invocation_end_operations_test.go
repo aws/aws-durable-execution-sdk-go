@@ -270,3 +270,31 @@ func TestSnapshotOperationErrorIsOperationError(t *testing.T) {
 		}
 	}
 }
+
+// TestUnreachedEndErrorKeepsStandIn asserts that the end of an operation
+// the handler did not reach reports the stand-in built from the checkpoint,
+// not the *OperationError of the operation's snapshot entry. The callback
+// here has a terminal status other than FAILED and TIMED_OUT, so
+// unreachedEndError builds no callback error for it.
+func TestUnreachedEndErrorKeepsStandIn(t *testing.T) {
+	op := &operation{
+		id: "cb", name: "approval", opType: string(OperationTypeCallback), status: statusStopped,
+		callback: &callbackDetails{errType: "Rejected", errMessage: "no"},
+	}
+	snapshot := op.operationError()
+	var opErr *OperationError
+	if !errors.As(snapshot, &opErr) {
+		t.Fatalf("snapshot error = %T, want *OperationError", snapshot)
+	}
+
+	got := unreachedEndError(op, snapshot)
+	if errors.As(got, &opErr) {
+		t.Errorf("end error = %T, want the stand-in without the *OperationError wrapper", got)
+	}
+	if got == nil || got.Error() != "Rejected: no" {
+		t.Errorf("end error = %v, want %q", got, "Rejected: no")
+	}
+	if unreachedEndError(&operation{opType: string(OperationTypeWait)}, nil) != nil {
+		t.Error("end error of an operation with no checkpointed error is not nil")
+	}
+}

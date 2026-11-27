@@ -1284,8 +1284,13 @@ func dispatchUnreachedEnds(d *pluginDispatcher, ctx context.Context, executionAr
 // failed or timed-out callback, and the cause of the [*InvokeError] for an
 // invoke that did not succeed. A plugin must receive the same Error for one
 // outcome on both paths, so this builds the error with the same
-// constructors. Any other record keeps checkpointed, the error read from
-// the checkpoint.
+// constructors.
+//
+// checkpointed is the Error of the operation's snapshot entry: nil, or an
+// [*OperationError] that wraps the stand-in built from the checkpointed
+// error type and message. An end reports the stand-in, as it did before
+// the snapshot entry gained the wrapper. So any other record returns the
+// wrapped stand-in.
 func unreachedEndError(op *operation, checkpointed error) error {
 	switch OperationType(op.opType) {
 	case OperationTypeCallback:
@@ -1299,6 +1304,10 @@ func unreachedEndError(op *operation, checkpointed error) error {
 			// checkpoint does not record.
 			return invokeErrorFromCheckpoint(op.name, "", op).Err
 		}
+	}
+	var opErr *OperationError
+	if errors.As(checkpointed, &opErr) {
+		return opErr.Err
 	}
 	return checkpointed
 }
