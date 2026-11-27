@@ -295,7 +295,7 @@ Resources:
     Properties:
       CodeUri: publish/step_at_most_once_no_retry/
       Handler: bootstrap
-      Description: Step with AtMostOncePerRetry semantics (interrupted, no retry)
+      Description: Step with AtMostOnce semantics (interrupted, no retry)
       Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7
@@ -310,7 +310,7 @@ Resources:
     Properties:
       CodeUri: publish/step_at_most_once_with_retry/
       Handler: bootstrap
-      Description: Step with AtMostOncePerRetry semantics (with retry, succeeds on second attempt)
+      Description: Step with AtMostOnce semantics (with retry, succeeds on second attempt)
       Role: !Ref ExecutionRoleArn
       DurableConfig:
         RetentionPeriodInDays: 7

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 )
@@ -83,6 +84,16 @@ type pendingCheckpoint struct {
 type checkpointer struct {
 	client       ExecutionClient
 	executionArn string
+
+	// invocationCtx is the invocation's context. A request that nobody
+	// waits for takes its cancellation and deadline from it instead of
+	// from the caller's context: the caller can be a child-context body
+	// whose context a plugin's WrapChildContextFn supplied, and that
+	// context is cancelled when the body returns, while the request is
+	// still queued or in flight. The request keeps the values of the
+	// caller's context (see noWaitContext). Set once by the handler before
+	// any operation runs.
+	invocationCtx context.Context
 
 	mu       sync.Mutex
 	token    string
@@ -411,13 +422,48 @@ func (cp *checkpointer) checkpointFinal(ctx context.Context, updates []Operation
 // ends with that error. The operation's later SUCCEED, FAIL, or RETRY is
 // queued after the START and awaited, and the flusher sends calls in queue
 // order, so when that wait returns the START is recorded too.
+//
+// It is also for the SUCCEED of a step under [AtLeastOnceAsync]. The step
+// runs again on the next invocation when the SUCCEED was not recorded. The
+// handler sends every queued request before it reports an outcome (see
+// terminateAtQueueEnd), and the invocation ends with the error of a failed
+// call, so no outcome is reported over an unrecorded SUCCEED.
+//
+// The request is not cancelled with ctx. Nobody waits for it, so it must
+// outlive the caller: a child-context body returns, and its context can be
+// cancelled, while the request is still queued or in flight. So the
+// request takes its cancellation and deadline from the invocation's
+// context, and its values from ctx (see noWaitContext).
 func (cp *checkpointer) checkpointNoWait(ctx context.Context, update OperationUpdate) error {
 	if cp.terminated.Load() {
 		return errCheckpointTerminated
 	}
+	if cp.invocationCtx != nil {
+		ctx = newNoWaitContext(ctx, cp.invocationCtx)
+	}
 	cp.submit(ctx, []OperationUpdate{update}, false)
 	return nil
 }
+
+// noWaitContext is the context of a request that nobody waits for. Its
+// values are those of caller, so the client call sees the values that
+// plugin hooks added and the checkpoint Debug records keep the caller's
+// logging scope. Its deadline and cancellation are those of lifetime, the
+// invocation's context, so the request outlives the caller.
+type noWaitContext struct {
+	// Context is caller without its cancellation. It answers Value.
+	context.Context
+	caller   context.Context
+	lifetime context.Context
+}
+
+func newNoWaitContext(caller, lifetime context.Context) *noWaitContext {
+	return &noWaitContext{Context: context.WithoutCancel(caller), caller: caller, lifetime: lifetime}
+}
+
+func (c *noWaitContext) Deadline() (time.Time, bool) { return c.lifetime.Deadline() }
+func (c *noWaitContext) Done() <-chan struct{}       { return c.lifetime.Done() }
+func (c *noWaitContext) Err() error                  { return c.lifetime.Err() }
 
 // queuedStart is the START of an asynchronous operation that StepAsync,
 // WaitAsync, or InvokeAsync queued on the calling goroutine before it

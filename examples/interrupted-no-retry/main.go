@@ -41,7 +41,7 @@ func handler(ctx durable.Context, event Input) (Result, error) {
 			time.Sleep(time.Duration(sleepMs) * time.Millisecond)
 			return "step-completed", nil
 		},
-		durable.WithSemantics(durable.AtMostOncePerRetry),
+		durable.WithSemantics(durable.AtMostOnce),
 		durable.WithRetry(durable.NoRetry()),
 	)
 	if err != nil {

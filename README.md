@@ -329,15 +329,47 @@ func handler(ctx durable.Context, _ any) (string, error) {
 
 Between the moment the SDK starts a step and the moment the service records
 the outcome, the function can time out or the runtime can crash. Under the
-default `AtLeastOncePerRetry` semantics the SDK runs the body again on
+default `AtLeastOnce` semantics the SDK runs the body again on
 resume. So the body may run more than once for one attempt, and it should
-be idempotent. `AtMostOncePerRetry` treats the interrupted attempt as a
+be idempotent. `AtMostOnce` treats the interrupted attempt as a
 failure instead and consults the retry strategy.
 
-Under `AtLeastOncePerRetry` the body runs without waiting for the step's
+Under `AtLeastOnce` the body runs without waiting for the step's
 START to be recorded. The step still waits for its SUCCEED or FAIL to be
-recorded before it returns. Under `AtMostOncePerRetry` the SDK waits for
+recorded before it returns. Under `AtMostOnce` the SDK waits for
 the START to be recorded before the body runs.
+
+`AtLeastOnceAsync` (experimental) is `AtLeastOnce`, except that the step does not wait for
+its SUCCEED to be recorded before it returns. So the step has lower
+latency. RETRY and FAIL are still awaited. The SDK sends checkpoints in
+order, and the invocation sends every queued checkpoint before it reports
+a result or an error. A failed checkpoint ends the invocation, and the step
+then runs again on replay. So the step still runs at least once.
+
+The code after an `AtLeastOnceAsync` step can run before the result is
+saved. If the invocation ends before the save, that code and the step run
+again on replay, and the step can return a different value. So do not use
+the mode for a step whose result becomes an idempotency key, client token,
+or other identifier for a later step. Plugins receive the step's end with
+SUCCEEDED and the result before the service answers the SUCCEED.
+
+`WithDefaultStepSemantics` sets the semantics of every step that does not
+set its own, in every context of the execution, including child contexts,
+`Map` and `Parallel` items, and the submitter step of `WaitForCallback`. A
+step's own `WithSemantics` wins. Without the option the default stays
+`AtLeastOnce`.
+
+```go
+func main() {
+	durable.Start(handler, durable.WithDefaultStepSemantics(durable.AtLeastOnceAsync))
+}
+
+func handler(ctx durable.Context, _ any) (string, error) {
+	return durable.Step(ctx, "greet", func(durable.StepContext) (string, error) {
+		return "hello", nil
+	})
+}
+```
 
 `WithRetry` sets the retry strategy. The default is `ExponentialBackoff()`,
 which makes 6 attempts in total, starting 5 seconds apart, doubling each
@@ -366,7 +398,7 @@ func handler(ctx durable.Context, _ any) (string, error) {
 		return fmt.Sprintf("succeeded on attempt %d", sc.Attempt()), nil
 	},
 		durable.WithRetry(strategy),
-		durable.WithSemantics(durable.AtMostOncePerRetry),
+		durable.WithSemantics(durable.AtMostOnce),
 	)
 }
 ```
@@ -431,7 +463,7 @@ and the SDK ignores `Pause` when the decision does not retry.
   custom `ExecutionClient` that does not implement `ExecutionPauser` also
   retries as usual.
 - An attempt that an earlier invocation interrupted under
-  `AtMostOncePerRetry` does not pause.
+  `AtMostOnce` does not pause.
 - The submitter of `WaitForCallback` runs as a step, so it pauses.
   `durable.Retry` does not run as a step and ignores `Pause`.
 - Steps already running in other branches, such as `Parallel` or `Map`
@@ -1149,7 +1181,7 @@ One case logs a line twice. When an invocation fails, for example by
 crashing or timing out, the SDK cannot know which lines it wrote. The next
 invocation logs again the lines the failed invocation ran after it
 received an outcome. A step body can also run more than once under
-`AtLeastOncePerRetry`, and the lines of its `StepContext.Logger` repeat
+`AtLeastOnce`, and the lines of its `StepContext.Logger` repeat
 with the body.
 
 Replay is decided per context. A `Go` branch that is still replaying stays

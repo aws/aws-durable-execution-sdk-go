@@ -46,7 +46,7 @@ func TestAsyncAfterTerminationReturnsSuspension(t *testing.T) {
 				return StepAsync(c, "late", func(_ StepContext) (string, error) {
 					bodyRan.Store(true)
 					return "x", nil
-				}, WithSemantics(AtMostOncePerRetry))
+				}, WithSemantics(AtMostOnce))
 			},
 		},
 		{

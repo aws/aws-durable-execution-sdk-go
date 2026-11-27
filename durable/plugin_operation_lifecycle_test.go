@@ -833,7 +833,7 @@ func TestDispatchOperationHelpersConcurrent(t *testing.T) {
 }
 
 // TestOperationLifecycleStepInterruptedAtMostOnce asserts the hooks of an
-// AtMostOncePerRetry step whose previous attempt was interrupted. The
+// AtMostOnce step whose previous attempt was interrupted. The
 // invocation re-enters the step before it settled, so it replays the start
 // with the checkpointed start time. With no retry it records the terminal
 // failure, so it dispatches the live end with the failure.
@@ -844,7 +844,7 @@ func TestOperationLifecycleStepInterruptedAtMostOnce(t *testing.T) {
 		return Step(ctx, "once", func(StepContext) (string, error) {
 			executed = true
 			return "", nil
-		}, WithSemantics(AtMostOncePerRetry), WithRetry(NoRetry()))
+		}, WithSemantics(AtMostOnce), WithRetry(NoRetry()))
 	}, withTestPlugins(rec.plugin()), withLambdaAPI(&fakePluginClient{}))
 
 	ops := []wireOperation{

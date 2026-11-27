@@ -16,7 +16,7 @@ func handler(ctx durable.Context, event string) (string, error) {
 		fmt.Printf("{\"executionArn\":%q,\"message\":%q}\n", executionID, event)
 		os.Exit(1)
 		return "unreachable", nil
-	}, durable.WithSemantics(durable.AtMostOncePerRetry), durable.WithRetry(durable.NoRetry()))
+	}, durable.WithSemantics(durable.AtMostOnce), durable.WithRetry(durable.NoRetry()))
 }
 
 func main() {

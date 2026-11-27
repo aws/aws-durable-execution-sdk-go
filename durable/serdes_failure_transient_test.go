@@ -59,7 +59,7 @@ func terminalEvents(events []types.Event, name string) (succeeded, failed int) {
 // A RetryableSerdesError from the Unmarshal that round-trips a live result
 // ends the invocation before the operation records an outcome. So the next
 // invocation finds no recorded result and runs the body again under
-// AtLeastOncePerRetry. A recorded SUCCEED would make the next invocation
+// AtLeastOnce. A recorded SUCCEED would make the next invocation
 // replay it, and the body would run once only.
 func TestRetryableSerdesErrorOnLiveUnmarshalRecordsNothing(t *testing.T) {
 	cases := []struct {

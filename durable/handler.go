@@ -151,11 +151,27 @@ func WithCallbackDeserializer(d Deserializer) HandlerOption {
 	return handlerOptionFunc(func(o *handlerOptions) { o.callbackDeserializer = d })
 }
 
+// WithDefaultStepSemantics sets the semantics of every step in the
+// execution that does not set its own with [WithSemantics]. It applies in
+// every context: the root context, child contexts, and the items of
+// [Map] and [Parallel]. A step's own [WithSemantics] wins. The default is
+// [AtLeastOnce].
+//
+// It also applies to the steps the SDK creates for the handler, such as
+// the submitter step of [WaitForCallback].
+func WithDefaultStepSemantics(s StepSemantics) HandlerOption {
+	return handlerOptionFunc(func(o *handlerOptions) { o.defaultStepSemantics = s })
+}
+
 type handlerOptions struct {
 	logHandler           slog.Handler
 	replayLogMode        ReplayLogMode
 	serdes               Serdes
 	callbackDeserializer Deserializer
+
+	// defaultStepSemantics is the semantics of every step that sets
+	// none. Set via [WithDefaultStepSemantics].
+	defaultStepSemantics StepSemantics
 
 	// client overrides the lazily-built Lambda client. Set via
 	// [WithExecutionClient].
@@ -274,6 +290,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 		return nil, err
 	}
 	cp := newCheckpointer(client, in.DurableExecutionArn, in.CheckpointToken)
+	cp.invocationCtx = ctx
 
 	// The root branch token is released when the response is decided. The
 	// handler goroutine releases it itself only when it unwinds with
@@ -472,6 +489,7 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	defer stopCtxWatch()
 	ec.executionStartTime = execStartTimestamp
 	ec.noStackTraces = h.options.noStackTraces
+	ec.defaultStepSemantics = h.options.defaultStepSemantics
 	cp.state = state
 	if h.options.serdes != nil || h.options.callbackDeserializer != nil {
 		d := ec.serdesDefaults()

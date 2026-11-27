@@ -264,7 +264,7 @@ func TestStepInterruptedAttemptIgnoresPause(t *testing.T) {
 			return Step(ctx, "s", func(StepContext) (string, error) {
 				t.Error("step body re-executed under at-most-once semantics")
 				return "", nil
-			}, WithSemantics(AtMostOncePerRetry), WithRetry(func(RetryAttempt) RetryDecision {
+			}, WithSemantics(AtMostOnce), WithRetry(func(RetryAttempt) RetryDecision {
 				asked++
 				return RetryDecision{Retry: true, Delay: time.Minute, Pause: true}
 			}))

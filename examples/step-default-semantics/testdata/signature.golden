@@ -1,0 +1,26 @@
+[
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "count-items",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "create-order-id",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "WAIT",
+    "subType": "Wait",
+    "name": "wait-for-warehouse",
+    "status": "SUCCEEDED"
+  },
+  {
+    "type": "STEP",
+    "subType": "Step",
+    "name": "confirm-order",
+    "status": "SUCCEEDED"
+  }
+]

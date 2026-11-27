@@ -242,7 +242,7 @@ func TestOperationSerdesFailureIsCatchableAndNotRetried(t *testing.T) {
 
 // A RetryableSerdesError from a step's Marshal ends the invocation without
 // recording an outcome, even when the handler catches the error. The next
-// invocation runs the body again under AtLeastOncePerRetry and completes.
+// invocation runs the body again under AtLeastOnce and completes.
 func TestRetryableSerdesErrorEndsInvocation(t *testing.T) {
 	var runs int64
 	serdes := newTransientMarshalSerdes(1)
@@ -281,7 +281,7 @@ func TestRetryableSerdesErrorEndsInvocation(t *testing.T) {
 	}
 }
 
-// Under AtMostOncePerRetry the next invocation finds the attempt started
+// Under AtMostOnce the next invocation finds the attempt started
 // and treats it as interrupted, applying the step retry strategy instead
 // of running the body again.
 func TestRetryableSerdesErrorAtMostOnceIsInterrupted(t *testing.T) {
@@ -292,7 +292,7 @@ func TestRetryableSerdesErrorAtMostOnceIsInterrupted(t *testing.T) {
 			atomic.AddInt64(&runs, 1)
 			return "value", nil
 		}, durable.WithStepSerdes(serdes),
-			durable.WithSemantics(durable.AtMostOncePerRetry),
+			durable.WithSemantics(durable.AtMostOnce),
 			durable.WithRetry(durable.NoRetry()))
 	}
 	runner := durabletest.NewLocalRunner(h)

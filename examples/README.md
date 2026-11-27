@@ -21,6 +21,7 @@ Deployable example workflows demonstrating the AWS Lambda Durable Execution SDK 
 | [step-pause-every](step-pause-every/main.go) | Step, RetryConfig.PauseEvery, pause and resume (experimental) | SUCCEEDED (local only) |
 | [attempt-fallback](attempt-fallback/main.go) | Step (sequential fallback) | SUCCEEDED |
 | [interrupted-no-retry](interrupted-no-retry/main.go) | Step, AtMostOnce semantics | SUCCEEDED |
+| [step-default-semantics](step-default-semantics/main.go) | Step, WithDefaultStepSemantics, AtLeastOnceAsync, AtLeastOnce, Wait | SUCCEEDED |
 | [step-error-determinism](step-error-determinism/main.go) | Step, error replay determinism | SUCCEEDED |
 | [retry-exhaustion](retry-exhaustion/main.go) | Step, RetryStrategy exhaustion | FAILED |
 | [retry-linear](retry-linear/main.go) | Step, MustLinearBackoff, LinearBackoff (delays 1 s, 2 s, 3 s) | SUCCEEDED |

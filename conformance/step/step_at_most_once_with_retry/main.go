@@ -25,7 +25,7 @@ func handler(ctx durable.Context, event string) (string, error) {
 		}
 		return "succeeded on second attempt", nil
 	},
-		durable.WithSemantics(durable.AtMostOncePerRetry),
+		durable.WithSemantics(durable.AtMostOnce),
 		durable.WithRetry(durable.MustNewRetryStrategy(durable.RetryConfig{
 			MaxAttempts:  3,
 			InitialDelay: time.Second,

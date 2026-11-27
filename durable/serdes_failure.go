@@ -17,9 +17,9 @@ var ErrRetryableSerdes = errors.New("durable: retryable serdes failure")
 // permanent by default.
 //
 // The operation whose serdes returned the error records no outcome, and the
-// step retry strategy is not consulted. A step under [AtLeastOncePerRetry]
+// step retry strategy is not consulted. A step under [AtLeastOnce]
 // runs its body again on the next invocation. A step under
-// [AtMostOncePerRetry] finds its attempt started and treats it as
+// [AtMostOnce] finds its attempt started and treats it as
 // interrupted. The invocation ends with the error even when handler code
 // catches it.
 func RetryableSerdesError(err error) error {

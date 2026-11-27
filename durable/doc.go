@@ -145,7 +145,8 @@
 // release. [Plugin] lists what the plugin API comprises. The step pause
 // API is experimental too. It comprises [RetryDecision.Pause],
 // [RetryConfig.PauseEvery], [ExecutionPauser] and its input and output
-// types. Each of these declarations carries an EXPERIMENTAL marker.
+// types. The [AtLeastOnceAsync] step semantics value is experimental as
+// well. Each of these declarations carries an EXPERIMENTAL marker.
 //
 // # Struct Literals
 //

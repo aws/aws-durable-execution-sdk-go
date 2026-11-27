@@ -148,6 +148,9 @@ func debugOperationWireAttrs(wireID, name, subType string) []slog.Attr {
 // without replay suppression.
 func (c *execContext) logCheckpoint(ctx context.Context, msg string, updateCount int) {
 	attr := slog.Int(logKeyUpdateCount, updateCount)
+	if nw, ok := ctx.(*noWaitContext); ok {
+		ctx = nw.caller
+	}
 	if ec, ok := ctx.(*execContext); ok {
 		ec.debugLog(nil, msg, attr)
 		return

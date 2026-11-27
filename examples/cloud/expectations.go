@@ -559,6 +559,7 @@ var expectations = map[string]expectation{
 		},
 	},
 	"simple-step":            {result: `"step completed"`},
+	"step-default-semantics": {result: `"order-3 confirmed"`},
 	"step-error-determinism": {result: `{"deterministic":true,"before":{"hasError":true,"isStepErr":true,"attempts":1},"after":{"hasError":true,"isStepErr":true,"attempts":1}}`},
 	"step-with-retry":        {result: `"step succeeded"`},
 	"steps-with-retry":       {result: `{"id":"rec-001","name":""}`},
