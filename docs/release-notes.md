@@ -32,16 +32,19 @@ checkpoint describes it:
   every operation start and end.
 
 For a sampled-out execution, `CreatePlugin` now returns a plugin with
-`EnrichLogContext` only. So the SDK builds no operation map for that
-invocation. The emitted records and the log fields are unchanged.
+`EnrichLogContext` only. So the SDK tracks no operation changes for that
+invocation and builds no `Operations` map at its end. The SDK still builds
+the `Operations` map that `CreatePlugin` receives. The emitted records and
+the log fields are unchanged.
 
 ### Added: `Operations` on `InvocationEndHookInfo`
 
 The plugin API is experimental.
 
 - `InvocationEndHookInfo` has a new field, `Operations`. It holds every
-  operation checkpointed when the invocation ended, keyed by operation ID.
-  It omits the operations beyond the depth set by
+  operation known when the invocation ended, keyed by operation ID, with
+  the state that the invocation payload and the checkpoint responses
+  delivered. It omits the operations beyond the depth set by
   `WithPluginChildOperationsDepth`.
 - An invocation with a plugin that implements `OnInvocationEnd` waits for
   the checkpoint calls already sent before it dispatches the hook. So the

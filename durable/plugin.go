@@ -501,6 +501,13 @@ type InvocationEndHookInfo struct {
 	// lack the response of a call that was still in flight when the context
 	// ended.
 	//
+	// The map holds the operation state that the invocation payload and
+	// the checkpoint responses delivered. A checkpoint response without a
+	// checkpoint token ends the invocation, and the SDK does not apply the
+	// operation state of that response. So the operations that call
+	// updated keep their earlier entries in this map. The next invocation
+	// receives their checkpointed state.
+	//
 	// The map is built for this dispatch and is shared by the plugins that
 	// receive it; treat it as read-only.
 	Operations map[string]OperationHookInfo

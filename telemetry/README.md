@@ -139,10 +139,12 @@ execution). The decision is per-execution and deterministic, derived from an
 FNV-1a hash of the execution ARN.
 
 For a sampled-out execution, `CreatePlugin` returns a plugin with
-`EnrichLogContext` only. The SDK builds operation maps only for a plugin with
-an `OnOperationChange` or `OnInvocationEnd` hook. So the SDK builds none for a
-sampled-out invocation. Its log records still carry `execution_arn` and
-`function_name`.
+`EnrichLogContext` only. The SDK tracks operation changes and builds the
+`Operations` maps of `OnOperationChange` and `OnInvocationEnd` only for a
+plugin with one of those hooks. So the SDK skips that work for a sampled-out
+invocation. The SDK still builds the `Operations` map that `CreatePlugin`
+receives at invocation start. The log records of a sampled-out invocation
+still carry `execution_arn` and `function_name`.
 
 ```go
 plugin := telemetry.New(telemetry.Config{

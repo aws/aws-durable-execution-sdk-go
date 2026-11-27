@@ -3,6 +3,7 @@ package telemetry
 import (
 	"context"
 	"maps"
+	"reflect"
 	"strconv"
 	"testing"
 	"time"
@@ -110,9 +111,11 @@ func TestPlugin_SampledOutExecution_EmitsNoRecords(t *testing.T) {
 
 // TestPlugin_SampledOutRegistersOnlyLogContext asserts which hooks a
 // sampled-out invocation registers. The SDK tracks operation changes and
-// builds an Operations map for a plugin that implements OnOperationChange
-// or OnInvocationEnd. So a sampled-out invocation must register neither.
-// Its log records still carry the plugin's fields.
+// builds the Operations maps of OnOperationChange and OnInvocationEnd for
+// a plugin that implements one of those hooks. So a sampled-out invocation
+// must register neither. The test checks every hook field of
+// durable.Plugin, so it also covers a hook that a later change adds. The
+// log records of a sampled-out invocation still carry the plugin's fields.
 func TestPlugin_SampledOutRegistersOnlyLogContext(t *testing.T) {
 	const arn = "arn:aws:lambda:us-east-1:123456789012:function:orders:1/durable-execution/name/id"
 	// At this rate the sampling threshold is 0 buckets, so every ARN
@@ -124,9 +127,15 @@ func TestPlugin_SampledOutRegistersOnlyLogContext(t *testing.T) {
 			factory := New(Config{EmitMode: mode, SamplingRate: rate, Exporters: []Exporter{&capturingExporter{}}})
 			plugin := createTestPlugin(t, ctx, factory, durable.InvocationHookInfo{ExecutionArn: arn})
 
-			if plugin.OnInvocationStart != nil || plugin.OnOperationChange != nil || plugin.OnInvocationEnd != nil {
-				t.Errorf("sampled-out plugin registered hooks: start=%t change=%t end=%t, want none",
-					plugin.OnInvocationStart != nil, plugin.OnOperationChange != nil, plugin.OnInvocationEnd != nil)
+			fields := reflect.ValueOf(*plugin)
+			for i := range fields.NumField() {
+				name := fields.Type().Field(i).Name
+				if name == "EnrichLogContext" || fields.Field(i).Kind() != reflect.Func {
+					continue
+				}
+				if !fields.Field(i).IsNil() {
+					t.Errorf("sampled-out plugin registered %s, want only EnrichLogContext", name)
+				}
 			}
 			if plugin.EnrichLogContext == nil {
 				t.Fatal("sampled-out plugin registered no EnrichLogContext")
