@@ -2,6 +2,49 @@
 
 ## Unreleased
 
+### Changed: the telemetry plugin reads operations from checkpoints only
+
+This is a breaking change to the records that the telemetry plugin emits. It
+fixes issues #203 and #164.
+
+Before, the plugin built the operations array from two sources: the
+checkpointed operations, and the `OnOperationStart` and `OnOperationEnd`
+hooks. The two sources could disagree about one operation.
+
+Now the plugin reads only the checkpointed operations. It registers no
+operation-level hook. At invocation end it reads the new
+`InvocationEndHookInfo.Operations`. So a record lists each operation as its
+checkpoint describes it:
+
+- A child context under `WithChildVirtual` is absent. It has no checkpoint.
+- The error of a failed operation holds the checkpointed error type and
+  message. Before, a step error held the Go type of the returned error and
+  its `Error()` text.
+- A failed operation with no checkpointed error has no error. Before, the
+  plugin recorded the Go error that the operation returned.
+- The timestamps and the duration of a step are those of the checkpoint.
+  Before, they were the times at which the hooks ran.
+- The attempt of a step is the checkpointed attempt count. A running step
+  reports one lower than before. A step in its first attempt reports no
+  attempt.
+- With `EmitOnChange`, the plugin emits at invocation start, after each
+  `OnOperationChange` call, and at invocation end. Before, it emitted on
+  every operation start and end.
+
+### Added: `Operations` on `InvocationEndHookInfo`
+
+The plugin API is experimental.
+
+- `InvocationEndHookInfo` has a new field, `Operations`. It holds every
+  operation checkpointed when the invocation ended, keyed by operation ID.
+  It omits the operations beyond the depth set by
+  `WithPluginChildOperationsDepth`.
+- The `Error` of an entry in an `Operations` or `UpdatedOperations` map is
+  now an `*OperationError` when the checkpoint holds an error type. Its fields
+  carry the checkpointed error type, message, data, and stack trace. Its
+  text is `durable: operation "<name>" failed: <ErrorType>: <Message>`. The
+  `Error` that `OnOperationEnd` reports is unchanged.
+
 ### Changed: `OnOperationChange` fires on checkpoint responses
 
 The plugin API is experimental, and this is a breaking change to one of its
@@ -41,10 +84,6 @@ is reported during that invocation.
 - The hook no longer fires at the start of an invocation. A plugin reads the
   operations that changed between invocations from `UpdatedOperations` of
   `InvocationHookInfo`, as before.
-
-The telemetry plugin records every change, except a change for an operation
-that `OnOperationEnd` already reported in the same invocation. So a late
-change cannot replace the outcome that `OnOperationEnd` reported.
 
 An operation that a checkpoint response or a paginated state read delivers
 now keeps its parent ID. Before, the depth bound of
@@ -106,9 +145,8 @@ A child context under `WithChildVirtual` is unchanged. It has no
 checkpoint, so it dispatches a start and an end, with `IsReplay` true, on
 every invocation that replays it.
 
-The telemetry plugin builds its record from `InvocationHookInfo.Operations`
-at each invocation start. So record contents are unchanged. With
-`EmitOnChange`, a replay can emit fewer records, because fewer hooks fire.
+The telemetry plugin builds its record from the checkpointed operations. So
+record contents are unchanged.
 
 ### Added: pause the execution from a retry decision (experimental)
 

@@ -151,9 +151,8 @@ func TestResume_LocalRunnerCompletedChildContext(t *testing.T) {
 // TestResume_LocalRunnerReplayedOperationsKeepRecordContents runs a handler
 // over three invocations through the local runner. Each wait suspends one
 // invocation. The third invocation replays the first step, the first wait,
-// and the second step. The SDK dispatches no operation hook for them,
-// because earlier invocations dispatched their ends. So the telemetry
-// record reads them from the invocation start snapshot. The final record
+// and the second step. The telemetry record reads them from the operations
+// of OnInvocationEnd, like every other operation. The final record
 // must hold every operation once, with its type, its terminal status, and
 // its result. The local runner's invocation payload carries no operation
 // timestamps. So the operations in the final record have none, and the
@@ -233,9 +232,8 @@ func TestResume_LocalRunnerReplayedOperationsKeepRecordContents(t *testing.T) {
 // completion through the local runner. A step fails twice and then
 // succeeds. A wait-for-condition stops on its third check. Then a wait
 // suspends the invocation. The last invocation replays the step and the
-// wait-for-condition from terminal checkpoints. Earlier invocations
-// dispatched their ends, so the SDK dispatches no operation hook for them.
-// So the telemetry record reads them from the invocation start snapshot.
+// wait-for-condition from terminal checkpoints. The telemetry record reads
+// them from the operations of OnInvocationEnd, like every other operation.
 // The final record must report, for both, the attempt count that the
 // checkpoint holds. The test reads that count from the runner's result, so
 // it does not depend on how the runner numbers attempts.

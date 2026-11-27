@@ -544,27 +544,31 @@ func TestPlugin_Content_TransformsApplyToInputOutputAndResults(t *testing.T) {
 		ExecutionStartTimestamp: start,
 	}
 	plugin := startTestPlugin(t, ctx, factory, info)
-	plugin.OnOperationEnd(ctx, durable.OperationHookInfo{
-		ID: "op-1", Name: "increment", Type: "STEP", SubType: "Step",
-		Status: durable.PluginOperationSucceeded, Attempt: 1,
-		StartTimestamp: start, EndTimestamp: start.Add(time.Second),
-		Result: `{"value":"secret"}`,
-	})
-	plugin.OnOperationEnd(ctx, durable.OperationHookInfo{
-		ID: "op-2", Name: "raw", Type: "STEP", SubType: "Step",
-		Status: durable.PluginOperationSucceeded, Attempt: 1,
-		StartTimestamp: start, EndTimestamp: start.Add(time.Second),
-		Result: `not json secret`,
-	})
-	plugin.OnOperationEnd(ctx, durable.OperationHookInfo{
-		ID: "op-3", Name: "unlisted", Type: "STEP", SubType: "Step",
-		Status: durable.PluginOperationSucceeded, Attempt: 1,
-		StartTimestamp: start, EndTimestamp: start.Add(time.Second),
-		Result: `"secret"`,
-	})
+	// The three operations have the same start timestamp, so the record
+	// lists them by ID.
 	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
 		Status:          durable.PluginInvocationSucceeded,
 		ExecutionResult: "secret output",
+		Operations: opsByID(
+			durable.OperationHookInfo{
+				ID: "op-1", Name: "increment", Type: "STEP", SubType: "Step",
+				Status: durable.PluginOperationSucceeded, Attempt: 1,
+				StartTimestamp: start, EndTimestamp: start.Add(time.Second),
+				Result: `{"value":"secret"}`,
+			},
+			durable.OperationHookInfo{
+				ID: "op-2", Name: "raw", Type: "STEP", SubType: "Step",
+				Status: durable.PluginOperationSucceeded, Attempt: 1,
+				StartTimestamp: start, EndTimestamp: start.Add(time.Second),
+				Result: `not json secret`,
+			},
+			durable.OperationHookInfo{
+				ID: "op-3", Name: "unlisted", Type: "STEP", SubType: "Step",
+				Status: durable.PluginOperationSucceeded, Attempt: 1,
+				StartTimestamp: start, EndTimestamp: start.Add(time.Second),
+				Result: `"secret"`,
+			},
+		),
 	})
 
 	records := exp.snapshot()
@@ -646,14 +650,16 @@ func TestPlugin_Content_ExcludedOperationSkipsResultTransform(t *testing.T) {
 	plugin := startTestPlugin(t, ctx, factory, durable.InvocationHookInfo{
 		ExecutionArn: "arn:test",
 	})
+	var ops []durable.OperationHookInfo
 	for _, name := range []string{"excluded", "included"} {
-		plugin.OnOperationEnd(ctx, durable.OperationHookInfo{
+		ops = append(ops, durable.OperationHookInfo{
 			ID: name, Name: name, Type: "STEP",
 			Status: durable.PluginOperationSucceeded, Result: `{"value":"secret"}`,
 		})
 	}
 	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
-		Status: durable.PluginInvocationSucceeded,
+		Status:     durable.PluginInvocationSucceeded,
+		Operations: opsByID(ops...),
 	})
 
 	if excludedCalls != 0 {
@@ -666,12 +672,12 @@ func TestPlugin_Content_ExcludedOperationSkipsResultTransform(t *testing.T) {
 	if len(records) != 1 {
 		t.Fatalf("got %d records, want 1", len(records))
 	}
-	ops := records[0].Operations
-	if len(ops) != 1 || ops[0].Name != "included" {
-		t.Fatalf("operations = %+v, want only the included operation", ops)
+	recorded := records[0].Operations
+	if len(recorded) != 1 || recorded[0].Name != "included" {
+		t.Fatalf("operations = %+v, want only the included operation", recorded)
 	}
-	if string(ops[0].Result) != `"transformed"` {
-		t.Errorf("included result = %s, want transformed JSON string", ops[0].Result)
+	if string(recorded[0].Result) != `"transformed"` {
+		t.Errorf("included result = %s, want transformed JSON string", recorded[0].Result)
 	}
 }
 
@@ -686,13 +692,13 @@ func TestPlugin_Content_ResultsOmittedByDefault(t *testing.T) {
 		ExecutionArn:   "arn:test",
 		ExecutionInput: map[string]int{"value": 41},
 	})
-	plugin.OnOperationEnd(ctx, durable.OperationHookInfo{
-		ID: "op-1", Name: "increment", Type: "STEP",
-		Status: durable.PluginOperationSucceeded, Result: `{"value":42}`,
-	})
 	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
 		Status:          durable.PluginInvocationSucceeded,
 		ExecutionResult: map[string]int{"value": 42},
+		Operations: opsByID(durable.OperationHookInfo{
+			ID: "op-1", Name: "increment", Type: "STEP",
+			Status: durable.PluginOperationSucceeded, Result: `{"value":42}`,
+		}),
 	})
 
 	records := exp.snapshot()
@@ -738,13 +744,13 @@ func TestPlugin_Content_ExcludedContentHasNoKey(t *testing.T) {
 		ExecutionArn:   "arn:test",
 		ExecutionInput: map[string]int{"value": 41},
 	})
-	plugin.OnOperationEnd(ctx, durable.OperationHookInfo{
-		ID: "op-1", Name: "increment", Type: "STEP",
-		Status: durable.PluginOperationFailed, Error: errors.New("step failed"),
-	})
 	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
 		Status:         durable.PluginInvocationFailed,
 		ExecutionError: errors.New("execution failed"),
+		Operations: opsByID(durable.OperationHookInfo{
+			ID: "op-1", Name: "increment", Type: "STEP",
+			Status: durable.PluginOperationFailed, Error: checkpointedError("increment", "Error", "step failed"),
+		}),
 	})
 
 	records := exp.snapshot()
@@ -809,9 +815,12 @@ func TestPlugin_Content_LargeInputIsNotCut(t *testing.T) {
 
 // TestPlugin_Content_ResultTransformRunsOncePerResultText verifies that
 // hooks reporting an unchanged result reuse the transformed value, and
-// that a changed result text runs the transform again.
+// that a changed result text runs the transform again. EmitOnChange is the
+// mode in which every hook builds the operation list.
 func TestPlugin_Content_ResultTransformRunsOncePerResultText(t *testing.T) {
 	ctx := t.Context()
+	// The hooks run the transform while they hold the invocation's lock,
+	// and the test calls the hooks one at a time. So calls needs no lock.
 	calls := 0
 	content := ContentConfig{Operations: ContentOperations{Overrides: []OperationOverride{{
 		OperationName: "step",
@@ -821,7 +830,7 @@ func TestPlugin_Content_ResultTransformRunsOncePerResultText(t *testing.T) {
 		},
 	}}}}
 	exp := &capturingExporter{}
-	factory := New(Config{Content: content, Exporters: []Exporter{exp}})
+	factory := New(Config{EmitMode: EmitOnChange, Content: content, Exporters: []Exporter{exp}})
 	start := time.Now().Add(-time.Minute)
 	op := durable.OperationHookInfo{
 		ID: "op-1", Name: "step", Type: "STEP",
@@ -831,32 +840,29 @@ func TestPlugin_Content_ResultTransformRunsOncePerResultText(t *testing.T) {
 	}
 	plugin := startTestPlugin(t, ctx, factory, durable.InvocationHookInfo{
 		ExecutionArn: "arn:test",
-		Operations:   map[string]durable.OperationHookInfo{op.ID: op},
+		Operations:   opsByID(op),
 	})
-	// The change precedes the operation hooks of the operation, so the
-	// plugin records it.
-	plugin.OnOperationChange(ctx, durable.OperationChangeHookInfo{
-		UpdatedOperations: map[string]durable.OperationHookInfo{op.ID: op},
-	})
-	plugin.OnOperationEnd(ctx, op)
+	reportChange(ctx, plugin, op)
+	reportChange(ctx, plugin, op)
 	if calls != 1 {
 		t.Fatalf("after three hooks with the same result, transform called %d times, want 1", calls)
 	}
 
 	op.Result = `"second"`
-	plugin.OnOperationEnd(ctx, op)
+	reportChange(ctx, plugin, op)
 	if calls != 2 {
 		t.Fatalf("after a changed result, transform called %d times, want 2", calls)
 	}
 	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
-		Status: durable.PluginInvocationSucceeded,
+		Status:     durable.PluginInvocationSucceeded,
+		Operations: opsByID(op),
 	})
 
 	records := exp.snapshot()
-	if len(records) != 1 {
-		t.Fatalf("got %d records, want 1", len(records))
+	if len(records) == 0 {
+		t.Fatal("no record was exported")
 	}
-	ops := records[0].Operations
+	ops := records[len(records)-1].Operations
 	if len(ops) != 1 {
 		t.Fatalf("got %d operations, want 1", len(ops))
 	}
@@ -892,9 +898,11 @@ func TestPlugin_Content_SampledOutSkipsTransforms(t *testing.T) {
 	exp := &capturingExporter{}
 	factory := New(Config{
 		SamplingRate: rate,
-		EmitMode:     EmitAlways,
-		Content:      content,
-		Exporters:    []Exporter{exp},
+		// EmitOnChange is the mode in which every hook builds the
+		// operation list.
+		EmitMode:  EmitOnChange,
+		Content:   content,
+		Exporters: []Exporter{exp},
 	})
 	op := durable.OperationHookInfo{
 		ID: "op-1", Name: "step", Type: "STEP",
@@ -903,17 +911,14 @@ func TestPlugin_Content_SampledOutSkipsTransforms(t *testing.T) {
 	plugin := startTestPlugin(t, ctx, factory, durable.InvocationHookInfo{
 		ExecutionArn:   arn,
 		ExecutionInput: map[string]int{"value": 0},
-		Operations:     map[string]durable.OperationHookInfo{op.ID: op},
+		Operations:     opsByID(op),
 	})
-	plugin.OnOperationStart(ctx, op)
-	plugin.OnOperationEnd(ctx, op)
-	plugin.OnOperationChange(ctx, durable.OperationChangeHookInfo{
-		UpdatedOperations: map[string]durable.OperationHookInfo{op.ID: op},
-	})
+	reportChange(ctx, plugin, op)
 	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
 		ExecutionArn:    arn,
 		Status:          durable.PluginInvocationSucceeded,
 		ExecutionResult: map[string]int{"value": 1},
+		Operations:      opsByID(op),
 	})
 
 	if inputCalls != 0 || outputCalls != 0 || resultCalls != 0 {

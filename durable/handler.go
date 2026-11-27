@@ -671,8 +671,18 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	// OnOperationChange reports queued so far, so every change a checkpoint
 	// response delivered before this point is reported before
 	// OnInvocationEnd, and none is reported after it.
+	//
+	// It then sets info.Operations to every operation the state holds at
+	// this point. The map is built only when a plugin exists for the
+	// invocation. The checkpointer is terminated on every path that reaches
+	// this function, so the state changes only through a call that is still
+	// in flight; see the wait above.
 	invocationEnd := func(info InvocationEndHookInfo) {
 		changes.close(ctx)
+		if pd != nil {
+			ops, seq := state.snapshot()
+			info.Operations = operationsSnapshotInfo(in.DurableExecutionArn, state, depthBound, ops, seq)
+		}
 		dispatchNotification(pd, func(p *Plugin) {
 			if p.OnInvocationEnd != nil {
 				p.OnInvocationEnd(ctx, info)

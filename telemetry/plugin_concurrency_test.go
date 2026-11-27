@@ -67,7 +67,7 @@ func TestPlugin_ConcurrentInvocations_IsolateRecords(t *testing.T) {
 				return
 			}
 			plugin.OnInvocationStart(ctx, info)
-			plugin.OnOperationStart(ctx, durable.OperationHookInfo{ExecutionArn: info.ExecutionArn, ID: "shared-id", Type: "STEP", Status: durable.PluginOperationStarted})
+			reportChange(ctx, plugin, durable.OperationHookInfo{ExecutionArn: info.ExecutionArn, ID: "shared-id", Type: "STEP", Status: durable.PluginOperationStarted})
 			if i == 0 {
 				close(aStarted)
 				select {
@@ -78,9 +78,10 @@ func TestPlugin_ConcurrentInvocations_IsolateRecords(t *testing.T) {
 			} else {
 				close(bStarted)
 			}
-			plugin.OnOperationEnd(ctx, durable.OperationHookInfo{ExecutionArn: info.ExecutionArn, ID: "shared-id", Name: "shared", Type: "STEP", Status: durable.PluginOperationSucceeded, Result: fmt.Sprintf("result-%d", i)})
+			succeeded := durable.OperationHookInfo{ExecutionArn: info.ExecutionArn, ID: "shared-id", Name: "shared", Type: "STEP", Status: durable.PluginOperationSucceeded, Result: fmt.Sprintf("result-%d", i)}
+			reportChange(ctx, plugin, succeeded)
 			logs <- plugin.EnrichLogContext(ctx)
-			end := durable.InvocationEndHookInfo{ExecutionArn: info.ExecutionArn, Status: durable.PluginInvocationSucceeded, ExecutionResult: "output-a"}
+			end := durable.InvocationEndHookInfo{ExecutionArn: info.ExecutionArn, Status: durable.PluginInvocationSucceeded, ExecutionResult: "output-a", Operations: opsByID(succeeded)}
 			if i == 1 {
 				end.Status = durable.PluginInvocationFailed
 				end.ExecutionResult = nil
@@ -137,24 +138,26 @@ func TestPlugin_ConcurrentInvocations_IsolateRecords(t *testing.T) {
 	}
 }
 
-func TestPlugin_ConcurrentOperations_PreserveUpdates(t *testing.T) {
+// TestPlugin_ConcurrentLogEnrichmentAndChanges runs log enrichment on many
+// goroutines while the changes of one invocation are reported. The SDK
+// reports the changes one at a time, and handler goroutines can enrich a
+// log at any moment. Each change carries one more operation. The final
+// record holds every operation of OnInvocationEnd once.
+func TestPlugin_ConcurrentLogEnrichmentAndChanges(t *testing.T) {
 	ctx := t.Context()
 	exp := &capturingExporter{}
 	info := durable.InvocationHookInfo{ExecutionArn: "arn:aws:lambda:us-east-1:123456789012:function:fn:1/durable-execution/name/id"}
-	plugin := startTestPlugin(t, ctx, New(Config{Exporters: []Exporter{exp}, Content: withResults("op")}), info)
+	plugin := startTestPlugin(t, ctx, New(Config{EmitMode: EmitOnChange, Exporters: []Exporter{exp}, Content: withResults("op")}), info)
 	const count = 64
 	ready := make(chan struct{}, count)
 	start := make(chan struct{})
 	var wg sync.WaitGroup
-	for i := range count {
+	for range count {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			ready <- struct{}{}
 			<-start
-			id := fmt.Sprintf("op-%d", i)
-			plugin.OnOperationStart(ctx, durable.OperationHookInfo{ID: id, Type: "STEP", Status: durable.PluginOperationStarted})
-			plugin.OnOperationEnd(ctx, durable.OperationHookInfo{ID: id, Name: "op", Type: "STEP", Status: durable.PluginOperationSucceeded, Result: id})
 			if fields := plugin.EnrichLogContext(ctx); fields["execution_arn"] != info.ExecutionArn || fields["function_name"] != "fn" {
 				t.Errorf("log fields = %v", fields)
 			}
@@ -164,14 +167,24 @@ func TestPlugin_ConcurrentOperations_PreserveUpdates(t *testing.T) {
 		awaitSignal(t, ready)
 	}
 	close(start)
+	var ops []durable.OperationHookInfo
+	for i := range count {
+		id := fmt.Sprintf("op-%d", i)
+		ops = append(ops, durable.OperationHookInfo{ID: id, Name: "op", Type: "STEP", Status: durable.PluginOperationSucceeded, Result: id})
+		reportChange(ctx, plugin, ops...)
+	}
 	wg.Wait()
-	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{Status: durable.PluginInvocationSucceeded})
+	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{Status: durable.PluginInvocationSucceeded, Operations: opsByID(ops...)})
 	records := exp.snapshot()
-	if len(records) != 1 || len(records[0].Operations) != count {
-		t.Fatalf("records = %+v, want one record with %d operations", records, count)
+	if len(records) == 0 {
+		t.Fatal("no record was exported")
+	}
+	final := records[len(records)-1]
+	if final.Status != StatusSucceeded || len(final.Operations) != count {
+		t.Fatalf("final record = %+v, want SUCCEEDED with %d operations", final, count)
 	}
 	seen := make(map[string]bool)
-	for _, op := range records[0].Operations {
+	for _, op := range final.Operations {
 		if seen[op.ID] || op.Status != "SUCCEEDED" || string(op.Result) != jsonString(op.ID) {
 			t.Errorf("unexpected operation: %+v", op)
 		}

@@ -153,22 +153,24 @@ func TestPlugin_ConcurrentInvocations_IsolateSampling(t *testing.T) {
 				done := make(chan struct{})
 				go func() {
 					defer close(done)
-					first.OnOperationStart(ctx, durable.OperationHookInfo{ID: "shared-id", Type: "STEP", Status: durable.PluginOperationStarted})
+					reportChange(ctx, first, durable.OperationHookInfo{ID: "shared-id", Type: "STEP", Status: durable.PluginOperationStarted})
 					close(firstReady)
 					select {
 					case <-secondReady:
 					case <-release:
 						return
 					}
-					first.OnOperationEnd(ctx, durable.OperationHookInfo{ID: "shared-id", Name: "shared", Type: "STEP", Status: durable.PluginOperationSucceeded, Result: "first"})
-					first.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{Status: durable.PluginInvocationSucceeded, ExecutionResult: "first"})
+					succeeded := durable.OperationHookInfo{ID: "shared-id", Name: "shared", Type: "STEP", Status: durable.PluginOperationSucceeded, Result: "first"}
+					reportChange(ctx, first, succeeded)
+					first.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{Status: durable.PluginInvocationSucceeded, ExecutionResult: "first", Operations: opsByID(succeeded)})
 				}()
 				awaitSignal(t, firstReady)
 				second := startTestPlugin(t, ctx, factory, durable.InvocationHookInfo{ExecutionArn: arns[!firstSampled], ExecutionInput: "second"})
-				second.OnOperationStart(ctx, durable.OperationHookInfo{ID: "shared-id", Type: "STEP", Status: durable.PluginOperationStarted})
+				reportChange(ctx, second, durable.OperationHookInfo{ID: "shared-id", Type: "STEP", Status: durable.PluginOperationStarted})
 				close(secondReady)
-				second.OnOperationEnd(ctx, durable.OperationHookInfo{ID: "shared-id", Name: "shared", Type: "STEP", Status: durable.PluginOperationSucceeded, Result: "second"})
-				second.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{Status: durable.PluginInvocationSucceeded, ExecutionResult: "second"})
+				succeeded := durable.OperationHookInfo{ID: "shared-id", Name: "shared", Type: "STEP", Status: durable.PluginOperationSucceeded, Result: "second"}
+				reportChange(ctx, second, succeeded)
+				second.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{Status: durable.PluginInvocationSucceeded, ExecutionResult: "second", Operations: opsByID(succeeded)})
 				awaitSignal(t, done)
 				records := exp.snapshot()
 				if len(records) == 0 {

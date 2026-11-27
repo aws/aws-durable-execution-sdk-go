@@ -62,33 +62,21 @@ func TestPlugin_HappyPath_EmitsSucceededRecord(t *testing.T) {
 		ExecutionInput:          map[string]string{"orderId": "abc"},
 	})
 
-	plugin.OnOperationStart(ctx, durable.OperationHookInfo{
-		ExecutionArn:   arn,
-		ID:             "op-1",
-		Name:           "validate",
-		Type:           "STEP",
-		SubType:        "Step",
-		Status:         durable.PluginOperationStarted,
-		StartTimestamp: now.Add(10 * time.Millisecond),
-		ParentID:       "",
-	})
-
-	plugin.OnOperationEnd(ctx, durable.OperationHookInfo{
-		ExecutionArn:   arn,
-		ID:             "op-1",
-		Name:           "validate",
-		Type:           "STEP",
-		SubType:        "Step",
-		Status:         durable.PluginOperationSucceeded,
-		StartTimestamp: now.Add(10 * time.Millisecond),
-		EndTimestamp:   now.Add(50 * time.Millisecond),
-		Result:         `"validated:abc"`,
-	})
-
 	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
 		ExecutionArn:    arn,
 		Status:          durable.PluginInvocationSucceeded,
 		ExecutionResult: map[string]string{"status": "done"},
+		Operations: opsByID(durable.OperationHookInfo{
+			ExecutionArn:   arn,
+			ID:             "op-1",
+			Name:           "validate",
+			Type:           "STEP",
+			SubType:        "Step",
+			Status:         durable.PluginOperationSucceeded,
+			StartTimestamp: now.Add(10 * time.Millisecond),
+			EndTimestamp:   now.Add(50 * time.Millisecond),
+			Result:         `"validated:abc"`,
+		}),
 	})
 
 	records := exp.snapshot()
@@ -144,30 +132,20 @@ func TestPlugin_FailedExecution_EmitsFailedRecordWithError(t *testing.T) {
 		ExecutionStartTimestamp: now,
 	})
 
-	plugin.OnOperationStart(ctx, durable.OperationHookInfo{
-		ExecutionArn:   arn,
-		ID:             "op-1",
-		Name:           "failing-step",
-		Type:           "STEP",
-		Status:         durable.PluginOperationStarted,
-		StartTimestamp: now,
-	})
-
-	plugin.OnOperationEnd(ctx, durable.OperationHookInfo{
-		ExecutionArn:   arn,
-		ID:             "op-1",
-		Name:           "failing-step",
-		Type:           "STEP",
-		Status:         durable.PluginOperationFailed,
-		StartTimestamp: now,
-		EndTimestamp:   now.Add(10 * time.Millisecond),
-		Error:          &testError{msg: "boom"},
-	})
-
 	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
 		ExecutionArn:   arn,
 		Status:         durable.PluginInvocationFailed,
 		ExecutionError: &testError{msg: "boom"},
+		Operations: opsByID(durable.OperationHookInfo{
+			ExecutionArn:   arn,
+			ID:             "op-1",
+			Name:           "failing-step",
+			Type:           "STEP",
+			Status:         durable.PluginOperationFailed,
+			StartTimestamp: now,
+			EndTimestamp:   now.Add(10 * time.Millisecond),
+			Error:          checkpointedError("failing-step", "Error", "boom"),
+		}),
 	})
 
 	records := exp.snapshot()
@@ -181,8 +159,10 @@ func TestPlugin_FailedExecution_EmitsFailedRecordWithError(t *testing.T) {
 	if rec.Error == nil {
 		t.Fatal("expected non-nil Error on failed record")
 	}
-	if rec.Error.Message != "boom" {
-		t.Errorf("expected error message %q, got %q", "boom", rec.Error.Message)
+	// The execution error is built from the Go error the handler returned:
+	// its type name and its text.
+	if rec.Error.Type != "testError" || rec.Error.Message != "boom" {
+		t.Errorf("execution error = %+v, want type testError and message boom", *rec.Error)
 	}
 	if len(rec.Operations) != 1 || rec.Operations[0].Status != "FAILED" {
 		t.Errorf("expected 1 FAILED operation, got %+v", rec.Operations)
@@ -285,33 +265,33 @@ func TestPlugin_OperationDetailTopLevel_FiltersChildOps(t *testing.T) {
 		ExecutionStartTimestamp: now,
 	})
 
-	// Top-level op.
-	plugin.OnOperationEnd(ctx, durable.OperationHookInfo{
-		ExecutionArn:   arn,
-		ID:             "parent-op",
-		Name:           "parent",
-		Type:           "CONTEXT",
-		Status:         durable.PluginOperationSucceeded,
-		StartTimestamp: now,
-		EndTimestamp:   now.Add(10 * time.Millisecond),
-	})
-
-	// Child op (should be filtered out).
-	plugin.OnOperationEnd(ctx, durable.OperationHookInfo{
-		ExecutionArn:   arn,
-		ID:             "child-op",
-		Name:           "child",
-		Type:           "STEP",
-		Status:         durable.PluginOperationSucceeded,
-		ParentID:       "parent-op",
-		StartTimestamp: now,
-		EndTimestamp:   now.Add(5 * time.Millisecond),
-	})
-
 	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
 		ExecutionArn:    arn,
 		Status:          durable.PluginInvocationSucceeded,
 		ExecutionResult: "ok",
+		Operations: opsByID(
+			// Top-level op.
+			durable.OperationHookInfo{
+				ExecutionArn:   arn,
+				ID:             "parent-op",
+				Name:           "parent",
+				Type:           "CONTEXT",
+				Status:         durable.PluginOperationSucceeded,
+				StartTimestamp: now,
+				EndTimestamp:   now.Add(10 * time.Millisecond),
+			},
+			// Child op (should be filtered out).
+			durable.OperationHookInfo{
+				ExecutionArn:   arn,
+				ID:             "child-op",
+				Name:           "child",
+				Type:           "STEP",
+				Status:         durable.PluginOperationSucceeded,
+				ParentID:       "parent-op",
+				StartTimestamp: now,
+				EndTimestamp:   now.Add(5 * time.Millisecond),
+			},
+		),
 	})
 
 	records := exp.snapshot()
@@ -343,31 +323,31 @@ func TestPlugin_OperationDetailFullTree_IncludesChildOps(t *testing.T) {
 		ExecutionStartTimestamp: now,
 	})
 
-	plugin.OnOperationEnd(ctx, durable.OperationHookInfo{
-		ExecutionArn:   arn,
-		ID:             "parent-op",
-		Name:           "parent",
-		Type:           "CONTEXT",
-		Status:         durable.PluginOperationSucceeded,
-		StartTimestamp: now,
-		EndTimestamp:   now.Add(10 * time.Millisecond),
-	})
-
-	plugin.OnOperationEnd(ctx, durable.OperationHookInfo{
-		ExecutionArn:   arn,
-		ID:             "child-op",
-		Name:           "child",
-		Type:           "STEP",
-		Status:         durable.PluginOperationSucceeded,
-		ParentID:       "parent-op",
-		StartTimestamp: now,
-		EndTimestamp:   now.Add(5 * time.Millisecond),
-	})
-
 	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
 		ExecutionArn:    arn,
 		Status:          durable.PluginInvocationSucceeded,
 		ExecutionResult: "ok",
+		Operations: opsByID(
+			durable.OperationHookInfo{
+				ExecutionArn:   arn,
+				ID:             "parent-op",
+				Name:           "parent",
+				Type:           "CONTEXT",
+				Status:         durable.PluginOperationSucceeded,
+				StartTimestamp: now,
+				EndTimestamp:   now.Add(10 * time.Millisecond),
+			},
+			durable.OperationHookInfo{
+				ExecutionArn:   arn,
+				ID:             "child-op",
+				Name:           "child",
+				Type:           "STEP",
+				Status:         durable.PluginOperationSucceeded,
+				ParentID:       "parent-op",
+				StartTimestamp: now,
+				EndTimestamp:   now.Add(5 * time.Millisecond),
+			},
+		),
 	})
 
 	records := exp.snapshot()
@@ -392,17 +372,16 @@ func TestPlugin_SkipsExecutionOperation(t *testing.T) {
 	})
 
 	// The EXECUTION operation should be skipped.
-	plugin.OnOperationStart(ctx, durable.OperationHookInfo{
-		ExecutionArn: arn,
-		ID:           "exec-root",
-		Type:         "EXECUTION",
-		Status:       durable.PluginOperationStarted,
-	})
-
 	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
 		ExecutionArn:    arn,
 		Status:          durable.PluginInvocationSucceeded,
 		ExecutionResult: "ok",
+		Operations: opsByID(durable.OperationHookInfo{
+			ExecutionArn: arn,
+			ID:           "exec-root",
+			Type:         "EXECUTION",
+			Status:       durable.PluginOperationStarted,
+		}),
 	})
 
 	records := exp.snapshot()
@@ -448,7 +427,62 @@ func TestPlugin_CreatePlugin_InitializesMetadataAndInput(t *testing.T) {
 	}
 }
 
-func TestPlugin_OnOperationChange_BackfillsOps(t *testing.T) {
+// TestPlugin_FinalRecordUsesInvocationEndOperations asserts that the final
+// record is built from the operations of OnInvocationEnd. The last change
+// the plugin received reports the step as STARTED. The SDK drops the change
+// that reports it as SUCCEEDED when the invocation's context ends first.
+// OnInvocationEnd then carries the step as SUCCEEDED. The final record
+// holds the SUCCEEDED status, the end timestamp, and the attempt.
+func TestPlugin_FinalRecordUsesInvocationEndOperations(t *testing.T) {
+	for _, mode := range []EmitMode{EmitOnComplete, EmitAlways, EmitOnChange} {
+		t.Run(string(mode), func(t *testing.T) {
+			exp := &capturingExporter{}
+			ip := New(Config{Exporters: []Exporter{exp}, EmitMode: mode})
+
+			ctx := context.Background()
+			arn := "arn:aws:lambda:us-east-1:123456789012:function:fn:1"
+			now := time.Now()
+
+			plugin := startTestPlugin(t, ctx, ip, durable.InvocationHookInfo{
+				ExecutionArn:            arn,
+				ExecutionStartTimestamp: now,
+			})
+
+			step := durable.OperationHookInfo{ExecutionArn: arn, ID: "op-1", Name: "step", Type: "STEP", Status: durable.PluginOperationStarted, StartTimestamp: now}
+			reportChange(ctx, plugin, step)
+
+			succeeded := step
+			succeeded.Status = durable.PluginOperationSucceeded
+			succeeded.Attempt = 1
+			succeeded.EndTimestamp = now.Add(time.Millisecond)
+			plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
+				ExecutionArn:    arn,
+				Status:          durable.PluginInvocationSucceeded,
+				ExecutionResult: "done",
+				Operations:      opsByID(succeeded),
+			})
+
+			records := exp.snapshot()
+			if len(records) == 0 {
+				t.Fatal("no record was exported")
+			}
+			final := records[len(records)-1]
+			if final.Status != StatusSucceeded || len(final.Operations) != 1 {
+				t.Fatalf("final record = %+v, want SUCCEEDED with 1 operation", final)
+			}
+			if op := final.Operations[0]; op.Status != string(durable.PluginOperationSucceeded) || op.Attempt != 1 || op.EndTimestamp == nil {
+				t.Errorf("operation = %+v, want the SUCCEEDED record with attempt 1 and an end timestamp", op)
+			}
+		})
+	}
+}
+
+// TestPlugin_OperationError_CheckpointedTypeAndMessage asserts the error of
+// an operation in the record. A failed operation whose snapshot entry holds
+// a *durable.OperationError reports the checkpointed error type and
+// message. A failed operation whose snapshot entry holds no error, for
+// example a callback whose caller sent none, has no error in the record.
+func TestPlugin_OperationError_CheckpointedTypeAndMessage(t *testing.T) {
 	exp := &capturingExporter{}
 	ip := New(Config{Exporters: []Exporter{exp}})
 
@@ -460,130 +494,33 @@ func TestPlugin_OnOperationChange_BackfillsOps(t *testing.T) {
 		ExecutionArn:            arn,
 		ExecutionStartTimestamp: now,
 	})
-
-	// A checkpoint response reports an operation that no operation hook
-	// reported in this invocation.
-	plugin.OnOperationChange(ctx, durable.OperationChangeHookInfo{
-		ExecutionArn: arn,
-		UpdatedOperations: map[string]durable.OperationHookInfo{
-			"op-prev": {
-				ExecutionArn:   arn,
-				ID:             "op-prev",
-				Name:           "previous-step",
-				Type:           "STEP",
-				Status:         durable.PluginOperationSucceeded,
-				StartTimestamp: now.Add(-100 * time.Millisecond),
-				EndTimestamp:   now.Add(-50 * time.Millisecond),
+	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
+		ExecutionArn:   arn,
+		Status:         durable.PluginInvocationFailed,
+		ExecutionError: &testError{msg: "handler failed"},
+		Operations: opsByID(
+			durable.OperationHookInfo{
+				ID: "op-1", Name: "charge", Type: "STEP", Status: durable.PluginOperationFailed,
+				StartTimestamp: now,
+				Error:          checkpointedError("charge", "PaymentDeclinedError", "card expired"),
 			},
-		},
-	})
-
-	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
-		ExecutionArn:    arn,
-		Status:          durable.PluginInvocationSucceeded,
-		ExecutionResult: "done",
-	})
-
-	records := exp.snapshot()
-	if len(records) != 1 {
-		t.Fatalf("expected 1 record, got %d", len(records))
-	}
-	if len(records[0].Operations) != 1 {
-		t.Fatalf("expected 1 op from OnOperationChange backfill, got %d", len(records[0].Operations))
-	}
-	if records[0].Operations[0].Name != "previous-step" {
-		t.Errorf("expected backfilled op name=previous-step, got %q", records[0].Operations[0].Name)
-	}
-}
-
-// TestPlugin_OnOperationChange_KeepsOperationHookRecord asserts that a
-// change dispatched after the OnOperationEnd of the same operation does
-// not replace its record. The step ends as SUCCEEDED with attempt 2, and
-// a late change then reports it as STARTED. The emitted record keeps the
-// outcome OnOperationEnd reported.
-func TestPlugin_OnOperationChange_KeepsOperationHookRecord(t *testing.T) {
-	exp := &capturingExporter{}
-	ip := New(Config{Exporters: []Exporter{exp}})
-
-	ctx := context.Background()
-	arn := "arn:aws:lambda:us-east-1:123456789012:function:fn:1"
-	now := time.Now()
-
-	plugin := startTestPlugin(t, ctx, ip, durable.InvocationHookInfo{
-		ExecutionArn:            arn,
-		ExecutionStartTimestamp: now,
-	})
-
-	step := durable.OperationHookInfo{ExecutionArn: arn, ID: "op-1", Name: "step", Type: "STEP", Status: durable.PluginOperationStarted, StartTimestamp: now}
-	plugin.OnOperationStart(ctx, step)
-	ended := step
-	ended.Status = durable.PluginOperationSucceeded
-	ended.Attempt = 2
-	ended.EndTimestamp = now.Add(time.Millisecond)
-	plugin.OnOperationEnd(ctx, ended)
-
-	plugin.OnOperationChange(ctx, durable.OperationChangeHookInfo{
-		ExecutionArn:      arn,
-		UpdatedOperations: map[string]durable.OperationHookInfo{"op-1": step},
-		Operations:        map[string]durable.OperationHookInfo{"op-1": step},
-	})
-
-	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
-		ExecutionArn:    arn,
-		Status:          durable.PluginInvocationSucceeded,
-		ExecutionResult: "done",
+			durable.OperationHookInfo{
+				ID: "op-2", Name: "approve", Type: "CALLBACK", Status: durable.PluginOperationFailed,
+				StartTimestamp: now.Add(time.Millisecond),
+			},
+		),
 	})
 
 	records := exp.snapshot()
-	if len(records) != 1 || len(records[0].Operations) != 1 {
-		t.Fatalf("records = %+v, want 1 record with 1 operation", records)
+	if len(records) != 1 || len(records[0].Operations) != 2 {
+		t.Fatalf("records = %+v, want 1 record with 2 operations", records)
 	}
-	if op := records[0].Operations[0]; op.Status != string(durable.PluginOperationSucceeded) || op.Attempt != 2 || op.EndTimestamp == nil {
-		t.Errorf("operation = %+v, want the SUCCEEDED record with attempt 2 and an end timestamp", op)
+	step, callback := records[0].Operations[0], records[0].Operations[1]
+	if step.Error == nil || step.Error.Type != "PaymentDeclinedError" || step.Error.Message != "card expired" {
+		t.Errorf("step error = %+v, want type PaymentDeclinedError and message card expired", step.Error)
 	}
-}
-
-// TestPlugin_OnOperationChange_AfterStartWithoutEnd asserts that a change
-// is recorded for an operation that OnOperationStart reported and
-// OnOperationEnd did not. A step starts, a checkpoint response then reports
-// it as PENDING because a retry is scheduled, and the invocation ends as
-// pending. The emitted record holds the PENDING status.
-func TestPlugin_OnOperationChange_AfterStartWithoutEnd(t *testing.T) {
-	exp := &capturingExporter{}
-	// EmitAlways emits a record for a pending invocation.
-	ip := New(Config{Exporters: []Exporter{exp}, EmitMode: EmitAlways})
-
-	ctx := context.Background()
-	arn := "arn:aws:lambda:us-east-1:123456789012:function:fn:1"
-	now := time.Now()
-
-	plugin := startTestPlugin(t, ctx, ip, durable.InvocationHookInfo{
-		ExecutionArn:            arn,
-		ExecutionStartTimestamp: now,
-	})
-
-	step := durable.OperationHookInfo{ExecutionArn: arn, ID: "op-1", Name: "step", Type: "STEP", Status: durable.PluginOperationStarted, StartTimestamp: now}
-	plugin.OnOperationStart(ctx, step)
-	pending := step
-	pending.Status = durable.PluginOperationPending
-	pending.Attempt = 1
-	plugin.OnOperationChange(ctx, durable.OperationChangeHookInfo{
-		ExecutionArn:      arn,
-		UpdatedOperations: map[string]durable.OperationHookInfo{"op-1": pending},
-		Operations:        map[string]durable.OperationHookInfo{"op-1": pending},
-	})
-
-	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
-		ExecutionArn: arn,
-		Status:       durable.PluginInvocationPending,
-	})
-
-	records := exp.snapshot()
-	if len(records) != 1 || len(records[0].Operations) != 1 {
-		t.Fatalf("records = %+v, want 1 record with 1 operation", records)
-	}
-	if op := records[0].Operations[0]; op.Status != string(durable.PluginOperationPending) || op.Attempt != 1 {
-		t.Errorf("operation = %+v, want the PENDING record with attempt 1", op)
+	if callback.Status != string(durable.PluginOperationFailed) || callback.Error != nil {
+		t.Errorf("callback = %+v, want FAILED with no error", callback)
 	}
 }
 
@@ -599,12 +536,6 @@ func TestPlugin_DurablePlugin_WiresHooksCorrectly(t *testing.T) {
 	}
 	if dp.OnInvocationEnd == nil {
 		t.Error("expected OnInvocationEnd to be set")
-	}
-	if dp.OnOperationStart == nil {
-		t.Error("expected OnOperationStart to be set")
-	}
-	if dp.OnOperationEnd == nil {
-		t.Error("expected OnOperationEnd to be set")
 	}
 	if dp.OnOperationChange == nil {
 		t.Error("expected OnOperationChange to be set")

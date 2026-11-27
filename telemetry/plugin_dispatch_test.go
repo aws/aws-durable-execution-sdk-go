@@ -73,14 +73,23 @@ func TestPlugin_EmitOnChange_InvocationDispatchIsolation(t *testing.T) {
 			factory := New(Config{EmitMode: EmitOnChange, Exporters: []Exporter{exp}, Content: withResults("same")})
 			done := []chan struct{}{make(chan struct{}), make(chan struct{})}
 			for i, arn := range arns {
-				plugin := startTestPlugin(t, ctx, factory, durable.InvocationHookInfo{ExecutionArn: arn})
-				plugin.OnOperationStart(changeCtx, durable.OperationHookInfo{ID: "same-id", Type: "STEP", Status: durable.PluginOperationStarted})
+				info := durable.InvocationHookInfo{ExecutionArn: arn}
+				plugin := createTestPlugin(t, ctx, factory, info)
+				// The emission at invocation start is the first on-change
+				// export. The exporter blocks it.
+				plugin.OnInvocationStart(changeCtx, info)
 				awaitSignal(t, exp.gates[arn].entered)
-				// The blocked dispatch must send this later update before the end emission.
-				plugin.OnOperationEnd(changeCtx, durable.OperationHookInfo{ID: "same-id", Name: "same", Type: "STEP", Status: durable.PluginOperationSucceeded, Result: fmt.Sprintf("result-%d", i)})
+				// The blocked dispatch must send these later updates, as
+				// one record, before the end emission.
+				step := durable.OperationHookInfo{ID: "same-id", Type: "STEP", Status: durable.PluginOperationStarted}
+				reportChange(changeCtx, plugin, step)
+				step.Name = "same"
+				step.Status = durable.PluginOperationSucceeded
+				step.Result = fmt.Sprintf("result-%d", i)
+				reportChange(changeCtx, plugin, step)
 				go func() {
 					defer close(done[i])
-					plugin.OnInvocationEnd(endCtx, durable.InvocationEndHookInfo{ExecutionArn: arn, Status: outcome})
+					plugin.OnInvocationEnd(endCtx, durable.InvocationEndHookInfo{ExecutionArn: arn, Status: outcome, Operations: opsByID(step)})
 				}()
 			}
 			// B must finish while A's exporter is still blocked.
@@ -105,8 +114,8 @@ func TestPlugin_EmitOnChange_InvocationDispatchIsolation(t *testing.T) {
 				if len(records) != 3 {
 					t.Fatalf("%s: got %d records, want initial, coalesced and final", arn, len(records))
 				}
-				if records[0].Status != StatusRunning {
-					t.Errorf("initial record status = %s, want RUNNING", records[0].Status)
+				if records[0].Status != StatusRunning || len(records[0].Operations) != 0 {
+					t.Errorf("initial record = status %s with %d operations, want RUNNING with none", records[0].Status, len(records[0].Operations))
 				}
 				for _, rec := range records[1:] {
 					if rec.ExecutionArn != arn || len(rec.Operations) != 1 || string(rec.Operations[0].Result) != jsonString(fmt.Sprintf("result-%d", i)) {

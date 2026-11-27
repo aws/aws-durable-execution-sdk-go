@@ -49,20 +49,34 @@ IAM permissions.
 `TelemetryPlugin` is a factory shared by the execution environment. Each
 `CreatePlugin` call creates a separate record, operation index, sampling decision,
 mutex, and on-change dispatch state. Hooks and log enrichment for one invocation
-use only that invocation's state. Concurrent operation hooks within an invocation
-remain synchronized.
+use only that invocation's state. Concurrent hooks within an invocation remain
+synchronized.
 
 The factory initializes execution metadata, input, and sampling before returning
 the hooks. A resumed invocation retains the execution ARN and original execution
 start timestamp. Its request ID identifies the new invocation. Sampling uses the
 execution ARN, so the decision stays the same across resumes.
 
-At invocation start, the plugin initializes its operation buffer from the full
-checkpointed snapshot. This includes unchanged nested operations in completed
-child contexts whose bodies do not run again. The root execution operation is
-excluded from the operations array. `OperationDetail` and the SDK's
-`durable.WithPluginChildOperationsDepth` still limit the operations reported.
-Subsequent hooks update the buffer by operation ID.
+The plugin builds the operations array from the checkpointed operations that
+the SDK reports. It uses no per-operation hook. At invocation end it reads
+`InvocationEndHookInfo.Operations`, which holds every operation checkpointed
+when the invocation ended. With `EmitOnChange` it also reads the operations
+reported at invocation start and by each `OnOperationChange` call. Each read
+replaces the whole array.
+
+The array includes unchanged nested operations in completed child contexts
+whose bodies do not run again. The root execution operation is excluded. A
+child context under `durable.WithChildVirtual` has no checkpoint, so it is
+absent. `OperationDetail` and the SDK's `durable.WithPluginChildOperationsDepth`
+still limit the operations reported.
+
+Every field of an operation comes from its checkpoint:
+
+- The timestamps and `DurationMs` are the checkpointed start and end.
+- `Attempt` is the checkpointed attempt count. A step in its first attempt has
+  no count yet, so the JSON omits `attempt`.
+- `Error` holds the checkpointed error type and message. A failed operation
+  with no checkpointed error has no `Error`.
 
 Exporters and content transforms remain shared. `InputTransform`,
 `OutputTransform`, and each `OperationOverride.Result` may be called concurrently
@@ -107,7 +121,7 @@ Controls when a record is sent to exporters.
 | --- | --- |
 | `EmitOnComplete` | Emit only when the execution reaches a terminal state (succeeded or failed). This is the default. |
 | `EmitAlways` | Emit after every invocation regardless of outcome. |
-| `EmitOnChange` | Emit a running snapshot on every operation start/end, plus the terminal record. |
+| `EmitOnChange` | Emit a running record at invocation start and after each checkpoint response that changes the status of an operation, plus the record at invocation end. |
 
 ### OperationDetail
 

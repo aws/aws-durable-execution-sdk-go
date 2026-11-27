@@ -480,6 +480,29 @@ type InvocationEndHookInfo struct {
 	// ExecutionError is the error that caused invocation failure. Nil on
 	// success or suspension.
 	ExecutionError error
+
+	// Operations contains every operation known when OnInvocationEnd is
+	// dispatched, keyed by operation ID, including the root execution
+	// operation. Each entry carries the checkpointed status, timestamps,
+	// result, and error. The entry of a step or a wait-for-condition also
+	// carries the checkpointed attempt count. An entry has IsReplay false
+	// when the operation's status changed during this invocation and true
+	// when its record is unchanged since the invocation started. Like the
+	// maps of [InvocationHookInfo], it omits the operations beyond the
+	// depth set by [WithPluginChildOperationsDepth].
+	//
+	// Every OnInvocationEnd dispatch carries the map, whatever the
+	// invocation status. A plugin that builds its final view from this map
+	// does not depend on the delivery of the last OnOperationChange report,
+	// which is dropped when the invocation's context ends first.
+	//
+	// The invocation waits for the checkpoint calls still in flight only
+	// when a plugin implements OnOperationChange. Without such a plugin,
+	// the map can lack the response of a call that is still in flight.
+	//
+	// The map is built for this dispatch and is shared by the plugins that
+	// receive it; treat it as read-only.
+	Operations map[string]OperationHookInfo
 }
 
 // PluginInvocationStatus is the invocation outcome visible to plugins.
@@ -588,6 +611,21 @@ type OperationHookInfo struct {
 
 	// Error is the error the operation failed with, if any. Set on
 	// OnOperationEnd for failed operations; nil otherwise.
+	//
+	// A snapshot entry is an entry of an Operations or UpdatedOperations
+	// map. Its Error is built from the checkpoint. When the checkpoint
+	// holds an error type, Error is an [*OperationError] with the
+	// operation's Name and the checkpointed ErrorType, Message, ErrorData,
+	// and StackTrace. Its text is
+	// `durable: operation "<name>" failed: <ErrorType>: <Message>`.
+	// Otherwise Error is nil, even when the operation's status is FAILED:
+	// for example a callback whose caller sent no error. Read the fields
+	// with [errors.As]:
+	//
+	//	var opErr *durable.OperationError
+	//	if errors.As(info.Error, &opErr) {
+	//	    // opErr.ErrorType, opErr.Message
+	//	}
 	Error error
 }
 

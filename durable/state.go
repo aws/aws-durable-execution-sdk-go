@@ -469,22 +469,38 @@ func (op *operation) operationResult() string {
 	}
 }
 
-// operationError returns the error for a failed operation, or nil if not
-// applicable. Used to populate OperationHookInfo.Error.
+// operationError returns the checkpointed error of the operation as an
+// [*OperationError], or nil when the checkpoint holds no error type. Used
+// to populate OperationHookInfo.Error in a snapshot entry.
+//
+// The OperationError carries the operation's name and the four checkpointed
+// error fields. A plugin reads them with [errors.As]. Err is the stand-in
+// built from the error type and message, which was the whole value before.
+// The stand-in's type is unexported and gains no method here. So the errors
+// that handler code receives do not change.
 func (op *operation) operationError() error {
 	if op == nil {
 		return nil
 	}
+	var rec errorRecord
 	switch {
 	case op.step != nil && op.step.errType != "":
-		return op.step.record().standIn(nil)
+		rec = op.step.record()
 	case op.invoke != nil && op.invoke.errType != "":
-		return op.invoke.record().standIn(nil)
+		rec = op.invoke.record()
 	case op.childCtx != nil && op.childCtx.errType != "":
-		return op.childCtx.record().standIn(nil)
+		rec = op.childCtx.record()
 	case op.callback != nil && op.callback.errType != "":
-		return op.callback.record().standIn(nil)
+		rec = op.callback.record()
 	default:
 		return nil
+	}
+	return &OperationError{
+		Name:       op.name,
+		ErrorType:  rec.errType,
+		Message:    rec.message,
+		ErrorData:  rec.data,
+		StackTrace: rec.stackTrace,
+		Err:        rec.standIn(nil),
 	}
 }

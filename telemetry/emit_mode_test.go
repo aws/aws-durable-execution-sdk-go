@@ -3,90 +3,100 @@ package telemetry
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-durable-execution-sdk-go/durable"
 )
 
-func TestPlugin_EmitOnChange_EmitsRunningSnapshotsPlusFinal(t *testing.T) {
-	exp := &capturingExporter{exported: make(chan struct{}, 16)}
-	ip := New(Config{EmitMode: EmitOnChange, Exporters: []Exporter{exp}})
-
-	ctx := context.Background()
-	now := time.Now()
-	arn := "arn:aws:lambda:us-east-1:123456789012:function:fn:1"
-
-	plugin := startTestPlugin(t, ctx, ip, durable.InvocationHookInfo{
-		ExecutionArn:            arn,
-		ExecutionStartTimestamp: now,
-	})
-
-	// Step 1 start+end.
-	plugin.OnOperationStart(ctx, durable.OperationHookInfo{
-		ExecutionArn:   arn,
-		ID:             "op-1",
-		Name:           "step-1",
-		Type:           "STEP",
-		Status:         durable.PluginOperationStarted,
-		StartTimestamp: now.Add(5 * time.Millisecond),
-	})
-	plugin.OnOperationEnd(ctx, durable.OperationHookInfo{
-		ExecutionArn:   arn,
-		ID:             "op-1",
-		Name:           "step-1",
-		Type:           "STEP",
-		Status:         durable.PluginOperationSucceeded,
-		StartTimestamp: now.Add(5 * time.Millisecond),
-		EndTimestamp:   now.Add(15 * time.Millisecond),
-	})
-
-	// Step 2 start+end.
-	plugin.OnOperationStart(ctx, durable.OperationHookInfo{
-		ExecutionArn:   arn,
-		ID:             "op-2",
-		Name:           "step-2",
-		Type:           "STEP",
-		Status:         durable.PluginOperationStarted,
-		StartTimestamp: now.Add(20 * time.Millisecond),
-	})
-	plugin.OnOperationEnd(ctx, durable.OperationHookInfo{
-		ExecutionArn:   arn,
-		ID:             "op-2",
-		Name:           "step-2",
-		Type:           "STEP",
-		Status:         durable.PluginOperationSucceeded,
-		StartTimestamp: now.Add(20 * time.Millisecond),
-		EndTimestamp:   now.Add(30 * time.Millisecond),
-	})
-
-	// Observe a running emission before ending the invocation.
-	awaitSignal(t, exp.exported)
-
-	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
-		ExecutionArn:    arn,
-		Status:          durable.PluginInvocationSucceeded,
-		ExecutionResult: "done",
-	})
-
-	records := exp.snapshot()
-	if len(records) < 2 {
-		t.Fatalf("expected at least 2 records (running + final), got %d", len(records))
+// TestPlugin_EmitOnChange_EmissionPoints asserts the three points at which
+// EmitOnChange emits a record: at invocation start, after each
+// OnOperationChange, and at invocation end. The test waits for each
+// emission before the next hook, so no two emissions are coalesced. Each
+// record lists the full set of operations its hook carried. The record at
+// invocation end is terminal when the execution finished, and RUNNING when
+// the invocation ended as pending.
+func TestPlugin_EmitOnChange_EmissionPoints(t *testing.T) {
+	cases := []struct {
+		name       string
+		end        durable.PluginInvocationStatus
+		wantStatus Status
+	}{
+		{name: "succeeded", end: durable.PluginInvocationSucceeded, wantStatus: StatusSucceeded},
+		{name: "pending", end: durable.PluginInvocationPending, wantStatus: StatusRunning},
 	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			exp := &capturingExporter{exported: make(chan struct{}, 16)}
+			ip := New(Config{EmitMode: EmitOnChange, Exporters: []Exporter{exp}})
 
-	last := records[len(records)-1]
-	if last.Status != StatusSucceeded {
-		t.Errorf("expected last record Status=SUCCEEDED, got %s", last.Status)
-	}
+			ctx := context.Background()
+			now := time.Now()
+			arn := "arn:aws:lambda:us-east-1:123456789012:function:fn:1"
 
-	sawRunning := false
-	for _, rec := range records[:len(records)-1] {
-		if rec.Status == StatusRunning {
-			sawRunning = true
-		}
-	}
-	if !sawRunning {
-		t.Error("expected at least one RUNNING snapshot before the final record")
+			// An earlier invocation checkpointed step-1.
+			step1 := durable.OperationHookInfo{
+				ExecutionArn: arn, ID: "op-1", Name: "step-1", Type: "STEP", Status: durable.PluginOperationSucceeded,
+				StartTimestamp: now.Add(5 * time.Millisecond), EndTimestamp: now.Add(15 * time.Millisecond),
+			}
+			plugin := startTestPlugin(t, ctx, ip, durable.InvocationHookInfo{
+				ExecutionArn:            arn,
+				ExecutionStartTimestamp: now,
+				Operations:              opsByID(step1),
+			})
+			awaitSignal(t, exp.exported)
+
+			// A checkpoint response reports step-2 as STARTED.
+			step2 := durable.OperationHookInfo{
+				ExecutionArn: arn, ID: "op-2", Name: "step-2", Type: "STEP", Status: durable.PluginOperationStarted,
+				StartTimestamp: now.Add(20 * time.Millisecond),
+			}
+			reportChange(ctx, plugin, step1, step2)
+			awaitSignal(t, exp.exported)
+
+			// The next response reports step-2 as SUCCEEDED.
+			step2.Status = durable.PluginOperationSucceeded
+			step2.EndTimestamp = now.Add(30 * time.Millisecond)
+			reportChange(ctx, plugin, step1, step2)
+			awaitSignal(t, exp.exported)
+
+			plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
+				ExecutionArn:    arn,
+				Status:          tc.end,
+				ExecutionResult: "done",
+				Operations:      opsByID(step1, step2),
+			})
+
+			records := exp.snapshot()
+			if len(records) != 4 {
+				t.Fatalf("got %d records, want 4: start, two changes, end", len(records))
+			}
+			want := []struct {
+				status   Status
+				statuses []string // operation statuses, in record order
+			}{
+				{StatusRunning, []string{"SUCCEEDED"}},
+				{StatusRunning, []string{"SUCCEEDED", "STARTED"}},
+				{StatusRunning, []string{"SUCCEEDED", "SUCCEEDED"}},
+				{tc.wantStatus, []string{"SUCCEEDED", "SUCCEEDED"}},
+			}
+			for i, rec := range records {
+				if rec.Status != want[i].status {
+					t.Errorf("record %d status = %s, want %s", i, rec.Status, want[i].status)
+				}
+				var got []string
+				for _, op := range rec.Operations {
+					got = append(got, op.Status)
+				}
+				if !slices.Equal(got, want[i].statuses) {
+					t.Errorf("record %d operation statuses = %v, want %v", i, got, want[i].statuses)
+				}
+				if i > 0 && !rec.EmittedAt.After(records[i-1].EmittedAt) {
+					t.Errorf("record %d EmittedAt %v is not after record %d EmittedAt %v", i, rec.EmittedAt, i-1, records[i-1].EmittedAt)
+				}
+			}
+		})
 	}
 }
 
@@ -103,28 +113,24 @@ func TestPlugin_EmitOnComplete_NeverEmitsRunningSnapshots(t *testing.T) {
 		ExecutionStartTimestamp: now,
 	})
 
-	plugin.OnOperationStart(ctx, durable.OperationHookInfo{
+	step := durable.OperationHookInfo{
 		ExecutionArn:   arn,
 		ID:             "op-1",
 		Name:           "step-1",
 		Type:           "STEP",
 		Status:         durable.PluginOperationStarted,
 		StartTimestamp: now,
-	})
-	plugin.OnOperationEnd(ctx, durable.OperationHookInfo{
-		ExecutionArn:   arn,
-		ID:             "op-1",
-		Name:           "step-1",
-		Type:           "STEP",
-		Status:         durable.PluginOperationSucceeded,
-		StartTimestamp: now,
-		EndTimestamp:   now.Add(10 * time.Millisecond),
-	})
+	}
+	reportChange(ctx, plugin, step)
+	step.Status = durable.PluginOperationSucceeded
+	step.EndTimestamp = now.Add(10 * time.Millisecond)
+	reportChange(ctx, plugin, step)
 
 	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
 		ExecutionArn:    arn,
 		Status:          durable.PluginInvocationSucceeded,
 		ExecutionResult: "ok",
+		Operations:      opsByID(step),
 	})
 
 	records := exp.snapshot()
@@ -153,28 +159,24 @@ func TestPlugin_EmitOnChange_SampledOut_EmitsNothing(t *testing.T) {
 		ExecutionStartTimestamp: now,
 	})
 
-	plugin.OnOperationStart(ctx, durable.OperationHookInfo{
+	step := durable.OperationHookInfo{
 		ExecutionArn:   arn,
 		ID:             "op-1",
 		Name:           "step-1",
 		Type:           "STEP",
 		Status:         durable.PluginOperationStarted,
 		StartTimestamp: now,
-	})
-	plugin.OnOperationEnd(ctx, durable.OperationHookInfo{
-		ExecutionArn:   arn,
-		ID:             "op-1",
-		Name:           "step-1",
-		Type:           "STEP",
-		Status:         durable.PluginOperationSucceeded,
-		StartTimestamp: now,
-		EndTimestamp:   now.Add(10 * time.Millisecond),
-	})
+	}
+	reportChange(ctx, plugin, step)
+	step.Status = durable.PluginOperationSucceeded
+	step.EndTimestamp = now.Add(10 * time.Millisecond)
+	reportChange(ctx, plugin, step)
 
 	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
 		ExecutionArn:    arn,
 		Status:          durable.PluginInvocationSucceeded,
 		ExecutionResult: "ok",
+		Operations:      opsByID(step),
 	})
 
 	if records := exp.snapshot(); len(records) != 0 {
@@ -252,10 +254,10 @@ func TestPlugin_ContinuingInvocation_LeavesRecordRunning(t *testing.T) {
 					Status:         status,
 					ExecutionError: errors.New("transient"),
 				})
-				wantRecords := 1
-				if mode == EmitOnComplete {
-					wantRecords = 0
-				}
+				// EmitOnComplete emits nothing for a continuing
+				// invocation. EmitAlways emits at invocation end.
+				// EmitOnChange emits at invocation start and end.
+				wantRecords := map[EmitMode]int{EmitOnComplete: 0, EmitAlways: 1, EmitOnChange: 2}[mode]
 				records := exp.snapshot()
 				if len(records) != wantRecords {
 					t.Fatalf("got %d records, want %d", len(records), wantRecords)
@@ -310,8 +312,10 @@ func TestPlugin_EmitOnChange_FullTree_ContentFilter_NoBackingArrayCorruption(t *
 		ExecutionStartTimestamp: now,
 	})
 
-	// Add a "keep" op.
-	plugin.OnOperationEnd(ctx, durable.OperationHookInfo{
+	// Observe the emission at invocation start. It lists no operation.
+	awaitSignal(t, exp.exported)
+
+	keep := durable.OperationHookInfo{
 		ExecutionArn:   arn,
 		ID:             "op-keep",
 		Name:           "keep-me",
@@ -319,13 +323,8 @@ func TestPlugin_EmitOnChange_FullTree_ContentFilter_NoBackingArrayCorruption(t *
 		Status:         durable.PluginOperationSucceeded,
 		StartTimestamp: now,
 		EndTimestamp:   now.Add(10 * time.Millisecond),
-	})
-
-	// Observe the first on-change emission.
-	awaitSignal(t, exp.exported)
-
-	// Add the filtered-out op.
-	plugin.OnOperationEnd(ctx, durable.OperationHookInfo{
+	}
+	filtered := durable.OperationHookInfo{
 		ExecutionArn:   arn,
 		ID:             "op-filter",
 		Name:           "filtered-out",
@@ -333,13 +332,8 @@ func TestPlugin_EmitOnChange_FullTree_ContentFilter_NoBackingArrayCorruption(t *
 		Status:         durable.PluginOperationSucceeded,
 		StartTimestamp: now.Add(15 * time.Millisecond),
 		EndTimestamp:   now.Add(20 * time.Millisecond),
-	})
-
-	// Observe the next on-change emission.
-	awaitSignal(t, exp.exported)
-
-	// Add another "keep" op.
-	plugin.OnOperationEnd(ctx, durable.OperationHookInfo{
+	}
+	keep2 := durable.OperationHookInfo{
 		ExecutionArn:   arn,
 		ID:             "op-keep-2",
 		Name:           "keep-me-2",
@@ -347,15 +341,22 @@ func TestPlugin_EmitOnChange_FullTree_ContentFilter_NoBackingArrayCorruption(t *
 		Status:         durable.PluginOperationSucceeded,
 		StartTimestamp: now.Add(25 * time.Millisecond),
 		EndTimestamp:   now.Add(30 * time.Millisecond),
-	})
+	}
 
-	// Observe the next on-change emission.
+	// Each change carries one more operation. Observe the on-change
+	// emission of each before the next.
+	reportChange(ctx, plugin, keep)
+	awaitSignal(t, exp.exported)
+	reportChange(ctx, plugin, keep, filtered)
+	awaitSignal(t, exp.exported)
+	reportChange(ctx, plugin, keep, filtered, keep2)
 	awaitSignal(t, exp.exported)
 
 	plugin.OnInvocationEnd(ctx, durable.InvocationEndHookInfo{
 		ExecutionArn:    arn,
 		Status:          durable.PluginInvocationSucceeded,
 		ExecutionResult: "done",
+		Operations:      opsByID(keep, filtered, keep2),
 	})
 
 	records := exp.snapshot()
@@ -383,8 +384,9 @@ func TestPlugin_EmitOnChange_FullTree_ContentFilter_NoBackingArrayCorruption(t *
 	}
 
 	// Verify the internal state was not corrupted: check that "keep-me"
-	// is still present in all emitted running records.
-	for i, rec := range records[:len(records)-1] {
+	// is still present in every running record emitted after a change.
+	// Record 0 is the emission at invocation start.
+	for i, rec := range records[1 : len(records)-1] {
 		hasKeep := false
 		for _, op := range rec.Operations {
 			if op.Name == "keep-me" {
