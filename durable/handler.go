@@ -660,12 +660,11 @@ func (h *durableHandler[I, O]) Invoke(ctx context.Context, payload []byte) ([]by
 	// status change of that response would never be reported, because no
 	// later invocation reports it through OnOperationChange. The
 	// Operations map of OnInvocationEnd would lack that response too. So
-	// when a plugin implements OnOperationChange or OnInvocationEnd, wait
-	// for the calls in flight before the end hooks. The context's end
-	// bounds the wait.
-	if readsEndState {
-		cp.awaitIdle(ctx)
-	}
+	// wait for the calls in flight before the end hooks. The wait runs on
+	// every invocation, with or without a plugin, so registering a plugin
+	// does not change when a pending invocation responds. The context's
+	// end bounds the wait.
+	cp.awaitIdle(ctx)
 
 	// unreachedEnds dispatches the ends of the settled waits, callbacks,
 	// and invokes that the handler did not reach. Every path below calls

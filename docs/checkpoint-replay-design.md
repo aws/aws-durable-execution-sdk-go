@@ -332,6 +332,14 @@ covers only the call already in flight. The invocation's context bounds
 the wait. A response without a token to that call halts the checkpointer,
 and the invocation responds PENDING instead of the handler's outcome.
 
+An invocation that ends as pending waits for the same calls. Its handler
+suspended, so the checkpointer is already terminated, and a call that an
+unjoined branch sent may still be in flight. The invocation waits until no
+checkpoint request is in flight before it dispatches the end hooks and
+responds. The wait does not depend on the registered plugins. The
+invocation's context bounds it. The response stays PENDING whatever the
+call returns.
+
 A response without a token to the call that carries the execution's own
 terminal update means the execution finished. That call succeeds, nothing
 halts, and the invocation reports the terminal outcome. A response without

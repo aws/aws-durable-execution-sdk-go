@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Changed: a pending invocation waits for the checkpoint calls already sent
+
+An invocation ends as pending when its handler suspends. A checkpoint call
+that an unjoined `durable.Go` branch sent can still be in flight at that
+point.
+
+Before, the invocation waited for such a call only when a plugin
+implemented `OnOperationChange`. So registering a plugin changed when a
+pending invocation responded.
+
+Now every invocation that ends as pending waits until no checkpoint call is
+in flight, and then responds. The invocation's context bounds the wait. The
+response is still `PENDING`. An invocation whose handler returns a result
+or an error already waited, and is unchanged.
+
 ### Changed: the telemetry plugin reads operations from checkpoints only
 
 This is a breaking change to the records that the telemetry plugin emits. It
@@ -91,8 +106,7 @@ is reported during that invocation.
   are dropped, and a call already in progress may still be running while
   `OnInvocationEnd` runs. No order is defined between a call and the
   operation-level hooks.
-- When a plugin implements `OnOperationChange` or `OnInvocationEnd`, the
-  invocation waits for the checkpoint calls already sent before it
+- The invocation waits for the checkpoint calls already sent before it
   dispatches `OnInvocationEnd`, so their responses are reported. This also
   applies to an invocation that ends as pending. The context's end bounds
   the wait.

@@ -431,3 +431,99 @@ func TestOrphanStepBodyStartedBeforeTerminationIsRefusedAtNextCheckpoint(t *test
 		t.Error("orphan-step result was recorded after the invocation responded; want refusal")
 	}
 }
+
+// heldStepStartClient is a stepEchoClient that holds the checkpoint call
+// carrying a step START until release is closed. It closes waitSeen when a
+// call carrying a WAIT update returns, and stepSent when the held call
+// begins.
+type heldStepStartClient struct {
+	stepEchoClient
+	release  chan struct{}
+	waitSeen chan struct{}
+	stepSent chan struct{}
+	waitOnce sync.Once
+	stepOnce sync.Once
+}
+
+func (c *heldStepStartClient) Checkpoint(ctx context.Context, in CheckpointInput) (CheckpointOutput, error) {
+	for _, u := range in.Updates {
+		if u.Type == OperationTypeStep && u.Action == OperationActionStart {
+			c.stepOnce.Do(func() { close(c.stepSent) })
+			<-c.release
+		}
+		if u.Type == OperationTypeWait {
+			defer c.waitOnce.Do(func() { close(c.waitSeen) })
+		}
+	}
+	return c.stepEchoClient.Checkpoint(ctx, in)
+}
+
+// TestPendingInvocationWaitsForCallInFlight asserts that an invocation
+// which ends as pending responds only after the checkpoint call of an
+// unjoined branch has returned. No plugin is registered. One branch blocks
+// on a wait, so the invocation is pending. A second branch starts a step,
+// and the client holds that call. The handler returns while the call is
+// held. The test asserts that no response arrives while the call is held,
+// and that the invocation responds PENDING once the call is released.
+func TestPendingInvocationWaitsForCallInFlight(t *testing.T) {
+	client := &heldStepStartClient{
+		release:  make(chan struct{}),
+		waitSeen: make(chan struct{}),
+		stepSent: make(chan struct{}),
+	}
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(client.release) }) }
+	t.Cleanup(release)
+
+	handlerReturned := make(chan struct{})
+	handler := Wrap(func(ctx Context, _ string) (string, error) {
+		defer close(handlerReturned)
+		Go(ctx, "waiter", func(c Context) (string, error) {
+			return "", Wait(c, "pause", time.Hour)
+		})
+		<-client.waitSeen
+		Go(ctx, "stepper", func(c Context) (string, error) {
+			return Step(c, "held", func(StepContext) (string, error) {
+				return "", nil
+			})
+		})
+		<-client.stepSent
+		// The waiter branch must be blocked on its wait before the
+		// handler returns, or the invocation does not end as pending.
+		// The package exposes no signal for that, so the handler sleeps.
+		time.Sleep(200 * time.Millisecond)
+		return "ignored", nil
+	}, withLambdaAPI(client))
+
+	type response struct {
+		raw []byte
+		err error
+	}
+	respCh := make(chan response, 1)
+	go func() {
+		raw, err := handler(makePluginContext(), makePluginPayload(t, "arn:test:pending-wait", "tok1", nil))
+		respCh <- response{raw, err}
+	}()
+
+	select {
+	case <-handlerReturned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("handler did not return")
+	}
+	select {
+	case resp := <-respCh:
+		t.Fatalf("invocation responded %s (err %v) while the step START call was in flight", resp.raw, resp.err)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	release()
+	select {
+	case resp := <-respCh:
+		if resp.err != nil {
+			t.Fatal(resp.err)
+		}
+		assertPluginResponseStatus(t, resp.raw, invocationPending)
+	case <-time.After(5 * time.Second):
+		t.Fatal("invocation did not respond after the step START call returned")
+	}
+}
