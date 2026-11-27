@@ -38,7 +38,9 @@ func awaitSignal(t *testing.T, signal <-chan struct{}) {
 func TestPlugin_ConcurrentInvocations_IsolateRecords(t *testing.T) {
 	ctx := t.Context()
 	exp := &capturingExporter{}
-	factory := New(Config{Exporters: []Exporter{exp}, Content: withResults("shared")})
+	// EmitOnChange registers OnOperationChange. So the two invocations
+	// write their operation lists between the handshake points below.
+	factory := New(Config{EmitMode: EmitOnChange, Exporters: []Exporter{exp}, Content: withResults("shared")})
 	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	infos := []durable.InvocationHookInfo{
 		{ExecutionArn: "arn:aws:lambda:us-east-1:123456789012:function:fn-a:1/durable-execution/name-a/id-a", RequestID: "request-a", ExecutionInput: "input-a", ExecutionStartTimestamp: start},
@@ -92,10 +94,10 @@ func TestPlugin_ConcurrentInvocations_IsolateRecords(t *testing.T) {
 	}
 	awaitSignal(t, done)
 	awaitSignal(t, done)
+	// Each invocation also emits running records. The record at invocation
+	// end is the last one of its execution, so later records replace
+	// earlier ones in the map.
 	records := exp.snapshot()
-	if len(records) != 2 {
-		t.Fatalf("got %d records, want 2", len(records))
-	}
 	byARN := make(map[string]Record)
 	for _, rec := range records {
 		byARN[rec.ExecutionArn] = rec

@@ -108,6 +108,52 @@ func TestPlugin_OperationsOrderedOldestFirst(t *testing.T) {
 	}
 }
 
+// TestPlugin_SnapshotLeavesOperationListUnchanged takes two snapshots of
+// one operation list under OperationDetailFullTree with an excluded
+// operation. Content filtering removes the excluded operation from each
+// snapshot. The snapshot must filter a copy: filtering the invocation's own
+// list would shift its entries, and the second snapshot would lose one.
+func TestPlugin_SnapshotLeavesOperationListUnchanged(t *testing.T) {
+	p := newTestInvocation(&capturingExporter{}, true)
+	p.env.operationDetail = OperationDetailFullTree
+	p.env.content = ContentConfig{Operations: ContentOperations{
+		Overrides: []OperationOverride{{OperationName: "filtered-out", Exclude: true}},
+	}}
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	step := func(id, name string, offset time.Duration) durable.OperationHookInfo {
+		return durable.OperationHookInfo{ID: id, Name: name, Type: "STEP", Status: durable.PluginOperationSucceeded, StartTimestamp: base.Add(offset)}
+	}
+	names := func(ops []OperationRecord) []string {
+		got := make([]string, len(ops))
+		for i, op := range ops {
+			got[i] = op.Name
+		}
+		return got
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.setOperationsLocked(opsByID(
+		step("op-1", "keep-me", 0),
+		step("op-2", "filtered-out", time.Second),
+		step("op-3", "keep-me-2", 2*time.Second),
+	))
+	first := p.snapshotRecordLocked()
+	second := p.snapshotRecordLocked()
+
+	wantSnapshot := []string{"keep-me", "keep-me-2"}
+	if got := names(first.Operations); !slices.Equal(got, wantSnapshot) {
+		t.Errorf("first snapshot operations = %v, want %v", got, wantSnapshot)
+	}
+	if got := names(second.Operations); !slices.Equal(got, wantSnapshot) {
+		t.Errorf("second snapshot operations = %v, want %v", got, wantSnapshot)
+	}
+	wantList := []string{"keep-me", "filtered-out", "keep-me-2"}
+	if got := names(p.record.Operations); !slices.Equal(got, wantList) {
+		t.Errorf("invocation's operation list = %v, want unchanged %v", got, wantList)
+	}
+}
+
 // TestPlugin_SampledOutBuildsNoOperationList asserts that a sampled-out
 // invocation builds no operation list in any hook. Its record is never
 // emitted, so the list would be discarded.

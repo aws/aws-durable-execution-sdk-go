@@ -383,9 +383,11 @@ func TestPlugin_EmitOnChange_FullTree_ContentFilter_NoBackingArrayCorruption(t *
 		t.Errorf("expected 2 keep ops in final record, got %d (ops: %+v)", keepCount, last.Operations)
 	}
 
-	// Verify the internal state was not corrupted: check that "keep-me"
-	// is still present in every running record emitted after a change.
-	// Record 0 is the emission at invocation start.
+	// Check that "keep-me" is present in every running record emitted
+	// after a change. Record 0 is the emission at invocation start. Each
+	// hook replaces the operation list, so this loop does not detect a
+	// snapshot that filters the list in place.
+	// TestPlugin_SnapshotLeavesOperationListUnchanged covers that case.
 	for i, rec := range records[1 : len(records)-1] {
 		hasKeep := false
 		for _, op := range rec.Operations {
@@ -394,7 +396,7 @@ func TestPlugin_EmitOnChange_FullTree_ContentFilter_NoBackingArrayCorruption(t *
 			}
 		}
 		if !hasKeep {
-			t.Errorf("running record %d lost 'keep-me' op — backing array corrupted", i+1)
+			t.Errorf("running record %d lost 'keep-me' op", i+1)
 		}
 	}
 }
