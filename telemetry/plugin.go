@@ -377,7 +377,7 @@ func (p *telemetryInvocation) onInvocationEnd(ctx context.Context, info durable.
 	p.mu.Unlock()
 
 	continuing := info.Status == durable.PluginInvocationPending || info.Status == durable.PluginInvocationRetrying
-	if continuing && p.env.emitMode != EmitAlways && p.env.emitMode != EmitOnChange {
+	if continuing && !p.env.shouldEmit(StatusRunning) {
 		return
 	}
 
@@ -540,7 +540,9 @@ func filterTopLevel(ops []OperationRecord) []OperationRecord {
 	return filtered
 }
 
-// shouldEmit applies EmitMode's gating for the terminal record.
+// shouldEmit reports whether the emit mode emits a record with the given
+// status at invocation end. A pending or retrying invocation ends with
+// StatusRunning.
 func (p *TelemetryPlugin) shouldEmit(status Status) bool {
 	switch p.emitMode {
 	case EmitOnComplete:
@@ -548,8 +550,8 @@ func (p *TelemetryPlugin) shouldEmit(status Status) bool {
 	case EmitAlways:
 		return true
 	case EmitOnChange:
-		// EmitOnChange emits running records via
-		// scheduleOnChangeDispatch AND the terminal record.
+		// EmitOnChange also emits running records between invocation
+		// start and end, through scheduleOnChangeDispatch.
 		return true
 	default:
 		return status == StatusSucceeded || status == StatusFailed
@@ -557,13 +559,9 @@ func (p *TelemetryPlugin) shouldEmit(status Status) bool {
 }
 
 // scheduleOnChangeDispatch implements EmitOnChange's coalescing: at most
-// one dispatch goroutine runs at a time. No-op when EmitMode is not
-// EmitOnChange.
+// one dispatch goroutine runs at a time. Its two callers, onInvocationStart
+// and onOperationChange, call it only in EmitOnChange.
 func (p *telemetryInvocation) scheduleOnChangeDispatch(ctx context.Context) {
-	if p.env.emitMode != EmitOnChange {
-		return
-	}
-
 	p.mu.Lock()
 	if p.ended {
 		p.mu.Unlock()
